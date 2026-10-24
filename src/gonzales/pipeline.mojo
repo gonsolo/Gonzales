@@ -1698,7 +1698,7 @@ struct GpuGuidedRenderer(GuidedRenderer):
     def render_samples(mut self, begin: Int, end: Int) raises:
         var si = begin
         while si < end:
-            var actual_batch = min(WAVEFRONT_BATCH, end - si)
+            var actual_batch = min(self.handle[].batch, end - si)
             self._dispatch(si, actual_batch, Int32(-1), Int32(1) if self.ptex_on else Int32(0))
             if self.ptex_on:
                 self._ptex_step(si, actual_batch)

@@ -537,6 +537,13 @@ struct CurveBuffers(Movable):
     def upload(ctx: DeviceContext, ref s: ParsedScene_Mojo, n_pix: Int) raises -> Self:
         # Upload curves (native hair/fur primitives — control points only, no tessellation)
         var curve_buf = _gpu_upload_array[Curve](ctx, s.curves, Int(s.curve_count))
+        var c = Self(curves_buf=curve_buf^, n_curves=Int(s.curve_count), cand_prim_buf=_gpu_placeholder(ctx),
+                     cand_count_buf=_gpu_placeholder(ctx), cand_offset_buf=_gpu_placeholder(ctx),
+                     compact_path_buf=_gpu_placeholder(ctx), compact_counter_buf=ctx.enqueue_create_buffer[DType.uint8](4))
+        c.alloc_paths(ctx, n_pix * WAVEFRONT_BATCH)
+        return c^
+
+    def alloc_paths(mut self, ctx: DeviceContext, n_curve_paths: Int) raises:
         # Curve-divergence-mitigation scratch. curve_cand_prim/curve_cand_count
         # are indexed by every path's tid unconditionally inside
         # traverse_paths_gpu (curve_cand_count[tid] = 0 runs for every active
@@ -552,21 +559,16 @@ struct CurveBuffers(Movable):
         # touched by compact_curve_paths_gpu/resolve_curve_candidates_gpu,
         # both gated behind `if handle[].curves.n_curves > 0` at the dispatch site,
         # so those two are still safe to leave dummy-sized.
-        var n_curve_paths = n_pix * WAVEFRONT_BATCH
-        var r_curve_cand_prim_buf   = ctx.enqueue_create_buffer[DType.uint8](n_curve_paths * CURVE_DEFER_K * 4)
-        var r_curve_cand_count_buf  = ctx.enqueue_create_buffer[DType.uint8](n_curve_paths * 4)
-        var r_curve_cand_offset_buf = ctx.enqueue_create_buffer[DType.uint8](n_curve_paths * 4)
+        self.cand_prim_buf   = ctx.enqueue_create_buffer[DType.uint8](n_curve_paths * CURVE_DEFER_K * 4)
+        self.cand_count_buf  = ctx.enqueue_create_buffer[DType.uint8](n_curve_paths * 4)
+        self.cand_offset_buf = ctx.enqueue_create_buffer[DType.uint8](n_curve_paths * 4)
         ctx.enqueue_function[init_curve_cand_offset_gpu](
-            r_curve_cand_offset_buf.unsafe_ptr().unsafe_bitcast[Int32]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
+            self.cand_offset_buf.unsafe_ptr().unsafe_bitcast[Int32]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
             Int64(n_curve_paths),
             grid_dim=ceildiv(n_curve_paths, 256), block_dim=256,
         )
-        var n_curve_compact_paths = n_curve_paths if Int(s.curve_count) > 0 else 1
-        var r_curve_compact_path_buf = ctx.enqueue_create_buffer[DType.uint8](n_curve_compact_paths * 4)
-        var r_curve_compact_counter_buf = ctx.enqueue_create_buffer[DType.uint8](4)
-        return Self(curves_buf=curve_buf^, n_curves=Int(s.curve_count), cand_prim_buf=r_curve_cand_prim_buf^,
-                    cand_count_buf=r_curve_cand_count_buf^, cand_offset_buf=r_curve_cand_offset_buf^,
-                    compact_path_buf=r_curve_compact_path_buf^, compact_counter_buf=r_curve_compact_counter_buf^)
+        var n_curve_compact_paths = n_curve_paths if self.n_curves > 0 else 1
+        self.compact_path_buf = ctx.enqueue_create_buffer[DType.uint8](n_curve_compact_paths * 4)
 
 @fieldwise_init
 struct MediaBuffers(Movable):
@@ -803,6 +805,7 @@ struct GpuSceneHandle(Movable):
     var active_count_buf: DeviceBuffer[DType.uint8] # live count, then one count per MatKind (16 × Int32)
     var active_idx_buf: DeviceBuffer[DType.uint8]   # 4 lists of n_pixels × WAVEFRONT_BATCH Int32: live (even/odd round), RT shadow rays, paths of one material kind
     var n_pixels: Int
+    var batch: Int      # concurrent samples a pixel the path buffers hold
     # Camera and sampling data for GPU-side ray generation
     var sobol_buf: DeviceBuffer[DType.uint8]  # 1024 dims × 52 UInt32 = 212992 bytes
     var r2c_buf: DeviceBuffer[DType.uint8]    # raster_to_camera: 16 Float32 = 64 bytes
@@ -1047,12 +1050,15 @@ def gpu_upload_scene(
     restir_di: Bool = True,    # False: no per-pixel ReSTIR reservoirs (a pixel's worth is kept so the buffers exist)
     restir_vol: Bool = True,
     instances_external: Bool = False,   # the instances will be the RT-core TLAS records (see pipeline._share_instances)
+    verbose: Bool = True,
+    batch: Int = WAVEFRONT_BATCH,
 ) -> Pointer[GpuSceneHandle, MutUntrackedOrigin]:
     comptime if has_accelerator():
         try:
             var ctx = ctx_in.value().copy() if ctx_in else DeviceContext()
             ref s = psc[]
-            _report_gpu_memory(ctx, s)
+            if verbose:
+                _report_gpu_memory(ctx, s)
             var bvh = BvhBuffers.upload(ctx, s)
             var blas = BlasBuffers.upload(ctx, s)
             ctx.synchronize()
@@ -1087,50 +1093,15 @@ def gpu_upload_scene(
             ctx.synchronize()
             _gpu_free_log("media")
 
-            # Allocate persistent render buffers (zeroed film)
-            var n_pix = max(Int(n_pixels), 1)
-            var r_suppress = ctx.enqueue_create_buffer[DType.uint8](n_pix * 32 * WAVEFRONT_BATCH if has_glass_mat else 32)
-            ctx.enqueue_memset(r_suppress, UInt8(0))
-            var r_mnee_stats = ctx.enqueue_create_buffer[DType.int32](2)
-            ctx.enqueue_memset(r_mnee_stats, Int32(0))
-            var r_path_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * size_of[PathState]() * WAVEFRONT_BATCH)
-            var r_inter_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * size_of[Intersection]() * WAVEFRONT_BATCH)
-            var r_film_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 12)
-            var r_albedo_film_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 12)
-            var r_film_sq_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 4)
-            var r_hist_color_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 12)
-            var r_hist_len_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 4)
-            var r_hist_len_tmp_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 4)
-            var r_prev_depth_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 4)
-            var r_prev_c2w_buf = ctx.enqueue_create_buffer[DType.uint8](64)
-            var r_atrous_ping_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 12)
-            var r_atrous_pong_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 12)
-            var r_atrous_albedo_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 12)
-            var r_atrous_variance_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 4)
-            var r_atrous_normals_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 12)
-            var r_atrous_depth_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 4)
-            var r_atrous_curve_mask_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 4)
-            var r_gbuf_worldpos_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 12)
-            var r_gbuf_material_id_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 4)
-            var n_di = n_pix if restir_di else 1
-            var n_vol = n_pix if restir_vol else 1
-            var r_restir_a_buf = ctx.enqueue_create_buffer[DType.uint8](n_di * size_of[DIReservoir]())
-            var r_restir_b_buf = ctx.enqueue_create_buffer[DType.uint8](n_di * size_of[DIReservoir]())
-            var r_restir_vol_a_buf = ctx.enqueue_create_buffer[DType.uint8](n_vol * size_of[VolReservoir]())
-            var r_restir_vol_b_buf = ctx.enqueue_create_buffer[DType.uint8](n_vol * size_of[VolReservoir]())
-            var r_restir_vol_used_buf = ctx.enqueue_create_buffer[DType.uint8](n_vol * size_of[Int8]())
             # --rt-hardware defers up to SHADOW_SLOTS shadow rays per path; everything else needs one slot per path.
             # The software BVH defers too (gpu.mojo sw_shadow) when every NEE candidate of a bounce has a slot and there is no medium.
             var nee_candidates = (1 if s.area_light_count > 0 else 0) + Int(s.distant_count) + Int(s.point_count) + Int(s.sphere_count) + Int(s.infinite_count)
             var sw_defer = Int(s.medium_count) == 0 and nee_candidates <= SHADOW_SLOTS and getenv("GONZALES_NO_SW_SHADOW") == ""
             var r_shadow_slots = SHADOW_SLOTS if getenv("GONZALES_RTCORE") != "" or sw_defer else 1
-            var r_rt_scratch_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 32 * WAVEFRONT_BATCH if getenv("GONZALES_RTCORE") != "" and meshes.has_alpha else 32)
-            var r_shadow_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * size_of[ShadowTask]() * WAVEFRONT_BATCH * r_shadow_slots)
-            ctx.synchronize()
-            _gpu_free_log("per-pixel buffers")
-            if getenv("GONZALES_GPU_LOG") != "":
-                print("GPU per-pixel: n_pix", n_pix, "glass", has_glass_mat, "alpha", meshes.has_alpha, "shadow slots", r_shadow_slots, "restir_di", restir_di, "restir_vol", restir_vol, "path B", size_of[PathState](), "inter B", size_of[Intersection](), "shadow B", size_of[ShadowTask]())
-            ctx.enqueue_memset(r_shadow_buf, UInt8(0))      # every slot free (active == 0)
+            var r_mnee_stats = ctx.enqueue_create_buffer[DType.int32](2)
+            ctx.enqueue_memset(r_mnee_stats, Int32(0))
+            var r_prev_c2w_buf = ctx.enqueue_create_buffer[DType.uint8](64)
+            ctx.enqueue_memset(r_prev_c2w_buf, UInt8(0))
             var r_shade_ctx_buf = ctx.enqueue_create_buffer[DType.uint8](1024)
             var r_filter_lut_buf = ctx.enqueue_create_buffer[DType.uint8](2 * FILTER_LUT_N * 4)
             if s.filter_type == Int32(0):
@@ -1140,24 +1111,10 @@ def gpu_upload_scene(
                 ctx.synchronize()
                 lut_host.unsafe_free()
             var r_active_count_buf = ctx.enqueue_create_buffer[DType.uint8](64)
-            var r_active_idx_buf   = ctx.enqueue_create_buffer[DType.uint8](n_pix * 4 * WAVEFRONT_BATCH * 4)
-            var curves = CurveBuffers.upload(ctx, s, n_pix)
-            ctx.synchronize()
-            _gpu_free_log("curves")
-            ctx.enqueue_memset(r_film_buf, UInt8(0))
-            ctx.enqueue_memset(r_albedo_film_buf, UInt8(0))
-            ctx.enqueue_memset(r_film_sq_buf, UInt8(0))
-            ctx.enqueue_memset(r_hist_color_buf, UInt8(0))
-            ctx.enqueue_memset(r_hist_len_buf, UInt8(0))
-            ctx.enqueue_memset(r_prev_depth_buf, UInt8(0))
-            ctx.enqueue_memset(r_prev_c2w_buf, UInt8(0))
+            var curves = CurveBuffers.upload(ctx, s, 1)
             var textures = TextureBuffers.upload(ctx, s)
             ctx.synchronize()
             _gpu_free_log("textures")
-            var r_ptex_redo_buf = ctx.enqueue_create_buffer[DType.uint8](
-                n_pix * WAVEFRONT_BATCH if len(textures.ptex_bufs) > 0 else 1)
-            var r_ptex_redo_si_buf = ctx.enqueue_create_buffer[DType.uint8](
-                n_pix * WAVEFRONT_BATCH * 4 if len(textures.ptex_bufs) > 0 else 4)
 
             # Upload Sobol matrices: first 1024 dimensions × 52 UInt32 = 212992 bytes
             comptime N_SOBOL_GPU_DIMS = 1024
@@ -1177,7 +1134,7 @@ def gpu_upload_scene(
             # Allocate handle on heap
             var handle = unsafe_alloc[GpuSceneHandle](1)
             handle.unsafe_write(GpuSceneHandle(
-                ctx=ctx^,
+                ctx=ctx.copy(),
                 bvh=bvh^,
                 blas=blas^,
                 instances_buf=instances_gpu_buf^,
@@ -1190,7 +1147,7 @@ def gpu_upload_scene(
                 mnee_stats_buf=r_mnee_stats^,
                 mnee_adapt_done=False,
                 bench=_bench_counters(),
-                suppress_buf=r_suppress^,
+                suppress_buf=_gpu_placeholder(ctx),
                 mat_kind_mask=kind_mask,
                 has_interface_material=has_iface_mat,
                 cam_fp=CameraFootprint.none(),
@@ -1202,41 +1159,42 @@ def gpu_upload_scene(
                 curves=curves^,
                 media=media^,
                 measured=measured^,
-                path_buf=r_path_buf^,
-                ptex_redo_buf=r_ptex_redo_buf^,
-                ptex_redo_si_buf=r_ptex_redo_si_buf^,
-                inter_buf=r_inter_buf^,
-                film_buf=r_film_buf^,
-                albedo_film_buf=r_albedo_film_buf^,
-                film_sq_buf=r_film_sq_buf^,
-                hist_color_buf=r_hist_color_buf^,
-                hist_len_buf=r_hist_len_buf^,
-                hist_len_tmp_buf=r_hist_len_tmp_buf^,
-                prev_depth_buf=r_prev_depth_buf^,
+                path_buf=_gpu_placeholder(ctx),
+                ptex_redo_buf=_gpu_placeholder(ctx),
+                ptex_redo_si_buf=_gpu_placeholder(ctx),
+                inter_buf=_gpu_placeholder(ctx),
+                film_buf=_gpu_placeholder(ctx),
+                albedo_film_buf=_gpu_placeholder(ctx),
+                film_sq_buf=_gpu_placeholder(ctx),
+                hist_color_buf=_gpu_placeholder(ctx),
+                hist_len_buf=_gpu_placeholder(ctx),
+                hist_len_tmp_buf=_gpu_placeholder(ctx),
+                prev_depth_buf=_gpu_placeholder(ctx),
                 prev_c2w_buf=r_prev_c2w_buf^,
-                atrous_ping_buf=r_atrous_ping_buf^,
-                atrous_pong_buf=r_atrous_pong_buf^,
-                atrous_albedo_buf=r_atrous_albedo_buf^,
-                atrous_variance_buf=r_atrous_variance_buf^,
-                atrous_normals_buf=r_atrous_normals_buf^,
-                atrous_depth_buf=r_atrous_depth_buf^,
-                atrous_curve_mask_buf=r_atrous_curve_mask_buf^,
-                gbuf_worldpos_buf=r_gbuf_worldpos_buf^,
-                gbuf_material_id_buf=r_gbuf_material_id_buf^,
-                restir_a_buf=r_restir_a_buf^,
-                restir_b_buf=r_restir_b_buf^,
-                restir_vol_a_buf=r_restir_vol_a_buf^,
-                restir_vol_b_buf=r_restir_vol_b_buf^,
-                restir_vol_used_buf=r_restir_vol_used_buf^,
-                shadow_buf=r_shadow_buf^,
+                atrous_ping_buf=_gpu_placeholder(ctx),
+                atrous_pong_buf=_gpu_placeholder(ctx),
+                atrous_albedo_buf=_gpu_placeholder(ctx),
+                atrous_variance_buf=_gpu_placeholder(ctx),
+                atrous_normals_buf=_gpu_placeholder(ctx),
+                atrous_depth_buf=_gpu_placeholder(ctx),
+                atrous_curve_mask_buf=_gpu_placeholder(ctx),
+                gbuf_worldpos_buf=_gpu_placeholder(ctx),
+                gbuf_material_id_buf=_gpu_placeholder(ctx),
+                restir_a_buf=_gpu_placeholder(ctx),
+                restir_b_buf=_gpu_placeholder(ctx),
+                restir_vol_a_buf=_gpu_placeholder(ctx),
+                restir_vol_b_buf=_gpu_placeholder(ctx),
+                restir_vol_used_buf=_gpu_placeholder(ctx),
+                shadow_buf=_gpu_placeholder(ctx),
                 shadow_slots=r_shadow_slots,
                 filter_lut_buf=r_filter_lut_buf^,
                 shade_ctx_buf=r_shade_ctx_buf^,
-                rt_scratch_buf=r_rt_scratch_buf^,
+                rt_scratch_buf=_gpu_placeholder(ctx),
                 guide_read=null_guide(), guide_write=null_guide(), guide_bufs=List[DeviceBuffer[DType.uint8]](),
                 active_count_buf=r_active_count_buf^,
-                active_idx_buf=r_active_idx_buf^,
-                n_pixels=n_pix,
+                active_idx_buf=_gpu_placeholder(ctx),
+                n_pixels=0,
+                batch=0,
                 sobol_buf=sobol_gpu_buf^,
                 r2c_buf=r2c_gpu_buf^,
                 c2w_buf=c2w_gpu_buf^,
@@ -1246,7 +1204,9 @@ def gpu_upload_scene(
                 spectral=spectral^,
             ))
 
-            print("GPU: scene uploaded")
+            gpu_alloc_pixel_buffers(handle.unsafe_bitcast[GpuSceneHandle](), n_pixels, restir_di, restir_vol, batch)
+            if verbose:
+                print("GPU: scene uploaded")
             return handle.unsafe_bitcast[GpuSceneHandle]()
         except e:
             var msg = String(e)
@@ -1259,6 +1219,67 @@ def gpu_upload_scene(
         return Pointer[GpuSceneHandle, MutUntrackedOrigin].unsafe_dangling()
 
 
+
+def _gpu_placeholder(ctx: DeviceContext) raises -> DeviceBuffer[DType.uint8]:
+    return ctx.enqueue_create_buffer[DType.uint8](32)
+
+# The buffers sized by the pixel count, (re)allocated for n_pixels; the film and the denoiser's history start at zero.
+def gpu_alloc_pixel_buffers(handle: Pointer[GpuSceneHandle, MutUntrackedOrigin], n_pixels: Int,
+                            restir_di: Bool = True, restir_vol: Bool = True, batch: Int = WAVEFRONT_BATCH) raises:
+    var ctx = handle[].ctx.copy()
+    ref h = handle[]
+    var n_pix = max(n_pixels, 1)
+    var n_paths = n_pix * batch
+    h.suppress_buf = ctx.enqueue_create_buffer[DType.uint8](n_paths * 32 if h.has_glass_material else 32)
+    ctx.enqueue_memset(h.suppress_buf, UInt8(0))
+    h.path_buf = ctx.enqueue_create_buffer[DType.uint8](n_paths * size_of[PathState]())
+    h.inter_buf = ctx.enqueue_create_buffer[DType.uint8](n_paths * size_of[Intersection]())
+    h.film_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 12)
+    h.albedo_film_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 12)
+    h.film_sq_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 4)
+    h.hist_color_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 12)
+    h.hist_len_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 4)
+    h.hist_len_tmp_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 4)
+    h.prev_depth_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 4)
+    h.atrous_ping_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 12)
+    h.atrous_pong_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 12)
+    h.atrous_albedo_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 12)
+    h.atrous_variance_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 4)
+    h.atrous_normals_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 12)
+    h.atrous_depth_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 4)
+    h.atrous_curve_mask_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 4)
+    h.gbuf_worldpos_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 12)
+    h.gbuf_material_id_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 4)
+    var n_di = n_pix if restir_di else 1
+    var n_vol = n_pix if restir_vol else 1
+    h.restir_a_buf = ctx.enqueue_create_buffer[DType.uint8](n_di * size_of[DIReservoir]())
+    h.restir_b_buf = ctx.enqueue_create_buffer[DType.uint8](n_di * size_of[DIReservoir]())
+    h.restir_vol_a_buf = ctx.enqueue_create_buffer[DType.uint8](n_vol * size_of[VolReservoir]())
+    h.restir_vol_b_buf = ctx.enqueue_create_buffer[DType.uint8](n_vol * size_of[VolReservoir]())
+    h.restir_vol_used_buf = ctx.enqueue_create_buffer[DType.uint8](n_vol * size_of[Int8]())
+    h.rt_scratch_buf = ctx.enqueue_create_buffer[DType.uint8](n_paths * 32 if getenv("GONZALES_RTCORE") != "" and h.meshes.has_alpha else 32)
+    h.shadow_buf = ctx.enqueue_create_buffer[DType.uint8](n_paths * size_of[ShadowTask]() * h.shadow_slots)
+    ctx.synchronize()
+    _gpu_free_log("per-pixel buffers")
+    if getenv("GONZALES_GPU_LOG") != "":
+        print("GPU per-pixel: n_pix", n_pix, "glass", h.has_glass_material, "alpha", h.meshes.has_alpha, "shadow slots", h.shadow_slots, "restir_di", restir_di, "restir_vol", restir_vol, "path B", size_of[PathState](), "inter B", size_of[Intersection](), "shadow B", size_of[ShadowTask]())
+    ctx.enqueue_memset(h.shadow_buf, UInt8(0))      # every slot free (active == 0)
+    h.active_idx_buf = ctx.enqueue_create_buffer[DType.uint8](n_paths * 4 * 4)
+    h.curves.alloc_paths(ctx, n_paths)
+    ctx.synchronize()
+    _gpu_free_log("curves")
+    ctx.enqueue_memset(h.film_buf, UInt8(0))
+    ctx.enqueue_memset(h.albedo_film_buf, UInt8(0))
+    ctx.enqueue_memset(h.film_sq_buf, UInt8(0))
+    ctx.enqueue_memset(h.hist_color_buf, UInt8(0))
+    ctx.enqueue_memset(h.hist_len_buf, UInt8(0))
+    ctx.enqueue_memset(h.prev_depth_buf, UInt8(0))
+    var ptex = len(h.textures.ptex_bufs) > 0
+    h.ptex_redo_buf = ctx.enqueue_create_buffer[DType.uint8](n_paths if ptex else 1)
+    h.ptex_redo_si_buf = ctx.enqueue_create_buffer[DType.uint8](n_paths * 4 if ptex else 4)
+    ctx.synchronize()
+    h.n_pixels = n_pix
+    h.batch = batch
 
 @__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
 @__llvm_metadata(`nvvm.minctasm`=SIMDLength(1))    # NVIDIA keeps its old register budget; AMD ignores this
