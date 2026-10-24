@@ -31,6 +31,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cmath>
+#include <fstream>
 #include <functional>
 #include <map>
 #include <mutex>
@@ -452,7 +453,25 @@ Image const &_ReadImage(std::string const &path) {
     static std::map<std::string, Image> cache;
     std::lock_guard<std::mutex> lock(mutex);
     auto [it, inserted] = cache.try_emplace(path);
-    if (inserted) {
+    if (inserted && path.size() > 4 && path.compare(path.size() - 4, 4, ".pfm") == 0) {
+        // Hio has no PFM reader: RGB floats, rows bottom to top, little endian when the scale is negative.
+        std::ifstream in(path, std::ios::binary);
+        std::string magic;
+        int w = 0, h = 0;
+        float scale = 0;
+        if (in >> magic >> w >> h >> scale && magic == "PF" && scale < 0 && w > 0 && h > 0) {
+            in.get();
+            std::vector<GfVec3f> rows(size_t(w) * h);
+            if (in.read(reinterpret_cast<char *>(rows.data()), std::streamsize(rows.size() * sizeof(GfVec3f)))) {
+                Image &image = it->second;
+                image.width = w;
+                image.height = h;
+                image.pixels.resize(rows.size());
+                for (int y = 0; y < h; ++y)
+                    std::copy_n(&rows[size_t(h - 1 - y) * w], w, &image.pixels[size_t(y) * w]);
+            }
+        }
+    } else if (inserted) {
         if (HioImageSharedPtr in = HioImage::OpenForReading(path)) {
             Image &image = it->second;
             image.width = in->GetWidth();
