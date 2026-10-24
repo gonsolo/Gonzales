@@ -34,6 +34,7 @@
 #include <map>
 #include <mutex>
 #include <numeric>
+#include <sstream>
 #include <vector>
 
 PXR_NAMESPACE_OPEN_SCOPE
@@ -120,8 +121,36 @@ std::string _EqualAreaDome(std::string const &path, GfMatrix4d const &lightToWor
 }
 
 // Everything the prims synced, rebuilt into a Gonzales scene when it changes.
+// A material the Blender add-on evaluated itself, for what UsdPreviewSurface cannot carry.
+struct Override {
+    TfToken kind;              // hair or glass
+    GfVec3f sigma{0.0f};       // hair absorption
+    float betaM = 0.3f, betaN = 0.3f, ior = 1.5f, alpha = 0.0f;
+};
+
+// Lines of "<material prim name> hair sr sg sb beta_m beta_n ior" or "<name> glass ior alpha".
+std::map<std::string, Override> _ParseOverrides(std::string const &text) {
+    std::map<std::string, Override> result;
+    std::istringstream lines(text);
+    std::string line, name, kind;
+    while (std::getline(lines, line)) {
+        std::istringstream in(line);
+        Override o;
+        if (!(in >> name >> kind))
+            continue;
+        o.kind = TfToken(kind);
+        if (kind == "hair" && (in >> o.sigma[0] >> o.sigma[1] >> o.sigma[2] >> o.betaM >> o.betaN >> o.ior))
+            result[name] = o;
+        else if (kind == "glass" && (in >> o.ior >> o.alpha))
+            result[name] = o;
+    }
+    return result;
+}
+
 class Scene final : public HdRenderParam {
 public:
+    std::string overrideText;
+    std::map<std::string, Override> overrides;
     HdRenderThread *thread;
     std::mutex mutex;
     std::map<SdfPath, MeshData> meshes;
@@ -650,12 +679,23 @@ void *_BuildScene(Scene &synced, int *version) {
     *version = synced.version.load();
     std::map<SdfPath, int> materials;
     auto path = [](std::string const &p) { return p.empty() ? nullptr : p.c_str(); };
+    auto override = [&](SdfPath const &id, TfToken const &kind) -> Override const * {
+        auto it = synced.overrides.find(id.GetName());
+        return it != synced.overrides.end() && it->second.kind == kind ? &it->second : nullptr;
+    };
     for (auto const &[id, mat] : synced.materials)
-        materials[id] = gz_scene_add_diffuse(scene, mat.diffuse[0], mat.diffuse[1], mat.diffuse[2],
-                                             path(mat.texture), path(mat.normalMap));
+        if (Override const *glass = override(id, TfToken("glass")))
+            materials[id] = gz_scene_add_dielectric(scene, glass->ior, glass->alpha);
+        else
+            materials[id] = gz_scene_add_diffuse(scene, mat.diffuse[0], mat.diffuse[1], mat.diffuse[2],
+                                                 path(mat.texture), path(mat.normalMap));
     for (auto const &[id, m] : synced.meshes) {
         if (m.indices.empty())
             continue;
+        // A glass-only Blender material has no Hydra material, only the add-on's override.
+        if (!materials.count(m.material))
+            if (Override const *glass = override(m.material, TfToken("glass")))
+                materials[m.material] = gz_scene_add_dielectric(scene, glass->ior, glass->alpha);
         auto it = materials.find(m.material);
         int material = it != materials.end() ? it->second
             : gz_scene_add_diffuse(scene, m.displayColor[0], m.displayColor[1], m.displayColor[2], nullptr, nullptr);
@@ -664,17 +704,20 @@ void *_BuildScene(Scene &synced, int *version) {
                           m.normals.empty() ? nullptr : m.normals.data(),
                           m.uvs.empty() ? nullptr : m.uvs.data(), material);
     }
-    constexpr float betaM = 0.3f, betaN = 0.3f;
     std::map<SdfPath, int> hairs;
-    auto hair = [&](GfVec3f const &color) {
-        GfVec3f sigma = _SigmaAFromReflectance(color, betaN);
-        return gz_scene_add_hair(scene, sigma[0], sigma[1], sigma[2], betaM, betaN);
-    };
     for (auto const &[id, c] : synced.curves) {
-        auto it = synced.materials.find(c.material);
-        if (!hairs.count(c.material))
-            hairs[c.material] = hair(it == synced.materials.end() ? c.displayColor
-                                     : it->second.texture.empty() ? it->second.diffuse : GfVec3f(0.5f));
+        if (!hairs.count(c.material)) {
+            Override h;
+            if (Override const *o = override(c.material, TfToken("hair"))) {
+                h = *o;
+            } else {
+                auto it = synced.materials.find(c.material);
+                h.sigma = _SigmaAFromReflectance(it == synced.materials.end() ? c.displayColor
+                                                 : it->second.texture.empty() ? it->second.diffuse : GfVec3f(0.5f), h.betaN);
+                h.ior = 1.55f;
+            }
+            hairs[c.material] = gz_scene_add_hair(scene, h.sigma[0], h.sigma[1], h.sigma[2], h.betaM, h.betaN, h.ior);
+        }
         gz_scene_add_curves(scene, c.controlPoints.data(), c.widths.data(), int(c.widths.size() / 2),
                             hairs[c.material]);
     }
@@ -801,6 +844,14 @@ protected:
         HdRenderDelegate *delegate = GetRenderIndex()->GetRenderDelegate();
         v.spp = std::max(1, delegate->GetRenderSetting<int>(HdRenderSettingsTokens->convergedSamplesPerPixel, 64));
         v.maxDepth = delegate->GetRenderSetting<int>(TfToken("maxDepth"), 5);
+        std::string overrides = delegate->GetRenderSetting<std::string>(TfToken("gonzales:materials"), std::string());
+        if (overrides != _scene->overrideText) {
+            _thread->StopRender();
+            _scene->Edit([&] {
+                _scene->overrideText = overrides;
+                _scene->overrides = _ParseOverrides(overrides);
+            });
+        }
         int version = _scene->version.load();
         if (version == _version && v == _renderer->view)
             return;

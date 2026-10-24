@@ -217,14 +217,25 @@ def gz_scene_add_sphere_light(s: ScenePtr, x: Float32, y: Float32, z: Float32, r
 
 @export
 def gz_scene_add_hair(s: ScenePtr, sigma_r: Float32, sigma_g: Float32, sigma_b: Float32,
-                      beta_m: Float32, beta_n: Float32) abi("C") -> Int32:
-    """pbrt's hair BSDF from its absorption coefficient and roughnesses."""
+                      beta_m: Float32, beta_n: Float32, ior: Float32) abi("C") -> Int32:
+    """pbrt's hair BSDF from its absorption coefficient, roughnesses and index of refraction."""
     var nm = NamedMaterial(String("m") + String(len(s[unsafe_offset=0].named_materials)))
     nm.kind = MatKind.hair
     nm.albedo = RGB(sigma_r, sigma_g, sigma_b)
-    nm.ior = Float32(1.55)
+    nm.ior = ior
     nm.roughness_u = beta_m
     nm.roughness_v = beta_n
+    s[unsafe_offset=0].named_materials.append(nm^)
+    return Int32(len(s[unsafe_offset=0].named_materials) - 1)
+
+@export
+def gz_scene_add_dielectric(s: ScenePtr, ior: Float32, alpha: Float32) abi("C") -> Int32:
+    """Glass with GGX roughness `alpha` (0 is smooth)."""
+    var nm = NamedMaterial(String("m") + String(len(s[unsafe_offset=0].named_materials)))
+    nm.kind = MatKind.dielectric
+    nm.ior = ior
+    nm.roughness_u = alpha
+    nm.roughness_v = alpha
     s[unsafe_offset=0].named_materials.append(nm^)
     return Int32(len(s[unsafe_offset=0].named_materials) - 1)
 

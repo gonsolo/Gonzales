@@ -15,7 +15,8 @@ void gz_scene_add_dome_map(void *scene, const char *path, float r, float g, floa
 void gz_scene_add_distant(void *scene, float dx, float dy, float dz, float r, float g, float b);
 void gz_scene_add_point(void *scene, float x, float y, float z, float r, float g, float b);
 void gz_scene_add_sphere_light(void *scene, float x, float y, float z, float radius, float r, float g, float b);
-int gz_scene_add_hair(void *scene, float sigma_r, float sigma_g, float sigma_b, float beta_m, float beta_n);
+int gz_scene_add_hair(void *scene, float sigma_r, float sigma_g, float sigma_b, float beta_m, float beta_n, float ior);
+int gz_scene_add_dielectric(void *scene, float ior, float alpha);
 void gz_scene_add_curves(void *scene, const float *control_points, const float *widths, int n_segments, int material);
 void gz_scene_set_camera(void *scene, const float *world_to_camera, float fov_deg, int width, int height);
 void *gz_session_new(void *renderer, void *scene, int spp, int max_depth);
