@@ -1930,7 +1930,6 @@ def parse_and_render(
     # CPU or GPU, only ever happens in render_interactive (below), the
     # only place a stable per-frame identity exists to key a reservoir on.
     use_vol_restir_reuse: Bool = False,
-    out_rgb: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),  # the GPU image goes here instead of to files
 ) raises -> Int32:
     if use_gpu and not gpu_available():
         print("No GPU available — compile with --target-accelerator sm_86 or similar")
@@ -2516,12 +2515,8 @@ def parse_and_render(
         aux_job[unsafe_offset=0].thread.join()
         _ = aux_job.unsafe_take_pointee()
         aux_job.unsafe_free()
-        if _is_real_ptr[Float32](out_rgb):
-            for i in range(n_pixels * 3):
-                out_rgb[unsafe_offset=i] = denoised_gpu[i]
-        else:
-            _ = write_render_outputs(psc, denoised_gpu.unsafe_ptr(), noisy_gpu.unsafe_ptr(), not no_denoise,
-                                     albedo_gpu.unsafe_ptr(), normals_gpu.unsafe_ptr(), depth_gpu.unsafe_ptr())
+        _ = write_render_outputs(psc, denoised_gpu.unsafe_ptr(), noisy_gpu.unsafe_ptr(), not no_denoise,
+                                 albedo_gpu.unsafe_ptr(), normals_gpu.unsafe_ptr(), depth_gpu.unsafe_ptr())
         # the buffers and results are freed automatically
         mojo_parsed_free(psc)
         return Int32(0)
