@@ -795,13 +795,14 @@ def _hair_wrap(x: Float32) -> Float32:
 @always_inline
 def _hair_asin(x: Float32) -> Float32:
     """Polynomial asin(x) for x in [-1,1] — avoids std.math asin which may not link on GPU.
-    Uses sqrt-reflection for |x|>0.5 for accuracy; max error ~5e-6."""
+    Uses sqrt-reflection for |x|>0.5, asin(1-t) = pi/2 - sqrt(2t) * sum C(2n,n) t^n / (8^n (2n+1)); max error ~5e-6."""
     var ax = abs(x)
     var result: Float32
     if ax > Float32(0.5):
         var t = Float32(1.0) - ax
         var r = sqrt(Float32(2.0) * t)
-        result = Float32(1.5707963) - r * (Float32(1.0) + t * (Float32(0.16666667) + t * (Float32(0.075) + t * Float32(0.04464286))))
+        var c = Float32(0.0055803571) + t * (Float32(0.0018988715) + t * Float32(0.00069913))
+        result = Float32(1.5707963) - r * (Float32(1.0) + t * (Float32(0.083333333) + t * (Float32(0.01875) + t * c)))
     else:
         var x2 = ax * ax
         result = ax * (Float32(1.0) + x2 * (Float32(0.16666667) + x2 * (Float32(0.075) + x2 * Float32(0.04464286))))
