@@ -176,6 +176,7 @@ struct Scene(Movable):
             mediumIfaceCount  = Int64(len(self.medium_ifaces)),
             hasGlass          = Int32(1),
             lens              = ThinLens.pinhole(),
+            filterGlossy      = Float32(0),
             mneeStats         = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
             bvh4              = BVH4.none(),
         )

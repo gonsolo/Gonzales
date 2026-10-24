@@ -6,7 +6,7 @@ from std.sys import prefetch
 from std.sys.info import num_performance_cores
 from std.time import perf_counter_ns
 from .geometry import RGB, Point3f, Vec3f, point3f, vec3f, dot, cross, INV_FOUR_PI
-from .render_state import PathState, TileResult
+from .render_state import PathState, MIN_RAY_PDF_NONE, TileResult
 from .progress import Progress
 from .primitives import sphere_outward_normal, Ray, Intersection, PrimId, Sphere, TriangleMesh, mesh_vi
 from .primitives import mesh_point
@@ -230,6 +230,7 @@ def render_tile[Osp: Origin[mut=True], Oc2w: Origin[mut=True]](
                     INV_FOUR_PI,    # lastEnvNeePdf (see PathState)
                     Float32(0.0),   # cone_len: total path length, accumulated per bounce
                     Int8(0),   # ptex_missed
+                    MIN_RAY_PDF_NONE,   # min_ray_pdf
                 )
                 pixel_idx_buf[unsafe_offset=idx] = this_pixel_idx
                 idx += 1
@@ -246,7 +247,7 @@ def render_tile[Osp: Origin[mut=True], Oc2w: Origin[mut=True]](
         gi_pending=gi_pending_buf, gi_io=gi_io,
         nmaps=scene.normalSlopeMaps,
         textures=scene.gpuTextures, n_textures=Int(scene.gpuTextureCount),
-        has_glass=scene.hasGlass != Int32(0), mnee_stats=scene.mneeStats, bvh4=scene.bvh4)
+        has_glass=scene.hasGlass != Int32(0), mnee_stats=scene.mneeStats, bvh4=scene.bvh4, filter_glossy=scene.filterGlossy)
 
     # Multi-bounce path trace
     for _ in range(maxD):

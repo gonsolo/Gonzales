@@ -34,6 +34,8 @@ struct FilterParams(TrivialRegisterPassable):
 # ── Path state ────────────────────────────────────────────────────────────────
 # See: docs/07_path_tracing.md
 
+comptime MIN_RAY_PDF_NONE: Float32 = 3.0e38   # no scatter yet
+
 @fieldwise_init
 struct PathState(TrivialRegisterPassable):
 # <<listing: PathState>>
@@ -211,6 +213,7 @@ struct PathState(TrivialRegisterPassable):
     # Ptex demand paging: 1 = a lookup on this path wanted a face that was not loaded yet, so the sample is
     # withheld from the film and rendered again later; 2 = not rendered in this pass (gpu_wavefront.mojo).
     var ptex_missed: Int8
+    var min_ray_pdf: Float32   # smallest scatter pdf so far: Cycles' Filter Glossy blurs lobes by it
 # <</listing>>
 # PathState layout: 24+12+12+12+4+8+8+1+1+1+1+4+4+4+4+4+4+4+8+20+4+4+4 = 148 bytes (was 144 -- +4 for cone_len);
 # size is computed via size_of[PathState]() everywhere (GPU buffer sizing included), not hardcoded.

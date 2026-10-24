@@ -7,7 +7,7 @@ separate ranges in geometry.mojo; both depend only on the core
 comments and docstrings stripped before moving it. This is the last of the
 six clusters -- geometry.mojo itself keeps only the core (constants,
 Point3f/Vec3f/RGB/Frame, and the shared geometry/SIMD helpers)."""
-from std.math import min, max, abs, exp
+from std.math import min, max, abs, exp, sqrt
 from .geometry import RGB, safe_sqrt, fast_div, fast_recip
 
 struct MatKind:
@@ -307,3 +307,19 @@ def dt_transmittance(mat: Material, tex_rgb: RGB) -> RGB:
     if Int(mat.tex_idx) == -1 or mat.dt_tex_lobes == Int8(1):
         return mat.emission
     return tex_rgb
+
+
+def filter_glossy(mat: Material, min_ray_pdf: Float32, filter: Float32) -> Material:
+    """Cycles' Filter Glossy: after a scatter of pdf p, glossy lobes widen to roughness sqrt(1 - p / filter) / 2.
+    Hair takes it in emission.b (see _hair_precompute), microfacet materials as a floor on their alpha."""
+    if filter <= Float32(0) or min_ray_pdf >= filter:
+        return mat
+    var r = sqrt(Float32(1) - min_ray_pdf / filter) * Float32(0.5)
+    var m = mat
+    if m.type == MatKind.hair:
+        m.emission.b = r
+    elif m.type == MatKind.conductor or m.type == MatKind.coated_diffuse or m.type == MatKind.coated_conductor or \
+         (m.type == MatKind.dielectric and m.sss_boundary == Int8(0)):
+        m.roughU = max(m.roughU, r)
+        m.roughV = max(m.roughV, r)
+    return m

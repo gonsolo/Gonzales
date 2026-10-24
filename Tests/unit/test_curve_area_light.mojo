@@ -3,7 +3,7 @@ from std.memory.alloc import unsafe_alloc
 from std.testing import assert_true, TestSuite
 from gonzales.geometry import Point3f, Vec3f, RGB, dot, cross
 from gonzales.materials import Material, MatKind
-from gonzales.render_state import PathState
+from gonzales.render_state import PathState, MIN_RAY_PDF_NONE
 from gonzales.primitives import Ray, Intersection, PrimId, TriangleMesh, Sphere
 from gonzales.lights import AreaLight, DistantLight, PointLight, InfiniteLight, LightSampler
 from gonzales.curves import Curve, curve_bspline_point, curve_light_tube_area, _curve_perp_axis
@@ -32,6 +32,7 @@ def _dummy_path(ray: Ray, throughput: SpectralSample) -> PathState:
         Float32(0.0),   # lastEnvNeePdf
         Float32(0.0),   # cone_len
         Int8(0),   # ptex_missed
+        MIN_RAY_PDF_NONE,   # min_ray_pdf
     )
 
 # ── Curve area lights (task #59: glowing_hair.pbrt used to render black) ───
@@ -175,6 +176,7 @@ def test_emissive_curve_bounce_hit_mis_weights_against_its_own_light_pdf() raise
         Float32(0.0),   # lastEnvNeePdf
         Float32(0.0),   # cone_len
         Int8(0),   # ptex_missed
+        MIN_RAY_PDF_NONE,   # min_ray_pdf
     )
     intersections[unsafe_offset=0] = inter
 

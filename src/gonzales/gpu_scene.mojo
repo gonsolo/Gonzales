@@ -812,6 +812,7 @@ struct GpuSceneHandle(Movable):
     var c2w_buf: DeviceBuffer[DType.uint8]    # camera_to_world: 16 Float32 = 64 bytes (updated each frame)
     var filter: FilterParams
     var lens: ThinLens
+    var filter_glossy: Float32
     var film: FilmDims
     # Staged spectral rendering rollout (Stage 2c-1, see
     # project_spectral_rendering memory) — device-side twin of the host
@@ -861,6 +862,7 @@ struct GpuSceneHandle(Movable):
             vcmBucketCap=Int32(0),
             hasGlass=Int32(1) if self.has_glass_material else Int32(0),
             lens=self.lens,
+            filterGlossy=self.filter_glossy,
             mneeStats=Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
             bvh4=BVH4.none(),
         )
@@ -1203,6 +1205,7 @@ def gpu_upload_scene(
                 filter=FilterParams(s.filter_sigma, s.filter_support_x, s.filter_support_y,
                                     s.filter_norm_x, s.filter_norm_y, s.filter_type),
                 lens=ThinLens(s.camera_lens_radius, s.camera_focal_distance),
+                filter_glossy=Float32(0),
                 film=FilmDims(s.film_w, s.film_h),
                 spectral=spectral^,
             ))

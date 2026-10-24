@@ -7,7 +7,7 @@ from .geometry import _is_real_ptr, Vec3f, dot
 from std.math import sqrt
 from .guide import null_guide
 from .lights import AreaLight, DistantLight, InfiniteLight, LightSampler, PointLight
-from .materials import MatKind, Material, MeasuredBRDF
+from .materials import MatKind, Material, MeasuredBRDF, filter_glossy
 from .media import Medium, MediumInterface, Grid, NvdbGrid
 from .primitives import Instance, Intersection, PrimId, Sphere, TriangleMesh
 from .render_state import GpuTexture, NormalSlopeMap, PathState, ShadowTask, SuppressTask
@@ -47,7 +47,7 @@ def _shade_context(
             distant_lights=sd.distantLights, distant_count=Int(sd.distantLightCount),
             point_lights=sd.pointLights, point_count=Int(sd.pointLightCount),
             infinite_lights=sd.infiniteLights, infinite_count=Int(sd.infiniteLightCount),
-            spheres=sd.spheres, sphere_count=Int(sd.sphereCount), light_sampler=sd.lightSampler))
+            spheres=sd.spheres, sphere_count=Int(sd.sphereCount), light_sampler=sd.lightSampler), filter_glossy=sd.filterGlossy)
 
 
 def shared_shade_context(
@@ -232,6 +232,7 @@ def shade_coated_diffuse_gpu[defer_only: Bool = False](
     path_ptr[].pending_mat = Int8(0)
     var inter = intersections[unsafe_offset=tid]
     var mat = sd.materials[unsafe_offset=Int(inter.primId.materialIndex)]
+    mat = filter_glossy(mat, path_ptr[].min_ray_pdf, sd.filterGlossy)
     shade_coated_diffuse[True, True, defer_only](path_ptr, inter, ctx_ptr[], mat)
 
 
@@ -346,6 +347,7 @@ def shade_conductor_gpu(
     path_ptr[].pending_mat = Int8(0)
     var inter = intersections[unsafe_offset=tid]
     var mat = sd.materials[unsafe_offset=Int(inter.primId.materialIndex)]
+    mat = filter_glossy(mat, path_ptr[].min_ray_pdf, sd.filterGlossy)
     var ctx = _shade_context(sd, sobol_matrices, path_idx=tid, shadow_tasks=shadow_tasks)
     shade_conductor[True, True](path_ptr, inter, ctx, mat)
 
@@ -398,6 +400,7 @@ def shade_dielectric_gpu(
     path_ptr[].pending_mat = Int8(0)
     var inter = intersections[unsafe_offset=tid]
     var mat = sd.materials[unsafe_offset=Int(inter.primId.materialIndex)]
+    mat = filter_glossy(mat, path_ptr[].min_ray_pdf, sd.filterGlossy)
     # sd.gpuTextures/camFp are here only so a dielectric carrying "texture
     # displacement"/"normalmap" gets it applied (barcelona-pavilion's water).
     # tex_filenames is CPU-only (GPU samples the uploaded texture table), so
@@ -451,6 +454,7 @@ def shade_coated_conductor_gpu(
     path_ptr[].pending_mat = Int8(0)
     var inter = intersections[unsafe_offset=tid]
     var mat = sd.materials[unsafe_offset=Int(inter.primId.materialIndex)]
+    mat = filter_glossy(mat, path_ptr[].min_ray_pdf, sd.filterGlossy)
     var ctx = _shade_context(sd, sobol_matrices, path_idx=tid, shadow_tasks=shadow_tasks)
     shade_coated_conductor[True, True](path_ptr, inter, ctx, mat)
 
@@ -501,6 +505,7 @@ def shade_hair_gpu(
     path_ptr[].pending_mat = Int8(0)
     var inter = intersections[unsafe_offset=tid]
     var mat = sd.materials[unsafe_offset=Int(inter.primId.materialIndex)]
+    mat = filter_glossy(mat, path_ptr[].min_ray_pdf, sd.filterGlossy)
     var ctx = _shade_context(sd, sobol_matrices, path_idx=tid, shadow_tasks=shadow_tasks)
     shade_hair[True, True](path_ptr, inter, ctx, mat)
 
@@ -562,7 +567,7 @@ def shade_enqueue_shadow_gpu(
             distant_lights=Pointer[DistantLight, MutUntrackedOrigin](), distant_count=0,
             point_lights=Pointer[PointLight, MutUntrackedOrigin](), point_count=0,
             infinite_lights=infiniteLights, infinite_count=n_infinite_lights,
-            spheres=spheres, sphere_count=n_spheres, light_sampler=ls_shadow))
+            spheres=spheres, sphere_count=n_spheres, light_sampler=ls_shadow), filter_glossy=Float32(0))
     shade_nee_core[True, True](path_ptr, inter, ctx_shadow)
 
 

@@ -299,6 +299,7 @@ struct SceneView(TrivialRegisterPassable, DevicePassable):
     # 0 when no material is smooth glass, so MNEE's per-sample probe toward the light can be skipped; 1 otherwise (always on the CPU).
     var hasGlass: Int32
     var lens: ThinLens
+    var filterGlossy: Float32   # Cycles' Filter Glossy; 0 = off
     # [MNEE probes, probes that found glass, switched-off flag]; dangling = MNEE always on
     var mneeStats: Pointer[Int32, MutUntrackedOrigin]
     # CPU-only 4-wide collapse of bvh2Nodes (build_bvh4); BVH4.none() = use the BVH2.
@@ -1031,7 +1032,7 @@ def _hair_precompute(
     var bm4 = bm2 * bm2; var bm8 = bm4 * bm4; var bm16 = bm8 * bm8
     var bm20 = bm16 * bm4
     var tmp_v = Float32(0.726) * betaM + Float32(0.812) * bm2 + Float32(3.7) * bm20
-    var vm0 = max(tmp_v * tmp_v, Float32(0.0001))
+    var vm0 = max(max(tmp_v * tmp_v, Float32(0.0001)), mat.emission.b)   # emission.b: Filter Glossy's blur
     var vm1 = max(vm0 * Float32(0.25), Float32(0.0001))
     var vm2 = max(vm0 * Float32(4.0), Float32(0.0001))
     var inv_vm0 = Float32(1.0) / vm0; var inv_vm1 = Float32(1.0) / vm1; var inv_vm2 = Float32(1.0) / vm2
@@ -1048,7 +1049,7 @@ def _hair_precompute(
 
     # pbrt's azimuthal logistic scale from betaN
     var bn2 = betaN * betaN; var bn4 = bn2 * bn2; var bn8 = bn4 * bn4; var bn16 = bn8 * bn8
-    var s = Float32(0.626657069) * (Float32(0.265) * betaN + Float32(1.194) * bn2 + Float32(5.372) * bn16 * bn4 * bn2)
+    var s = max(Float32(0.626657069) * (Float32(0.265) * betaN + Float32(1.194) * bn2 + Float32(5.372) * bn16 * bn4 * bn2), mat.emission.b)
 
     var lum0 = A0.luma() + Float32(1e-6)
     var lum1 = A1.luma() + Float32(1e-6)

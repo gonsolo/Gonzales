@@ -14,7 +14,7 @@ from std.testing import assert_true, assert_false, TestSuite
 from gonzales.footprint import CameraFootprint
 from gonzales.geometry import RGB, Point3f, Vec3f, dot, cross
 from gonzales.materials import Material, MatKind, MeasuredBRDF
-from gonzales.render_state import GpuTexture, NormalSlopeMap, ShadowTask, SuppressTask, PathState
+from gonzales.render_state import GpuTexture, NormalSlopeMap, ShadowTask, SuppressTask, PathState, MIN_RAY_PDF_NONE
 from gonzales.primitives import Ray, PrimId, Intersection, TriangleMesh, Instance, Sphere
 from gonzales.lights import LightSampler, AreaLight, DistantLight, PointLight, InfiniteLight
 from gonzales.curves import Curve
@@ -111,6 +111,7 @@ def _make_ctx(
         Pointer[SuppressTask, MutUntrackedOrigin].unsafe_dangling(),
         0, Pointer[Medium, MutUntrackedOrigin].unsafe_dangling(), Pointer[MediumInterface, MutUntrackedOrigin].unsafe_dangling(),
         Pointer[Grid, MutUntrackedOrigin].unsafe_dangling(), Pointer[NvdbGrid, MutUntrackedOrigin].unsafe_dangling(),
+        Float32(0),
     )
 
 def _make_path(org: Vec3f, dir: Vec3f) -> PathState:
@@ -124,6 +125,7 @@ def _make_path(org: Vec3f, dir: Vec3f) -> PathState:
         Float32(0.0),   # lastEnvNeePdf
         Float32(0.0),   # cone_len
         Int8(0),   # ptex_missed
+        MIN_RAY_PDF_NONE,   # min_ray_pdf
     )
 
 # ── _get_tri_verts ────────────────────────────────────────────────────────────
@@ -322,6 +324,7 @@ def test_build_geom_context_full_sphere_prim_returns_exact_analytic_normal() rai
         Pointer[SuppressTask, MutUntrackedOrigin].unsafe_dangling(),
         0, Pointer[Medium, MutUntrackedOrigin].unsafe_dangling(), Pointer[MediumInterface, MutUntrackedOrigin].unsafe_dangling(),
         Pointer[Grid, MutUntrackedOrigin].unsafe_dangling(), Pointer[NvdbGrid, MutUntrackedOrigin].unsafe_dangling(),
+        Float32(0),
     )
 
     var org = Vec3f(0.0, 0.0, 5.0)

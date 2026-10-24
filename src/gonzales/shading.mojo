@@ -7,7 +7,7 @@ from std.ffi import external_call
 from std.memory.alloc import unsafe_alloc
 from .geometry import offset_point, RGB, Point3f, Point2f, Point2i, restir_jitter_pixel, Vec3f, dot, face_toward, cross, Frame, fast_sincos, safe_sqrt, reflect, refract, PI, TWO_PI, INV_PI, INV_FOUR_PI, _is_real_ptr, _atan2f
 from .render_state import PDF_DROP_DIRECT
-from .materials import Material, MatKind, LobeKind, MeasuredBRDF, schlick_fresnel, fr_dielectric, dielectric_is_rough, is_specular_glass, dt_reflectance, dt_transmittance
+from .materials import Material, MatKind, LobeKind, filter_glossy, MeasuredBRDF, schlick_fresnel, fr_dielectric, dielectric_is_rough, is_specular_glass, dt_reflectance, dt_transmittance
 from .render_state import PathState, GpuTexture, NormalSlopeMap, normal_slope_map_none, ShadowTask, SuppressTask, SHADOW_SLOTS
 from .primitives import Ray, Intersection, PrimId, TriangleMesh, Sphere, Instance, mesh_uv, mesh_has_uvs, mesh_normal, mesh_vi, mesh_face
 from .primitives import mesh_pos
@@ -184,6 +184,8 @@ struct ShadeContext:
     var medium_ifaces: Pointer[MediumInterface, MutUntrackedOrigin]
     var grids:         Pointer[Grid, MutUntrackedOrigin]
     var nvdb_grids:    Pointer[NvdbGrid, MutUntrackedOrigin]
+    # Cycles' Filter Glossy (scene.cycles.blur_glossy); 0 = off
+    var filter_glossy: Float32
 
 # Orient an emitter triangle's WINDING normal to agree with the mesh's own
 # supplied per-vertex normals, which is what decides whether a one-sided
@@ -5530,6 +5532,8 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
     # of the sky light transmitted through diffusetransmission foliage.
     if mat.type != MatKind.interface:
         path_ptr[].mis_null_dist = Float32(0.0)
+        if path_ptr[].specularBounce == Int8(0) and path_ptr[].lastBsdfPdf > Float32(0.0):
+            path_ptr[].min_ray_pdf = min(path_ptr[].min_ray_pdf, path_ptr[].lastBsdfPdf)
         # Same reasoning, same one place: default the escape's env-NEE MIS
         # partner to the material-agnostic sampler (_sample_infinite_light_nee,
         # uniform sphere) that every material but `diffuse` uses, and let
@@ -5549,7 +5553,7 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
         # GPU: mark material for its dedicated per-material kernel
         path_ptr[].pending_mat = mat.type
     else:
-        _shade_dispatch[False, enqueue_shadow](mat, path_ptr, inter, ctx, guide_write, restir_io, pixel_idx, sms_io)
+        _shade_dispatch[False, enqueue_shadow](filter_glossy(mat, path_ptr[].min_ray_pdf, ctx.filter_glossy), path_ptr, inter, ctx, guide_write, restir_io, pixel_idx, sms_io)
 
 
 @always_inline
@@ -5588,6 +5592,7 @@ def cpu_shade_context(
     has_glass: Bool = True,
     mnee_stats: Pointer[Int32, MutUntrackedOrigin] = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
     bvh4: BVH4 = BVH4.none(),
+    filter_glossy: Float32 = Float32(0),
 ) -> ShadeContext:
     """The per-render-invariant ShadeContext of the CPU wavefront; build once, set path_idx per path."""
     return ShadeContext(
@@ -5608,7 +5613,7 @@ def cpu_shade_context(
             distant_lights=distantLights, distant_count=distantLightCount,
             point_lights=pointLights, point_count=pointLightCount,
             infinite_lights=infiniteLights, infinite_count=infiniteLightCount,
-            spheres=spheres, sphere_count=sphereCount, light_sampler=light_sampler))
+            spheres=spheres, sphere_count=sphereCount, light_sampler=light_sampler), filter_glossy=filter_glossy)
 
 
 @always_inline
