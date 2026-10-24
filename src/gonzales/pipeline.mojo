@@ -3408,6 +3408,12 @@ def session_resolve(s: SessionPtr, rgb: Pointer[Float32, MutUntrackedOrigin], de
     s[].resolves += 1
 
 def session_free(s: SessionPtr):
+    var b = s[].renderer.handle[].bench
+    if b[unsafe_offset=3] == 2:
+        print("bench ms: primary", b[unsafe_offset=9] // 1000000, "closest", b[unsafe_offset=4] // 1000000,
+              "medium/walk", b[unsafe_offset=12] // 1000000,
+              "shade", b[unsafe_offset=5] // 1000000, "shadow", b[unsafe_offset=6] // 1000000,
+              "| rays: closest", b[unsafe_offset=0], "shadow", b[unsafe_offset=1])
     gpu_free_scene(s[].renderer.handle)
     mojo_parsed_free(s[].psc)
     s.unsafe_deinit_pointee()

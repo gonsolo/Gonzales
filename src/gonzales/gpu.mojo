@@ -58,7 +58,8 @@ def _bench_stage(handle: Pointer[GpuSceneHandle, MutUntrackedOrigin], slot: Int,
         handle[].bench[unsafe_offset=count_slot] += read_counter(handle[].ctx, handle[].active_count_buf, count_index)
     handle[].ctx.synchronize()
     var now = Int(perf_counter_ns())
-    handle[].bench[unsafe_offset=slot] += now - handle[].bench[unsafe_offset=8]
+    if handle[].bench[unsafe_offset=8] != 0:
+        handle[].bench[unsafe_offset=slot] += now - handle[].bench[unsafe_offset=8]
     handle[].bench[unsafe_offset=8] = now
 
 # GONZALES_TRAVERSE_COUNT: re-trace the round's rays with step counters, print the means per ray, stop after six rounds.
@@ -292,6 +293,7 @@ def _gpu_bounce_kernels(
             grid_dim=grid_dim,
             block_dim=block_size,
         )
+        _bench_stage(handle, 12)
     var suppress_tasks = Pointer[SuppressTask, MutUntrackedOrigin].unsafe_dangling()
     if handle[].has_glass_material:
         suppress_tasks = handle[].suppress_buf.unsafe_ptr().unsafe_bitcast[SuppressTask]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()

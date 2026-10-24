@@ -1,5 +1,6 @@
 // Hydra render delegate: collects meshes, materials, lights and the camera,
 // and renders them with libgonzales.so.
+#include <chrono>
 #include "gonzales.h"
 
 #include "pxr/base/gf/half.h"
@@ -909,6 +910,30 @@ void *_BuildScene(Scene &synced, int *version) {
     return scene;
 }
 
+// GONZALES_TIMING: wall time per stage of a render, summed over its passes.
+struct Timer {
+    std::chrono::steady_clock::time_point last = std::chrono::steady_clock::now();
+    std::vector<std::pair<std::string, double>> laps;
+    bool on = std::getenv("GONZALES_TIMING") != nullptr;
+    void Lap(char const *name, bool sum = false) {
+        auto now = std::chrono::steady_clock::now();
+        double s = std::chrono::duration<double>(now - last).count();
+        last = now;
+        for (auto &l : laps)
+            if (sum && l.first == name) {
+                l.second += s;
+                return;
+            }
+        laps.emplace_back(name, s);
+    }
+    void Report() const {
+        if (!on)
+            return;
+        for (auto const &[name, s] : laps)
+            fprintf(stderr, "Gonzales: %s %.2f s\n", name.c_str(), s);
+    }
+};
+
 // Progressive rendering on the render thread. The session keeps the scene on the GPU until the scene changes;
 // the render pass sets the view only while the thread is stopped.
 class Renderer {
@@ -930,12 +955,15 @@ public:
         spp = 0;
         if (!v.color || v.width <= 0 || v.height <= 0)
             return;
+        Timer timer;
         if (!_session || _version != _scene->version.load()) {
             Free();
             void *scene = _BuildScene(*_scene, &_version);
+            timer.Lap("build scene");
             gz_scene_set_camera(scene, v.worldToCamera.data(), v.fov, v.width, v.height);
             gz_scene_set_lens(scene, v.lensRadius, v.focusDistance);
             _session = gz_session_new(_Renderer(), scene, v.spp, v.maxDepth);
+            timer.Lap("upload");
             if (!_session) {
                 v.color->SetConverged(true);
                 return;
@@ -953,8 +981,10 @@ public:
         // Small passes first, for a quick first image.
         for (int pass = 1; !thread.IsStopRequested(); pass = std::min(2 * pass, 8)) {
             int done = gz_session_render(_session, pass);
+            timer.Lap("render", true);
             if ((failed = done < 0 || gz_session_resolve(_session, rgb.data(), v.denoise) != 0))
                 break;
+            timer.Lap("resolve", true);
             v.color->StoreRgb(rgb.data());
             spp = done;
             if (done >= v.spp)
@@ -962,6 +992,7 @@ public:
         }
         if (failed || spp >= v.spp)
             v.color->SetConverged(true);
+        timer.Report();
     }
 
 private:
