@@ -8,7 +8,7 @@ from gonzales.geometry import RGB, _is_real_ptr
 from gonzales.materials import MatKind
 from gonzales.parse_types import SceneParseState, NamedMaterial
 from gonzales.pbrt_parser import ParsedScene_Mojo, finalize_scene, mojo_apply_overrides
-from gonzales.pipeline import (_generate_sobol_matrices, RenderSession, SessionPtr, session_new, session_set_camera, session_set_samples, session_set_lens,
+from gonzales.pipeline import (_generate_sobol_matrices, RenderSession, SessionPtr, session_new, session_set_camera, session_set_samples, session_set_lens, session_set_filter_glossy,
                                session_render, session_resolve, session_free)
 from gonzales.scene_builder import store_mesh
 from gonzales.spectrum import load_spectral_context, spectral_handle, SpectralContext
@@ -193,6 +193,11 @@ def gz_session_set_camera(s: SessionPtr, world_to_camera: F32Ptr, fov_deg: Float
 def gz_session_set_lens(s: SessionPtr, radius: Float32, focal_distance: Float32) abi("C"):
     """As gz_scene_set_lens; a change starts the film over."""
     session_set_lens(s, radius, focal_distance)
+
+@export
+def gz_session_set_filter_glossy(s: SessionPtr, filter: Float32) abi("C"):
+    """Cycles' Filter Glossy: glossy lobes widen after rough bounces; 0 is off."""
+    session_set_filter_glossy(s, filter)
 
 @export
 def gz_session_set_samples(s: SessionPtr, spp: Int32, max_depth: Int32) abi("C"):

@@ -3374,6 +3374,13 @@ def session_set_lens(s: SessionPtr, radius: Float32, focal_distance: Float32):
     s[].renderer.handle[].lens = ThinLens(radius, focal_distance)
     session_clear(s)
 
+def session_set_filter_glossy(s: SessionPtr, filter: Float32):
+    """Cycles' Filter Glossy; 0 is off."""
+    if filter == s[].renderer.handle[].filter_glossy:
+        return
+    s[].renderer.handle[].filter_glossy = filter
+    session_clear(s)
+
 def session_set_samples(s: SessionPtr, spp: Int32, max_depth: Int32):
     """The sample count a render converges at, which lays out the sample sequence, and the path depth."""
     ref psc = s[].psc
