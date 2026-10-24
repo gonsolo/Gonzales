@@ -382,13 +382,18 @@ def _gpu_bounce_kernels(
     # Software BVH: the diffuse and coated kernels only queue their shadow rays and sw_resolve_shadow_gpu traces them after
     # the last material kernel. Needs the task buffer (no media), no guiding/ReSTIR, and no live MNEE (its probe wants the
     # shadow result inline).
-    var sw_shadow = (not use_vulkan_rt) and Int(handle[].shadow_slots) == SHADOW_SLOTS and handle[].media.n_mediums == 0 \
-        and not use_restir and not handle[].has_glass_material and not guide_is_active(handle[].guide_write) \
-        and getenv("GONZALES_NO_SW_SHADOW") == ""
+    var sw_shadow_ok = (not use_vulkan_rt) and Int(handle[].shadow_slots) == SHADOW_SLOTS and handle[].media.n_mediums == 0 \
+        and not use_restir and not guide_is_active(handle[].guide_write) and getenv("GONZALES_NO_SW_SHADOW") == ""
+    var sw_shadow = sw_shadow_ok and not handle[].has_glass_material
+    # Hair NEE has no MNEE probe, so its shadow rays are deferred with glass in the scene too (the fur's rays dominate).
+    var sw_shadow_hair = sw_shadow_ok and handle[].has_material(MatKind.hair)
     var sw_defer_coated = getenv("GONZALES_NO_SW_COATED") == ""
     var shadow_ptr = Pointer[ShadowTask, MutUntrackedOrigin].unsafe_dangling()
     if hw_shadow or sw_shadow:
         shadow_ptr = handle[].shadow_buf.unsafe_ptr().unsafe_bitcast[ShadowTask]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
+    var hair_shadow_ptr = shadow_ptr
+    if sw_shadow_hair:
+        hair_shadow_ptr = handle[].shadow_buf.unsafe_ptr().unsafe_bitcast[ShadowTask]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
     # Software shading queues tasks only when sw_shadow (cleared once at allocation, freed by sw_resolve_shadow_gpu); the
     # reset below is --rt-hardware's.
     if hw_shadow and round == 0 and usable_slots == SHADOW_SLOTS:
@@ -641,13 +646,14 @@ def _gpu_bounce_kernels(
             sd,
             handle[].sobol_buf.unsafe_ptr().unsafe_bitcast[UInt32](),
             Int64(n), kind_idx, live_count.unsafe_offset(1 + Int(MatKind.hair)),
-            shadow_ptr,
+            hair_shadow_ptr,
             grid_dim=grid_dim,
             block_dim=block_size,
         )
     _bench_stage(handle, 17 + Int(MatKind.hair))
     _bench_stage(handle, 5)
-    if sw_shadow:
+    if sw_shadow or sw_shadow_hair:
+        shadow_ptr = hair_shadow_ptr
         var sw_ids = ids_base.unsafe_offset(n)      # [n, 3n) is unused without the RT cores and holds a task per slot
         var sw_count = live_count.unsafe_offset(15)     # zeroed with the other counters at the start of the round
         var task_grid = ceildiv(n * SHADOW_SLOTS, block_size)
