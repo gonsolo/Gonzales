@@ -1,11 +1,14 @@
 """Builds a bottom-level acceleration structure in the format the RT cores walk (docs/rtcore/ACCEL_FORMAT.md), with no
 driver involved. Input: triangles as nine floats each. Output: the structure's bytes (the root node at 0x380, the nodes,
 then the triangle blocks) and the map from the hit's primitive id to the input triangle."""
+from max.algorithm import parallelize
+from std.atomic import Atomic
 from std.math import floor, ceil
 from std.memory import bitcast
 from std.memory.alloc import unsafe_alloc
 from std.os import getenv
 from std.sys import get_defined_int
+from std.sys.info import num_performance_cores
 
 comptime RT_NODE = 128
 comptime RT_ROOT = 0x380
@@ -401,13 +404,17 @@ def _build_binary(order: PI, tlo: PD, thi: PD, tc: PD, tvv: PF, u_first: PI, u_n
     return nb
 
 
+comptime BOX_SUBTREE = 65536       # boxes a subtree task covers at most
+comptime BOX_MAX_TASKS = 4096
+
+
 @no_inline
-def _build_box_binary(order: PI, tlo: PD, thi: PD, tc: PD, m: Int, first: Int, bn_s: PI, bn_c: PI, bn_l: PI, bn_r: PI, bn_nb: PI, bn_box: PD) -> Int:
-    """Binary tree over boxes from node `first` on; a leaf holds at most RT_LEAF_TRIS boxes. Returns the next free node."""
+def _box_subtree(order: PI, tlo: PD, thi: PD, tc: PD, root: Int, nb0: Int, bn_s: PI, bn_c: PI, bn_l: PI, bn_r: PI, bn_nb: PI, bn_box: PD) -> Int:
+    """Binary tree over the boxes of node `root` (bn_s, bn_c set), its other nodes from nb0 on; a leaf holds at most
+    RT_LEAF_TRIS boxes. Returns the next free node."""
     var stack = unsafe_alloc[Int32](128 + 64)
-    var nb = first + 1
-    bn_s[unsafe_offset=first] = Int32(0); bn_c[unsafe_offset=first] = Int32(m)
-    stack[unsafe_offset=0] = Int32(first)
+    var nb = nb0
+    stack[unsafe_offset=0] = Int32(root)
     var sp = 1
     var cb = unsafe_alloc[Float64](6)
     while sp > 0:
@@ -429,6 +436,67 @@ def _build_box_binary(order: PI, tlo: PD, thi: PD, tc: PD, m: Int, first: Int, b
         sp += 2
     stack.unsafe_free(); cb.unsafe_free()
     return nb
+
+
+@no_inline
+def _build_box_binary(order: PI, tlo: PD, thi: PD, tc: PD, m: Int, first: Int, bn_s: PI, bn_c: PI, bn_l: PI, bn_r: PI, bn_nb: PI, bn_box: PD) -> Int:
+    """Binary tree over boxes from node `first` on, on all cores: the top split level by level (a level's nodes in
+    parallel), then subtrees of at most BOX_SUBTREE boxes, each in its own node range (twice its boxes). A child's index is
+    above its parent's; unused nodes have no children and no boxes. Returns the end of the node range."""
+    bn_s[unsafe_offset=first] = Int32(0); bn_c[unsafe_offset=first] = Int32(m)
+    var level = unsafe_alloc[Int32](BOX_MAX_TASKS); var next_level = unsafe_alloc[Int32](BOX_MAX_TASKS)
+    var half = unsafe_alloc[Int](BOX_MAX_TASKS)
+    var subs = unsafe_alloc[Int32](BOX_MAX_TASKS)
+    var n_subs = 0
+    level[unsafe_offset=0] = Int32(first)
+    var n_level = 1
+    var nb = first + 1
+    while n_level > 0:
+        def split_one(k: Int) {imm}:
+            var ni = Int(level[unsafe_offset=k])
+            var start = Int(bn_s[unsafe_offset=ni]); var count = Int(bn_c[unsafe_offset=ni])
+            half[unsafe_offset=k] = -1
+            if count > BOX_SUBTREE:
+                _range_box(order, tlo, thi, start, count, bn_box.unsafe_offset(ni * 6))
+                half[unsafe_offset=k] = _split_sah(order, tlo, thi, tc, start, count)
+
+        parallelize(split_one, n_level)
+        var n_next = 0
+        for k in range(n_level):
+            var ni = Int(level[unsafe_offset=k])
+            if half[unsafe_offset=k] < 0 or n_subs + n_next + 2 * (n_level - k) > BOX_MAX_TASKS:
+                subs[unsafe_offset=n_subs] = Int32(ni); n_subs += 1
+                continue
+            var start = Int(bn_s[unsafe_offset=ni]); var count = Int(bn_c[unsafe_offset=ni])
+            var h = half[unsafe_offset=k]
+            bn_l[unsafe_offset=ni] = Int32(nb); bn_r[unsafe_offset=ni] = Int32(nb + 1); bn_nb[unsafe_offset=ni] = Int32(0)
+            bn_s[unsafe_offset=nb] = Int32(start); bn_c[unsafe_offset=nb] = Int32(h)
+            bn_s[unsafe_offset=nb + 1] = Int32(start + h); bn_c[unsafe_offset=nb + 1] = Int32(count - h)
+            next_level[unsafe_offset=n_next] = Int32(nb); next_level[unsafe_offset=n_next + 1] = Int32(nb + 1)
+            nb += 2; n_next += 2
+        var tmp = level; level = next_level; next_level = tmp
+        n_level = n_next
+    var base = unsafe_alloc[Int](n_subs + 1)
+    base[unsafe_offset=0] = nb
+    for j in range(n_subs):
+        base[unsafe_offset=j + 1] = base[unsafe_offset=j] + 2 * Int(bn_c[unsafe_offset=Int(subs[unsafe_offset=j])])
+    var ends = unsafe_alloc[Int](max(n_subs, 1))
+    var next_sub = unsafe_alloc[Int32](1)
+    next_sub[unsafe_offset=0] = Int32(0)
+
+    def build_worker(_w: Int) {imm}:
+        while True:
+            var j = Int(Atomic.fetch_add(next_sub, Int32(1)))
+            if j >= n_subs:
+                break
+            ends[unsafe_offset=j] = _box_subtree(order, tlo, thi, tc, Int(subs[unsafe_offset=j]), base[unsafe_offset=j], bn_s, bn_c, bn_l, bn_r, bn_nb, bn_box)
+            for i in range(ends[unsafe_offset=j], base[unsafe_offset=j + 1]):
+                bn_l[unsafe_offset=i] = Int32(-1); bn_r[unsafe_offset=i] = Int32(-1); bn_nb[unsafe_offset=i] = Int32(0)
+
+    parallelize(build_worker, min(num_performance_cores(), max(n_subs, 1)))
+    var end = base[unsafe_offset=n_subs]
+    level.unsafe_free(); next_level.unsafe_free(); half.unsafe_free(); subs.unsafe_free(); base.unsafe_free(); ends.unsafe_free(); next_sub.unsafe_free()
+    return end
 
 
 @no_inline
@@ -574,7 +642,7 @@ def rt_build_blas(tv: PF, n: Int, tight: Bool = True, sah: Bool = True, quads: B
             tlo[unsafe_offset=u * 3 + a] = lo; thi[unsafe_offset=u * 3 + a] = hi
             tc[unsafe_offset=u * 3 + a] = (lo + hi) * 0.5
         order[unsafe_offset=u] = Int32(u)
-    var nbmax = 2 * nu + 2 * n_bx + 2
+    var nbmax = 2 * nu + 2 * n_bx + 2 + BOX_MAX_TASKS
     var bn_s = unsafe_alloc[Int32](nbmax); var bn_c = unsafe_alloc[Int32](nbmax)
     var bn_l = unsafe_alloc[Int32](nbmax); var bn_r = unsafe_alloc[Int32](nbmax)
     var bn_nb = unsafe_alloc[Int32](nbmax)
