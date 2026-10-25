@@ -193,6 +193,7 @@ def _gpu_bounce_kernels(
         )
         if live_paths == 0:
             return 0                                    # every path is finished: the remaining kernels would be no-ops
+        _bench_stage(handle, 4)
     elif use_vulkan_rt:
         vulkaninterop_rt_traverse_paths_gpu(
             handle[].ctx,
@@ -691,6 +692,7 @@ def _gpu_bounce_kernels(
             interop_rays_buf.value(), interop_results_buf.value(), handle[].active_idx_buf, handle[].active_count_buf, n,
             sd, handle[].n_spheres,
             handle[].rt_scratch_buf, n_meshes_vk, shadow_instance_base, round, live_paths, handle[].bench)
+        _bench_stage(handle, 6)
     return live_paths
 
 

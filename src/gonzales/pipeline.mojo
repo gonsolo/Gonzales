@@ -3316,18 +3316,25 @@ def session_new(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin], sobol: Point
                 spectral: SpectralHandle, gpu_ctx: Optional[DeviceContext]) -> SessionPtr:
     """Uploads the parsed scene, which the session then owns; dangling if that fails."""
     var n_pixels = Int(psc[unsafe_offset=0].film_w) * Int(psc[unsafe_offset=0].film_h)
+    var timing = getenv("GONZALES_TIMING") != ""
+    var t0 = perf_counter_ns()
     var handle = gpu_upload_scene(psc, sobol, n_pixels, spectral.coeffs, spectral.res, spectral.cie_x, spectral.cie_y,
                                   spectral.cie_z, spectral.d65, gpu_ctx, restir_di=False, restir_vol=False, verbose=False,
                                   batch=_session_batch(n_pixels))
     if not _is_real_ptr(handle):
         mojo_parsed_free(psc)
         return SessionPtr.unsafe_dangling()
+    if timing:
+        print("Gonzales:   gpu upload", Float64(perf_counter_ns() - t0) / 1.0e9, "s")
+    t0 = perf_counter_ns()
     var rtb = _RtBufs()
     if getenv("GONZALES_RTCORE") != "":
         try:
             rtb = _rt_wavefront_setup(handle, psc, n_pixels * _session_batch(n_pixels))
         except:
             pass
+        if timing:
+            print("Gonzales:   rt build", Float64(perf_counter_ns() - t0) / 1.0e9, "s")
     var s = unsafe_alloc[RenderSession](1)
     s.unsafe_write(RenderSession(psc, GpuGuidedRenderer(
         handle, psc, UInt32(mix_bits_u64(UInt64(0))), UInt32(mix_bits_u64(UInt64(1))), n_pixels,

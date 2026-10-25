@@ -1,7 +1,8 @@
 # C API of the Gonzales shared library, called by the Hydra render delegate.
 from std.ffi import external_call
 from std.memory.alloc import unsafe_alloc
-from std.os import setenv
+from std.os import getenv, setenv
+from std.time import perf_counter_ns
 from std.runtime import initialize_runtime
 from max.gpu.host import DeviceContext
 from gonzales.geometry import RGB, _is_real_ptr
@@ -171,7 +172,10 @@ def gz_session_new(r: RendererPtr, s: ScenePtr, spp: Int32, max_depth: Int32) ab
     """Consumes the scene and puts it on the GPU; null if that fails."""
     s[unsafe_offset=0].max_depth = max_depth
     var psc = unsafe_alloc[ParsedScene_Mojo](1)
+    var t0 = perf_counter_ns()
     finalize_scene(s, psc, False)
+    if getenv("GONZALES_TIMING") != "":
+        print("Gonzales:   finalize", Float64(perf_counter_ns() - t0) / 1.0e9, "s")
     _ = s.unsafe_take_pointee()
     s.unsafe_free()
     mojo_apply_overrides(psc, spp, Int32(0), Int32(0))
