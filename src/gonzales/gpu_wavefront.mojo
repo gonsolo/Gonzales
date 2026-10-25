@@ -410,6 +410,37 @@ def sss_walk_gpu(
         return
     _sss_walk_step(paths, intersections, Int(idx[unsafe_offset=i]), sd)
 
+
+# One walk step for each listed walker (sss_walk_gpu's list); those still under the surface list themselves in next_idx
+# with their next segment in `rays`, the RT-core layout, for rtcore_sss_walk_gpu to trace.
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+def sss_walk_rt_step_gpu(
+    paths: Pointer[PathState, MutUntrackedOrigin],
+    intersections: Pointer[Intersection, MutUntrackedOrigin],
+    sd: SceneView,
+    idx: Pointer[Int32, MutUntrackedOrigin],
+    count: Pointer[Int32, MutUntrackedOrigin],
+    next_idx: Pointer[Int32, MutUntrackedOrigin],
+    next_count: Pointer[Int32, MutUntrackedOrigin],
+    rays: Pointer[Float32, MutUntrackedOrigin],
+):
+    var i = Int(block_idx.x * block_dim.x + thread_idx.x)
+    var p = 0
+    var pending = False
+    if i < Int(count[unsafe_offset=0]):
+        p = Int(idx[unsafe_offset=i])
+        _sss_walk_step[1](paths, intersections, p, sd)
+        pending = paths[unsafe_offset=p].active != 0 and paths[unsafe_offset=p].sss.mesh >= Int32(0)
+    var pos = warp_append(next_count, pending)
+    if pending:
+        var ray = paths[unsafe_offset=p].ray
+        var r = rays.unsafe_offset(8 * pos)
+        r[unsafe_offset=0] = ray.origin.x; r[unsafe_offset=1] = ray.origin.y; r[unsafe_offset=2] = ray.origin.z
+        r[unsafe_offset=3] = Float32(0)
+        r[unsafe_offset=4] = ray.direction.x; r[unsafe_offset=5] = ray.direction.y; r[unsafe_offset=6] = ray.direction.z
+        r[unsafe_offset=7] = Float32(1.0e8)
+        next_idx[unsafe_offset=pos] = Int32(p)
+
 # Adaptive sampling as Cycles (film_adaptive_sampling_convergence_check): a pixel stops when the difference between all
 # its samples and twice every other one, over the square root of its intensity, falls under the threshold.
 @__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
@@ -1595,6 +1626,61 @@ def shadow_curves_kernel(
     paths[unsafe_offset=t // SHADOW_SLOTS].estimate += task.contrib
 
 comptime SHADOW_COUNTS = 16        # in the counter buffer, after the shading kinds' counts: the survivors per slot
+comptime SSS_RT_COUNTS = 20        # in the counter buffer: the walkers of the RT steps, alternately
+comptime SSS_RT_STEPS = 16         # walk steps a round with RT-core segments, while enough walkers remain
+comptime SSS_RT_MIN = 4096         # fewer walkers finish in software: the tail of long walks
+
+
+def rtcore_sss_walk_gpu(
+    ctx: DeviceContext,
+    paths: Pointer[PathState, MutUntrackedOrigin],
+    inter: Pointer[Intersection, MutUntrackedOrigin],
+    sd: SceneView,
+    rays_buf: DeviceBuffer[DType.float32],
+    results_buf: DeviceBuffer[DType.float32],
+    ids_buf: DeviceBuffer[DType.uint8],
+    counter_buf: DeviceBuffer[DType.uint8],
+    mesh_material_idx_buf: DeviceBuffer[DType.uint8],
+    mesh_al_idx_buf: DeviceBuffer[DType.uint8],
+    n_meshes: Int,
+    instance_base_mesh: Pointer[Int32, MutUntrackedOrigin],
+    walkers: Int,                  # counter slot of the walker list at 3 n_total (compact_walking_gpu's)
+    n_total: Int,
+) raises:
+    """The walks of the listed walkers, their segments traced on the RT cores a step at a time, so the walkers of a step
+    are full warps and no lane waits on another's long walk; the few walks still going after SSS_RT_STEPS steps, or
+    once fewer than SSS_RT_MIN remain, finish in software (sss_walk_gpu)."""
+    comptime block_size = 256
+    var rt_hw = rtcore_active()
+    var cuda_stream = CUDA(ctx.stream())
+    var rays = rays_buf.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
+    var results = results_buf.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
+    var ids_base = ids_buf.unsafe_ptr().unsafe_bitcast[Int32]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
+    var counts = counter_buf.unsafe_ptr().unsafe_bitcast[Int32]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
+    var lists = [ids_base.unsafe_offset(3 * n_total), ids_base.unsafe_offset(2 * n_total)]   # the shadow ids' room, free now
+    var slots = [walkers, SSS_RT_COUNTS]
+    var m = n_total
+    for step in range(SSS_RT_STEPS):
+        var a = step % 2
+        var out_slot = SSS_RT_COUNTS + step % 2
+        ctx.enqueue_memset(DeviceBuffer[DType.int32](ctx, counts.unsafe_offset(out_slot), 1, owning=False), Int32(0))
+        ctx.enqueue_function[sss_walk_rt_step_gpu](paths, inter, sd, lists[a], counts.unsafe_offset(slots[a]), lists[1 - a],
+                                                   counts.unsafe_offset(out_slot), rays, grid_dim=ceildiv(m, block_size), block_dim=block_size)
+        m = read_counter(ctx, counter_buf, out_slot)
+        slots[1 - a] = out_slot
+        if m == 0:
+            return
+        _ = rtcore_trace_interop(rt_hw, UInt64(Int(rays)), UInt64(Int(results)), Int32(m), cuda_stream)
+        ctx.enqueue_function[vulkaninterop_unpack_results_kernel](
+            results, inter,
+            mesh_material_idx_buf.unsafe_ptr().unsafe_bitcast[Int64]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
+            mesh_al_idx_buf.unsafe_ptr().unsafe_bitcast[Int32]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
+            Int64(n_meshes), Int64(m), instance_base_mesh, lists[1 - a], rt_no_paths(), sd.meshes,
+            grid_dim=ceildiv(m, block_size), block_dim=block_size)
+        if m < SSS_RT_MIN or step == SSS_RT_STEPS - 1:
+            ctx.enqueue_function[sss_walk_gpu](paths, inter, sd, lists[1 - a], counts.unsafe_offset(slots[1 - a]),
+                                               grid_dim=ceildiv(m, block_size), block_dim=block_size)
+            return
 
 
 def rtcore_shadow_rays_compact_gpu(

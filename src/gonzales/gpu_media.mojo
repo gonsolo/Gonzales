@@ -636,7 +636,7 @@ def _volume_area_light_nee(
 # Inlined so `sd` stays in kernel param space: a non-inlined call needs its
 # address, which copies the whole descriptor to local memory per thread.
 @always_inline
-def _sss_walk_step(
+def _sss_walk_step[steps: Int = 256](
     paths: Pointer[PathState, MutUntrackedOrigin],
     intersections: Pointer[Intersection, MutUntrackedOrigin],
     i: Int,
@@ -645,9 +645,9 @@ def _sss_walk_step(
     """A random walk under a surface (PathState.sss), as Cycles' subsurface_random_walk: each distance comes from one
     hero wavelength picked by albedo times throughput, directions are Henyey-Greenstein or, for a guided fraction,
     Dwivedi-guided toward the entry surface (or away, toward a nearby opposite one), and every step is weighted by the
-    balance heuristic over wavelengths and strategies. Steps trace their own segments, up to _SSS_STEPS per call, in the
-    mesh's own BVH; the next hit on the mesh is the exit, left in `intersections` for the shading kernels."""
-    comptime _SSS_STEPS = 256
+    balance heuristic over wavelengths and strategies. Up to `steps` steps a call: the first uses the segment the caller
+    traced (`intersections`), later ones trace their own in the mesh's own BVH; the next hit on the mesh is the exit, left
+    in `intersections` for the shading kernels. A walk out of steps leaves its next segment for the caller to trace."""
     # Cycles' SUBSURFACE_RANDOM_WALK_SIMILARITY_LEVEL: after these steps the walk continues isotropic with the reduced
     # scattering sigma_s (1 - g), the similarity relation, which makes strongly forward-scattering walks much shorter.
     comptime _SSS_SIMILARITY_STEPS = 9
@@ -669,7 +669,19 @@ def _sss_walk_step(
     var local_bvh = -1
     if _is_real_ptr(sd.walkBvhOfMesh) and walk.instance < Int32(0):
         local_bvh = Int(sd.walkBvhOfMesh[unsafe_offset=Int(walk.mesh)])
-    for _ in range(_SSS_STEPS):
+    for it in range(steps):
+        if it > 0:
+            if local_bvh >= 0:
+                traverse_bvh2_core_defer_curves[False, False, False](
+                    sd.walkNodesArr[unsafe_offset=local_bvh], sd.walkPrimsArr[unsafe_offset=local_bvh], sd.meshes, sd.curves,
+                    ray, Float32(1.0e38), store.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin](),
+                    Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(), Pointer[Int32, MutUntrackedOrigin].unsafe_dangling())
+            else:
+                traverse_bvh2_core_defer_curves[False, True, False](
+                    sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, Float32(1.0e38),
+                    store.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin](),
+                    Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(), Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
+                    sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances)
         var step = path_ptr[].sss.steps
         if step >= Int32(_SSS_MAX_STEPS):
             path_ptr[].active = 0   # Cycles' BSSRDF_MAX_BOUNCES: a walk this long is given up
@@ -787,18 +799,7 @@ def _sss_walk_step(
                 path_ptr[].pcgState = pcg.state
                 return
             path_ptr[].throughput *= Float32(1) / q
-        if local_bvh >= 0:
-            traverse_bvh2_core_defer_curves[False, False, False](
-                sd.walkNodesArr[unsafe_offset=local_bvh], sd.walkPrimsArr[unsafe_offset=local_bvh], sd.meshes, sd.curves,
-                ray, Float32(1.0e38), store.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin](),
-                Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(), Pointer[Int32, MutUntrackedOrigin].unsafe_dangling())
-        else:
-            traverse_bvh2_core_defer_curves[False, True, False](
-                sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, Float32(1.0e38),
-                store.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin](),
-                Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(), Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
-                sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances)
-    # Out of steps this round: the wavefront traces the pending segment and calls again.
+    # Out of steps this call: the caller traces the pending segment and calls again.
     path_ptr[].ray = ray
     path_ptr[].volume_scattered = Int8(1)
     intersections[unsafe_offset=i].hit = Int8(0)
