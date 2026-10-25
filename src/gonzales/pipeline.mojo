@@ -1103,16 +1103,11 @@ def _rt_wavefront_setup(handle: Pointer[GpuSceneHandle, MutUntrackedOrigin], psc
     b.results = handle[].ctx.enqueue_create_buffer[DType.float32](max_rays * 8)
     var light_info = _build_mesh_light_info(psc)
     var mmi_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](max(n_meshes, 1) * size_of[Int64]())
-    with mmi_buf.map_to_host() as h:
-        var dst = h.unsafe_ptr().unsafe_bitcast[Int64]()
-        for i in range(n_meshes):
-            dst[unsafe_offset=i] = light_info[0][unsafe_offset=i]
-    b.mesh_material_idx = mmi_buf^
+    handle[].ctx.enqueue_copy(mmi_buf, light_info[0].unsafe_bitcast[UInt8]())
     var mai_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](max(n_meshes, 1) * size_of[Int32]())
-    with mai_buf.map_to_host() as h2:
-        var dst2 = h2.unsafe_ptr().unsafe_bitcast[Int32]()
-        for i in range(n_meshes):
-            dst2[unsafe_offset=i] = light_info[1][unsafe_offset=i]
+    handle[].ctx.enqueue_copy(mai_buf, light_info[1].unsafe_bitcast[UInt8]())
+    handle[].ctx.synchronize()
+    b.mesh_material_idx = mmi_buf^
     b.mesh_al_idx = mai_buf^
     light_info[0].unsafe_free(); light_info[1].unsafe_free()
     var n_inst = Int(psc[unsafe_offset=0].instance_count)
