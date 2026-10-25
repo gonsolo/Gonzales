@@ -2902,38 +2902,44 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
     # write=False branch of _curve_greedy_groups skips all writes) — just
     # needs to be a valid, non-dangling pointer to satisfy the signature.
     var count_pass_scratch = unsafe_alloc[Int32](1)
-    for i in range(Int(n_curves)):
-        var cb = i * 12
-        var cx0 = s[unsafe_offset=0].curves_cp[cb+0]; var cy0 = s[unsafe_offset=0].curves_cp[cb+1]; var cz0 = s[unsafe_offset=0].curves_cp[cb+2]
-        var cx3 = s[unsafe_offset=0].curves_cp[cb+9]; var cy3 = s[unsafe_offset=0].curves_cp[cb+10]; var cz3 = s[unsafe_offset=0].curves_cp[cb+11]
-        var chord_x = cx3 - cx0; var chord_y = cy3 - cy0; var chord_z = cz3 - cz0
-        var chord_len = sqrt(chord_x*chord_x + chord_y*chord_y + chord_z*chord_z)
-        var max_dev = Float32(0.0)
-        if chord_len > Float32(1e-8):
-            var dcx = chord_x / chord_len; var dcy = chord_y / chord_len; var dcz = chord_z / chord_len
-            for k in range(1, 3):
-                var vx = s[unsafe_offset=0].curves_cp[cb+k*3+0] - cx0
-                var vy = s[unsafe_offset=0].curves_cp[cb+k*3+1] - cy0
-                var vz = s[unsafe_offset=0].curves_cp[cb+k*3+2] - cz0
-                var ccx = vy*dcz - vz*dcy
-                var ccy = vz*dcx - vx*dcz
-                var ccz = vx*dcy - vy*dcx
-                var dist = sqrt(ccx*ccx + ccy*ccy + ccz*ccz)
-                if dist > max_dev: max_dev = dist
-        var maxw = max(s[unsafe_offset=0].curves_w0[i], s[unsafe_offset=0].curves_w1[i])
-        curve_n_pieces[unsafe_offset=i] = Int32(1) if max_dev < maxw * Float32(0.5) else Int32(CURVE_N_PIECES)
+    comptime CURVE_CHUNK = 65536                     # curves a parallel task takes
+    var n_curve_chunks = (Int(n_curves) + CURVE_CHUNK - 1) // CURVE_CHUNK
 
-        var curve_i = Curve(
-            Point3f(s[unsafe_offset=0].curves_cp[cb+0], s[unsafe_offset=0].curves_cp[cb+1], s[unsafe_offset=0].curves_cp[cb+2]),
-            Point3f(s[unsafe_offset=0].curves_cp[cb+3], s[unsafe_offset=0].curves_cp[cb+4], s[unsafe_offset=0].curves_cp[cb+5]),
-            Point3f(s[unsafe_offset=0].curves_cp[cb+6], s[unsafe_offset=0].curves_cp[cb+7], s[unsafe_offset=0].curves_cp[cb+8]),
-            Point3f(s[unsafe_offset=0].curves_cp[cb+9], s[unsafe_offset=0].curves_cp[cb+10], s[unsafe_offset=0].curves_cp[cb+11]),
-            s[unsafe_offset=0].curves_w0[i], s[unsafe_offset=0].curves_w1[i], s[unsafe_offset=0].curves_mat[i], curve_n_pieces[unsafe_offset=i], s[unsafe_offset=0].curves_flat[i])
-        var ngroups = _curve_greedy_groups(curve_i, Int(curve_n_pieces[unsafe_offset=i]), count_pass_scratch, count_pass_scratch, False)
-        if curve_tmpl[unsafe_offset=i] >= Int32(0):
-            ngroups = 0   # a template's curves are in its own BVH, not the top level
+    def count_chunk(chunk: Int) {imm}:
+        for i in range(chunk * CURVE_CHUNK, min(chunk * CURVE_CHUNK + CURVE_CHUNK, Int(n_curves))):
+            var cb = i * 12
+            var cx0 = s[unsafe_offset=0].curves_cp[cb+0]; var cy0 = s[unsafe_offset=0].curves_cp[cb+1]; var cz0 = s[unsafe_offset=0].curves_cp[cb+2]
+            var cx3 = s[unsafe_offset=0].curves_cp[cb+9]; var cy3 = s[unsafe_offset=0].curves_cp[cb+10]; var cz3 = s[unsafe_offset=0].curves_cp[cb+11]
+            var chord_x = cx3 - cx0; var chord_y = cy3 - cy0; var chord_z = cz3 - cz0
+            var chord_len = sqrt(chord_x*chord_x + chord_y*chord_y + chord_z*chord_z)
+            var max_dev = Float32(0.0)
+            if chord_len > Float32(1e-8):
+                var dcx = chord_x / chord_len; var dcy = chord_y / chord_len; var dcz = chord_z / chord_len
+                for k in range(1, 3):
+                    var vx = s[unsafe_offset=0].curves_cp[cb+k*3+0] - cx0
+                    var vy = s[unsafe_offset=0].curves_cp[cb+k*3+1] - cy0
+                    var vz = s[unsafe_offset=0].curves_cp[cb+k*3+2] - cz0
+                    var ccx = vy*dcz - vz*dcy
+                    var ccy = vz*dcx - vx*dcz
+                    var ccz = vx*dcy - vy*dcx
+                    var dist = sqrt(ccx*ccx + ccy*ccy + ccz*ccz)
+                    if dist > max_dev: max_dev = dist
+            var maxw = max(s[unsafe_offset=0].curves_w0[i], s[unsafe_offset=0].curves_w1[i])
+            curve_n_pieces[unsafe_offset=i] = Int32(1) if max_dev < maxw * Float32(0.5) else Int32(CURVE_N_PIECES)
+            var curve_i = Curve(
+                Point3f(s[unsafe_offset=0].curves_cp[cb+0], s[unsafe_offset=0].curves_cp[cb+1], s[unsafe_offset=0].curves_cp[cb+2]),
+                Point3f(s[unsafe_offset=0].curves_cp[cb+3], s[unsafe_offset=0].curves_cp[cb+4], s[unsafe_offset=0].curves_cp[cb+5]),
+                Point3f(s[unsafe_offset=0].curves_cp[cb+6], s[unsafe_offset=0].curves_cp[cb+7], s[unsafe_offset=0].curves_cp[cb+8]),
+                Point3f(s[unsafe_offset=0].curves_cp[cb+9], s[unsafe_offset=0].curves_cp[cb+10], s[unsafe_offset=0].curves_cp[cb+11]),
+                s[unsafe_offset=0].curves_w0[i], s[unsafe_offset=0].curves_w1[i], s[unsafe_offset=0].curves_mat[i], curve_n_pieces[unsafe_offset=i], s[unsafe_offset=0].curves_flat[i])
+            var ngroups = _curve_greedy_groups(curve_i, Int(curve_n_pieces[unsafe_offset=i]), count_pass_scratch, count_pass_scratch, False)
+            curve_group_base[unsafe_offset=i] = Int32(0) if curve_tmpl[unsafe_offset=i] >= Int32(0) else Int32(ngroups)   # a template's curves are in its own BVH
+
+    parallelize(count_chunk, n_curve_chunks)
+    for i in range(Int(n_curves)):                   # counts -> first group of each curve
+        var c = curve_group_base[unsafe_offset=i]
         curve_group_base[unsafe_offset=i] = total_curve_groups
-        total_curve_groups += Int32(ngroups)
+        total_curve_groups += c
 
     var total_instances = Int32(len(s[unsafe_offset=0].instance_template_idx))
     var total_prims_gpu = total_tris + total_curve_groups
@@ -2996,34 +3002,39 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
     # whole-segment hull since a run rarely spans the entire curly curve.
     var group_curve_idx = unsafe_alloc[Int32](max(Int(total_curve_groups), 1))
     var group_id2 = unsafe_alloc[Int32](max(Int(total_curve_groups), 1))  # packed first_piece*8 + piece_count
-    var group_first_scratch = unsafe_alloc[Int32](CURVE_N_PIECES)
-    var group_count_scratch = unsafe_alloc[Int32](CURVE_N_PIECES)
-    for ci in range(Int(n_curves)):
-        if curve_tmpl[unsafe_offset=ci] >= Int32(0):
-            continue
-        var base = ci * 12
-        var curve_i = Curve(
-            Point3f(s[unsafe_offset=0].curves_cp[base+0], s[unsafe_offset=0].curves_cp[base+1], s[unsafe_offset=0].curves_cp[base+2]),
-            Point3f(s[unsafe_offset=0].curves_cp[base+3], s[unsafe_offset=0].curves_cp[base+4], s[unsafe_offset=0].curves_cp[base+5]),
-            Point3f(s[unsafe_offset=0].curves_cp[base+6], s[unsafe_offset=0].curves_cp[base+7], s[unsafe_offset=0].curves_cp[base+8]),
-            Point3f(s[unsafe_offset=0].curves_cp[base+9], s[unsafe_offset=0].curves_cp[base+10], s[unsafe_offset=0].curves_cp[base+11]),
-            s[unsafe_offset=0].curves_w0[ci], s[unsafe_offset=0].curves_w1[ci], s[unsafe_offset=0].curves_mat[ci], curve_n_pieces[unsafe_offset=ci], s[unsafe_offset=0].curves_flat[ci])
-        var ngroups = _curve_greedy_groups(curve_i, Int(curve_n_pieces[unsafe_offset=ci]), group_first_scratch, group_count_scratch, True)
-        for g in range(ngroups):
-            var global_group = Int(curve_group_base[unsafe_offset=ci]) + g
-            var first_piece = Int(group_first_scratch[unsafe_offset=g])
-            var piece_count = Int(group_count_scratch[unsafe_offset=g])
-            group_curve_idx[unsafe_offset=global_group] = Int32(ci)
-            group_id2[unsafe_offset=global_group] = Int32(first_piece * 8 + piece_count)
-            var (xmin, ymin, zmin, xmax, ymax, zmax) = curve_piece_bounds(curve_i, first_piece)
-            for p in range(first_piece + 1, first_piece + piece_count):
-                var (pxmin, pymin, pzmin, pxmax, pymax, pzmax) = curve_piece_bounds(curve_i, p)
-                xmin = min(xmin, pxmin); ymin = min(ymin, pymin); zmin = min(zmin, pzmin)
-                xmax = max(xmax, pxmax); ymax = max(ymax, pymax); zmax = max(zmax, pzmax)
-            var b = (Int(total_tris) + global_group) * 6
-            prim_bounds[unsafe_offset=b+0] = xmin; prim_bounds[unsafe_offset=b+1] = ymin; prim_bounds[unsafe_offset=b+2] = zmin
-            prim_bounds[unsafe_offset=b+3] = xmax; prim_bounds[unsafe_offset=b+4] = ymax; prim_bounds[unsafe_offset=b+5] = zmax
-    group_first_scratch.unsafe_free(); group_count_scratch.unsafe_free(); count_pass_scratch.unsafe_free()
+
+    def group_chunk(chunk: Int) {imm}:
+        var group_first_scratch = unsafe_alloc[Int32](CURVE_N_PIECES)
+        var group_count_scratch = unsafe_alloc[Int32](CURVE_N_PIECES)
+        for ci in range(chunk * CURVE_CHUNK, min(chunk * CURVE_CHUNK + CURVE_CHUNK, Int(n_curves))):
+            if curve_tmpl[unsafe_offset=ci] >= Int32(0):
+                continue
+            var base = ci * 12
+            var curve_i = Curve(
+                Point3f(s[unsafe_offset=0].curves_cp[base+0], s[unsafe_offset=0].curves_cp[base+1], s[unsafe_offset=0].curves_cp[base+2]),
+                Point3f(s[unsafe_offset=0].curves_cp[base+3], s[unsafe_offset=0].curves_cp[base+4], s[unsafe_offset=0].curves_cp[base+5]),
+                Point3f(s[unsafe_offset=0].curves_cp[base+6], s[unsafe_offset=0].curves_cp[base+7], s[unsafe_offset=0].curves_cp[base+8]),
+                Point3f(s[unsafe_offset=0].curves_cp[base+9], s[unsafe_offset=0].curves_cp[base+10], s[unsafe_offset=0].curves_cp[base+11]),
+                s[unsafe_offset=0].curves_w0[ci], s[unsafe_offset=0].curves_w1[ci], s[unsafe_offset=0].curves_mat[ci], curve_n_pieces[unsafe_offset=ci], s[unsafe_offset=0].curves_flat[ci])
+            var ngroups = _curve_greedy_groups(curve_i, Int(curve_n_pieces[unsafe_offset=ci]), group_first_scratch, group_count_scratch, True)
+            for g in range(ngroups):
+                var global_group = Int(curve_group_base[unsafe_offset=ci]) + g
+                var first_piece = Int(group_first_scratch[unsafe_offset=g])
+                var piece_count = Int(group_count_scratch[unsafe_offset=g])
+                group_curve_idx[unsafe_offset=global_group] = Int32(ci)
+                group_id2[unsafe_offset=global_group] = Int32(first_piece * 8 + piece_count)
+                var (xmin, ymin, zmin, xmax, ymax, zmax) = curve_piece_bounds(curve_i, first_piece)
+                for p in range(first_piece + 1, first_piece + piece_count):
+                    var (pxmin, pymin, pzmin, pxmax, pymax, pzmax) = curve_piece_bounds(curve_i, p)
+                    xmin = min(xmin, pxmin); ymin = min(ymin, pymin); zmin = min(zmin, pzmin)
+                    xmax = max(xmax, pxmax); ymax = max(ymax, pymax); zmax = max(zmax, pzmax)
+                var b = (Int(total_tris) + global_group) * 6
+                prim_bounds[unsafe_offset=b+0] = xmin; prim_bounds[unsafe_offset=b+1] = ymin; prim_bounds[unsafe_offset=b+2] = zmin
+                prim_bounds[unsafe_offset=b+3] = xmax; prim_bounds[unsafe_offset=b+4] = ymax; prim_bounds[unsafe_offset=b+5] = zmax
+        group_first_scratch.unsafe_free(); group_count_scratch.unsafe_free()
+
+    parallelize(group_chunk, n_curve_chunks)
+    count_pass_scratch.unsafe_free()
 
     # ---- Object instancing: one BLAS per template, then a TLAS instance leaf
     # (transform + BLAS reference) per ObjectInstance placement — see
