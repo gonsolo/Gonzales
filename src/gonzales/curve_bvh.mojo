@@ -122,100 +122,138 @@ def _q_oc(w: SIMD[DType.uint32, 4]) -> SIMD[DType.int32, 2]:
     return SIMD[DType.int32, 2](Int32(w[3] & (UInt32(0xFFFF) | ~leaf)), Int32((w[3] >> 16) & UInt32(0x7FFF) & leaf))
 
 
-def _curve_bvh_walk[any_hit: Bool](cb: CurveBvh, curves: Pointer[Curve, MutUntrackedOrigin],
-                                   materials: Pointer[Material, MutUntrackedOrigin], ray: Ray, tmax_in: Float32) -> Tuple[Int, Float32, Float32, Float32]:
-    """One loop and one stack over both levels: a top leaf names a cluster, whose BVH is walked with the ray in its frame;
+comptime WALK_STACK = 64
+
+
+struct CurveWalk(Movable):
+    """The two-level walk of one ray, a node or leaf a step: one loop and one stack over both levels; a top leaf names a cluster, whose BVH is walked with the ray in its frame;
     a -1 on the stack marks the way back to the top level. Both levels are _qnodes, so their steps are the same code.
     Pieces are tested with the world ray."""
-    var tmax = tmax_in
-    var best = -1
-    var bu = Float32(0); var bv = Float32(0)
-    var wo = Vec3f(ray.origin.x, ray.origin.y, ray.origin.z)
-    var wd = ray.direction
-    var top_o = Vec3f((wo.x - cb.grid[0]) / cb.grid[3] + Q_BIAS, (wo.y - cb.grid[1]) / cb.grid[4] + Q_BIAS, (wo.z - cb.grid[2]) / cb.grid[5] + Q_BIAS)
-    var top_rdir = Vec3f(cb.grid[3] / wd.x, cb.grid[4] / wd.y, cb.grid[5] / wd.z)
-    var o = top_o
-    var rdir = top_rdir
-    var nx = rdir.x >= Float32(0.0); var ny = rdir.y >= Float32(0.0); var nz = rdir.z >= Float32(0.0)
-    var qn = cb.top
-    var slot0 = 0
-    var in_cluster = False
-    var stack = stack_allocation[64, Int32]()
-    var to_visit = 0
-    var current = 0
-    var cur_oc = _q_oc(_qnode(qn, 0))
-    while True:
+    var tmax: Float32
+    var best: Int
+    var bu: Float32
+    var bv: Float32
+    var wo: Vec3f
+    var wd: Vec3f
+    var top_o: Vec3f
+    var top_rdir: Vec3f
+    var o: Vec3f
+    var rdir: Vec3f
+    var nx: Bool
+    var ny: Bool
+    var nz: Bool
+    var qn: Pointer[UInt32, MutUntrackedOrigin]
+    var slot0: Int
+    var in_cluster: Bool
+    var to_visit: Int
+    var current: Int
+    var cur_oc: SIMD[DType.int32, 2]
+
+    @always_inline
+    def __init__(out self, cb: CurveBvh, ray: Ray, tmax: Float32):
+        self.tmax = tmax
+        self.best = -1
+        self.bu = Float32(0); self.bv = Float32(0)
+        self.wo = Vec3f(ray.origin.x, ray.origin.y, ray.origin.z)
+        self.wd = ray.direction
+        var g = cb.grid
+        self.top_o = Vec3f((self.wo.x - g[0]) / g[3] + Q_BIAS, (self.wo.y - g[1]) / g[4] + Q_BIAS, (self.wo.z - g[2]) / g[5] + Q_BIAS)
+        self.top_rdir = Vec3f(g[3] / self.wd.x, g[4] / self.wd.y, g[5] / self.wd.z)
+        self.o = self.top_o
+        self.rdir = self.top_rdir
+        self.nx = self.rdir.x >= Float32(0.0); self.ny = self.rdir.y >= Float32(0.0); self.nz = self.rdir.z >= Float32(0.0)
+        self.qn = cb.top
+        self.slot0 = 0
+        self.in_cluster = False
+        self.to_visit = 0
+        self.current = 0
+        self.cur_oc = _q_oc(_qnode(cb.top, 0))
+
+    @always_inline
+    def step[any_hit: Bool](mut self, cb: CurveBvh, curves: Pointer[Curve, MutUntrackedOrigin], materials: Pointer[Material, MutUntrackedOrigin],
+                            stack: Pointer[Int32, MutUntrackedOrigin]) -> Bool:
+        """One node or leaf; True when the walk is over (best, tmax, bu, bv hold its result)."""
         var pop = False
-        if cur_oc[1] > 0:
-            var off = Int(cur_oc[0])
-            if not in_cluster:
+        if self.cur_oc[1] > 0:
+            var off = Int(self.cur_oc[0])
+            if not self.in_cluster:
                 var c = Int(cb.top_cl[unsafe_offset=off])
                 var f = cb.frames.unsafe_offset(FS * c)
                 var qs = Vec3f(f[unsafe_offset=12], f[unsafe_offset=13], f[unsafe_offset=14])
-                var co = _in_frame(f, wo) - Vec3f(f[unsafe_offset=9], f[unsafe_offset=10], f[unsafe_offset=11])
+                var co = _in_frame(f, self.wo) - Vec3f(f[unsafe_offset=9], f[unsafe_offset=10], f[unsafe_offset=11])
                 co = Vec3f(co.x / qs.x + Q_BIAS, co.y / qs.y + Q_BIAS, co.z / qs.z + Q_BIAS)
-                var cd = _in_frame(f, wd)
+                var cd = _in_frame(f, self.wd)
                 var crdir = Vec3f(qs.x / cd.x, qs.y / cd.y, qs.z / cd.z)
                 var cnx = crdir.x >= Float32(0.0); var cny = crdir.y >= Float32(0.0); var cnz = crdir.z >= Float32(0.0)
                 var s0 = Int(cb.roots[unsafe_offset=c])
                 var cq = cb.nodes.unsafe_offset(8 * s0)
                 var w = _qnode(cq, 0)
-                if _q_hit(w, crdir, co, cnx, cny, cnz, tmax)[0] and to_visit < 64:
-                    stack[unsafe_offset=to_visit] = Int32(-1)
-                    to_visit += 1
-                    o = co; rdir = crdir; nx = cnx; ny = cny; nz = cnz
-                    qn = cq; slot0 = s0; in_cluster = True
-                    current = 0; cur_oc = _q_oc(w)
-                    continue
+                if _q_hit(w, crdir, co, cnx, cny, cnz, self.tmax)[0] and self.to_visit < WALK_STACK:
+                    stack[unsafe_offset=self.to_visit] = Int32(-1)
+                    self.to_visit += 1
+                    self.o = co; self.rdir = crdir; self.nx = cnx; self.ny = cny; self.nz = cnz
+                    self.qn = cq; self.slot0 = s0; self.in_cluster = True
+                    self.current = 0; self.cur_oc = _q_oc(w)
+                    return False
                 pop = True
             else:
-                off += slot0
-                for j in range(Int(cur_oc[1])):
+                off += self.slot0
+                for j in range(Int(self.cur_oc[1])):
                     var r = cb.refs.unsafe_offset(3 * (off + j))
                     comptime if any_hit:
                         if _shadow_is_null_material(materials, Int64(r[unsafe_offset=2])):
                             continue
                     var id2 = Int(r[unsafe_offset=1])
-                    var h = intersect_curve(wo, wd, curves[unsafe_offset=Int(r[unsafe_offset=0])], id2 // 8, id2 % 8, tmax)
+                    var h = intersect_curve(self.wo, self.wd, curves[unsafe_offset=Int(r[unsafe_offset=0])], id2 // 8, id2 % 8, self.tmax)
                     if h[0]:
-                        best = off + j; tmax = h[1]; bu = h[2]; bv = h[3]
+                        self.best = off + j; self.tmax = h[1]; self.bu = h[2]; self.bv = h[3]
                         comptime if any_hit:
-                            to_visit = 0                       # leave by the loop's one exit
+                            self.to_visit = 0                  # done: leave by the pop below
                             break
                 pop = True
         else:
-            var li = current + 1
-            var ri = Int(cur_oc[0])
-            var lw = _qnode(qn, li); var rw = _qnode(qn, ri)
-            var lh = _q_hit(lw, rdir, o, nx, ny, nz, tmax)
-            var rh = _q_hit(rw, rdir, o, nx, ny, nz, tmax)
+            var li = self.current + 1
+            var ri = Int(self.cur_oc[0])
+            var lw = _qnode(self.qn, li); var rw = _qnode(self.qn, ri)
+            var lh = _q_hit(lw, self.rdir, self.o, self.nx, self.ny, self.nz, self.tmax)
+            var rh = _q_hit(rw, self.rdir, self.o, self.nx, self.ny, self.nz, self.tmax)
             if lh[0] and rh[0]:
                 var near_left = lh[1] <= rh[1]
-                current = li if near_left else ri
-                cur_oc = _q_oc(lw if near_left else rw)
-                if to_visit < 64:
-                    stack[unsafe_offset=to_visit] = Int32(ri if near_left else li)
-                    to_visit += 1
+                self.current = li if near_left else ri
+                self.cur_oc = _q_oc(lw if near_left else rw)
+                if self.to_visit < WALK_STACK:
+                    stack[unsafe_offset=self.to_visit] = Int32(ri if near_left else li)
+                    self.to_visit += 1
             elif lh[0]:
-                current = li; cur_oc = _q_oc(lw)
+                self.current = li; self.cur_oc = _q_oc(lw)
             elif rh[0]:
-                current = ri; cur_oc = _q_oc(rw)
+                self.current = ri; self.cur_oc = _q_oc(rw)
             else:
                 pop = True
         if pop:
-            if to_visit == 0:
-                break
-            to_visit -= 1
-            current = Int(stack[unsafe_offset=to_visit])
-            if current < 0:                                    # back to the top level
-                o = top_o; rdir = top_rdir; nx = rdir.x >= Float32(0.0); ny = rdir.y >= Float32(0.0); nz = rdir.z >= Float32(0.0)
-                qn = cb.top; in_cluster = False
-                if to_visit == 0:
-                    break
-                to_visit -= 1
-                current = Int(stack[unsafe_offset=to_visit])
-            cur_oc = _q_oc(_qnode(qn, current))
-    return (best, tmax, bu, bv)
+            if self.to_visit == 0:
+                return True
+            self.to_visit -= 1
+            self.current = Int(stack[unsafe_offset=self.to_visit])
+            if self.current < 0:                               # back to the top level
+                self.o = self.top_o; self.rdir = self.top_rdir
+                self.nx = self.rdir.x >= Float32(0.0); self.ny = self.rdir.y >= Float32(0.0); self.nz = self.rdir.z >= Float32(0.0)
+                self.qn = cb.top; self.in_cluster = False
+                if self.to_visit == 0:
+                    return True
+                self.to_visit -= 1
+                self.current = Int(stack[unsafe_offset=self.to_visit])
+            self.cur_oc = _q_oc(_qnode(self.qn, self.current))
+        return False
+
+
+def _curve_bvh_walk[any_hit: Bool](cb: CurveBvh, curves: Pointer[Curve, MutUntrackedOrigin],
+                                   materials: Pointer[Material, MutUntrackedOrigin], ray: Ray, tmax_in: Float32) -> Tuple[Int, Float32, Float32, Float32]:
+    var stack = stack_allocation[WALK_STACK, Int32]()
+    var w = CurveWalk(cb, ray, tmax_in)
+    while not w.step[any_hit](cb, curves, materials, stack.unsafe_origin_cast[MutUntrackedOrigin]()):
+        pass
+    return (w.best, w.tmax, w.bu, w.bv)
 
 
 # ---- the same clusters, built on the GPU (gpu_bvh) ----
