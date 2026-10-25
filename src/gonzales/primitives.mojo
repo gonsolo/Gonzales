@@ -214,7 +214,8 @@ def intersect_triangle_edges(
     var pvec = cross(ray_dir, e2)
     var det = dot(e1, pvec)
 
-    if det > -0.0000001 and det < 0.0000001:
+    # Only an exactly parallel ray: det scales with the triangle's area, so a fixed epsilon dropped finely tessellated meshes.
+    if det == 0.0:
         return (False, tMax, 0.0, 0.0)
 
     var invDet = 1.0 / det
