@@ -3345,8 +3345,8 @@ def session_new(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin], sobol: Point
     if getenv("GONZALES_RTCORE") != "":
         try:
             rtb = _rt_wavefront_setup(handle, psc, n_pixels * _session_batch(n_pixels))
-        except:
-            pass
+        except e:
+            print("Gonzales: RT setup failed:", e)
         if timing:
             print("Gonzales:   rt build", Float64(perf_counter_ns() - t0) / 1.0e9, "s")
     var s = unsafe_alloc[RenderSession](1)
