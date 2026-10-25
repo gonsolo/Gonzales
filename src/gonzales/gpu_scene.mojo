@@ -2,7 +2,7 @@ from max.gpu import MAX_THREADS_PER_BLOCK_METADATA
 from std.utils import StaticTuple
 from .bvh import BVH2Node, BVH4, SceneView, build_bvh2
 from .curves import CURVE_DEFER_K, Curve, CurveBvh
-from .curve_bvh import CurveBvhBuild, free_curve_bvh
+from .curve_bvh import CurveBvhDev
 from .geometry import _is_real_ptr
 from .guide import GuideGrid, null_guide
 from .lights import AreaLight, DistantLight, InfiniteLight, PointLight, LightSampler, LIGHT_BOUNDS_STRIDE, env_build_cdf, env_downsample
@@ -1579,19 +1579,6 @@ def gpu_free_scene(handlePtr: Pointer[GpuSceneHandle, MutUntrackedOrigin]):
     handlePtr.unsafe_bitcast[GpuSceneHandle]().unsafe_free()
 
 
-# The fiber-aligned curve clusters (curve_bvh.mojo) onto the GPU; the host arrays are freed.
-def gpu_set_curve_bvh(handle: Pointer[GpuSceneHandle, MutUntrackedOrigin], b: CurveBvhBuild) raises:
-    var ctx = handle[].ctx
-    var nc = Int(b.bvh.n_clusters)
-    var bufs = List[DeviceBuffer[DType.uint8]]()
-    bufs.append(_gpu_upload_array[Float32](ctx, b.bvh.top, 8 * max(b.n_top, 1)))
-    bufs.append(_gpu_upload_array[Int32](ctx, b.bvh.top_cl, max(nc, 1)))
-    bufs.append(_gpu_upload_array[Float32](ctx, b.bvh.frames, 9 * max(nc, 1)))
-    bufs.append(_gpu_upload_array[Int32](ctx, b.bvh.roots, max(nc, 1)))
-    bufs.append(_gpu_upload_array[Float32](ctx, b.bvh.nodes, 8 * max(b.n_nodes, 1)))
-    bufs.append(_gpu_upload_array[Int32](ctx, b.bvh.prims, max(b.n_prims, 1)))
-    ctx.synchronize()
-    free_curve_bvh(b.bvh)
-    handle[].curve_bvh = CurveBvh(typed_ptr[Float32](bufs[0]), typed_ptr[Int32](bufs[1]), typed_ptr[Float32](bufs[2]),
-                                  typed_ptr[Int32](bufs[3]), typed_ptr[Float32](bufs[4]), typed_ptr[Int32](bufs[5]), Int32(nc))
-    handle[].curve_bvh_bufs = bufs^
+def gpu_set_curve_bvh_dev(handle: Pointer[GpuSceneHandle, MutUntrackedOrigin], var d: CurveBvhDev):
+    handle[].curve_bvh = d.bvh
+    swap(handle[].curve_bvh_bufs, d.bufs)

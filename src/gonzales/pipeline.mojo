@@ -33,13 +33,13 @@ from .restir_gi import GIReservoir, gi_reservoir_init, GIReservoirIO, gi_reservo
 from .restir_sms import SMSReservoir, sms_reservoir_init, SMSReservoirIO, sms_reservoir_io_null
 from .restir_vol import VolReservoir, vol_reservoir_init, VolReservoirIO, vol_reservoir_io_null
 from .gpu import gpu_render_sample, gpu_render_wavefront, gpu_adaptive_update, gpu_mnee_adapt, gpu_download_film, gpu_download_albedo, gpu_clear_film, gpu_clear_restir, gpu_clear_restir_vol
-from .gpu_scene import GpuSceneHandle, WAVEFRONT_BATCH, gpu_available, gpu_upload_scene, gpu_alloc_pixel_buffers, gpu_free_scene, gpu_ptex_begin, gpu_ptex_finish, gpu_ptex_withhold, gpu_ptex_withheld, gpu_ptex_redo_upload, gpu_ptex_stream_start, gpu_ptex_poll, gpu_ptex_stream_finish, gpu_ptex_make_room, gpu_set_curve_bvh
+from .gpu_scene import GpuSceneHandle, WAVEFRONT_BATCH, gpu_available, gpu_upload_scene, gpu_alloc_pixel_buffers, gpu_free_scene, gpu_ptex_begin, gpu_ptex_finish, gpu_ptex_withhold, gpu_ptex_withheld, gpu_ptex_redo_upload, gpu_ptex_stream_start, gpu_ptex_poll, gpu_ptex_stream_finish, gpu_ptex_make_room, gpu_set_curve_bvh_dev
 from .gpu_denoise import gpu_atrous_denoise
 from .gpu_wavefront import gpu_gen_aux_buffers
 from .viewer import CameraState, ViewerHandle, viewer_create, viewer_update_framebuffer, viewer_should_close, viewer_poll_events, viewer_get_camera_state, viewer_set_camera_state, viewer_destroy, viewer_denoise_enabled, viewer_monitor_size, build_camera_to_world
 from .spectrum import SpectralHandle, null_spectral_handle
 from .vulkanrt import VulkanRtSceneHandle, vulkanrt_build_scene, vulkanrt_destroy_scene, vulkanrt_debug_read_as
-from .curve_bvh import build_curve_bvh
+from .curve_bvh import gpu_build_curve_bvh, _leaf_range
 from .rt_build import rt_build_blas, rt_build_tlas, rt_patch_ids, RtBlas, RtTlas, _fbits
 from .rt_cache import rt_cache_load, rt_cache_save, RtCacheTlas
 from .scene_cache import scene_cache_variant
@@ -1072,8 +1072,8 @@ def _rt_curve_clusters(handle: Pointer[GpuSceneHandle, MutUntrackedOrigin], psc:
     if psc[unsafe_offset=0].curve_root < Int32(0) or getenv("GONZALES_CURVE_BVH") == "0":
         return
     var t0 = perf_counter_ns()
-    gpu_set_curve_bvh(handle, build_curve_bvh(psc[unsafe_offset=0].bvh_nodes_cpu, psc[unsafe_offset=0].prim_ids_cpu,
-                                              psc[unsafe_offset=0].curves, Int(psc[unsafe_offset=0].curve_root)))
+    var r = _leaf_range(psc[unsafe_offset=0].bvh_nodes_cpu, Int(psc[unsafe_offset=0].curve_root))
+    gpu_set_curve_bvh_dev(handle, gpu_build_curve_bvh(handle[].ctx, handle[].bvh.prim_ids_ptr(), handle[].curves.curves_ptr(), r[0], r[1] - r[0]))
     if getenv("GONZALES_TIMING") != "":
         print("Gonzales:   curve clusters", handle[].curve_bvh.n_clusters, "in", Float64(perf_counter_ns() - t0) / 1.0e9, "s")
 

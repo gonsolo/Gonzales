@@ -1,9 +1,16 @@
 from std.sys import has_accelerator
+from std.sys.info import size_of
 from std.memory.alloc import unsafe_alloc
 from std.testing import assert_true, assert_equal, TestSuite
-from max.gpu.host import DeviceContext
+from max.gpu.host import DeviceContext, DeviceBuffer
 from gonzales.bvh import BVH2Node, build_bvh2
 from gonzales.gpu_bvh import gpu_build_bvh2
+from gonzales.geometry import Point3f, Vec3f
+from gonzales.primitives import Ray, PrimId
+from gonzales.curves import Curve, CurveBvh, intersect_curve
+from gonzales.curve_bvh import gpu_build_curve_bvh, curve_bvh_occluded, curve_bvh_closest
+from _scene_fixture import make_triangle_scene
+from std.math import sqrt
 
 # The GPU build must give a valid depth-first BVH2 (boxes nest, every primitive once, each segment's tree over exactly its
 # primitives) of about the CPU build's SAH cost.
@@ -141,6 +148,74 @@ def test_segments_get_their_own_trees() raises:
     assert_equal(next_root, g[3])
     g[0].unsafe_free(); g[1].unsafe_free(); g[2].unsafe_free(); boxes.unsafe_free()
 
+
+def _unit(mut r: _Lcg) -> Vec3f:
+    var v = Vec3f(r.next() - 0.5, r.next() - 0.5, r.next() - 0.5)
+    return v * (Float32(1.0) / sqrt(max(Float32(1e-12), v.x * v.x + v.y * v.y + v.z * v.z)))
+
+
+def _download[T: AnyType](ctx: DeviceContext, mut b: DeviceBuffer[DType.uint8]) raises -> Pointer[T, MutUntrackedOrigin]:
+    var h = unsafe_alloc[UInt8](len(b))
+    ctx.enqueue_copy(h, b)
+    ctx.synchronize()
+    return h.unsafe_bitcast[T]().unsafe_origin_cast[MutUntrackedOrigin]()
+
+
+def test_curve_clusters_match_brute_force() raises:
+    """Shadow and nearest hits through the GPU-built clusters equal a brute-force test; the PrimIds sit after 5 others."""
+    comptime if not has_accelerator():
+        return
+    var ctx = DeviceContext()
+    comptime N = 60000
+    comptime A = 5
+    var r = _Lcg(7)
+    var curves = unsafe_alloc[Curve](N)
+    var prims = unsafe_alloc[PrimId](N + A)
+    for i in range(N):
+        var c = Vec3f(r.next() * 10.0, r.next() * 10.0, r.next() * 10.0)
+        var d = _unit(r) * (Float32(0.2) + r.next() * 0.4)
+        var bend = _unit(r) * Float32(0.03)
+        var p0 = c; var p1 = c + d * Float32(0.33) + bend; var p2 = c + d * Float32(0.66) + bend; var p3 = c + d
+        var pieces = 1 if i % 3 != 0 else 7
+        curves[unsafe_offset=i] = Curve(Point3f(p0.x, p0.y, p0.z), Point3f(p1.x, p1.y, p1.z), Point3f(p2.x, p2.y, p2.z),
+                                        Point3f(p3.x, p3.y, p3.z), Float32(0.02), Float32(0.01), Int32(0), Int32(pieces), Int32(0))
+        prims[unsafe_offset=A + i] = PrimId(Int64(i), Int64(pieces), Int64(0), Int32(-1), Int8(5), Int8(0), Int8(0), Int8(0))
+    var cb = ctx.enqueue_create_buffer[DType.uint8](N * size_of[Curve]())
+    ctx.enqueue_copy(cb, curves.unsafe_bitcast[UInt8]())
+    var pb = ctx.enqueue_create_buffer[DType.uint8]((N + A) * size_of[PrimId]())
+    ctx.enqueue_copy(pb, prims.unsafe_bitcast[UInt8]())
+    var g = gpu_build_curve_bvh(ctx, pb.unsafe_ptr().unsafe_bitcast[PrimId]().unsafe_origin_cast[MutUntrackedOrigin](),
+                                cb.unsafe_ptr().unsafe_bitcast[Curve]().unsafe_origin_cast[MutUntrackedOrigin](), A, N)
+    _ = cb^; _ = pb^
+    var h = CurveBvh(_download[Float32](ctx, g.bufs[0]), _download[Int32](ctx, g.bufs[1]), _download[Float32](ctx, g.bufs[2]),
+                     _download[Int32](ctx, g.bufs[3]), _download[Float32](ctx, g.bufs[4]), _download[Int32](ctx, g.bufs[5]), g.bvh.n_clusters)
+    assert_true(Int(h.n_clusters) > 10)
+    var seen = List[Bool](length=N, fill=False)
+    for k in range(N):
+        var q = Int(h.prims[unsafe_offset=k]) - A
+        assert_true(q >= 0 and q < N and not seen[q])
+        seen[q] = True
+    var fx = make_triangle_scene([Point3f(100.0, 100.0, 100.0), Point3f(101.0, 100.0, 100.0), Point3f(100.0, 101.0, 100.0)])
+    var hits = 0
+    for _ in range(600):
+        var o = Vec3f(r.next() * 14.0 - 2.0, r.next() * 14.0 - 2.0, r.next() * 14.0 - 2.0)
+        var d = _unit(r)
+        var tmax = Float32(0.5) + r.next() * 15.0
+        var near = tmax
+        var want = False
+        for i in range(N):
+            var c = intersect_curve(o, d, curves[unsafe_offset=i], 0, Int(prims[unsafe_offset=A + i].id2), near)
+            if c[0]:
+                want = True; near = c[1]
+        var ray = Ray(Point3f(o.x, o.y, o.z), d)
+        assert_equal(curve_bvh_occluded(h, prims, curves, fx.materials, ray, tmax), want)
+        var got = curve_bvh_closest(h, prims, curves, ray, tmax)
+        assert_equal(got[0] >= 0, want)
+        if want:
+            assert_true(abs(got[1] - near) < Float32(1e-5))
+        hits += 1 if want else 0
+    assert_true(hits > 30 and hits < 570)
+    curves.unsafe_free(); prims.unsafe_free()
 
 
 def main() raises:
