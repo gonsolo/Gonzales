@@ -1,7 +1,7 @@
-"""Curve leaves in clusters, each with a BVH built in a frame along its fibers (CurveBvh in curves.mojo), for shadow rays
+"""Curve leaves in clusters, each with a BVH built in a frame along its fibers (CurveBvh in curves.mojo), for the rays
 next to the RT cores. Fur is thin, nearly straight pieces at every slant; their world-axis boxes are mostly empty. A
 cluster rotates the ray once; distances are the same in both frames, so one tmax serves the box and the curve tests.
-Blender lion: shadow pass 16.5 -> 8.5 s. Closest hits stay on the scene BVH's curve subtree, which measured faster."""
+Blender lion: shadow pass 16.5 -> 8.5 s, closest curve hits 8.5 -> 8.1 s."""
 from max.algorithm import parallelize
 from std.math import sqrt
 from std.memory import stack_allocation
@@ -187,8 +187,22 @@ def free_curve_bvh(cb: CurveBvh):
 
 def curve_bvh_occluded(cb: CurveBvh, prim_ids: Pointer[PrimId, MutUntrackedOrigin], curves: Pointer[Curve, MutUntrackedOrigin],
                        materials: Pointer[Material, MutUntrackedOrigin], ray: Ray, tmax: Float32) -> Bool:
+    return _curve_bvh_walk[True](cb, prim_ids, curves, materials, ray, tmax)[0] >= 0
+
+
+def curve_bvh_closest(cb: CurveBvh, prim_ids: Pointer[PrimId, MutUntrackedOrigin], curves: Pointer[Curve, MutUntrackedOrigin],
+                      ray: Ray, tmax: Float32) -> Tuple[Int, Float32, Float32, Float32]:
+    """(PrimId index or -1, t, u, v) of the nearest curve hit before tmax."""
+    return _curve_bvh_walk[False](cb, prim_ids, curves, Pointer[Material, MutUntrackedOrigin].unsafe_dangling(), ray, tmax)
+
+
+def _curve_bvh_walk[any_hit: Bool](cb: CurveBvh, prim_ids: Pointer[PrimId, MutUntrackedOrigin], curves: Pointer[Curve, MutUntrackedOrigin],
+                                   materials: Pointer[Material, MutUntrackedOrigin], ray: Ray, tmax_in: Float32) -> Tuple[Int, Float32, Float32, Float32]:
     """One loop and one stack over both levels: a top leaf names a cluster, whose BVH is walked with the ray in its frame;
     a -1 on the stack marks the way back to the top level. Pieces are tested with the world ray."""
+    var tmax = tmax_in
+    var best = -1
+    var bu = Float32(0); var bv = Float32(0)
     var wo = Vec3f(ray.origin.x, ray.origin.y, ray.origin.z)
     var wd = ray.direction
     var w_rdir = Vec3f(Float32(1.0) / wd.x, Float32(1.0) / wd.y, Float32(1.0) / wd.z)
@@ -226,11 +240,15 @@ def curve_bvh_occluded(cb: CurveBvh, prim_ids: Pointer[PrimId, MutUntrackedOrigi
                 for j in range(Int(cur_oc[1])):
                     var pi = Int(cb.prims[unsafe_offset=off + j])
                     var prim = prim_ids[unsafe_offset=pi]
-                    if _shadow_is_null_material(materials, prim.materialIndex):
-                        continue
+                    comptime if any_hit:
+                        if _shadow_is_null_material(materials, prim.materialIndex):
+                            continue
                     var curve = curves[unsafe_offset=Int(prim.id1)]
-                    if intersect_curve(wo, wd, curve, Int(prim.id2) // 8, Int(prim.id2) % 8, tmax)[0]:
-                        return True
+                    var h = intersect_curve(wo, wd, curve, Int(prim.id2) // 8, Int(prim.id2) % 8, tmax)
+                    if h[0]:
+                        comptime if any_hit:
+                            return (pi, h[1], h[2], h[3])
+                        best = pi; tmax = h[1]; bu = h[2]; bv = h[3]
                 pop = True
         else:
             var li = current + 1
@@ -264,4 +282,4 @@ def curve_bvh_occluded(cb: CurveBvh, prim_ids: Pointer[PrimId, MutUntrackedOrigi
                 to_visit -= 1
                 current = Int(stack[unsafe_offset=to_visit])
             cur_oc = _node_oc(_node_hi(nodes_f, current))
-    return False
+    return (best, tmax, bu, bv)

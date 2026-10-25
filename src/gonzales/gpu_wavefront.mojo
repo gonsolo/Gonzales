@@ -5,7 +5,7 @@ from std.utils import StaticTuple
 from .gpu_tuning import MINCTA_TRAVERSE
 from std.sys import get_defined_int
 from .bvh import _node_box_hit, _node_hi, _node_lo, _node_oc, _bvh_has_nodes, _shadow_is_null_material, _traverse_instances, BVH2Node, any_hit_bvh2_core, ray_sphere_hit, test_spheres, traverse_bvh2_core, traverse_bvh2_core_defer_curves, SceneView
-from .curve_bvh import curve_bvh_occluded
+from .curve_bvh import curve_bvh_occluded, curve_bvh_closest
 from .curves import CURVE_DEFER_K, Curve, _curve_perp_axis, curve_piece_endpoints, intersect_curve, curve_hit_normal
 from .geometry import INV_FOUR_PI, Point3f, RGB, Vec3f, _is_real_ptr, cross, dot, store_vec3, vec3f
 from .materials import Material
@@ -1028,7 +1028,7 @@ comptime CURVE_BLOCK: Int = get_defined_int["CURVE_BLOCK", 32]()
 # replaces the raw result (flag 2, or 4 with the instance in word 3) so the unpack kernel treats it like any curve hit.
 @__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
 @__llvm_metadata(`nvvm.minctasm`=SIMDLength(1))    # NVIDIA keeps its old register budget; AMD ignores this
-def rtcore_curve_clip_gpu(
+def rtcore_curve_clip_gpu[clusters: Bool](
     sd: SceneView,
     rays: Pointer[Float32, MutUntrackedOrigin],
     results: Pointer[Float32, MutUntrackedOrigin],
@@ -1048,8 +1048,14 @@ def rtcore_curve_clip_gpu(
     var ray = Ray(Point3f(rays[unsafe_offset=idx], rays[unsafe_offset=idx + 1], rays[unsafe_offset=idx + 2]),
                   Vec3f(rays[unsafe_offset=idx + 4], rays[unsafe_offset=idx + 5], rays[unsafe_offset=idx + 6]))
     var tmp = Intersection(PrimId(-1, -1, 0, -1, 0, 0, 0, 0), tmax, Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0))
-    traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, tmax, Pointer(to=tmp),
-                       sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances, root=max(Int(sd.curveRoot), 0))
+    comptime if clusters:
+        var h = curve_bvh_closest(sd.curveBvh, sd.primIds, sd.curves, ray, tmax)
+        if h[0] < 0:
+            return
+        tmp = Intersection(sd.primIds[unsafe_offset=h[0]], h[1], h[2], h[3], Int8(1), Int8(0), Int8(0), Int8(0))
+    else:
+        traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, tmax, Pointer(to=tmp),
+                           sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances, root=max(Int(sd.curveRoot), 0))
     if tmp.hit == Int8(0) or tmp.primId.type != Int8(5):
         return
     results[unsafe_offset=idx + 0] = tmp.tHit
@@ -1089,11 +1095,12 @@ def rtcore_trace_unpack_gpu(
     if alpha:
         rtcore_alpha_passes(ctx, rays_buf, results_buf, scratch_buf, sd.meshes, n_meshes, instance_base_mesh_ptr, n_total)
     if Int(sd.curveCount) > 0:
-        ctx.enqueue_function[rtcore_curve_clip_gpu](
-            sd, rays_buf.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
-            results_buf.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
-            Int64(n_total), grid_dim=grid, block_dim=block_size,
-        )
+        var rp = rays_buf.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
+        var sp = results_buf.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
+        if sd.curveBvh.n_clusters > Int32(0):
+            ctx.enqueue_function[rtcore_curve_clip_gpu[True]](sd, rp, sp, Int64(n_total), grid_dim=grid, block_dim=block_size)
+        else:
+            ctx.enqueue_function[rtcore_curve_clip_gpu[False]](sd, rp, sp, Int64(n_total), grid_dim=grid, block_dim=block_size)
     ctx.enqueue_function[vulkaninterop_unpack_results_kernel](
         results_buf.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
         inter_buf.unsafe_ptr().unsafe_bitcast[Intersection]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
@@ -1253,7 +1260,10 @@ def rtcore_closest_hit_gpu(
     if alpha:
         rtcore_alpha_passes(ctx, rays_buf, results_buf, scratch_buf, sd.meshes, n_meshes, instance_base_mesh_ptr, m)
     if Int(sd.curveCount) > 0:
-        ctx.enqueue_function[rtcore_curve_clip_gpu](sd, rays, results, Int64(m), grid_dim=ceildiv(m, CURVE_BLOCK), block_dim=CURVE_BLOCK)
+        if sd.curveBvh.n_clusters > Int32(0):
+            ctx.enqueue_function[rtcore_curve_clip_gpu[True]](sd, rays, results, Int64(m), grid_dim=ceildiv(m, CURVE_BLOCK), block_dim=CURVE_BLOCK)
+        else:
+            ctx.enqueue_function[rtcore_curve_clip_gpu[False]](sd, rays, results, Int64(m), grid_dim=ceildiv(m, CURVE_BLOCK), block_dim=CURVE_BLOCK)
     var fuse_paths = paths if n_spheres == 0 else Pointer[PathState, MutUntrackedOrigin].unsafe_dangling()
     ctx.enqueue_function[vulkaninterop_unpack_results_kernel](
         results, inter,
