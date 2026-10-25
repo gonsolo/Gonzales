@@ -1504,53 +1504,85 @@ def rt_pack_shadow_compact_kernel(
     rays[unsafe_offset=idx + 7] = task.tmax
     ids[unsafe_offset=pos] = Int32(t)
 
-# Adds the contribution of every listed shadow ray of one slot that reached its light, and frees its task for the next
-# bounce (so the tasks never need a full-grid reset between bounces).
+# Frees every listed shadow ray's task for the next bounce (so the tasks never need a full-grid reset between bounces) and
+# lists, per slot, those no triangle or sphere blocks: the curve walk then runs on full warps. Slot 0's list grows up
+# from `lists`, slot 1's down from lists + cap; together they hold at most the `count` rays. Bit 31: too many rejected
+# alpha hits for the RT-core passes, the software BVH decides.
 @__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
-@__llvm_metadata(`nvvm.minctasm`=SIMDLength(1))    # NVIDIA keeps its old register budget; AMD ignores this
-def resolve_shadow_compact_kernel(
-    paths: Pointer[PathState, MutUntrackedOrigin],
+def shadow_survivors_kernel(
     tasks: Pointer[ShadowTask, MutUntrackedOrigin],
     raw: Pointer[UInt32, MutUntrackedOrigin],
     ids: Pointer[Int32, MutUntrackedOrigin],
     sd: SceneView,
     n_spheres_dp: Int64,
     count_dp: Int64,
-    slot_dp: Int64,
     converted_dp: Int64,
+    lists: Pointer[Int32, MutUntrackedOrigin],
+    counts: Pointer[Int32, MutUntrackedOrigin],
+    cap_dp: Int64,
 ):
+    comptime assert SHADOW_SLOTS <= 2, "a list per slot, from either end"
     var i = Int(block_idx.x * block_dim.x + thread_idx.x)
-    if i >= Int(count_dp):
+    var t = 0
+    var keep = False
+    var soft = False
+    if i < Int(count_dp):
+        t = Int(ids[unsafe_offset=i])
+        tasks[unsafe_offset=t].active = Int32(0)
+        var flag = raw[unsafe_offset=i * 8 + 6]
+        soft = converted_dp != Int64(0) and flag == UInt32(3)
+        keep = soft or not (flag != UInt32(0) if converted_dp != Int64(0) else raw[unsafe_offset=i * 8 + 3] != UInt32(0xffffffff))
+        if keep and not soft:                  # analytic spheres are not in the acceleration structure
+            var task = tasks[unsafe_offset=t]
+            var ray = Ray(Point3f(task.origin.x, task.origin.y, task.origin.z), Vec3f(task.direction.x, task.direction.y, task.direction.z))
+            for k in range(Int(n_spheres_dp)):
+                if ray_sphere_hit(sd.spheres[unsafe_offset=k].center, sd.spheres[unsafe_offset=k].radius, ray, Float32(1e-4), task.tmax) > Float32(0.0):
+                    keep = False
+                    break
+    var slot = t % SHADOW_SLOTS
+    var p0 = warp_append(counts, keep and slot == 0)
+    barrier()                                  # warp_append's shared counts, read above, are used again
+    var p1 = warp_append(counts.unsafe_offset(1), keep and slot == 1)
+    if keep:
+        var e = Int32(t) | (Int32(1) << 31 if soft else Int32(0))
+        lists[unsafe_offset=p0 if slot == 0 else Int(cap_dp) - 1 - p1] = e
+
+
+# Adds the contribution of every listed shadow ray of one slot that no curve blocks either. Slot by slot, so a path's two
+# rays never add at once, and in slot order, which keeps the sum order.
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+@__llvm_metadata(`nvvm.minctasm`=SIMDLength(1))    # NVIDIA keeps its old register budget; AMD ignores this
+def shadow_curves_kernel(
+    paths: Pointer[PathState, MutUntrackedOrigin],
+    tasks: Pointer[ShadowTask, MutUntrackedOrigin],
+    sd: SceneView,
+    n_spheres_dp: Int64,
+    lists: Pointer[Int32, MutUntrackedOrigin],
+    counts: Pointer[Int32, MutUntrackedOrigin],
+    slot_dp: Int64,
+    cap_dp: Int64,
+):
+    var j = Int(block_idx.x * block_dim.x + thread_idx.x)
+    if j >= Int(counts[unsafe_offset=Int(slot_dp)]):
         return
-    var t = Int(ids[unsafe_offset=i])
-    if t % SHADOW_SLOTS != Int(slot_dp):
-        return
-    var tid = t // SHADOW_SLOTS
+    var e = lists[unsafe_offset=j if slot_dp == Int64(0) else Int(cap_dp) - 1 - j]
+    var t = Int(e & Int32(0x7FFFFFFF))
     var task = tasks[unsafe_offset=t]
-    tasks[unsafe_offset=t].active = Int32(0)
     var ray = Ray(Point3f(task.origin.x, task.origin.y, task.origin.z), Vec3f(task.direction.x, task.direction.y, task.direction.z))
-    var flag = raw[unsafe_offset=i * 8 + 6]
-    if converted_dp != Int64(0) and flag == UInt32(3):
-        # Too many rejected alpha hits for the RT-core passes: the software BVH decides (it also covers the spheres).
+    if e < Int32(0):
         if any_hit_bvh2_core[True](sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, task.tmax, sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances, sd.spheres, Int(n_spheres_dp), materials=sd.materials):
             return
         if _curves_apart(sd) and curve_bvh_occluded(sd.curveBvh, sd.curves, sd.materials, ray, task.tmax):
             return
-        paths[unsafe_offset=tid].estimate += task.contrib
-        return
-    var blocked = flag != UInt32(0) if converted_dp != Int64(0) else raw[unsafe_offset=i * 8 + 3] != UInt32(0xffffffff)
-    if blocked:                                                    # a triangle is in the way
-        return
-    # Analytic spheres are not in the acceleration structure: test them here, as the primary rays' sphere pass does.
-    for k in range(Int(n_spheres_dp)):
-        if ray_sphere_hit(sd.spheres[unsafe_offset=k].center, sd.spheres[unsafe_offset=k].radius, ray, Float32(1e-4), task.tmax) > Float32(0.0):
-            return
-    if sd.curveBvh.n_clusters > Int32(0):
+    elif sd.curveBvh.n_clusters > Int32(0):
         if curve_bvh_occluded(sd.curveBvh, sd.curves, sd.materials, ray, task.tmax):
             return
     elif Int(sd.curveCount) > 0 and any_hit_bvh2_core[True](sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, task.tmax, sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances, sd.spheres, 0, materials=sd.materials, root=max(Int(sd.curveRoot), 0)):
         return                                                     # curves are not in the acceleration structure either
-    paths[unsafe_offset=tid].estimate += task.contrib
+    paths[unsafe_offset=t // SHADOW_SLOTS].estimate += task.contrib
+
+comptime SHADOW_COUNTS = 16        # in the counter buffer, after the shading kinds' counts: the survivors per slot
+
 
 def rtcore_shadow_rays_compact_gpu(
     ctx: DeviceContext,
@@ -1600,12 +1632,17 @@ def rtcore_shadow_rays_compact_gpu(
             rtcore_alpha_passes(ctx, interop_rays_buf, interop_results_buf, scratch_buf, sd.meshes, n_meshes, instance_base_mesh, m)
         else:
             _ = rtcore_trace(rt_hw, UInt64(Int(interop_rays_buf.unsafe_ptr())), UInt64(Int(interop_results_buf.unsafe_ptr())), Int32(m), cuda_stream)
-        for s in range(SHADOW_SLOTS):                   # slot order keeps the sum order of the per-slot passes
-            ctx.enqueue_function[resolve_shadow_compact_kernel](
+        var counts = counter_buf.unsafe_ptr().unsafe_bitcast[Int32]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]().unsafe_offset(SHADOW_COUNTS)
+        var lists = ids_base.unsafe_offset(3 * n_total)          # the shading kinds' list, done with by now
+        ctx.enqueue_function[shadow_survivors_kernel](
+            tasks, interop_results_buf.unsafe_ptr().unsafe_bitcast[UInt32]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
+            ids, sd, Int64(n_spheres), Int64(m), Int64(1 if alpha else 0), lists, counts, Int64(n_total),
+            grid_dim=ceildiv(m, block_size), block_dim=block_size,
+        )
+        for s in range(SHADOW_SLOTS):
+            ctx.enqueue_function[shadow_curves_kernel](
                 path_buf.unsafe_ptr().unsafe_bitcast[PathState]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
-                tasks,
-                interop_results_buf.unsafe_ptr().unsafe_bitcast[UInt32]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
-                ids, sd, Int64(n_spheres), Int64(m), Int64(s), Int64(1 if alpha else 0),
+                tasks, sd, Int64(n_spheres), lists, counts, Int64(s), Int64(n_total),
                 grid_dim=ceildiv(m, CURVE_BLOCK), block_dim=CURVE_BLOCK,
             )
         if bench[unsafe_offset=3] == 2:

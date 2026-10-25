@@ -1202,7 +1202,7 @@ def gpu_upload_scene(
                 ctx.enqueue_copy(r_filter_lut_buf, lut_host.unsafe_bitcast[UInt8]())
                 ctx.synchronize()
                 lut_host.unsafe_free()
-            var r_active_count_buf = ctx.enqueue_create_buffer[DType.uint8](64)
+            var r_active_count_buf = ctx.enqueue_create_buffer[DType.uint8](128)
             var curves = CurveBuffers.upload(ctx, s, 1)
             var textures = TextureBuffers.upload(ctx, s)
             ctx.synchronize()
