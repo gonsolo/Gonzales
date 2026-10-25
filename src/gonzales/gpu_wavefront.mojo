@@ -5,7 +5,7 @@ from std.utils import StaticTuple
 from .gpu_tuning import MINCTA_TRAVERSE
 from std.sys import get_defined_int
 from .bvh import _node_box_hit, _node_hi, _node_lo, _node_oc, _bvh_has_nodes, _shadow_is_null_material, _traverse_instances, BVH2Node, any_hit_bvh2_core, ray_sphere_hit, test_spheres, traverse_bvh2_core, traverse_bvh2_core_defer_curves, SceneView
-from .curve_bvh import curve_bvh_occluded, curve_bvh_closest
+from .curve_bvh import curve_bvh_occluded, curve_bvh_closest, curve_bvh_prim
 from .curves import CURVE_DEFER_K, Curve, _curve_perp_axis, curve_piece_endpoints, intersect_curve, curve_hit_normal
 from .geometry import INV_FOUR_PI, Point3f, RGB, Vec3f, _is_real_ptr, cross, dot, store_vec3, vec3f
 from .materials import Material
@@ -1056,10 +1056,10 @@ def rtcore_curve_clip_gpu[clusters: Bool](
                   Vec3f(rays[unsafe_offset=idx + 4], rays[unsafe_offset=idx + 5], rays[unsafe_offset=idx + 6]))
     var tmp = Intersection(PrimId(-1, -1, 0, -1, 0, 0, 0, 0), tmax, Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0))
     comptime if clusters:
-        var h = curve_bvh_closest(sd.curveBvh, sd.primIds, sd.curves, ray, tmax)
+        var h = curve_bvh_closest(sd.curveBvh, sd.curves, ray, tmax)
         if h[0] < 0:
             return
-        tmp = Intersection(sd.primIds[unsafe_offset=h[0]], h[1], h[2], h[3], Int8(1), Int8(0), Int8(0), Int8(0))
+        tmp = Intersection(curve_bvh_prim(sd.curveBvh, h[0]), h[1], h[2], h[3], Int8(1), Int8(0), Int8(0), Int8(0))
     else:
         traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, tmax, Pointer(to=tmp),
                            sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances, root=max(Int(sd.curveRoot), 0))
@@ -1534,7 +1534,7 @@ def resolve_shadow_compact_kernel(
         # Too many rejected alpha hits for the RT-core passes: the software BVH decides (it also covers the spheres).
         if any_hit_bvh2_core[True](sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, task.tmax, sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances, sd.spheres, Int(n_spheres_dp), materials=sd.materials):
             return
-        if _curves_apart(sd) and curve_bvh_occluded(sd.curveBvh, sd.primIds, sd.curves, sd.materials, ray, task.tmax):
+        if _curves_apart(sd) and curve_bvh_occluded(sd.curveBvh, sd.curves, sd.materials, ray, task.tmax):
             return
         paths[unsafe_offset=tid].estimate += task.contrib
         return
@@ -1546,7 +1546,7 @@ def resolve_shadow_compact_kernel(
         if ray_sphere_hit(sd.spheres[unsafe_offset=k].center, sd.spheres[unsafe_offset=k].radius, ray, Float32(1e-4), task.tmax) > Float32(0.0):
             return
     if sd.curveBvh.n_clusters > Int32(0):
-        if curve_bvh_occluded(sd.curveBvh, sd.primIds, sd.curves, sd.materials, ray, task.tmax):
+        if curve_bvh_occluded(sd.curveBvh, sd.curves, sd.materials, ray, task.tmax):
             return
     elif Int(sd.curveCount) > 0 and any_hit_bvh2_core[True](sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, task.tmax, sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances, sd.spheres, 0, materials=sd.materials, root=max(Int(sd.curveRoot), 0)):
         return                                                     # curves are not in the acceleration structure either
@@ -1643,9 +1643,9 @@ def vk_alpha_retrace_gpu(
                        inter.unsafe_offset(tid), sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances)
     if _curves_apart(sd):
         var t = inter[unsafe_offset=tid].tHit if inter[unsafe_offset=tid].hit != Int8(0) else Float32(1.0e38)
-        var h = curve_bvh_closest(sd.curveBvh, sd.primIds, sd.curves, paths[unsafe_offset=tid].ray, t)
+        var h = curve_bvh_closest(sd.curveBvh, sd.curves, paths[unsafe_offset=tid].ray, t)
         if h[0] >= 0:
-            inter[unsafe_offset=tid] = Intersection(sd.primIds[unsafe_offset=h[0]], h[1], h[2], h[3], Int8(1), Int8(0), Int8(0), Int8(0))
+            inter[unsafe_offset=tid] = Intersection(curve_bvh_prim(sd.curveBvh, h[0]), h[1], h[2], h[3], Int8(1), Int8(0), Int8(0), Int8(0))
 
 
 def vulkaninterop_rt_traverse_paths_gpu(

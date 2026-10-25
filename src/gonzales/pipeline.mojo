@@ -14,7 +14,7 @@ from .outputs import write_render_outputs
 from std.time import perf_counter_ns
 from .geometry import RGB, Point3f, Vec3f, Bounds3f, dot, _is_real_ptr
 from .render_state import TileResult, PathState, FilmDims
-from .primitives import Ray, TriangleMesh, Instance, mesh_vi, mesh_pos
+from .primitives import Ray, PrimId, TriangleMesh, Instance, mesh_vi, mesh_pos
 from .curves import Curve, curve_piece_bounds
 from .postprocess import denoise, write_image, write_image_cropped, write_image_cropwindow
 from .transform import Mat4, matrix_invert
@@ -33,7 +33,7 @@ from .restir_gi import GIReservoir, gi_reservoir_init, GIReservoirIO, gi_reservo
 from .restir_sms import SMSReservoir, sms_reservoir_init, SMSReservoirIO, sms_reservoir_io_null
 from .restir_vol import VolReservoir, vol_reservoir_init, VolReservoirIO, vol_reservoir_io_null
 from .gpu import gpu_render_sample, gpu_render_wavefront, gpu_adaptive_update, gpu_mnee_adapt, gpu_download_film, gpu_download_albedo, gpu_clear_film, gpu_clear_restir, gpu_clear_restir_vol
-from .gpu_scene import GpuSceneHandle, WAVEFRONT_BATCH, gpu_available, gpu_upload_scene, gpu_alloc_pixel_buffers, gpu_free_scene, gpu_ptex_begin, gpu_ptex_finish, gpu_ptex_withhold, gpu_ptex_withheld, gpu_ptex_redo_upload, gpu_ptex_stream_start, gpu_ptex_poll, gpu_ptex_stream_finish, gpu_ptex_make_room, gpu_set_curve_bvh_dev
+from .gpu_scene import GpuSceneHandle, WAVEFRONT_BATCH, gpu_available, gpu_upload_scene, gpu_alloc_pixel_buffers, gpu_free_scene, gpu_ptex_begin, gpu_ptex_finish, gpu_ptex_withhold, gpu_ptex_withheld, gpu_ptex_redo_upload, gpu_ptex_stream_start, gpu_ptex_poll, gpu_ptex_stream_finish, gpu_ptex_make_room, gpu_set_curve_bvh_dev, typed_ptr
 from .gpu_denoise import gpu_atrous_denoise
 from .gpu_wavefront import gpu_gen_aux_buffers
 from .viewer import CameraState, ViewerHandle, viewer_create, viewer_update_framebuffer, viewer_should_close, viewer_poll_events, viewer_get_camera_state, viewer_set_camera_state, viewer_destroy, viewer_denoise_enabled, viewer_monitor_size, build_camera_to_world
@@ -1074,10 +1074,17 @@ def _rt_curve_clusters(handle: Pointer[GpuSceneHandle, MutUntrackedOrigin], psc:
     if (psc[unsafe_offset=0].curve_root < Int32(0) and first < 0) or getenv("GONZALES_CURVE_BVH") == "0":
         return
     var t0 = perf_counter_ns()
-    var r = (first, Int(psc[unsafe_offset=0].prim_count)) if first >= 0 else _leaf_range(psc[unsafe_offset=0].bvh_nodes_cpu, Int(psc[unsafe_offset=0].curve_root))
-    gpu_set_curve_bvh_dev(handle, gpu_build_curve_bvh(handle[].ctx, handle[].bvh.prim_ids_ptr(), handle[].curves.curves_ptr(), r[0], r[1] - r[0]))
+    if first >= 0:                                   # the device has no curve PrimIds: upload them for the build
+        var n = Int(psc[unsafe_offset=0].prim_count) - first
+        var ids = handle[].ctx.enqueue_create_buffer[DType.uint8](n * size_of[PrimId]())
+        handle[].ctx.enqueue_copy(ids, psc[unsafe_offset=0].prim_ids_cpu.unsafe_offset(first).unsafe_bitcast[UInt8]())
+        gpu_set_curve_bvh_dev(handle, gpu_build_curve_bvh(handle[].ctx, typed_ptr[PrimId](ids), handle[].curves.curves_ptr(), 0, n))
+        _ = ids^                                     # the build synchronized
+    else:
+        var r = _leaf_range(psc[unsafe_offset=0].bvh_nodes_cpu, Int(psc[unsafe_offset=0].curve_root))
+        gpu_set_curve_bvh_dev(handle, gpu_build_curve_bvh(handle[].ctx, handle[].bvh.prim_ids_ptr(), handle[].curves.curves_ptr(), r[0], r[1] - r[0]))
     if getenv("GONZALES_TIMING") != "":
-        print("Gonzales:   curve clusters", handle[].curve_bvh.n_clusters, "in", Float64(perf_counter_ns() - t0) / 1.0e9, "s")
+        print("Gonzales:   curve clusters", handle[].curve_bvh.n_clusters, "nodes", len(handle[].curve_bvh_bufs[4]) // 32, "in", Float64(perf_counter_ns() - t0) / 1.0e9, "s")
 
 
 def _rt_wavefront_setup(handle: Pointer[GpuSceneHandle, MutUntrackedOrigin], psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin], max_rays: Int) raises -> _RtBufs:

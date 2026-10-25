@@ -47,7 +47,7 @@ struct CurveBvh(TrivialRegisterPassable):
     var frames: Pointer[Float32, MutUntrackedOrigin]     # per cluster: rows x, y, z of its rotation (nine floats)
     var roots: Pointer[Int32, MutUntrackedOrigin]        # per cluster: its root in nodes
     var nodes: Pointer[Float32, MutUntrackedOrigin]      # every cluster's BVH, in its frame; leaves index prims
-    var prims: Pointer[Int32, MutUntrackedOrigin]        # -> the scene's PrimIds (type 5)
+    var refs: Pointer[Int32, MutUntrackedOrigin]         # per leaf slot: curve, PrimId.id2, material (curve_bvh_prim)
     var n_clusters: Int32                                 # 0: none
 
     @staticmethod

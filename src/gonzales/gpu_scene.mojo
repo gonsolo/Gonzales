@@ -107,6 +107,11 @@ struct SpectralBuffers(Movable):
         return Self(coeffs_buf=spec_coeffs_gpu_buf^, cie_x_buf=spec_cie_x_gpu_buf^, cie_y_buf=spec_cie_y_gpu_buf^,
                     cie_z_buf=spec_cie_z_gpu_buf^, d65_buf=spec_d65_gpu_buf^, res=spectral_res)
 
+
+def _gpu_prim_count(ref s: ParsedScene_Mojo) -> Int:
+    """The PrimIds the device keeps: with the curves apart, only the clusters reach theirs (CurveBvh.refs)."""
+    return Int(s.curve_first) if s.curve_first >= Int32(0) else Int(s.prim_count_cpu)
+
 @fieldwise_init
 struct BvhBuffers(Movable):
     var nodes_buf: DeviceBuffer[DType.uint8]
@@ -126,7 +131,7 @@ struct BvhBuffers(Movable):
         # buffer may be a 1-element placeholder when the scene has no
         # geometry).
         var bvh_buf = _gpu_upload_array[BVH2Node](ctx, s.bvh_nodes_cpu, max(Int(s.bvh_node_count_cpu), 1))   # an empty BVH still has its zero root
-        var prim_buf = _gpu_upload_array[PrimId](ctx, s.prim_ids_cpu, Int(s.prim_count_cpu))
+        var prim_buf = _gpu_upload_array[PrimId](ctx, s.prim_ids_cpu, _gpu_prim_count(s))
         return Self(nodes_buf=bvh_buf^, prim_ids_buf=prim_buf^)
 
 @fieldwise_init
@@ -1094,7 +1099,7 @@ def _report_gpu_memory(ctx: DeviceContext, ref s: ParsedScene_Mojo) raises:
     # a 0-byte enqueue_create_buffer yields a misaligned/invalid device
     # pointer that crashes on use and on free. Allocate at least 1 elem.
     var bvh_bytes = max(Int(s.bvh_node_count_cpu), 1) * size_of[BVH2Node]()
-    var prim_bytes = max(Int(s.prim_count_cpu), 1) * size_of[PrimId]()
+    var prim_bytes = max(_gpu_prim_count(s), 1) * size_of[PrimId]()
     var mesh_struct_bytes = max(Int(s.mesh_count), 1) * size_of[TriangleMesh]()
 
     # Estimate total mesh data

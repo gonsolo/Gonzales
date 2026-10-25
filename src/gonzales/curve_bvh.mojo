@@ -85,18 +85,25 @@ def _fiber_frame(prim_ids: Pointer[PrimId, MutUntrackedOrigin], curves: Pointer[
     f[unsafe_offset=6] = z.x; f[unsafe_offset=7] = z.y; f[unsafe_offset=8] = z.z
 
 
-def curve_bvh_occluded(cb: CurveBvh, prim_ids: Pointer[PrimId, MutUntrackedOrigin], curves: Pointer[Curve, MutUntrackedOrigin],
+def curve_bvh_occluded(cb: CurveBvh, curves: Pointer[Curve, MutUntrackedOrigin],
                        materials: Pointer[Material, MutUntrackedOrigin], ray: Ray, tmax: Float32) -> Bool:
-    return _curve_bvh_walk[True](cb, prim_ids, curves, materials, ray, tmax)[0] >= 0
+    return _curve_bvh_walk[True](cb, curves, materials, ray, tmax)[0] >= 0
 
 
-def curve_bvh_closest(cb: CurveBvh, prim_ids: Pointer[PrimId, MutUntrackedOrigin], curves: Pointer[Curve, MutUntrackedOrigin],
+def curve_bvh_closest(cb: CurveBvh, curves: Pointer[Curve, MutUntrackedOrigin],
                       ray: Ray, tmax: Float32) -> Tuple[Int, Float32, Float32, Float32]:
     """(PrimId index or -1, t, u, v) of the nearest curve hit before tmax."""
-    return _curve_bvh_walk[False](cb, prim_ids, curves, Pointer[Material, MutUntrackedOrigin].unsafe_dangling(), ray, tmax)
+    return _curve_bvh_walk[False](cb, curves, Pointer[Material, MutUntrackedOrigin].unsafe_dangling(), ray, tmax)
 
 
-def _curve_bvh_walk[any_hit: Bool](cb: CurveBvh, prim_ids: Pointer[PrimId, MutUntrackedOrigin], curves: Pointer[Curve, MutUntrackedOrigin],
+@always_inline
+def curve_bvh_prim(cb: CurveBvh, slot: Int) -> PrimId:
+    """The type-5 PrimId of a leaf slot curve_bvh_closest returned."""
+    var r = cb.refs.unsafe_offset(3 * slot)
+    return PrimId(Int64(r[unsafe_offset=0]), Int64(r[unsafe_offset=1]), Int64(r[unsafe_offset=2]), Int32(-1), Int8(5), Int8(0), Int8(0), Int8(0))
+
+
+def _curve_bvh_walk[any_hit: Bool](cb: CurveBvh, curves: Pointer[Curve, MutUntrackedOrigin],
                                    materials: Pointer[Material, MutUntrackedOrigin], ray: Ray, tmax_in: Float32) -> Tuple[Int, Float32, Float32, Float32]:
     """One loop and one stack over both levels: a top leaf names a cluster, whose BVH is walked with the ray in its frame;
     a -1 on the stack marks the way back to the top level. Pieces are tested with the world ray."""
@@ -138,17 +145,16 @@ def _curve_bvh_walk[any_hit: Bool](cb: CurveBvh, prim_ids: Pointer[PrimId, MutUn
                 pop = True
             else:
                 for j in range(Int(cur_oc[1])):
-                    var pi = Int(cb.prims[unsafe_offset=off + j])
-                    var prim = prim_ids[unsafe_offset=pi]
+                    var r = cb.refs.unsafe_offset(3 * (off + j))
                     comptime if any_hit:
-                        if _shadow_is_null_material(materials, prim.materialIndex):
+                        if _shadow_is_null_material(materials, Int64(r[unsafe_offset=2])):
                             continue
-                    var curve = curves[unsafe_offset=Int(prim.id1)]
-                    var h = intersect_curve(wo, wd, curve, Int(prim.id2) // 8, Int(prim.id2) % 8, tmax)
+                    var id2 = Int(r[unsafe_offset=1])
+                    var h = intersect_curve(wo, wd, curves[unsafe_offset=Int(r[unsafe_offset=0])], id2 // 8, id2 % 8, tmax)
                     if h[0]:
                         comptime if any_hit:
-                            return (pi, h[1], h[2], h[3])
-                        best = pi; tmax = h[1]; bu = h[2]; bv = h[3]
+                            return (off + j, h[1], h[2], h[3])
+                        best = off + j; tmax = h[1]; bu = h[2]; bv = h[3]
                 pop = True
         else:
             var li = current + 1
@@ -446,7 +452,8 @@ comptime CW = 4                     # clusters a block, a warp each
 def _sah_clusters_kernel(cl_lo: Pointer[Int32, MutUntrackedOrigin], nc_dp: Int64, widx: Pointer[Int32, MutUntrackedOrigin], wtmp: Pointer[Int32, MutUntrackedOrigin],
                          wmin: Pointer[Float32, MutUntrackedOrigin], wmax: Pointer[Float32, MutUntrackedOrigin], nodes: Pointer[BVH2Node, MutUntrackedOrigin],
                          roots: Pointer[Int32, MutUntrackedOrigin], pslot: Pointer[Int32, MutUntrackedOrigin], a_dp: Int64,
-                         prims: Pointer[Int32, MutUntrackedOrigin], top_cl: Pointer[Int32, MutUntrackedOrigin]):
+                         prim_ids: Pointer[PrimId, MutUntrackedOrigin], refs: Pointer[Int32, MutUntrackedOrigin],
+                         top_cl: Pointer[Int32, MutUntrackedOrigin]):
     """bvh._bvh_split's binned SAH, depth-first as build_bvh2_node, a warp per cluster; cluster c's nodes go to [2 lo, 2 hi)."""
     var lane = Int(lane_id())
     var w = Int(thread_idx.x) // WARP_SIZE
@@ -578,7 +585,9 @@ def _sah_clusters_kernel(cl_lo: Pointer[Int32, MutUntrackedOrigin], nc_dp: Int64
     if lane == 0:
         roots[unsafe_offset=c] = Int32(base); top_cl[unsafe_offset=c] = Int32(c)
     for k in range(lane, n, WARP_SIZE):
-        prims[unsafe_offset=lo + k] = Int32(a_dp) + pslot[unsafe_offset=lo + Int(idx[unsafe_offset=k])]
+        var p = prim_ids[unsafe_offset=Int(a_dp) + Int(pslot[unsafe_offset=lo + Int(idx[unsafe_offset=k])])]
+        var r = refs.unsafe_offset(3 * (lo + k))
+        r[unsafe_offset=0] = Int32(p.id1); r[unsafe_offset=1] = Int32(p.id2); r[unsafe_offset=2] = Int32(p.materialIndex)
 
 
 def _dev_ints(ctx: DeviceContext, values: List[Int]) raises -> DeviceBuffer[DType.uint8]:
@@ -797,15 +806,15 @@ def gpu_build_curve_bvh(ctx: DeviceContext, prim_ids: Pointer[PrimId, MutUntrack
                                               _p[Int32](widx), _p[Float32](wmin), _p[Float32](wmax), grid_dim=ceildiv(n, TPB), block_dim=TPB)
     var nodes = _buf[BVH2Node](ctx, 2 * n)
     var roots = _buf[Int32](ctx, nc)
-    var prims = _buf[Int32](ctx, n)
+    var refs = _buf[Int32](ctx, 3 * n)
     var top_cl = _buf[Int32](ctx, nc)
     var wtmp = _buf[Int32](ctx, n)
     ctx.enqueue_function[_sah_clusters_kernel](_p[Int32](cl_lo), Int64(nc), _p[Int32](widx), _p[Int32](wtmp), _p[Float32](wmin), _p[Float32](wmax),
-                                               _p[BVH2Node](nodes), _p[Int32](roots), _p[Int32](pslot), Int64(a), _p[Int32](prims), _p[Int32](top_cl),
+                                               _p[BVH2Node](nodes), _p[Int32](roots), _p[Int32](pslot), Int64(a), prim_ids, _p[Int32](refs), _p[Int32](top_cl),
                                                grid_dim=ceildiv(nc, CW), block_dim=CW * WARP_SIZE)
     ctx.synchronize()
     _ = widx^; _ = wtmp^; _ = wmin^; _ = wmax^; _ = pslot^; _ = cl_lo^
     var bufs = List[DeviceBuffer[DType.uint8]]()
-    bufs.append(top^); bufs.append(top_cl^); bufs.append(frames^); bufs.append(roots^); bufs.append(nodes^); bufs.append(prims^)
+    bufs.append(top^); bufs.append(top_cl^); bufs.append(frames^); bufs.append(roots^); bufs.append(nodes^); bufs.append(refs^)
     var cb = CurveBvh(_p[Float32](bufs[0]), _p[Int32](bufs[1]), _p[Float32](bufs[2]), _p[Int32](bufs[3]), _p[Float32](bufs[4]), _p[Int32](bufs[5]), Int32(nc))
     return CurveBvhDev(cb, bufs^)

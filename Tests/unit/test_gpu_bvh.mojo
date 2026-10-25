@@ -192,7 +192,7 @@ def test_curve_clusters_match_brute_force() raises:
     assert_true(Int(h.n_clusters) > 10)
     var seen = List[Bool](length=N, fill=False)
     for k in range(N):
-        var q = Int(h.prims[unsafe_offset=k]) - A
+        var q = Int(h.refs[unsafe_offset=3 * k])
         assert_true(q >= 0 and q < N and not seen[q])
         seen[q] = True
     var fx = make_triangle_scene([Point3f(100.0, 100.0, 100.0), Point3f(101.0, 100.0, 100.0), Point3f(100.0, 101.0, 100.0)])
@@ -208,8 +208,8 @@ def test_curve_clusters_match_brute_force() raises:
             if c[0]:
                 want = True; near = c[1]
         var ray = Ray(Point3f(o.x, o.y, o.z), d)
-        assert_equal(curve_bvh_occluded(h, prims, curves, fx.materials, ray, tmax), want)
-        var got = curve_bvh_closest(h, prims, curves, ray, tmax)
+        assert_equal(curve_bvh_occluded(h, curves, fx.materials, ray, tmax), want)
+        var got = curve_bvh_closest(h, curves, ray, tmax)
         assert_equal(got[0] >= 0, want)
         if want:
             assert_true(abs(got[1] - near) < Float32(1e-5))
