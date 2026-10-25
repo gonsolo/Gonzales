@@ -85,7 +85,7 @@ OPTIONS = $(SINGLERAY) $(SYNC) $(VERBOSE) $(QUICK) $(PARSE) $(WRITE_GONZALES) $(
 
 .PHONY: all c ca clean clean_all e edit es editScene em editMakefile lldb p perf tags t test smoke smoketest \
 	test_debug test_release v view wc book book-html book-watch ut unittest \
-	caustics causticstest sms_mitsuba_ref release-amd unittest-amd intel-hello hydra
+	caustics causticstest sms_mitsuba_ref release-amd unittest-amd intel-hello hydra gzreplay
 
 PBRT_OPTIONS = #--quiet # --stats #--gpu #--nthreads 1 #--quiet --v 2
 
@@ -246,6 +246,14 @@ $(HYDRA_DIR)/hdGonzales.so: src/hdgonzales/hdGonzales.cpp src/hdgonzales/gonzale
 	g++ -std=c++17 -O2 -fPIC -shared -Wall -Wno-deprecated -Wno-cpp $$(python3-config --includes) \
 		-DGONZALES_DATA_DIR=\"$(CURDIR)/src/gonzales/data\" -DMFB_PACKAGE_NAME=hdGonzales -DMFB_ALT_PACKAGE_NAME=hdGonzales \
 		src/hdgonzales/hdGonzales.cpp -o $@ -lusd_ms -L$(BUILD_DIR) -lgonzales -Wl,-rpath,$(abspath $(BUILD_DIR))
+
+# gzrecord.so (LD_PRELOAD into Blender, GZ_RECORD=file GZ_LIB=libgonzales.so) records the C API calls of a render;
+# gzreplay renders such a recording without the host application
+gzreplay: $(BUILD_DIR)/gzreplay $(BUILD_DIR)/libgzrecord.so
+$(BUILD_DIR)/gzreplay: src/hdgonzales/gzreplay.c src/hdgonzales/gzrecord.h src/hdgonzales/gonzales.h $(GONZALES_LIB)
+	cc -O2 -Wall src/hdgonzales/gzreplay.c -o $@ -L$(BUILD_DIR) -lgonzales -Wl,-rpath,$(abspath $(BUILD_DIR))
+$(BUILD_DIR)/libgzrecord.so: src/hdgonzales/gzrecord.c src/hdgonzales/gzrecord.h src/hdgonzales/gonzales.h
+	cc -O2 -Wall -fPIC -shared src/hdgonzales/gzrecord.c -o $@ -ldl
 
 # Intel GPU hello world: Mojo kernel -> NVPTX LLVM IR -> SPIR-V -> Level Zero (needs llvm-spirv, spirv-tools, level-zero)
 INTEL_DIR = $(BUILD_DIR)/intel
