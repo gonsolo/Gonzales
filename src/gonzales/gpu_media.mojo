@@ -730,6 +730,7 @@ def _sss_walk_step(
             if inter.primId.type == Int8(0) and Int32(inter.primId.id1) == walk.mesh and inter.primId.instanceIdx == walk.instance:
                 path_ptr[].sss.mesh = Int32(-1)
                 path_ptr[].sss.exiting = Int32(1)
+                path_ptr[].volume_scattered = Int8(0)       # no longer a pending segment: a later miss is a real one
                 path_ptr[].ray = ray
                 intersections[unsafe_offset=i] = inter
                 path_ptr[].pcgState = pcg.state
