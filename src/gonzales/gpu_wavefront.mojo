@@ -19,6 +19,7 @@ from .spectrum import SpectralSample, spectral_sample_to_rgb
 from .transform import transform_normal, Mat4
 from .vulkaninterop import VulkanInteropRtSceneHandle, vulkaninterop_rt_trace
 from .rtcore import rtcore_active, rtcore_alpha_enabled, rtcore_trace, rtcore_trace_interop
+from .optixcurves import oxc_active, oxc_scratch, oxc_trace_closest, oxc_trace_shadow
 from max.gpu import WARP_SIZE, barrier, block_dim, block_idx, lane_id, thread_idx
 from max.gpu.memory import AddressSpace
 from std.memory import stack_allocation
@@ -1104,7 +1105,10 @@ def rtcore_trace_unpack_gpu(
     if Int(sd.curveCount) > 0:
         var rp = rays_buf.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
         var sp = results_buf.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
-        if sd.curveBvh.n_clusters > Int32(0):
+        var ox = oxc_active()
+        if Int(ox) != 0:
+            _ = oxc_trace_closest(ox, UInt64(Int(rp)), UInt64(Int(sp)), n_total, CUDA(ctx.stream()))
+        elif sd.curveBvh.n_clusters > Int32(0):
             ctx.enqueue_function[rtcore_curve_clip_gpu[True]](sd, rp, sp, Int64(n_total), grid_dim=grid, block_dim=block_size)
         else:
             ctx.enqueue_function[rtcore_curve_clip_gpu[False]](sd, rp, sp, Int64(n_total), grid_dim=grid, block_dim=block_size)
@@ -1267,7 +1271,10 @@ def rtcore_closest_hit_gpu(
     if alpha:
         rtcore_alpha_passes(ctx, rays_buf, results_buf, scratch_buf, sd.meshes, n_meshes, instance_base_mesh_ptr, m)
     if Int(sd.curveCount) > 0:
-        if sd.curveBvh.n_clusters > Int32(0):
+        var ox = oxc_active()
+        if Int(ox) != 0:
+            _ = oxc_trace_closest(ox, UInt64(Int(rays)), UInt64(Int(results)), m, CUDA(ctx.stream()))
+        elif sd.curveBvh.n_clusters > Int32(0):
             ctx.enqueue_function[rtcore_curve_clip_gpu[True]](sd, rays, results, Int64(m), grid_dim=ceildiv(m, CURVE_BLOCK), block_dim=CURVE_BLOCK)
         else:
             ctx.enqueue_function[rtcore_curve_clip_gpu[False]](sd, rays, results, Int64(m), grid_dim=ceildiv(m, CURVE_BLOCK), block_dim=CURVE_BLOCK)
@@ -1505,7 +1512,7 @@ def rt_pack_shadow_compact_kernel(
     ids[unsafe_offset=pos] = Int32(t)
 
 # Frees every listed shadow ray's task for the next bounce (so the tasks never need a full-grid reset between bounces) and
-# lists, per slot, those no triangle or sphere blocks: the curve walk then runs on full warps. Slot 0's list grows up
+# lists, per slot, the indices of the rays no triangle or sphere blocks: the curve walk then runs on full warps. Slot 0's list grows up
 # from `lists`, slot 1's down from lists + cap; together they hold at most the `count` rays. Bit 31: too many rejected
 # alpha hits for the RT-core passes, the software BVH decides.
 @__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
@@ -1544,7 +1551,7 @@ def shadow_survivors_kernel(
     barrier()                                  # warp_append's shared counts, read above, are used again
     var p1 = warp_append(counts.unsafe_offset(1), keep and slot == 1)
     if keep:
-        var e = Int32(t) | (Int32(1) << 31 if soft else Int32(0))
+        var e = Int32(i) | (Int32(1) << 31 if soft else Int32(0))
         lists[unsafe_offset=p0 if slot == 0 else Int(cap_dp) - 1 - p1] = e
 
 
@@ -1557,22 +1564,28 @@ def shadow_curves_kernel(
     tasks: Pointer[ShadowTask, MutUntrackedOrigin],
     sd: SceneView,
     n_spheres_dp: Int64,
+    ids: Pointer[Int32, MutUntrackedOrigin],
     lists: Pointer[Int32, MutUntrackedOrigin],
     counts: Pointer[Int32, MutUntrackedOrigin],
     slot_dp: Int64,
     cap_dp: Int64,
+    blocked: Pointer[UInt8, MutUntrackedOrigin],               # the OptiX curves' verdicts per ray, else dangling
 ):
     var j = Int(block_idx.x * block_dim.x + thread_idx.x)
     if j >= Int(counts[unsafe_offset=Int(slot_dp)]):
         return
     var e = lists[unsafe_offset=j if slot_dp == Int64(0) else Int(cap_dp) - 1 - j]
-    var t = Int(e & Int32(0x7FFFFFFF))
+    var i = Int(e & Int32(0x7FFFFFFF))
+    var t = Int(ids[unsafe_offset=i])
     var task = tasks[unsafe_offset=t]
     var ray = Ray(Point3f(task.origin.x, task.origin.y, task.origin.z), Vec3f(task.direction.x, task.direction.y, task.direction.z))
     if e < Int32(0):
         if any_hit_bvh2_core[True](sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, task.tmax, sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances, sd.spheres, Int(n_spheres_dp), materials=sd.materials):
             return
         if _curves_apart(sd) and curve_bvh_occluded(sd.curveBvh, sd.curves, sd.materials, ray, task.tmax):
+            return
+    elif _is_real_ptr(blocked):
+        if blocked[unsafe_offset=i] != UInt8(0):
             return
     elif sd.curveBvh.n_clusters > Int32(0):
         if curve_bvh_occluded(sd.curveBvh, sd.curves, sd.materials, ray, task.tmax):
@@ -1639,10 +1652,18 @@ def rtcore_shadow_rays_compact_gpu(
             ids, sd, Int64(n_spheres), Int64(m), Int64(1 if alpha else 0), lists, counts, Int64(n_total),
             grid_dim=ceildiv(m, block_size), block_dim=block_size,
         )
+        var ox = oxc_active()
+        var blocked = Pointer[UInt8, MutUntrackedOrigin].unsafe_dangling()
+        if Int(ox) != 0 and Int(sd.curveCount) > 0:
+            var b = oxc_scratch(ox, m)
+            if b != UInt64(0):
+                blocked = Pointer[UInt8, MutUntrackedOrigin](unsafe_from_address=Int(b))
+                for s in range(SHADOW_SLOTS):
+                    _ = oxc_trace_shadow(ox, UInt64(Int(rays)), UInt64(Int(lists)), UInt64(Int(counts)), n_total, s, b, m, cuda_stream)
         for s in range(SHADOW_SLOTS):
             ctx.enqueue_function[shadow_curves_kernel](
                 path_buf.unsafe_ptr().unsafe_bitcast[PathState]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
-                tasks, sd, Int64(n_spheres), lists, counts, Int64(s), Int64(n_total),
+                tasks, sd, Int64(n_spheres), ids, lists, counts, Int64(s), Int64(n_total), blocked,
                 grid_dim=ceildiv(m, CURVE_BLOCK), block_dim=CURVE_BLOCK,
             )
         if bench[unsafe_offset=3] == 2:

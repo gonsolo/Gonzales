@@ -15,7 +15,7 @@ from std.time import perf_counter_ns
 from .geometry import RGB, Point3f, Vec3f, Bounds3f, dot, _is_real_ptr
 from .render_state import TileResult, PathState, FilmDims
 from .primitives import Ray, PrimId, TriangleMesh, Instance, mesh_vi, mesh_pos
-from .curves import Curve, curve_piece_bounds
+from .curves import Curve, CurveBvh, curve_piece_bounds
 from .postprocess import denoise, write_image, write_image_cropped, write_image_cropwindow
 from .transform import Mat4, matrix_invert
 from .sampling import TileSamplerParams, ThinLens, mix_bits_u64, encode_morton2, sobol_get_sample_index, sobol_sample, derive_pcg_seeds, camera_ray_from_film_xy
@@ -39,7 +39,8 @@ from .gpu_wavefront import gpu_gen_aux_buffers
 from .viewer import CameraState, ViewerHandle, viewer_create, viewer_update_framebuffer, viewer_should_close, viewer_poll_events, viewer_get_camera_state, viewer_set_camera_state, viewer_destroy, viewer_denoise_enabled, viewer_monitor_size, build_camera_to_world
 from .spectrum import SpectralHandle, null_spectral_handle
 from .vulkanrt import VulkanRtSceneHandle, vulkanrt_build_scene, vulkanrt_destroy_scene, vulkanrt_debug_read_as
-from .curve_bvh import gpu_build_curve_bvh, _leaf_range
+from .curve_bvh import CurveBvhDev, gpu_build_curve_bvh, _leaf_range
+from .optixcurves import gpu_build_optix_curves, oxc_active, oxc_bytes, oxc_destroy, oxc_set_active
 from .rt_build import rt_build_blas, rt_build_tlas, rt_patch_ids, RtBlas, RtTlas, _fbits
 from .rt_cache import rt_cache_load, rt_cache_save, RtCacheTlas
 from .scene_cache import scene_cache_variant
@@ -1068,23 +1069,38 @@ struct _RtBufs(Movable):
         self.n_meshes = 0
 
 
-# The RT cores trace the triangles; shadow rays meet the curves in fiber-aligned clusters (curve_bvh.mojo).
+# The RT cores trace the triangles; the curves are OptiX curves on the RT hardware (optixcurves.mojo) when the curves are
+# apart and OptiX takes them, else fiber-aligned clusters in software (curve_bvh.mojo).
 def _rt_curve_clusters(handle: Pointer[GpuSceneHandle, MutUntrackedOrigin], psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin]) raises:
     var first = Int(psc[unsafe_offset=0].curve_first)
     if (psc[unsafe_offset=0].curve_root < Int32(0) and first < 0) or getenv("GONZALES_CURVE_BVH") == "0":
         return
     var t0 = perf_counter_ns()
+    var timing = getenv("GONZALES_TIMING") != ""
     if first >= 0:                                   # the device has no curve PrimIds: upload them for the build
         var n = Int(psc[unsafe_offset=0].prim_count) - first
         var ids = handle[].ctx.enqueue_create_buffer[DType.uint8](n * size_of[PrimId]())
         handle[].ctx.enqueue_copy(ids, psc[unsafe_offset=0].prim_ids_cpu.unsafe_offset(first).unsafe_bitcast[UInt8]())
+        if getenv("GONZALES_OPTIX_CURVES") != "0" and not _scene_has_alpha(psc):   # the alpha retrace walks clusters
+            var refs = handle[].ctx.enqueue_create_buffer[DType.uint8](1)
+            var ox = gpu_build_optix_curves(handle[].ctx, typed_ptr[PrimId](ids), handle[].curves.curves_ptr(),
+                                            handle[].scene_descriptor().materials, n, refs)
+            if ox[1]:
+                oxc_set_active(ox[0])
+                var bufs = List[DeviceBuffer[DType.uint8]]()
+                bufs.append(refs^)
+                gpu_set_curve_bvh_dev(handle, CurveBvhDev(CurveBvh.none(), bufs^))
+                _ = ids^
+                if timing:
+                    print("Gonzales:   optix curves", n, oxc_bytes(ox[0]) // (1024 * 1024), "MB in", Float64(perf_counter_ns() - t0) / 1.0e9, "s")
+                return
         gpu_set_curve_bvh_dev(handle, gpu_build_curve_bvh(handle[].ctx, typed_ptr[PrimId](ids), handle[].curves.curves_ptr(), 0, n))
         _ = ids^                                     # the build synchronized
     else:
         var r = _leaf_range(psc[unsafe_offset=0].bvh_nodes_cpu, Int(psc[unsafe_offset=0].curve_root))
         gpu_set_curve_bvh_dev(handle, gpu_build_curve_bvh(handle[].ctx, handle[].bvh.prim_ids_ptr(), handle[].curves.curves_ptr(), r[0], r[1] - r[0]))
-    if getenv("GONZALES_TIMING") != "":
-        print("Gonzales:   curve clusters", handle[].curve_bvh.n_clusters, "nodes", len(handle[].curve_bvh_bufs[4]) // 32, "in", Float64(perf_counter_ns() - t0) / 1.0e9, "s")
+    if timing:
+        print("Gonzales:   curve clusters", handle[].curve_bvh.n_clusters, "in", Float64(perf_counter_ns() - t0) / 1.0e9, "s")
 
 
 def _rt_wavefront_setup(handle: Pointer[GpuSceneHandle, MutUntrackedOrigin], psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin], max_rays: Int) raises -> _RtBufs:
@@ -3351,7 +3367,7 @@ def session_new(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin], sobol: Point
             rtb = _rt_wavefront_setup(handle, psc, n_pixels * _session_batch(n_pixels))
         except e:
             print("Gonzales: RT setup failed:", e)
-        if psc[unsafe_offset=0].curve_first >= Int32(0) and handle[].curve_bvh.n_clusters == Int32(0):
+        if psc[unsafe_offset=0].curve_first >= Int32(0) and handle[].curve_bvh.n_clusters == Int32(0) and Int(oxc_active()) == 0:
             print("Gonzales: no curve clusters: the curves, kept out of the scene BVH for them, will be missing")
         if timing:
             print("Gonzales:   rt build", Float64(perf_counter_ns() - t0) / 1.0e9, "s")
@@ -3490,6 +3506,7 @@ def session_free(s: SessionPtr):
             if b[unsafe_offset=16 + k] // 1000000 > 0:
                 line += " " + names[k] + " " + String(b[unsafe_offset=16 + k] // 1000000)
         print(line)
+    oxc_destroy(oxc_active())                      # the session's OptiX curves, if any (clears the active handle)
     gpu_free_scene(s[].renderer.handle)
     mojo_parsed_free(s[].psc)
     s.unsafe_deinit_pointee()
