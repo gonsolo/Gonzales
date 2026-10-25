@@ -229,6 +229,26 @@ $(RTCORE_LIB): $(RTCORE_SRC) $(RTCORE_INC)/rtcore.h
 		-L$(CUDA_HOME)/lib64 -lcuda -o $(RTCORE_LIB)
 endif
 
+# Curves on the RT hardware through OptiX (src/optixcurves): the programs compiled to OptiX IR and embedded in the library.
+OPTIX_HOME ?= /opt/optix
+OPTIXCURVES_INC = src/optixcurves
+OPTIXCURVES_LIB = $(BUILD_DIR)/liboptixcurves.so
+HAVE_OPTIX := $(and $(HAVE_CUDA),$(wildcard $(OPTIX_HOME)/include/optix.h))
+ifeq ($(HAVE_OPTIX),)
+$(OPTIXCURVES_LIB): $(OPTIXCURVES_INC)/optixcurves_stub.cpp $(OPTIXCURVES_INC)/optixcurves.h
+	@mkdir -p $(BUILD_DIR)
+	@echo "note: no OptiX SDK at $(OPTIX_HOME) -- building optixcurves stub"
+	g++ $(CXXFLAGS) -fPIC -shared -std=c++20 -I$(OPTIXCURVES_INC) $(OPTIXCURVES_INC)/optixcurves_stub.cpp -o $@
+else
+$(BUILD_DIR)/optixcurves_ir.h: $(OPTIXCURVES_INC)/optixcurves.cu $(OPTIXCURVES_INC)/optixcurves_params.h
+	@mkdir -p $(BUILD_DIR)
+	$(CUDA_HOME)/bin/nvcc -optix-ir -I$(OPTIX_HOME)/include -I$(OPTIXCURVES_INC) $< -o $(BUILD_DIR)/optixcurves.optixir
+	$(CUDA_HOME)/bin/bin2c --name oxc_ir --type char $(BUILD_DIR)/optixcurves.optixir > $@
+$(OPTIXCURVES_LIB): $(OPTIXCURVES_INC)/optixcurves.cpp $(OPTIXCURVES_INC)/optixcurves.h $(OPTIXCURVES_INC)/optixcurves_params.h $(BUILD_DIR)/optixcurves_ir.h
+	g++ $(CXXFLAGS) -fPIC -shared -std=c++20 -I$(OPTIXCURVES_INC) -I$(BUILD_DIR) -I$(OPTIX_HOME)/include -I$(CUDA_HOME)/include \
+		$(OPTIXCURVES_INC)/optixcurves.cpp -L$(CUDA_HOME)/lib64 -lcuda -ldl -o $@
+endif
+
 # The kernel librtcore loads: generated from the installed NVIDIA driver (needs a Vulkan ray-query GPU, glslc, zstd,
 # nvcc); tests skip when it is absent.
 rt-cubin:
@@ -238,7 +258,7 @@ rt-cubin:
 GONZALES_LIB = $(BUILD_DIR)/libgonzales.so
 HYDRA_DIR = $(BUILD_DIR)/hydra
 hydra: $(HYDRA_DIR)/hdGonzales.so
-$(GONZALES_LIB): $(MOJO_SRCS) src/hdgonzales/capi.mojo pyproject.toml $(OIIO_BRIDGE_LIB) $(VIEWER_LIB) $(VULKANRT_LIB) $(VULKANINTEROP_LIB) $(RTCORE_LIB) $(NVDB_BRIDGE_LIB)
+$(GONZALES_LIB): $(MOJO_SRCS) src/hdgonzales/capi.mojo pyproject.toml $(OIIO_BRIDGE_LIB) $(VIEWER_LIB) $(VULKANRT_LIB) $(VULKANINTEROP_LIB) $(RTCORE_LIB) $(OPTIXCURVES_LIB) $(NVDB_BRIDGE_LIB)
 	uv run mojo build --emit shared-lib src/hdgonzales/capi.mojo -I src -o $@ $(MOJO_BUILD_FLAGS) $(MOJO_LINK_FLAGS) -Xlinker -rpath -Xlinker $(abspath $(BUILD_DIR))
 $(HYDRA_DIR)/hdGonzales.so: src/hdgonzales/hdGonzales.cpp src/hdgonzales/gonzales.h src/hdgonzales/plugInfo.json $(GONZALES_LIB)
 	@mkdir -p $(HYDRA_DIR)
@@ -274,10 +294,10 @@ else
 MOJO_BUILD_FLAGS = --target-accelerator sm_86
 endif
 MOJO_LINK_FLAGS = -Xlinker -L$(BUILD_DIR) -Xlinker -loiiobridge -Xlinker -lvulkanviewer \
-                  -Xlinker -lvulkanrt -Xlinker -lvulkaninterop -Xlinker -lrtcore -Xlinker -lnvdbbridge \
+                  -Xlinker -lvulkanrt -Xlinker -lvulkaninterop -Xlinker -lrtcore -Xlinker -loptixcurves -Xlinker -lnvdbbridge \
                   -Xlinker -rpath -Xlinker $(BUILD_DIR) -Xlinker -lm
 
-$(GONZALES): $(MOJO_SRCS) pyproject.toml $(OIIO_BRIDGE_LIB) $(VIEWER_LIB) $(VULKANRT_LIB) $(VULKANINTEROP_LIB) $(RTCORE_LIB) $(NVDB_BRIDGE_LIB)
+$(GONZALES): $(MOJO_SRCS) pyproject.toml $(OIIO_BRIDGE_LIB) $(VIEWER_LIB) $(VULKANRT_LIB) $(VULKANINTEROP_LIB) $(RTCORE_LIB) $(OPTIXCURVES_LIB) $(NVDB_BRIDGE_LIB)
 	@mkdir -p $(BUILD_DIR)
 	uv run mojo build src/gonzales/__init__.mojo -I src -o $(GONZALES) $(MOJO_BUILD_FLAGS) $(MOJO_LINK_FLAGS)
 
@@ -476,7 +496,7 @@ unittest-amd:
 # stays readable/deterministic despite running out of order. Fails if any
 # file failed (checked after all finish, not fail-fast, so a run tells you
 # everything that broke in one pass).
-unittest: $(OIIO_BRIDGE_LIB) $(VIEWER_LIB) $(VULKANRT_LIB) $(VULKANINTEROP_LIB)
+unittest: $(OIIO_BRIDGE_LIB) $(VIEWER_LIB) $(VULKANRT_LIB) $(VULKANINTEROP_LIB) $(RTCORE_LIB) $(OPTIXCURVES_LIB)
 	@rm -rf build/unittest-logs && mkdir -p build/unittest-logs
 	@i=0; \
 	for f in $(UNIT_TEST_SRCS); do \
