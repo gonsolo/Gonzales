@@ -1013,7 +1013,8 @@ def _build_mesh_light_info(
         mat_idx[unsafe_offset=i] = Int64(0)
         al_idx[unsafe_offset=i] = Int32(-1)
         seen[unsafe_offset=i] = UInt8(0)
-    for i in range(Int(psc[unsafe_offset=0].prim_count)):
+    var first_curve = Int(psc[unsafe_offset=0].curve_first)
+    for i in range(first_curve if first_curve >= 0 else Int(psc[unsafe_offset=0].prim_count)):    # curves apart: none after
         var p = psc[unsafe_offset=0].prim_ids[unsafe_offset=i]
         if p.type == Int8(0):
             var mi = Int(p.id1)
@@ -1069,10 +1070,11 @@ struct _RtBufs(Movable):
 
 # The RT cores trace the triangles; shadow rays meet the curves in fiber-aligned clusters (curve_bvh.mojo).
 def _rt_curve_clusters(handle: Pointer[GpuSceneHandle, MutUntrackedOrigin], psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin]) raises:
-    if psc[unsafe_offset=0].curve_root < Int32(0) or getenv("GONZALES_CURVE_BVH") == "0":
+    var first = Int(psc[unsafe_offset=0].curve_first)
+    if (psc[unsafe_offset=0].curve_root < Int32(0) and first < 0) or getenv("GONZALES_CURVE_BVH") == "0":
         return
     var t0 = perf_counter_ns()
-    var r = _leaf_range(psc[unsafe_offset=0].bvh_nodes_cpu, Int(psc[unsafe_offset=0].curve_root))
+    var r = (first, Int(psc[unsafe_offset=0].prim_count)) if first >= 0 else _leaf_range(psc[unsafe_offset=0].bvh_nodes_cpu, Int(psc[unsafe_offset=0].curve_root))
     gpu_set_curve_bvh_dev(handle, gpu_build_curve_bvh(handle[].ctx, handle[].bvh.prim_ids_ptr(), handle[].curves.curves_ptr(), r[0], r[1] - r[0]))
     if getenv("GONZALES_TIMING") != "":
         print("Gonzales:   curve clusters", handle[].curve_bvh.n_clusters, "in", Float64(perf_counter_ns() - t0) / 1.0e9, "s")
@@ -3347,6 +3349,8 @@ def session_new(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin], sobol: Point
             rtb = _rt_wavefront_setup(handle, psc, n_pixels * _session_batch(n_pixels))
         except e:
             print("Gonzales: RT setup failed:", e)
+        if psc[unsafe_offset=0].curve_first >= Int32(0) and handle[].curve_bvh.n_clusters == Int32(0):
+            print("Gonzales: no curve clusters: the curves, kept out of the scene BVH for them, will be missing")
         if timing:
             print("Gonzales:   rt build", Float64(perf_counter_ns() - t0) / 1.0e9, "s")
     var s = unsafe_alloc[RenderSession](1)
@@ -3368,7 +3372,12 @@ def session_clear(s: SessionPtr):
                                        Int(psc[unsafe_offset=0].film_w), Int(psc[unsafe_offset=0].film_h),
                                        Int(psc[unsafe_offset=0].samples_per_pixel))
     gpu_clear_film(handle, Int64(n))
-    gpu_gen_aux_buffers(handle, psc[unsafe_offset=0].camera_to_world, Int64(n))
+    ref r = s[].renderer
+    if r.use_vk:
+        gpu_gen_aux_buffers(handle, psc[unsafe_offset=0].camera_to_world, Int64(n), r.interop_rays_buf, r.interop_results_buf,
+                            r.mesh_material_idx_buf, r.mesh_al_idx_buf, r.n_meshes_vk, r.instance_base_mesh_buf)
+    else:
+        gpu_gen_aux_buffers(handle, psc[unsafe_offset=0].camera_to_world, Int64(n))
 
 def session_set_camera(s: SessionPtr, world_to_camera: Pointer[Float32, MutUntrackedOrigin], fov_deg: Float32,
                        width: Int32, height: Int32) raises:

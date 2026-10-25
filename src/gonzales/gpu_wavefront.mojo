@@ -1024,6 +1024,13 @@ def rtcore_spheres_from_rays_gpu(
 
 comptime CURVE_BLOCK: Int = get_defined_int["CURVE_BLOCK", 32]()
 
+
+@always_inline
+def _curves_apart(sd: SceneView) -> Bool:
+    """The curves are in the clusters only, not in the scene BVH (ParsedScene_Mojo.curve_first)."""
+    return sd.curveBvh.n_clusters > Int32(0) and sd.curveRoot < Int32(0)
+
+
 # The RT cores trace triangles only: curves are tested in software against the RT hit distance, and a nearer curve hit
 # replaces the raw result (flag 2, or 4 with the instance in word 3) so the unpack kernel treats it like any curve hit.
 @__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
@@ -1527,6 +1534,8 @@ def resolve_shadow_compact_kernel(
         # Too many rejected alpha hits for the RT-core passes: the software BVH decides (it also covers the spheres).
         if any_hit_bvh2_core[True](sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, task.tmax, sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances, sd.spheres, Int(n_spheres_dp), materials=sd.materials):
             return
+        if _curves_apart(sd) and curve_bvh_occluded(sd.curveBvh, sd.primIds, sd.curves, sd.materials, ray, task.tmax):
+            return
         paths[unsafe_offset=tid].estimate += task.contrib
         return
     var blocked = flag != UInt32(0) if converted_dp != Int64(0) else raw[unsafe_offset=i * 8 + 3] != UInt32(0xffffffff)
@@ -1632,6 +1641,11 @@ def vk_alpha_retrace_gpu(
         return
     traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, paths[unsafe_offset=tid].ray, Float32(1.0e38),
                        inter.unsafe_offset(tid), sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances)
+    if _curves_apart(sd):
+        var t = inter[unsafe_offset=tid].tHit if inter[unsafe_offset=tid].hit != Int8(0) else Float32(1.0e38)
+        var h = curve_bvh_closest(sd.curveBvh, sd.primIds, sd.curves, paths[unsafe_offset=tid].ray, t)
+        if h[0] >= 0:
+            inter[unsafe_offset=tid] = Intersection(sd.primIds[unsafe_offset=h[0]], h[1], h[2], h[3], Int8(1), Int8(0), Int8(0), Int8(0))
 
 
 def vulkaninterop_rt_traverse_paths_gpu(

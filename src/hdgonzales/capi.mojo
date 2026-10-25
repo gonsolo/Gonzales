@@ -173,7 +173,7 @@ def gz_session_new(r: RendererPtr, s: ScenePtr, spp: Int32, max_depth: Int32) ab
     s[unsafe_offset=0].max_depth = max_depth
     var psc = unsafe_alloc[ParsedScene_Mojo](1)
     var t0 = perf_counter_ns()
-    finalize_scene(s, psc, False)
+    finalize_scene(s, psc, False, curves_apart=getenv("GONZALES_RTCORE") != "" and getenv("GONZALES_CURVE_BVH") != "0")
     if getenv("GONZALES_TIMING") != "":
         print("Gonzales:   finalize", Float64(perf_counter_ns() - t0) / 1.0e9, "s")
     _ = s.unsafe_take_pointee()
