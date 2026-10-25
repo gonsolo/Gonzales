@@ -187,8 +187,9 @@ def test_curve_clusters_match_brute_force() raises:
     var g = gpu_build_curve_bvh(ctx, pb.unsafe_ptr().unsafe_bitcast[PrimId]().unsafe_origin_cast[MutUntrackedOrigin](),
                                 cb.unsafe_ptr().unsafe_bitcast[Curve]().unsafe_origin_cast[MutUntrackedOrigin](), A, N)
     _ = cb^; _ = pb^
-    var h = CurveBvh(_download[Float32](ctx, g.bufs[0]), _download[Int32](ctx, g.bufs[1]), _download[Float32](ctx, g.bufs[2]),
-                     _download[Int32](ctx, g.bufs[3]), _download[Float32](ctx, g.bufs[4]), _download[Int32](ctx, g.bufs[5]), g.bvh.n_clusters)
+    var h = CurveBvh(_download[UInt32](ctx, g.bufs[0]), _download[Int32](ctx, g.bufs[1]), _download[Float32](ctx, g.bufs[2]),
+                     _download[Int32](ctx, g.bufs[3]), _download[UInt32](ctx, g.bufs[4]), _download[Int32](ctx, g.bufs[5]), g.bvh.n_clusters,
+                     g.bvh.grid)
     assert_true(Int(h.n_clusters) > 10)
     var seen = List[Bool](length=N, fill=False)
     for k in range(N):

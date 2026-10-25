@@ -42,19 +42,22 @@ struct Curve(TrivialRegisterPassable):
 # slanted pieces are mostly empty in world axes. Nodes are BVH2Nodes (eight floats each), typed here as floats.
 @fieldwise_init
 struct CurveBvh(TrivialRegisterPassable):
-    var top: Pointer[Float32, MutUntrackedOrigin]        # BVH over the clusters' world boxes; leaves index top_cl
+    var top: Pointer[UInt32, MutUntrackedOrigin]         # BVH over the clusters' world boxes on grid; leaves index top_cl
     var top_cl: Pointer[Int32, MutUntrackedOrigin]       # -> cluster
-    var frames: Pointer[Float32, MutUntrackedOrigin]     # per cluster: rows x, y, z of its rotation (nine floats)
-    var roots: Pointer[Int32, MutUntrackedOrigin]        # per cluster: its root in nodes
-    var nodes: Pointer[Float32, MutUntrackedOrigin]      # every cluster's BVH, in its frame; leaves index prims
+    var frames: Pointer[Float32, MutUntrackedOrigin]     # per cluster, 16 floats: rows x, y, z of its rotation, then the
+                                                         # origin and step of its node boxes' 16-bit grid
+    var roots: Pointer[Int32, MutUntrackedOrigin]        # per cluster: its first leaf slot s; its nodes start at 2 s
+    var nodes: Pointer[UInt32, MutUntrackedOrigin]       # every cluster's BVH in its frame, 16 B nodes (curve_bvh._qnode)
     var refs: Pointer[Int32, MutUntrackedOrigin]         # per leaf slot: curve, PrimId.id2, material (curve_bvh_prim)
     var n_clusters: Int32                                 # 0: none
+    var grid: SIMD[DType.float32, 8]                      # the top level's grid: origin x y z, step x y z
 
     @staticmethod
     def none() -> Self:
-        return Self(Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(), Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
+        return Self(Pointer[UInt32, MutUntrackedOrigin].unsafe_dangling(), Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
                     Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(), Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
-                    Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(), Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(), Int32(0))
+                    Pointer[UInt32, MutUntrackedOrigin].unsafe_dangling(), Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(), Int32(0),
+                    SIMD[DType.float32, 8](1))
 
 comptime CURVE_N_PIECES: Int = 7   # max locally-linear pieces per segment (8 samples)
 

@@ -5,7 +5,7 @@ Blender lion: shadow pass 16.5 -> 8.5 s, closest curve hits 8.5 -> 8.1 s."""
 from std.atomic import Atomic, Ordering
 from std.bit import count_trailing_zeros, pop_count
 from std.math import ceildiv, sqrt
-from std.memory import stack_allocation
+from std.memory import bitcast, stack_allocation
 from std.memory.alloc import unsafe_alloc
 from std.sys.info import is_gpu
 from max.gpu import block_idx, thread_idx, lane_id, WARP_SIZE
@@ -14,7 +14,7 @@ from max.gpu.memory import AddressSpace
 from max.gpu.primitives import warp
 from max.gpu.primitives.warp import match_any, shuffle_idx, vote
 from max.gpu.sync import barrier, syncwarp
-from .bvh import BVH2Node, _node_box_hit, _node_oc, _shadow_is_null_material
+from .bvh import BVH2Node, _node_box_hit, _shadow_is_null_material
 from .curves import Curve, CurveBvh, intersect_curve, curve_piece_endpoints, _curve_perp_axis
 from .geometry import Point3f, Vec3f, cross
 from .gpu_bvh import TPB, MaskT, _buf, _p, _tid, _seg_of, _ord, _unord
@@ -33,17 +33,6 @@ def _leaf_range(nodes: Pointer[BVH2Node, MutUntrackedOrigin], i: Int) -> Tuple[I
     while nodes[unsafe_offset=b].count == Int32(0):
         b = Int(nodes[unsafe_offset=b].offset)
     return (Int(nodes[unsafe_offset=a].offset), Int(nodes[unsafe_offset=b].offset) + Int(nodes[unsafe_offset=b].count))
-
-
-# The scene BVH's node loads, but invariant only on the GPU: the optimized CPU walk moved such loads ahead of the tests
-# that make their index valid.
-@always_inline
-def _node_lo(nf: Pointer[Float32, MutUntrackedOrigin], idx: Int) -> SIMD[DType.float32, 4]:
-    return nf.unsafe_load[width=4, alignment=16 if is_gpu() else 4, invariant=is_gpu()](idx * 8)
-
-@always_inline
-def _node_hi(nf: Pointer[Float32, MutUntrackedOrigin], idx: Int) -> SIMD[DType.float32, 4]:
-    return nf.unsafe_load[width=4, alignment=16 if is_gpu() else 4, invariant=is_gpu()](idx * 8 + 4)
 
 
 @always_inline
@@ -103,47 +92,84 @@ def curve_bvh_prim(cb: CurveBvh, slot: Int) -> PrimId:
     return PrimId(Int64(r[unsafe_offset=0]), Int64(r[unsafe_offset=1]), Int64(r[unsafe_offset=2]), Int32(-1), Int8(5), Int8(0), Int8(0), Int8(0))
 
 
+comptime FS = 16                    # floats a cluster's frame takes
+comptime Q_STEPS = Float32(65000)   # grid steps over a level's root box; the margin keeps rounded boxes in 16 bits
+comptime Q_LEAF = UInt32(1) << 31
+comptime Q_BIAS = Float32(8388608)  # 2^23: its bits or a 16-bit q give the float 2^23 + q, so decoding is one integer op
+comptime Q_BIAS_BITS = UInt32(0x4B000000)
+
+
+# A node of either level: its box in that level's 16-bit grid (lo x | lo y << 16, lo z | hi x << 16, hi y | hi z << 16) and a
+# link: an interior node's right child (the left one follows it), or Q_LEAF | count << 16 | first slot, all
+# local to its level. Half the size of a BVH2Node; the ray goes into grid units, plus Q_BIAS, once per level. Rounding
+# that origin moves the ray by at most half a step, which the boxes' outward step covers.
+@always_inline                      # invariant only on the GPU: the optimized CPU walk hoisted it above its index test
+def _qnode(qn: Pointer[UInt32, MutUntrackedOrigin], i: Int) -> SIMD[DType.uint32, 4]:
+    return qn.unsafe_load[width=4, alignment=16 if is_gpu() else 4, invariant=is_gpu()](4 * i)
+
+
+@always_inline
+def _q_hit(w: SIMD[DType.uint32, 4], rdir: Vec3f, o: Vec3f, nx: Bool, ny: Bool, nz: Bool, tmax: Float32) -> Tuple[Bool, Float32]:
+    var lo = bitcast[DType.float32, 4](((SIMD[DType.uint32, 4](w[0], w[0], w[1], w[1]) >> SIMD[DType.uint32, 4](0, 16, 0, 16)) & UInt32(0xFFFF)) | Q_BIAS_BITS)
+    var hi = bitcast[DType.float32, 4](((SIMD[DType.uint32, 4](w[2], w[2], 0, 0) >> SIMD[DType.uint32, 4](0, 16, 0, 0)) & UInt32(0xFFFF)) | Q_BIAS_BITS)
+    return _node_box_hit(lo, hi, rdir, o, nx, ny, nz, tmax)
+
+
+@always_inline
+def _q_oc(w: SIMD[DType.uint32, 4]) -> SIMD[DType.int32, 2]:
+    """(right child, 0) or (first slot, count), as _node_oc."""
+    var leaf = UInt32(0) - (w[3] >> 31)                    # all ones for a leaf; masks, not a branch: lanes stay together
+    return SIMD[DType.int32, 2](Int32(w[3] & (UInt32(0xFFFF) | ~leaf)), Int32((w[3] >> 16) & UInt32(0x7FFF) & leaf))
+
+
 def _curve_bvh_walk[any_hit: Bool](cb: CurveBvh, curves: Pointer[Curve, MutUntrackedOrigin],
                                    materials: Pointer[Material, MutUntrackedOrigin], ray: Ray, tmax_in: Float32) -> Tuple[Int, Float32, Float32, Float32]:
     """One loop and one stack over both levels: a top leaf names a cluster, whose BVH is walked with the ray in its frame;
-    a -1 on the stack marks the way back to the top level. Pieces are tested with the world ray."""
+    a -1 on the stack marks the way back to the top level. Both levels are _qnodes, so their steps are the same code.
+    Pieces are tested with the world ray."""
     var tmax = tmax_in
     var best = -1
     var bu = Float32(0); var bv = Float32(0)
     var wo = Vec3f(ray.origin.x, ray.origin.y, ray.origin.z)
     var wd = ray.direction
-    var w_rdir = Vec3f(Float32(1.0) / wd.x, Float32(1.0) / wd.y, Float32(1.0) / wd.z)
-    var o = wo
-    var rdir = w_rdir
+    var top_o = Vec3f((wo.x - cb.grid[0]) / cb.grid[3] + Q_BIAS, (wo.y - cb.grid[1]) / cb.grid[4] + Q_BIAS, (wo.z - cb.grid[2]) / cb.grid[5] + Q_BIAS)
+    var top_rdir = Vec3f(cb.grid[3] / wd.x, cb.grid[4] / wd.y, cb.grid[5] / wd.z)
+    var o = top_o
+    var rdir = top_rdir
     var nx = rdir.x >= Float32(0.0); var ny = rdir.y >= Float32(0.0); var nz = rdir.z >= Float32(0.0)
-    var nodes_f = cb.top
+    var qn = cb.top
+    var slot0 = 0
     var in_cluster = False
     var stack = stack_allocation[64, Int32]()
     var to_visit = 0
     var current = 0
-    var cur_oc = _node_oc(_node_hi(nodes_f, 0))
+    var cur_oc = _q_oc(_qnode(qn, 0))
     while True:
         var pop = False
         if cur_oc[1] > 0:
             var off = Int(cur_oc[0])
             if not in_cluster:
                 var c = Int(cb.top_cl[unsafe_offset=off])
-                var f = cb.frames.unsafe_offset(9 * c)
-                var co = _in_frame(f, wo)
+                var f = cb.frames.unsafe_offset(FS * c)
+                var qs = Vec3f(f[unsafe_offset=12], f[unsafe_offset=13], f[unsafe_offset=14])
+                var co = _in_frame(f, wo) - Vec3f(f[unsafe_offset=9], f[unsafe_offset=10], f[unsafe_offset=11])
+                co = Vec3f(co.x / qs.x + Q_BIAS, co.y / qs.y + Q_BIAS, co.z / qs.z + Q_BIAS)
                 var cd = _in_frame(f, wd)
-                var crdir = Vec3f(Float32(1.0) / cd.x, Float32(1.0) / cd.y, Float32(1.0) / cd.z)
+                var crdir = Vec3f(qs.x / cd.x, qs.y / cd.y, qs.z / cd.z)
                 var cnx = crdir.x >= Float32(0.0); var cny = crdir.y >= Float32(0.0); var cnz = crdir.z >= Float32(0.0)
-                var r = Int(cb.roots[unsafe_offset=c])
-                var rhi = _node_hi(cb.nodes, r)
-                if _node_box_hit(_node_lo(cb.nodes, r), rhi, crdir, co, cnx, cny, cnz, tmax)[0] and to_visit < 64:
+                var s0 = Int(cb.roots[unsafe_offset=c])
+                var cq = cb.nodes.unsafe_offset(8 * s0)
+                var w = _qnode(cq, 0)
+                if _q_hit(w, crdir, co, cnx, cny, cnz, tmax)[0] and to_visit < 64:
                     stack[unsafe_offset=to_visit] = Int32(-1)
                     to_visit += 1
                     o = co; rdir = crdir; nx = cnx; ny = cny; nz = cnz
-                    nodes_f = cb.nodes; in_cluster = True
-                    current = r; cur_oc = _node_oc(rhi)
+                    qn = cq; slot0 = s0; in_cluster = True
+                    current = 0; cur_oc = _q_oc(w)
                     continue
                 pop = True
             else:
+                off += slot0
                 for j in range(Int(cur_oc[1])):
                     var r = cb.refs.unsafe_offset(3 * (off + j))
                     comptime if any_hit:
@@ -152,27 +178,28 @@ def _curve_bvh_walk[any_hit: Bool](cb: CurveBvh, curves: Pointer[Curve, MutUntra
                     var id2 = Int(r[unsafe_offset=1])
                     var h = intersect_curve(wo, wd, curves[unsafe_offset=Int(r[unsafe_offset=0])], id2 // 8, id2 % 8, tmax)
                     if h[0]:
-                        comptime if any_hit:
-                            return (off + j, h[1], h[2], h[3])
                         best = off + j; tmax = h[1]; bu = h[2]; bv = h[3]
+                        comptime if any_hit:
+                            to_visit = 0                       # leave by the loop's one exit
+                            break
                 pop = True
         else:
             var li = current + 1
             var ri = Int(cur_oc[0])
-            var lhi = _node_hi(nodes_f, li); var rhi = _node_hi(nodes_f, ri)
-            var lh = _node_box_hit(_node_lo(nodes_f, li), lhi, rdir, o, nx, ny, nz, tmax)
-            var rh = _node_box_hit(_node_lo(nodes_f, ri), rhi, rdir, o, nx, ny, nz, tmax)
+            var lw = _qnode(qn, li); var rw = _qnode(qn, ri)
+            var lh = _q_hit(lw, rdir, o, nx, ny, nz, tmax)
+            var rh = _q_hit(rw, rdir, o, nx, ny, nz, tmax)
             if lh[0] and rh[0]:
                 var near_left = lh[1] <= rh[1]
                 current = li if near_left else ri
-                cur_oc = _node_oc(lhi if near_left else rhi)
+                cur_oc = _q_oc(lw if near_left else rw)
                 if to_visit < 64:
                     stack[unsafe_offset=to_visit] = Int32(ri if near_left else li)
                     to_visit += 1
             elif lh[0]:
-                current = li; cur_oc = _node_oc(lhi)
+                current = li; cur_oc = _q_oc(lw)
             elif rh[0]:
-                current = ri; cur_oc = _node_oc(rhi)
+                current = ri; cur_oc = _q_oc(rw)
             else:
                 pop = True
         if pop:
@@ -181,13 +208,13 @@ def _curve_bvh_walk[any_hit: Bool](cb: CurveBvh, curves: Pointer[Curve, MutUntra
             to_visit -= 1
             current = Int(stack[unsafe_offset=to_visit])
             if current < 0:                                    # back to the top level
-                o = wo; rdir = w_rdir; nx = rdir.x >= Float32(0.0); ny = rdir.y >= Float32(0.0); nz = rdir.z >= Float32(0.0)
-                nodes_f = cb.top; in_cluster = False
+                o = top_o; rdir = top_rdir; nx = rdir.x >= Float32(0.0); ny = rdir.y >= Float32(0.0); nz = rdir.z >= Float32(0.0)
+                qn = cb.top; in_cluster = False
                 if to_visit == 0:
                     break
                 to_visit -= 1
                 current = Int(stack[unsafe_offset=to_visit])
-            cur_oc = _node_oc(_node_hi(nodes_f, current))
+            cur_oc = _q_oc(_qnode(qn, current))
     return (best, tmax, bu, bv)
 
 
@@ -425,7 +452,7 @@ def _frames_kernel(prim_ids: Pointer[PrimId, MutUntrackedOrigin], curves: Pointe
     var z = Vec3f(vx / vl, vy / vl, vz / vl)
     var x = _curve_perp_axis(z)
     var y = cross(z, x)
-    var f = frames.unsafe_offset(9 * c)
+    var f = frames.unsafe_offset(FS * c)
     f[unsafe_offset=0] = x.x; f[unsafe_offset=1] = x.y; f[unsafe_offset=2] = x.z
     f[unsafe_offset=3] = y.x; f[unsafe_offset=4] = y.y; f[unsafe_offset=5] = y.z
     f[unsafe_offset=6] = z.x; f[unsafe_offset=7] = z.y; f[unsafe_offset=8] = z.z
@@ -440,7 +467,7 @@ def _frame_boxes_kernel(prim_ids: Pointer[PrimId, MutUntrackedOrigin], curves: P
     if j >= Int(n_dp):
         return
     var c = _seg_of(cl_lo, Int(nc_dp), j)
-    var b = _prim_box[True](prim_ids[unsafe_offset=Int(a_dp) + Int(pslot[unsafe_offset=j])], curves, frames.unsafe_offset(9 * c))
+    var b = _prim_box[True](prim_ids[unsafe_offset=Int(a_dp) + Int(pslot[unsafe_offset=j])], curves, frames.unsafe_offset(FS * c))
     widx[unsafe_offset=j] = Int32(j - Int(cl_lo[unsafe_offset=c]))
     for q in range(3):
         wmin[unsafe_offset=3 * j + q] = b[0][q]; wmax[unsafe_offset=3 * j + q] = b[1][q]
@@ -449,12 +476,22 @@ def _frame_boxes_kernel(prim_ids: Pointer[PrimId, MutUntrackedOrigin], curves: P
 comptime CW = 4                     # clusters a block, a warp each
 
 
+@always_inline
+def _put_qnode(nodes: Pointer[UInt32, MutUntrackedOrigin], i: Int, bmin: Point3f, bmax: Point3f, qo: SIMD[DType.float32, 4],
+               qs: SIMD[DType.float32, 4], link: UInt32):
+    """A box rounded outward by a step more onto the cluster's grid."""
+    var l = max((SIMD[DType.float32, 4](bmin.x, bmin.y, bmin.z, 0) - qo) / qs - Float32(1), SIMD[DType.float32, 4](0)).cast[DType.uint32]()
+    var h = min((SIMD[DType.float32, 4](bmax.x, bmax.y, bmax.z, 0) - qo) / qs + Float32(2), SIMD[DType.float32, 4](65535)).cast[DType.uint32]()
+    nodes.unsafe_store(4 * i, SIMD[DType.uint32, 4](l[0] | (l[1] << 16), l[2] | (h[0] << 16), h[1] | (h[2] << 16), link))
+
+
 def _sah_clusters_kernel(cl_lo: Pointer[Int32, MutUntrackedOrigin], nc_dp: Int64, widx: Pointer[Int32, MutUntrackedOrigin], wtmp: Pointer[Int32, MutUntrackedOrigin],
-                         wmin: Pointer[Float32, MutUntrackedOrigin], wmax: Pointer[Float32, MutUntrackedOrigin], nodes: Pointer[BVH2Node, MutUntrackedOrigin],
-                         roots: Pointer[Int32, MutUntrackedOrigin], pslot: Pointer[Int32, MutUntrackedOrigin], a_dp: Int64,
+                         wmin: Pointer[Float32, MutUntrackedOrigin], wmax: Pointer[Float32, MutUntrackedOrigin], nodes: Pointer[UInt32, MutUntrackedOrigin],
+                         frames: Pointer[Float32, MutUntrackedOrigin], roots: Pointer[Int32, MutUntrackedOrigin], pslot: Pointer[Int32, MutUntrackedOrigin], a_dp: Int64,
                          prim_ids: Pointer[PrimId, MutUntrackedOrigin], refs: Pointer[Int32, MutUntrackedOrigin],
                          top_cl: Pointer[Int32, MutUntrackedOrigin]):
-    """bvh._bvh_split's binned SAH, depth-first as build_bvh2_node, a warp per cluster; cluster c's nodes go to [2 lo, 2 hi)."""
+    """bvh._bvh_split's binned SAH, depth-first as build_bvh2_node, a warp per cluster; cluster c's nodes (_qnode) go to
+    [2 lo, 2 hi), the grid of their boxes (from the root's) to its frame."""
     var lane = Int(lane_id())
     var w = Int(thread_idx.x) // WARP_SIZE
     var c = Int(block_idx.x) * CW + w
@@ -470,11 +507,12 @@ def _sah_clusters_kernel(cl_lo: Pointer[Int32, MutUntrackedOrigin], nc_dp: Int64
     var depth = 0
     var start = 0; var end = n; var parent = -1
     var count = 0
+    var qo = SIMD[DType.float32, 4](0); var qs = SIMD[DType.float32, 4](1)
     while True:
         var my = count
         count += 1
         if parent >= 0 and lane == 0:
-            nodes[unsafe_offset=base + parent].offset = Int32(base + my)
+            nodes[unsafe_offset=4 * (base + parent) + 3] = UInt32(my)
         var v = SIMD[DType.float32, 16](Float32(1e30))
         for j in range(start + lane, end, WARP_SIZE):
             var e = 3 * Int(idx[unsafe_offset=j])
@@ -486,6 +524,14 @@ def _sah_clusters_kernel(cl_lo: Pointer[Int32, MutUntrackedOrigin], nc_dp: Int64
             v[q] = warp.min(v[q])
         var cnt = end - start
         var bmin = Point3f(v[0], v[1], v[2]); var bmax = Point3f(-v[3], -v[4], -v[5])
+        if my == 0:
+            qs = max((SIMD[DType.float32, 4](bmax.x, bmax.y, bmax.z, 0) - SIMD[DType.float32, 4](bmin.x, bmin.y, bmin.z, 0)) / Q_STEPS,
+                     SIMD[DType.float32, 4](Float32(1e-30)))
+            qo = SIMD[DType.float32, 4](bmin.x, bmin.y, bmin.z, 0) - Float32(200) * qs
+            if lane == 0:
+                var f = frames.unsafe_offset(FS * c)
+                comptime for q in range(3):
+                    f[unsafe_offset=9 + q] = qo[q]; f[unsafe_offset=12 + q] = qs[q]
         var cex = -v[9] - v[6]; var cey = -v[10] - v[7]; var cez = -v[11] - v[8]
         var dim = 0
         if cey > cex and cey >= cez:
@@ -570,20 +616,20 @@ def _sah_clusters_kernel(cl_lo: Pointer[Int32, MutUntrackedOrigin], nc_dp: Int64
                         mid = -1
         if mid < 0 or depth == 64:
             if lane == 0:
-                nodes[unsafe_offset=base + my] = BVH2Node(bmin, bmax, Int32(lo + start), Int32(cnt))
+                _put_qnode(nodes, base + my, bmin, bmax, qo, qs, Q_LEAF | (UInt32(cnt) << 16) | UInt32(start))
             if depth == 0:
                 break
             depth -= 1
             start = Int(st_s[unsafe_offset=depth]); end = Int(st_e[unsafe_offset=depth]); parent = Int(st_p[unsafe_offset=depth])
         else:
             if lane == 0:
-                nodes[unsafe_offset=base + my] = BVH2Node(bmin, bmax, Int32(0), Int32(0))
+                _put_qnode(nodes, base + my, bmin, bmax, qo, qs, UInt32(0))
             st_s[unsafe_offset=depth] = Int32(mid); st_e[unsafe_offset=depth] = Int32(end); st_p[unsafe_offset=depth] = Int32(my)
             depth += 1
             end = mid; parent = -1
     syncwarp()
     if lane == 0:
-        roots[unsafe_offset=c] = Int32(base); top_cl[unsafe_offset=c] = Int32(c)
+        roots[unsafe_offset=c] = Int32(lo); top_cl[unsafe_offset=c] = Int32(c)
     for k in range(lane, n, WARP_SIZE):
         var p = prim_ids[unsafe_offset=Int(a_dp) + Int(pslot[unsafe_offset=lo + Int(idx[unsafe_offset=k])])]
         var r = refs.unsafe_offset(3 * (lo + k))
@@ -788,33 +834,41 @@ def gpu_build_curve_bvh(ctx: DeviceContext, prim_ids: Pointer[PrimId, MutUntrack
     ctx.enqueue_function[_world_boxes_kernel](prim_ids, curves, Int64(a), Int64(n), _p[Float32](wbox), grid_dim=ceildiv(n, TPB), block_dim=TPB)
     var t = _sah_top(ctx, wbox, n)
     var nc = len(t.cl_lo) - 1
+    if nc > 0xFFFF:
+        raise Error("curve clusters: more than 65535")
     var n_top = len(t.top)
-    var top = _buf[BVH2Node](ctx, n_top)
-    var th = unsafe_alloc[BVH2Node](n_top)
+    var top = _buf[UInt32](ctx, 4 * n_top)
+    var th = unsafe_alloc[UInt32](4 * n_top)
+    var r0 = t.top[0]
+    var qs = max((SIMD[DType.float32, 4](r0.max.x, r0.max.y, r0.max.z, 0) - SIMD[DType.float32, 4](r0.min.x, r0.min.y, r0.min.z, 0)) / Q_STEPS,
+                 SIMD[DType.float32, 4](Float32(1e-30)))
+    var qo = SIMD[DType.float32, 4](r0.min.x, r0.min.y, r0.min.z, 0) - Float32(200) * qs
     for k in range(n_top):
-        th[unsafe_offset=k] = t.top[k]
+        var nd = t.top[k]
+        _put_qnode(th, k, nd.min, nd.max, qo, qs, Q_LEAF | (UInt32(nd.count) << 16) | UInt32(nd.offset) if nd.count > Int32(0) else UInt32(nd.offset))
     ctx.enqueue_copy(top, th.unsafe_bitcast[UInt8]())
     var cl_lo = _dev_ints(ctx, t.cl_lo)
     th.unsafe_free()
     var pslot = _buf[Int32](ctx, 1)
     swap(pslot, t.perm)
     _ = wbox^
-    var frames = _buf[Float32](ctx, 9 * nc)
+    var frames = _buf[Float32](ctx, FS * nc)
     ctx.enqueue_function[_frames_kernel](prim_ids, curves, Int64(a), _p[Int32](pslot), _p[Int32](cl_lo), _p[Float32](frames), grid_dim=nc, block_dim=TPB)
     var widx = _buf[Int32](ctx, n); var wmin = _buf[Float32](ctx, 3 * n); var wmax = _buf[Float32](ctx, 3 * n)
     ctx.enqueue_function[_frame_boxes_kernel](prim_ids, curves, Int64(a), _p[Int32](pslot), _p[Int32](cl_lo), Int64(nc), _p[Float32](frames), Int64(n),
                                               _p[Int32](widx), _p[Float32](wmin), _p[Float32](wmax), grid_dim=ceildiv(n, TPB), block_dim=TPB)
-    var nodes = _buf[BVH2Node](ctx, 2 * n)
+    var nodes = _buf[UInt32](ctx, 8 * n)
     var roots = _buf[Int32](ctx, nc)
     var refs = _buf[Int32](ctx, 3 * n)
     var top_cl = _buf[Int32](ctx, nc)
     var wtmp = _buf[Int32](ctx, n)
     ctx.enqueue_function[_sah_clusters_kernel](_p[Int32](cl_lo), Int64(nc), _p[Int32](widx), _p[Int32](wtmp), _p[Float32](wmin), _p[Float32](wmax),
-                                               _p[BVH2Node](nodes), _p[Int32](roots), _p[Int32](pslot), Int64(a), prim_ids, _p[Int32](refs), _p[Int32](top_cl),
+                                               _p[UInt32](nodes), _p[Float32](frames), _p[Int32](roots), _p[Int32](pslot), Int64(a), prim_ids, _p[Int32](refs), _p[Int32](top_cl),
                                                grid_dim=ceildiv(nc, CW), block_dim=CW * WARP_SIZE)
     ctx.synchronize()
     _ = widx^; _ = wtmp^; _ = wmin^; _ = wmax^; _ = pslot^; _ = cl_lo^
     var bufs = List[DeviceBuffer[DType.uint8]]()
     bufs.append(top^); bufs.append(top_cl^); bufs.append(frames^); bufs.append(roots^); bufs.append(nodes^); bufs.append(refs^)
-    var cb = CurveBvh(_p[Float32](bufs[0]), _p[Int32](bufs[1]), _p[Float32](bufs[2]), _p[Int32](bufs[3]), _p[Float32](bufs[4]), _p[Int32](bufs[5]), Int32(nc))
+    var cb = CurveBvh(_p[UInt32](bufs[0]), _p[Int32](bufs[1]), _p[Float32](bufs[2]), _p[Int32](bufs[3]), _p[UInt32](bufs[4]), _p[Int32](bufs[5]), Int32(nc),
+                      SIMD[DType.float32, 8](qo[0], qo[1], qo[2], qs[0], qs[1], qs[2], 0, 0))
     return CurveBvhDev(cb, bufs^)
