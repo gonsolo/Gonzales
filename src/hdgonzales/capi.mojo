@@ -1,6 +1,7 @@
 # C API of the Gonzales shared library, called by the Hydra render delegate.
 from std.ffi import external_call
 from std.memory.alloc import unsafe_alloc
+from std.memory import unsafe_memcpy
 from std.os import getenv, setenv
 from std.time import perf_counter_ns
 from std.runtime import initialize_runtime
@@ -303,13 +304,17 @@ def gz_scene_add_curves(s: ScenePtr, control_points: F32Ptr, widths: F32Ptr, n_s
     """Round cubic B-spline segments in world space: 4 control points and 2 diameters each.
     `materials` (per segment) overrides `material` when not null."""
     ref st = s[unsafe_offset=0]
-    st.curves_cp.reserve(len(st.curves_cp) + Int(n_segments) * 12)
-    for i in range(Int(n_segments) * 12):
-        st.curves_cp.append(control_points[unsafe_offset=i])
-    for i in range(Int(n_segments)):
-        st.curves_w0.append(widths[unsafe_offset=2 * i])
-        st.curves_w1.append(widths[unsafe_offset=2 * i + 1])
-        st.curves_mat.append(materials[unsafe_offset=i] if Int(materials) != 0 else material)
-        st.curves_flat.append(Int32(0))
-        st.curves_al.append(False)
-        st.curves_al_rgb.append(RGB(Float32(0)))
+    var n = Int(n_segments)
+    var c0 = len(st.curves_w0)
+    st.curves_cp.resize(len(st.curves_cp) + n * 12, Float32(0))
+    unsafe_memcpy(dest=st.curves_cp.unsafe_ptr().unsafe_offset(c0 * 12), src=control_points, count=n * 12)
+    st.curves_w0.resize(c0 + n, Float32(0)); st.curves_w1.resize(c0 + n, Float32(0)); st.curves_mat.resize(c0 + n, material)
+    st.curves_flat.resize(c0 + n, Int32(0)); st.curves_al.resize(c0 + n, False); st.curves_al_rgb.resize(c0 + n, RGB(Float32(0)))
+    var w0 = st.curves_w0.unsafe_ptr().unsafe_offset(c0)
+    var w1 = st.curves_w1.unsafe_ptr().unsafe_offset(c0)
+    var mt = st.curves_mat.unsafe_ptr().unsafe_offset(c0)
+    for i in range(n):
+        w0[unsafe_offset=i] = widths[unsafe_offset=2 * i]
+        w1[unsafe_offset=i] = widths[unsafe_offset=2 * i + 1]
+        if Int(materials) != 0:
+            mt[unsafe_offset=i] = materials[unsafe_offset=i]
