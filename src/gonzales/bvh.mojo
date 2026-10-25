@@ -300,6 +300,7 @@ struct SceneView(TrivialRegisterPassable, DevicePassable):
     var hasGlass: Int32
     var lens: ThinLens
     var filterGlossy: Float32   # Cycles' Filter Glossy; 0 = off
+    var curveRoot: Int32        # bvh2Nodes' curve-only subtree (ParsedScene_Mojo.curve_root); -1: none
     # Per-mesh BVHs for subsurface walks (gpu_scene.WalkBvhBuffers); walkBvhOfMesh dangling = walk the scene BVH.
     var walkNodesArr: Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin]
     var walkPrimsArr: Pointer[Pointer[PrimId, MutUntrackedOrigin], MutUntrackedOrigin]
@@ -1741,6 +1742,7 @@ def traverse_bvh2_core[Or: Origin[mut=True]](
     instances: Pointer[Instance, MutUntrackedOrigin] = Pointer[Instance, MutUntrackedOrigin].unsafe_dangling(),
     spheres: Pointer[Sphere, MutUntrackedOrigin] = Pointer[Sphere, MutUntrackedOrigin].unsafe_dangling(),
     n_spheres: Int = 0,
+    root: Int = 0,
 ):
     # Callers that never populate any PrimId.type==6 leaf (GPU kernels, which
     # upload their own device-side scene copy with no instance data at all) can
@@ -1773,9 +1775,9 @@ def traverse_bvh2_core[Or: Origin[mut=True]](
     var stack = Array[Int32, 64](uninitialized=True)
     var stack_ptr = stack.unsafe_ptr()
     var toVisit = 0
-    var current = 0
+    var current = root
     var nodes_f = bvh2Nodes.unsafe_bitcast[Float32]()
-    var cur_oc = _node_oc(_node_hi(nodes_f, 0))
+    var cur_oc = _node_oc(_node_hi(nodes_f, root))
 
     var ray_org = Vec3f(ray.origin.x, ray.origin.y, ray.origin.z)
     var ray_dir = Vec3f(ray.direction.x, ray.direction.y, ray.direction.z)
@@ -2152,6 +2154,7 @@ def any_hit_bvh2_core[wide_on: Bool = True](
     ignore_sphere_center: Vec3f = Vec3f(Float32(0.0), Float32(0.0), Float32(0.0)),
     ignore_sphere_radius: Float32 = Float32(-1.0),
     materials: Pointer[Material, MutUntrackedOrigin] = Pointer[Material, MutUntrackedOrigin].unsafe_dangling(),
+    root: Int = 0,
 ) -> Bool:
     # Analytic spheres live in their own flat array, not the mesh/curve BVH
     # this function walks, so they need their own (cheap, since n_spheres
@@ -2195,9 +2198,9 @@ def any_hit_bvh2_core[wide_on: Bool = True](
     var stack = Array[Int32, 64](uninitialized=True)
     var stack_ptr = stack.unsafe_ptr()
     var toVisit = 0
-    var current = 0
+    var current = root
     var nodes_f = bvh2Nodes.unsafe_bitcast[Float32]()
-    var cur_oc = _node_oc(_node_hi(nodes_f, 0))
+    var cur_oc = _node_oc(_node_hi(nodes_f, root))
     var ray_org = Vec3f(ray.origin.x, ray.origin.y, ray.origin.z)
     var ray_dir = Vec3f(ray.direction.x, ray.direction.y, ray.direction.z)
     var has_nodes = _bvh_has_nodes(cur_oc)
@@ -3303,6 +3306,37 @@ def build_bvh2(
     var result = node_count[unsafe_offset=0]
     widx.unsafe_free(); wmin.unsafe_free(); wmax.unsafe_free(); node_count.unsafe_free()
     return result
+
+
+def build_bvh2_split(
+    primBounds: Pointer[Float32, MutUntrackedOrigin],
+    primCount: Int32,
+    n_first: Int32,                                       # primitives [0, n_first) and [n_first, n) get their own subtree
+    outNodes: Pointer[BVH2Node, MutUntrackedOrigin],      # capacity >= 2*n + 1
+    outOrder: Pointer[Int32, MutUntrackedOrigin],
+) -> Tuple[Int32, Int32]:
+    """build_bvh2 with the two ranges under one root: (node count, root of the second range's subtree, or -1 if empty).
+    The RT cores take the triangles; the curve subtree alone is what the software curve test then walks."""
+    var n = Int(primCount); var nf = Int(n_first)
+    if nf <= 0 or nf >= n:
+        return (build_bvh2(primBounds, primCount, outNodes, outOrder), Int32(0) if nf <= 0 and n > 0 else Int32(-1))
+    var nl = Int(build_bvh2(primBounds, n_first, outNodes.unsafe_offset(1), outOrder))
+    var nr = Int(build_bvh2(primBounds.unsafe_offset(nf * 6), Int32(n - nf), outNodes.unsafe_offset(1 + nl), outOrder.unsafe_offset(nf)))
+    for i in range(1, 1 + nl):
+        if outNodes[unsafe_offset=i].count == Int32(0):
+            outNodes[unsafe_offset=i].offset += Int32(1)
+    for i in range(1 + nl, 1 + nl + nr):
+        if outNodes[unsafe_offset=i].count == Int32(0):
+            outNodes[unsafe_offset=i].offset += Int32(1 + nl)
+        else:
+            outNodes[unsafe_offset=i].offset += Int32(nf)
+    for k in range(nf, n):
+        outOrder[unsafe_offset=k] += Int32(nf)
+    var l = outNodes[unsafe_offset=1]; var r = outNodes[unsafe_offset=1 + nl]
+    outNodes[unsafe_offset=0] = BVH2Node(Point3f(min(l.min.x, r.min.x), min(l.min.y, r.min.y), min(l.min.z, r.min.z)),
+                                         Point3f(max(l.max.x, r.max.x), max(l.max.y, r.max.y), max(l.max.z, r.max.z)),
+                                         Int32(1 + nl), Int32(0))
+    return (Int32(1 + nl + nr), Int32(1 + nl))
 
 # ── Unjittered normals/depth pass, for the denoiser's guide buffers ─────────
 # Lives here (not rendering.mojo, where it originated) so bdpt_*.mojo/sppm.mojo

@@ -876,6 +876,7 @@ struct GpuSceneHandle(Movable):
     var filter: FilterParams
     var lens: ThinLens
     var filter_glossy: Float32
+    var curve_root: Int32
     var film: FilmDims
     # Staged spectral rendering rollout (Stage 2c-1, see
     # project_spectral_rendering memory) — device-side twin of the host
@@ -926,6 +927,7 @@ struct GpuSceneHandle(Movable):
             hasGlass=Int32(1) if self.has_glass_material else Int32(0),
             lens=self.lens,
             filterGlossy=self.filter_glossy,
+            curveRoot=self.curve_root,
             walkNodesArr=typed_ptr[Pointer[BVH2Node, MutUntrackedOrigin]](self.walk_bvh.nodes_ptrs_buf),
             walkPrimsArr=typed_ptr[Pointer[PrimId, MutUntrackedOrigin]](self.walk_bvh.prims_ptrs_buf),
             walkBvhOfMesh=typed_ptr[Int32](self.walk_bvh.of_mesh_buf) if self.walk_bvh.n > 0 else Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
@@ -1279,6 +1281,7 @@ def gpu_upload_scene(
                                     s.filter_norm_x, s.filter_norm_y, s.filter_type),
                 lens=ThinLens(s.camera_lens_radius, s.camera_focal_distance),
                 filter_glossy=Float32(0),
+                curve_root=s.curve_root,
                 film=FilmDims(s.film_w, s.film_h),
                 spectral=spectral^,
             ))

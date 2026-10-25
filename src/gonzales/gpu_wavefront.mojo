@@ -981,7 +981,7 @@ def rtcore_curve_clip_gpu(
                   Vec3f(rays[unsafe_offset=idx + 4], rays[unsafe_offset=idx + 5], rays[unsafe_offset=idx + 6]))
     var tmp = Intersection(PrimId(-1, -1, 0, -1, 0, 0, 0, 0), tmax, Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0))
     traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, tmax, Pointer(to=tmp),
-                       sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances)
+                       sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances, root=max(Int(sd.curveRoot), 0))
     if tmp.hit == Int8(0) or tmp.primId.type != Int8(5):
         return
     results[unsafe_offset=idx + 0] = tmp.tHit
@@ -1458,7 +1458,7 @@ def resolve_shadow_compact_kernel(
     for k in range(Int(n_spheres_dp)):
         if ray_sphere_hit(sd.spheres[unsafe_offset=k].center, sd.spheres[unsafe_offset=k].radius, ray, Float32(1e-4), task.tmax) > Float32(0.0):
             return
-    if Int(sd.curveCount) > 0 and any_hit_bvh2_core[True](sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, task.tmax, sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances, sd.spheres, 0, materials=sd.materials):
+    if Int(sd.curveCount) > 0 and any_hit_bvh2_core[True](sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, task.tmax, sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances, sd.spheres, 0, materials=sd.materials, root=max(Int(sd.curveRoot), 0)):
         return                                                     # curves are not in the acceleration structure either
     paths[unsafe_offset=tid].estimate += task.contrib
 

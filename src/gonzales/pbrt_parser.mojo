@@ -33,7 +33,7 @@ from .curves import Curve, CURVE_N_PIECES, curve_piece_bounds, curve_bspline_poi
 from .nanovdb import nvdb_load, nvdb_load_named, nvdb_data, nvdb_size, nvdb_free, nvdb_index_bbox, nvdb_value_range, nvdb_map_invmatf, nvdb_map_vecf
 from .noise import _perlin_perm_table, cloud_density
 from .transform import matrix_multiply, matrix_invert, transform_points, transform_normals
-from .bvh import BVH2Node, BVH4, SceneView, build_bvh2, build_bvh4, free_bvh4, collapse_bvh_wide
+from .bvh import BVH2Node, BVH4, SceneView, build_bvh2, build_bvh2_split, build_bvh4, free_bvh4, collapse_bvh_wide
 from .spectrum import SpectralHandle
 from .sampling import gaussian_norm, ThinLens
 from .ply import load_ply
@@ -74,6 +74,7 @@ struct ParsedScene_Mojo:
     var bvh_nodes_cpu:      Pointer[BVH2Node, MutUntrackedOrigin]
     var prim_ids_cpu:       Pointer[PrimId, MutUntrackedOrigin]
     var bvh_node_count_cpu: Int32
+    var curve_root:         Int32   # root of the curve-only subtree of bvh_nodes_cpu (software curve test next to the RT cores); -1: none
     # CPU-only BVH4 collapse of bvh_nodes_cpu (bvh.mojo build_bvh4); owned. Built by mojo_parsed_scene_descriptor
     # for CPU renders (host_textures=True), BVH4.none() otherwise.
     var bvh4:               BVH4
@@ -3420,7 +3421,8 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
     var max_bvh_nodes_gpu = Int(n_gpu) * 2 + 4
     var bvh_nodes_gpu = unsafe_alloc[BVH2Node](max_bvh_nodes_gpu)
     var bvh_order_gpu = unsafe_alloc[Int32](max(Int(n_gpu), 1))
-    var node_count_gpu = build_bvh2(prim_bounds, n_gpu, bvh_nodes_gpu, bvh_order_gpu)
+    var split_gpu = build_bvh2_split(prim_bounds, n_gpu, total_tris, bvh_nodes_gpu, bvh_order_gpu)
+    var node_count_gpu = split_gpu[0]
 
     # ---- CPU-inclusive TLAS: tris + curves + instances ----
     # Without instances this covers exactly the primitives above, in the same
@@ -3623,6 +3625,7 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
     psc[unsafe_offset=0].bvh_nodes_cpu      = bvh_nodes
     psc[unsafe_offset=0].prim_ids_cpu       = prim_ids
     psc[unsafe_offset=0].bvh_node_count_cpu = node_count
+    psc[unsafe_offset=0].curve_root         = split_gpu[1] if shared_tlas else Int32(-1)
     psc[unsafe_offset=0].bvh4               = BVH4.none()
     psc[unsafe_offset=0].prim_count_cpu     = tl_prims + Int32(n_extra)
     psc[unsafe_offset=0].blas_nodes_arr   = blas_nodes_arr
