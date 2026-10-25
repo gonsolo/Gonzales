@@ -34,6 +34,7 @@
 #include <cmath>
 #include <fstream>
 #include <functional>
+#include <list>
 #include <map>
 #include <mutex>
 #include <numeric>
@@ -193,6 +194,7 @@ public:
     std::map<std::string, Override> overrides;
     std::string worldPath, worldTexture;  // the add-on's baked world and its equal-area version
     float sunScale = 1;                   // Blender exports a sun's strength divided by 4
+    std::string assetRoot;                // relative texture paths are relative to it (Blender: the .blend's folder)
     HdRenderThread *thread;
     std::mutex mutex;
     std::map<SdfPath, MeshData> meshes;
@@ -816,7 +818,12 @@ void *_BuildScene(Scene &synced, int *version) {
     std::lock_guard<std::mutex> lock(synced.mutex);
     *version = synced.version.load();
     std::map<SdfPath, int> materials;
-    auto path = [](std::string const &p) { return p.empty() ? nullptr : p.c_str(); };
+    std::list<std::string> held;
+    auto path = [&](std::string const &p) -> char const * {
+        if (p.empty() || p[0] == '/' || synced.assetRoot.empty())
+            return p.empty() ? nullptr : p.c_str();
+        return held.emplace_back(synced.assetRoot + "/" + p).c_str();
+    };
     auto override = [&](SdfPath const &id, TfToken const &kind) -> Override const * {
         auto it = synced.overrides.find(id.GetName());
         return it != synced.overrides.end() && it->second.kind == kind ? &it->second : nullptr;
@@ -1058,6 +1065,11 @@ protected:
                 _scene->worldPath = world;
                 _scene->worldTexture = texture;
             });
+        }
+        std::string assetRoot = delegate->GetRenderSetting<std::string>(TfToken("gonzales:assetRoot"), std::string());
+        if (assetRoot != _scene->assetRoot) {
+            _thread->StopRender();
+            _scene->Edit([&] { _scene->assetRoot = assetRoot; });
         }
         float sunScale = delegate->GetRenderSetting<float>(TfToken("gonzales:sunScale"), 1.0f);
         if (sunScale != _scene->sunScale) {
