@@ -1066,7 +1066,7 @@ struct _RtBufs(Movable):
         self.n_meshes = 0
 
 
-def _rt_wavefront_setup(handle: Pointer[GpuSceneHandle, MutUntrackedOrigin], psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin], n_pixels: Int) raises -> _RtBufs:
+def _rt_wavefront_setup(handle: Pointer[GpuSceneHandle, MutUntrackedOrigin], psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin], max_rays: Int) raises -> _RtBufs:
     var b = _RtBufs()
     var rt_merged = _rtcore_merge(psc)
     if not (rt_merged.valid or _rtcore_native_wanted(psc)):
@@ -1084,7 +1084,6 @@ def _rt_wavefront_setup(handle: Pointer[GpuSceneHandle, MutUntrackedOrigin], psc
     rtcore_set_shadow(Int32(0) if getenv("GONZALES_RTCORE_NOSHADOW") != "" else Int32(usable_slots))
     rtcore_set_alpha(Int32(1) if _scene_has_alpha(psc) else Int32(0))
     var n_meshes = Int(psc[unsafe_offset=0].mesh_count)
-    var max_rays = n_pixels * WAVEFRONT_BATCH
     b.rays = handle[].ctx.enqueue_create_buffer[DType.float32](max_rays * 8)
     b.results = handle[].ctx.enqueue_create_buffer[DType.float32](max_rays * 8)
     var light_info = _build_mesh_light_info(psc)
@@ -2733,7 +2732,7 @@ def render_interactive(
     var rtb = _RtBufs()
     if use_gpu and getenv("GONZALES_RTCORE") != "" and not use_restir:
         try:
-            rtb = _rt_wavefront_setup(handle, psc, n_pixels)
+            rtb = _rt_wavefront_setup(handle, psc, n_pixels * WAVEFRONT_BATCH)
         except:
             print("RT hardware: setup failed, using the CUDA intersection")
         if rtb.on:
@@ -3323,11 +3322,17 @@ def session_new(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin], sobol: Point
     if not _is_real_ptr(handle):
         mojo_parsed_free(psc)
         return SessionPtr.unsafe_dangling()
+    var rtb = _RtBufs()
+    if getenv("GONZALES_RTCORE") != "":
+        try:
+            rtb = _rt_wavefront_setup(handle, psc, n_pixels * _session_batch(n_pixels))
+        except:
+            pass
     var s = unsafe_alloc[RenderSession](1)
     s.unsafe_write(RenderSession(psc, GpuGuidedRenderer(
         handle, psc, UInt32(mix_bits_u64(UInt64(0))), UInt32(mix_bits_u64(UInt64(1))), n_pixels,
-        Int(psc[unsafe_offset=0].samples_per_pixel), False, False, Pointer[UInt8, MutUntrackedOrigin].unsafe_dangling(),
-        None, None, None, None, 0, None, quiet=True)))
+        Int(psc[unsafe_offset=0].samples_per_pixel), False, rtb.on, Pointer[UInt8, MutUntrackedOrigin].unsafe_dangling(),
+        rtb.rays, rtb.results, rtb.mesh_material_idx, rtb.mesh_al_idx, rtb.n_meshes, rtb.instance_base_mesh, quiet=True)))
     session_clear(s)
     return s
 
