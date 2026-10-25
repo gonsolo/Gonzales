@@ -1080,7 +1080,7 @@ def rt_pack_compact_kernel(
     rays[unsafe_offset=idx + 0] = ray.origin.x
     rays[unsafe_offset=idx + 1] = ray.origin.y
     rays[unsafe_offset=idx + 2] = ray.origin.z
-    rays[unsafe_offset=idx + 3] = Float32(1e-4)
+    rays[unsafe_offset=idx + 3] = Float32(0)          # the origin is already offset, as for the software traversal (t > 0)
     rays[unsafe_offset=idx + 4] = ray.direction.x
     rays[unsafe_offset=idx + 5] = ray.direction.y
     rays[unsafe_offset=idx + 6] = ray.direction.z
@@ -1412,7 +1412,7 @@ def rt_pack_shadow_compact_kernel(
     rays[unsafe_offset=idx + 0] = task.origin.x
     rays[unsafe_offset=idx + 1] = task.origin.y
     rays[unsafe_offset=idx + 2] = task.origin.z
-    rays[unsafe_offset=idx + 3] = Float32(1.0e-4)
+    rays[unsafe_offset=idx + 3] = Float32(0)
     rays[unsafe_offset=idx + 4] = task.direction.x
     rays[unsafe_offset=idx + 5] = task.direction.y
     rays[unsafe_offset=idx + 6] = task.direction.z
