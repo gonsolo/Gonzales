@@ -38,6 +38,24 @@ struct Curve(TrivialRegisterPassable):
     var n_pieces: Int32
     var flat: Int32   # pbrt "flat" ribbon (faces the ray) instead of a round tube
 
+# The curve leaves again in clusters, each with its own BVH in a frame along its fibers (curve_bvh.mojo): boxes around thin,
+# slanted pieces are mostly empty in world axes. Nodes are BVH2Nodes (eight floats each), typed here as floats.
+@fieldwise_init
+struct CurveBvh(TrivialRegisterPassable):
+    var top: Pointer[Float32, MutUntrackedOrigin]        # BVH over the clusters' world boxes; leaves index top_cl
+    var top_cl: Pointer[Int32, MutUntrackedOrigin]       # -> cluster
+    var frames: Pointer[Float32, MutUntrackedOrigin]     # per cluster: rows x, y, z of its rotation (nine floats)
+    var roots: Pointer[Int32, MutUntrackedOrigin]        # per cluster: its root in nodes
+    var nodes: Pointer[Float32, MutUntrackedOrigin]      # every cluster's BVH, in its frame; leaves index prims
+    var prims: Pointer[Int32, MutUntrackedOrigin]        # -> the scene's PrimIds (type 5)
+    var n_clusters: Int32                                 # 0: none
+
+    @staticmethod
+    def none() -> Self:
+        return Self(Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(), Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
+                    Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(), Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
+                    Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(), Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(), Int32(0))
+
 comptime CURVE_N_PIECES: Int = 7   # max locally-linear pieces per segment (8 samples)
 
 # Divergence experiment (traverse_paths_gpu): max curve-leaf candidates recorded

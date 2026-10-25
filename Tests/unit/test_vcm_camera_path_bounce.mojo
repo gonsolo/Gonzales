@@ -31,6 +31,7 @@
 
 from std.memory.alloc import unsafe_alloc
 from std.testing import assert_true, TestSuite
+from gonzales.curves import CurveBvh
 from gonzales.sampling import ThinLens
 from gonzales.footprint import CameraFootprint
 from gonzales.geometry import RGB, Point3f, Vec3f
@@ -140,6 +141,7 @@ def _build_scene() -> SceneView:
         ThinLens.pinhole(),
         Float32(0),
         Int32(-1),   # curveRoot
+        CurveBvh.none(),
         Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
         Pointer[Pointer[PrimId, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
         Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),

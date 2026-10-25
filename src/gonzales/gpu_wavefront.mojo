@@ -5,6 +5,7 @@ from std.utils import StaticTuple
 from .gpu_tuning import MINCTA_TRAVERSE
 from std.sys import get_defined_int
 from .bvh import _node_box_hit, _node_hi, _node_lo, _node_oc, _bvh_has_nodes, _shadow_is_null_material, _traverse_instances, BVH2Node, any_hit_bvh2_core, ray_sphere_hit, test_spheres, traverse_bvh2_core, traverse_bvh2_core_defer_curves, SceneView
+from .curve_bvh import curve_bvh_occluded
 from .curves import CURVE_DEFER_K, Curve, _curve_perp_axis, curve_piece_endpoints, intersect_curve, curve_hit_normal
 from .geometry import INV_FOUR_PI, Point3f, RGB, Vec3f, _is_real_ptr, cross, dot, store_vec3, vec3f
 from .materials import Material
@@ -1458,7 +1459,10 @@ def resolve_shadow_compact_kernel(
     for k in range(Int(n_spheres_dp)):
         if ray_sphere_hit(sd.spheres[unsafe_offset=k].center, sd.spheres[unsafe_offset=k].radius, ray, Float32(1e-4), task.tmax) > Float32(0.0):
             return
-    if Int(sd.curveCount) > 0 and any_hit_bvh2_core[True](sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, task.tmax, sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances, sd.spheres, 0, materials=sd.materials, root=max(Int(sd.curveRoot), 0)):
+    if sd.curveBvh.n_clusters > Int32(0):
+        if curve_bvh_occluded(sd.curveBvh, sd.primIds, sd.curves, sd.materials, ray, task.tmax):
+            return
+    elif Int(sd.curveCount) > 0 and any_hit_bvh2_core[True](sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, task.tmax, sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances, sd.spheres, 0, materials=sd.materials, root=max(Int(sd.curveRoot), 0)):
         return                                                     # curves are not in the acceleration structure either
     paths[unsafe_offset=tid].estimate += task.contrib
 

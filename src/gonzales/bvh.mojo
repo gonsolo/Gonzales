@@ -18,7 +18,7 @@ from .primitives import mesh_pos, mesh_point
 from .media import Medium, MediumInterface, Grid, NvdbGrid
 from .lights import AreaLight, DistantLight, PointLight, InfiniteLight, LightSampler, il_rgb
 from .portal_light import portal_frame, portal_ray_crosses
-from .curves import Curve, intersect_curve, CURVE_DEFER_K, CURVE_N_PIECES, curve_piece_endpoints, _curve_perp_axis, curve_view_frame, curve_hit_normal
+from .curves import Curve, CurveBvh, intersect_curve, CURVE_DEFER_K, CURVE_N_PIECES, curve_piece_endpoints, _curve_perp_axis, curve_view_frame, curve_hit_normal
 from .rng import PCG32
 from .footprint import CameraFootprint
 from .spectrum import SpectralHandle
@@ -301,6 +301,7 @@ struct SceneView(TrivialRegisterPassable, DevicePassable):
     var lens: ThinLens
     var filterGlossy: Float32   # Cycles' Filter Glossy; 0 = off
     var curveRoot: Int32        # bvh2Nodes' curve-only subtree (ParsedScene_Mojo.curve_root); -1: none
+    var curveBvh: CurveBvh      # the curve leaves in fiber-aligned clusters (curve_bvh.mojo); n_clusters 0: none
     # Per-mesh BVHs for subsurface walks (gpu_scene.WalkBvhBuffers); walkBvhOfMesh dangling = walk the scene BVH.
     var walkNodesArr: Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin]
     var walkPrimsArr: Pointer[Pointer[PrimId, MutUntrackedOrigin], MutUntrackedOrigin]

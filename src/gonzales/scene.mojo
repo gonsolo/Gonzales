@@ -7,6 +7,7 @@ from .primitives import TriangleMesh, PrimId, Sphere
 from .media import Medium, MediumInterface
 from .lights import AreaLight, DistantLight, PointLight, InfiniteLight
 from .bvh import BVH2Node, BVH4, SceneView
+from .curves import CurveBvh
 
 # ── Scene IR ──────────────────────────────────────────────────────────────────
 #
@@ -178,6 +179,7 @@ struct Scene(Movable):
             lens              = ThinLens.pinhole(),
             filterGlossy      = Float32(0),
             curveRoot         = Int32(-1),
+            curveBvh          = CurveBvh.none(),
             walkNodesArr      = Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
             walkPrimsArr      = Pointer[Pointer[PrimId, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
             walkBvhOfMesh     = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
