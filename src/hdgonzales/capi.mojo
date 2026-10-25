@@ -9,7 +9,7 @@ from gonzales.geometry import RGB, _is_real_ptr
 from gonzales.materials import MatKind
 from gonzales.parse_types import SceneParseState, NamedMaterial
 from gonzales.pbrt_parser import ParsedScene_Mojo, finalize_scene, mojo_apply_overrides
-from gonzales.pipeline import (_generate_sobol_matrices, RenderSession, SessionPtr, session_new, session_set_camera, session_set_samples, session_set_lens, session_set_filter_glossy,
+from gonzales.pipeline import (_generate_sobol_matrices, RenderSession, SessionPtr, session_new, session_set_camera, session_set_samples, session_set_lens, session_set_filter_glossy, session_set_adaptive, session_set_clamp,
                                session_render, session_resolve, session_free)
 from gonzales.scene_builder import store_mesh
 from gonzales.spectrum import load_spectral_context, spectral_handle, SpectralContext
@@ -198,6 +198,16 @@ def gz_session_set_camera(s: SessionPtr, world_to_camera: F32Ptr, fov_deg: Float
 def gz_session_set_lens(s: SessionPtr, radius: Float32, focal_distance: Float32) abi("C"):
     """As gz_scene_set_lens; a change starts the film over."""
     session_set_lens(s, radius, focal_distance)
+
+@export
+def gz_session_set_clamp(s: SessionPtr, clamp: Float32) abi("C"):
+    """A per-sample radiance limit (Cycles' Clamp Indirect, applied to whole samples); 0 is off."""
+    session_set_clamp(s, clamp)
+
+@export
+def gz_session_set_adaptive(s: SessionPtr, threshold: Float32, min_samples: Int32) abi("C"):
+    """Cycles' adaptive sampling: noise threshold (0 is off) and minimum samples (0: Cycles' automatic count)."""
+    session_set_adaptive(s, threshold, min_samples)
 
 @export
 def gz_session_set_filter_glossy(s: SessionPtr, filter: Float32) abi("C"):

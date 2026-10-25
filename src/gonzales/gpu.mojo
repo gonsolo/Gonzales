@@ -21,7 +21,7 @@ from .gpu_media import sample_medium_gpu, update_medium_gpu
 from .gpu_scene import GpuSceneHandle
 from .gpu_shade import shared_shade_context, resolve_suppress_gpu, shade_coated_conductor_gpu, shade_coated_diffuse_gpu, shade_conductor_gpu, shade_dielectric_gpu, shade_diffuse_gpu, shade_diffuse_transmit_gpu, shade_hair_gpu, shade_interface_gpu, shade_measured_gpu, shade_mix_gpu, shade_nee_preamble_gpu, shade_thin_dielectric_gpu
 from .guide import guide_is_active
-from .gpu_wavefront import sw_pack_shadow_tasks_gpu, sw_add_shadow_gpu, sw_resolve_shadow_gpu, compact_active_paths_gpu, compact_by_kind_gpu, accumulate_cone_gpu, accumulate_film_gpu, accumulate_film_wavefront_gpu, clear_film_gpu, clear_scalar_film_gpu, compact_curve_paths_gpu, compact_walking_gpu, sss_walk_gpu, deactivate_paths_past_maxdepth_gpu, gen_primary_rays_gpu, gen_primary_rays_wavefront_gpu, reset_curve_counter_gpu, reset_restir_reservoirs_gpu, reset_restir_vol_reservoirs_gpu, reset_shadow_tasks_gpu, read_counter, reset_vol_used_gpu, resolve_curve_candidates_gpu, traverse_paths_gpu, traverse_shadow_rays_gpu, rtcore_closest_hit_gpu, rtcore_shadow_rays_compact_gpu, vulkaninterop_rt_traverse_paths_gpu
+from .gpu_wavefront import sw_pack_shadow_tasks_gpu, sw_add_shadow_gpu, sw_resolve_shadow_gpu, compact_active_paths_gpu, compact_by_kind_gpu, accumulate_cone_gpu, accumulate_film_gpu, accumulate_film_wavefront_gpu, clear_film_gpu, clear_scalar_film_gpu, compact_curve_paths_gpu, compact_walking_gpu, adaptive_converge_gpu, adaptive_dilate_gpu, sss_walk_gpu, deactivate_paths_past_maxdepth_gpu, gen_primary_rays_gpu, gen_primary_rays_wavefront_gpu, reset_curve_counter_gpu, reset_restir_reservoirs_gpu, reset_restir_vol_reservoirs_gpu, reset_shadow_tasks_gpu, read_counter, reset_vol_used_gpu, resolve_curve_candidates_gpu, traverse_paths_gpu, traverse_shadow_rays_gpu, rtcore_closest_hit_gpu, rtcore_shadow_rays_compact_gpu, vulkaninterop_rt_traverse_paths_gpu
 
 
 def _enqueue_traverse[rare_on: Bool, alpha_on: Bool](
@@ -913,6 +913,8 @@ def gpu_render_wavefront(
     comptime if has_accelerator():
         try:
             var handle = handlePtr
+            # Adaptive sampling: converged pixels take no paths (gpu_adaptive_update).
+            var px_active = handle[].px_active_buf.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]() if handle[].adaptive_threshold > Float32(0) else Pointer[UInt8, MutUntrackedOrigin].unsafe_dangling()
             handle[].ctx.enqueue_copy(handle[].c2w_buf, c2w.unsafe_bitcast[UInt8]())
             comptime block_size = 256
             var grid_total = ceildiv(n_total, block_size)
@@ -932,6 +934,7 @@ def gpu_render_wavefront(
                 handle[].filter_lut_buf.unsafe_ptr().unsafe_bitcast[Float32]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]() if handle[].filter.type == Int32(0) else Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
                 handle[].lens.radius, handle[].lens.focal_distance,
                 handle[].ptex_redo_si_buf.unsafe_ptr().unsafe_bitcast[Int32]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](), ptex_mode,
+                px_active,
                 grid_dim=grid_total,
                 block_dim=block_size,
             )
@@ -996,6 +999,8 @@ def gpu_render_wavefront(
         handle[].spectral.cie_z_buf.unsafe_ptr().unsafe_bitcast[Float32](),
         handle[].spectral.d65_buf.unsafe_ptr().unsafe_bitcast[Float32](),
         handle[].ptex_redo_buf.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](), ptex_mode,
+        handle[].aux_film_buf.unsafe_ptr().unsafe_bitcast[Float32]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
+        px_active, si_start,
         grid_dim=grid_pix,
                 block_dim=block_size,
             )
@@ -1077,6 +1082,13 @@ def gpu_clear_film(
                 grid_dim=grid_dim,
                 block_dim=block_size,
             )
+            handle[].ctx.enqueue_function[clear_film_gpu](
+                handle[].aux_film_buf.unsafe_ptr().unsafe_bitcast[Float32](),
+                Int64(n_int),
+                grid_dim=grid_dim,
+                block_dim=block_size,
+            )
+            handle[].ctx.enqueue_memset(handle[].px_active_buf, UInt8(1))
             handle[].ctx.synchronize()
         except e:
             print("GPU clear film failed: " + String(e))
@@ -1137,3 +1149,24 @@ def gpu_clear_restir_vol(
             handle[].ctx.synchronize()
         except e:
             print("GPU clear restir vol failed: " + String(e))
+
+
+def gpu_adaptive_update(handlePtr: Pointer[GpuSceneHandle, MutUntrackedOrigin], spp: Int) raises:
+    """After `spp` samples: stop the pixels that converged, keeping their neighbours' neighbours sampling (Cycles)."""
+    comptime if has_accelerator():
+        var handle = handlePtr
+        comptime block_size = 256
+        var n = handle[].n_pixels
+        var grid_dim = ceildiv(n, block_size)
+        var active = handle[].px_active_buf.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
+        var tmp = handle[].px_active_tmp_buf.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
+        handle[].ctx.enqueue_function[adaptive_converge_gpu](
+            handle[].film_buf.unsafe_ptr().unsafe_bitcast[Float32]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
+            handle[].aux_film_buf.unsafe_ptr().unsafe_bitcast[Float32]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
+            active, Int64(n), Int32(spp), handle[].adaptive_threshold,
+            grid_dim=grid_dim, block_dim=block_size)
+        var w = Int64(handle[].film.width)
+        var h = Int64(handle[].film.height)
+        handle[].ctx.enqueue_function[adaptive_dilate_gpu](active, tmp, w, h, Int32(0), grid_dim=grid_dim, block_dim=block_size)
+        handle[].ctx.enqueue_function[adaptive_dilate_gpu](tmp, active, w, h, Int32(1), grid_dim=grid_dim, block_dim=block_size)
+        handle[].ctx.synchronize()

@@ -30,6 +30,8 @@ int gz_session_set_camera(void *session, const float *world_to_camera, float fov
 void gz_session_set_samples(void *session, int spp, int max_depth);
 void gz_session_set_lens(void *session, float radius, float focal_distance);
 void gz_session_set_filter_glossy(void *session, float filter);
+void gz_session_set_adaptive(void *session, float threshold, int min_samples);
+void gz_session_set_clamp(void *session, float clamp);
 int gz_session_render(void *session, int n_spp);
 int gz_session_resolve(void *session, float *out_rgb, int denoise);
 void gz_session_free(void *session);

@@ -817,6 +817,12 @@ struct GpuSceneHandle(Movable):
     var film_buf: DeviceBuffer[DType.uint8]          # n_pixels × 3 × Float32 = 12 bytes
     var albedo_film_buf: DeviceBuffer[DType.uint8]   # n_pixels × 3 × Float32 = 12 bytes
     var film_sq_buf: DeviceBuffer[DType.uint8]       # n_pixels × Float32: sum of per-sample luma^2, for the denoiser's variance
+    # Adaptive sampling as Cycles: twice the sum of every other sample, and per pixel 1 while it still takes samples.
+    var aux_film_buf: DeviceBuffer[DType.uint8]      # n_pixels × 3 Float32
+    var px_active_buf: DeviceBuffer[DType.uint8]     # n_pixels × UInt8
+    var px_active_tmp_buf: DeviceBuffer[DType.uint8] # n_pixels × UInt8, for the neighbour filter
+    var adaptive_threshold: Float32                  # Cycles' threshold times 5; 0 = off
+    var adaptive_min: Int                            # samples before the first convergence test
     # Temporal denoiser history (previous frame's output, its depth and camera).
     var hist_color_buf: DeviceBuffer[DType.uint8]    # n_pixels × 12
     var hist_len_buf: DeviceBuffer[DType.uint8]      # n_pixels × 4 — frames of history behind each pixel
@@ -1249,6 +1255,11 @@ def gpu_upload_scene(
                 film_buf=_gpu_placeholder(ctx),
                 albedo_film_buf=_gpu_placeholder(ctx),
                 film_sq_buf=_gpu_placeholder(ctx),
+                aux_film_buf=_gpu_placeholder(ctx),
+                px_active_buf=_gpu_placeholder(ctx),
+                px_active_tmp_buf=_gpu_placeholder(ctx),
+                adaptive_threshold=Float32(0),
+                adaptive_min=0,
                 hist_color_buf=_gpu_placeholder(ctx),
                 hist_len_buf=_gpu_placeholder(ctx),
                 hist_len_tmp_buf=_gpu_placeholder(ctx),
@@ -1325,6 +1336,9 @@ def gpu_alloc_pixel_buffers(handle: Pointer[GpuSceneHandle, MutUntrackedOrigin],
     h.film_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 12)
     h.albedo_film_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 12)
     h.film_sq_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 4)
+    h.aux_film_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 12)
+    h.px_active_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix)
+    h.px_active_tmp_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix)
     h.hist_color_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 12)
     h.hist_len_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 4)
     h.hist_len_tmp_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 4)
@@ -1359,6 +1373,8 @@ def gpu_alloc_pixel_buffers(handle: Pointer[GpuSceneHandle, MutUntrackedOrigin],
     ctx.enqueue_memset(h.film_buf, UInt8(0))
     ctx.enqueue_memset(h.albedo_film_buf, UInt8(0))
     ctx.enqueue_memset(h.film_sq_buf, UInt8(0))
+    ctx.enqueue_memset(h.aux_film_buf, UInt8(0))
+    ctx.enqueue_memset(h.px_active_buf, UInt8(1))
     ctx.enqueue_memset(h.hist_color_buf, UInt8(0))
     ctx.enqueue_memset(h.hist_len_buf, UInt8(0))
     ctx.enqueue_memset(h.prev_depth_buf, UInt8(0))

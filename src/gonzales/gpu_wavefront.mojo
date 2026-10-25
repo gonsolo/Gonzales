@@ -220,12 +220,26 @@ def accumulate_film_wavefront_gpu(
     # Ptex demand paging (ptex_mode != 0): redo_mask[sample] = 1 for the samples withheld here, to render again.
     redo_mask: Pointer[UInt8, MutUntrackedOrigin] = Pointer[UInt8, MutUntrackedOrigin].unsafe_dangling(),
     ptex_mode: Int32 = Int32(0),
+    aux_film: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+    px_active: Pointer[UInt8, MutUntrackedOrigin] = Pointer[UInt8, MutUntrackedOrigin].unsafe_dangling(),
+    si_start: Int32 = Int32(0),
 ):
     var n_pixels = Int(n_pixels_dp)
     var actual_batch = Int(actual_batch_dp)
     var px = Int(block_idx.x * block_dim.x + thread_idx.x)
     if px >= n_pixels:
         return
+    var adaptive = _is_real_ptr(px_active)
+    if adaptive and px_active[unsafe_offset=px] == UInt8(0) and si_start > Int32(0):
+        # Converged: each skipped sample adds the pixel's mean, so the sums stay consistent with the global count.
+        var k = Float32(actual_batch) / Float32(si_start)
+        for c in range(3):
+            film[unsafe_offset=px*3+c] += film[unsafe_offset=px*3+c] * k
+            albedo_film[unsafe_offset=px*3+c] += albedo_film[unsafe_offset=px*3+c] * k
+            aux_film[unsafe_offset=px*3+c] += aux_film[unsafe_offset=px*3+c] * k
+        film_sq[unsafe_offset=px] += film_sq[unsafe_offset=px] * k
+        return
+    var xr = Float32(0); var xg = Float32(0); var xb = Float32(0)
     var r = Float32(0); var g = Float32(0); var b = Float32(0)
     var ar = Float32(0); var ag = Float32(0); var ab = Float32(0)
     var sq = Float32(0)
@@ -240,12 +254,16 @@ def accumulate_film_wavefront_gpu(
             p.estimate, p.wavelengths)
         var (_qr, _qg, _qb) = _clamp_sample_rgb(_pe[0], _pe[1], _pe[2], sample_clamp)
         r += _qr; g += _qg; b += _qb
+        if (Int(si_start) + si) % 2 == 0:   # Cycles' class A samples, doubled
+            xr += Float32(2) * _qr; xg += Float32(2) * _qg; xb += Float32(2) * _qb
         var _ql = RGB(_qr, _qg, _qb).luma()
         sq += _ql * _ql
         ar += p.albedo.r;  ag += p.albedo.g;  ab += p.albedo.b
     film[unsafe_offset=px*3+0] += r; film[unsafe_offset=px*3+1] += g; film[unsafe_offset=px*3+2] += b
     film_sq[unsafe_offset=px] += sq
     albedo_film[unsafe_offset=px*3+0] += ar; albedo_film[unsafe_offset=px*3+1] += ag; albedo_film[unsafe_offset=px*3+2] += ab
+    if adaptive:
+        aux_film[unsafe_offset=px*3+0] += xr; aux_film[unsafe_offset=px*3+1] += xg; aux_film[unsafe_offset=px*3+2] += xb
 
 
 # Wavefront primary-ray generation: thread ti → pixel (ti % n_pixels), sample (si_start + ti // n_pixels).
@@ -270,6 +288,7 @@ def gen_primary_rays_wavefront_gpu(
     # Ptex demand paging, ptex_mode 2: slot ti renders sample redo_si[ti] of its pixel, or nothing if that is < 0.
     redo_si: Pointer[Int32, MutUntrackedOrigin] = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
     ptex_mode: Int32 = Int32(0),
+    px_active: Pointer[UInt8, MutUntrackedOrigin] = Pointer[UInt8, MutUntrackedOrigin].unsafe_dangling(),   # adaptive sampling
 ):
     var fw = Int(fw_dp)
     var count = Int(count_dp)
@@ -287,6 +306,8 @@ def gen_primary_rays_wavefront_gpu(
         si = redo_si[unsafe_offset=ti]
         skip = si < Int32(0)
         si = max(si, Int32(0))
+    if _is_real_ptr(px_active) and px_active[unsafe_offset=px_flat] == UInt8(0):
+        skip = True
     var rng_seed = UInt64(rng_seed_hi) << UInt64(32) | UInt64(rng_seed_lo)
     var (ray, pcg_state, pcg_inc, sobol_idx, wavelengths) = gen_primary_ray_state(
         px, py, si, Int(log2spp), Int(n_base4),
@@ -387,6 +408,52 @@ def sss_walk_gpu(
     if i >= Int(count[unsafe_offset=0]):
         return
     _sss_walk_step(paths, intersections, Int(idx[unsafe_offset=i]), sd)
+
+# Adaptive sampling as Cycles (film_adaptive_sampling_convergence_check): a pixel stops when the difference between all
+# its samples and twice every other one, over the square root of its intensity, falls under the threshold.
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+def adaptive_converge_gpu(
+    film: Pointer[Float32, MutUntrackedOrigin],
+    aux_film: Pointer[Float32, MutUntrackedOrigin],
+    px_active: Pointer[UInt8, MutUntrackedOrigin],
+    n_pixels_dp: Int64, spp: Int32, threshold: Float32,
+):
+    var px = Int(block_idx.x * block_dim.x + thread_idx.x)
+    if px >= Int(n_pixels_dp) or px_active[unsafe_offset=px] == UInt8(0):
+        return
+    var inv = Float32(1) / Float32(spp)
+    var diff = Float32(0)
+    var intensity = Float32(0)
+    for c in range(3):
+        var i = film[unsafe_offset=px*3+c] * inv
+        diff += abs(i - aux_film[unsafe_offset=px*3+c] * inv)
+        intensity += i
+    var norm = sqrt(intensity) if intensity < Float32(1) else intensity
+    if diff / (Float32(0.0001) + norm) < threshold:
+        px_active[unsafe_offset=px] = UInt8(0)
+
+# Cycles' film_adaptive_sampling_filter_x/_y: a pixel next to one still sampling samples too.
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+def adaptive_dilate_gpu(
+    src: Pointer[UInt8, MutUntrackedOrigin],
+    dst: Pointer[UInt8, MutUntrackedOrigin],
+    width_dp: Int64, height_dp: Int64, vertical: Int32,
+):
+    var w = Int(width_dp)
+    var h = Int(height_dp)
+    var px = Int(block_idx.x * block_dim.x + thread_idx.x)
+    if px >= w * h:
+        return
+    var x = px % w
+    var y = px // w
+    var a = src[unsafe_offset=px]
+    if vertical != Int32(0):
+        if y > 0: a = max(a, src[unsafe_offset=px - w])
+        if y < h - 1: a = max(a, src[unsafe_offset=px + w])
+    else:
+        if x > 0: a = max(a, src[unsafe_offset=px - 1])
+        if x < w - 1: a = max(a, src[unsafe_offset=px + 1])
+    dst[unsafe_offset=px] = a
 
 # Traversal kernel that reads rays directly from PathState (no separate ray buffer).
 @__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))

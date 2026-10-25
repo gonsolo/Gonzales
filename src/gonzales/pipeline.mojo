@@ -2,7 +2,7 @@ from .os_thread import OsThread, ThreadArg
 from std.memory.alloc import unsafe_alloc
 from std.memory import OwnedPointer, unsafe_memcpy
 from std.collections import List, Array
-from std.math import sqrt, tan, ceil
+from std.math import sqrt, tan, ceil, pow
 from std.sys.info import size_of
 from max.gpu.host import DeviceBuffer, DeviceContext
 from .footprint import camera_footprint
@@ -32,7 +32,7 @@ from .restir_di import DIReservoir, di_reservoir_init, ReservoirIO, reservoir_io
 from .restir_gi import GIReservoir, gi_reservoir_init, GIReservoirIO, gi_reservoir_io_null
 from .restir_sms import SMSReservoir, sms_reservoir_init, SMSReservoirIO, sms_reservoir_io_null
 from .restir_vol import VolReservoir, vol_reservoir_init, VolReservoirIO, vol_reservoir_io_null
-from .gpu import gpu_render_sample, gpu_render_wavefront, gpu_mnee_adapt, gpu_download_film, gpu_download_albedo, gpu_clear_film, gpu_clear_restir, gpu_clear_restir_vol
+from .gpu import gpu_render_sample, gpu_render_wavefront, gpu_adaptive_update, gpu_mnee_adapt, gpu_download_film, gpu_download_albedo, gpu_clear_film, gpu_clear_restir, gpu_clear_restir_vol
 from .gpu_scene import GpuSceneHandle, WAVEFRONT_BATCH, gpu_available, gpu_upload_scene, gpu_alloc_pixel_buffers, gpu_free_scene, gpu_ptex_begin, gpu_ptex_finish, gpu_ptex_withhold, gpu_ptex_withheld, gpu_ptex_redo_upload, gpu_ptex_stream_start, gpu_ptex_poll, gpu_ptex_stream_finish, gpu_ptex_make_room, gpu_set_curve_bvh
 from .gpu_denoise import gpu_atrous_denoise
 from .gpu_wavefront import gpu_gen_aux_buffers
@@ -3400,6 +3400,26 @@ def session_set_lens(s: SessionPtr, radius: Float32, focal_distance: Float32):
     s[].renderer.handle[].lens = ThinLens(radius, focal_distance)
     session_clear(s)
 
+def session_set_clamp(s: SessionPtr, clamp: Float32):
+    """A per-sample limit on radiance, for Cycles' Clamp Indirect (applied to whole samples); 0 is off."""
+    if clamp == s[].psc[unsafe_offset=0].film_max_comp:
+        return
+    s[].psc[unsafe_offset=0].film_max_comp = clamp
+    session_clear(s)
+
+def session_set_adaptive(s: SessionPtr, threshold: Float32, min_samples: Int32):
+    """Cycles' adaptive sampling: its noise threshold (0 is off) and minimum samples (0 is Cycles' automatic count)."""
+    var handle = s[].renderer.handle
+    var t = threshold * Float32(5) if threshold > Float32(0) else Float32(0)   # Cycles' factor on the threshold
+    var m = max(4, Int(min_samples))
+    if threshold > Float32(0) and min_samples <= Int32(0):
+        m = max(4, Int(ceil(Float32(16) / pow(threshold, Float32(0.3)))))
+    if t == handle[].adaptive_threshold and m == handle[].adaptive_min:
+        return
+    handle[].adaptive_threshold = t
+    handle[].adaptive_min = m
+    session_clear(s)
+
 def session_set_filter_glossy(s: SessionPtr, filter: Float32):
     """Cycles' Filter Glossy; 0 is off."""
     if filter == s[].renderer.handle[].filter_glossy:
@@ -3422,6 +3442,19 @@ def session_render(s: SessionPtr, n_spp: Int) raises -> Int:
     if end > s[].spp:
         s[].renderer.render_samples(s[].spp, end)
         s[].spp = end
+        var handle = s[].renderer.handle
+        if handle[].adaptive_threshold > Float32(0) and end >= handle[].adaptive_min:
+            gpu_adaptive_update(handle, end)
+            if getenv("GONZALES_ADAPTIVE_LOG") != "":
+                var n = handle[].n_pixels
+                var host = unsafe_alloc[UInt8](n)
+                handle[].ctx.enqueue_copy(host, handle[].px_active_buf)
+                handle[].ctx.synchronize()
+                var active = 0
+                for i in range(n):
+                    active += Int(host[unsafe_offset=i])
+                host.unsafe_free()
+                print("adaptive: spp", end, "active pixels", active, "of", n)
     return s[].spp
 
 def session_resolve(s: SessionPtr, rgb: Pointer[Float32, MutUntrackedOrigin], denoise: Bool) raises:

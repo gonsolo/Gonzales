@@ -27,6 +27,11 @@ class GonzalesRenderEngine(bpy.types.HydraRenderEngine):
                   'gonzales:assetRoot': bpy.path.abspath('//'),
                   'gonzales:sunScale': 4.0,   # Blender's Hydra export divides a sun's strength by 4; Cycles does not
                   'gonzales:filterGlossy': scene.cycles.blur_glossy if hasattr(scene, 'cycles') else 0.0,
+                  # The scene's Cycles adaptive sampling settings, so a file renders with the noise level it was made for.
+                  'gonzales:adaptiveThreshold': (scene.cycles.adaptive_threshold if hasattr(scene, 'cycles') and
+                                                 scene.cycles.use_adaptive_sampling else 0.0),
+                  'gonzales:adaptiveMinSamples': scene.cycles.adaptive_min_samples if hasattr(scene, 'cycles') else 0,
+                  'gonzales:clamp': scene.cycles.sample_clamp_indirect if hasattr(scene, 'cycles') else 0.0,
                   'gonzales:materials': materials.overrides(self._materials()),
                   'gonzales:world': world.texture(self._world())}
         if engine_type != 'VIEWPORT':
