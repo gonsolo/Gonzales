@@ -105,6 +105,9 @@ void gz_session_set_lens(void *s, float radius, float focus) { FWD(gz_session_se
 void gz_session_set_filter_glossy(void *s, float f) { FWD(gz_session_set_filter_glossy); op(GZ_SESSION_FILTER_GLOSSY); f32(f); real(s, f); }
 void gz_session_set_adaptive(void *s, float t, int m) { FWD(gz_session_set_adaptive); op(GZ_SESSION_ADAPTIVE); f32(t); i32(m); real(s, t, m); }
 void gz_session_set_clamp(void *s, float c) { FWD(gz_session_set_clamp); op(GZ_SESSION_CLAMP); f32(c); real(s, c); }
+void gz_session_set_bounces(void *s, int d, int g, int t) {
+    FWD(gz_session_set_bounces); op(GZ_SESSION_BOUNCES); i32(d); i32(g); i32(t); real(s, d, g, t);
+}
 int gz_session_render(void *s, int n) { FWD(gz_session_render); return real(s, n); }
 int gz_session_resolve(void *s, float *rgb, int denoise) {
     FWD(gz_session_resolve); op(GZ_SESSION_RESOLVE); i32(denoise); fflush(out); return real(s, rgb, denoise);

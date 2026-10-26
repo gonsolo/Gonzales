@@ -1,5 +1,5 @@
 // Renders a gzrecord recording: the same C API calls, then all samples at once and one resolve. Writes a PFM.
-// Usage: gzreplay RECORDING OUT.pfm [SPP]; GZ_DENOISE=0/1, GZ_FILTER_GLOSSY and GZ_CLAMP override the recorded settings
+// Usage: gzreplay RECORDING OUT.pfm [SPP]; GZ_DENOISE=0/1, GZ_FILTER_GLOSSY, GZ_CLAMP and GZ_BOUNCES=d,g,t override the recorded settings
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -27,6 +27,7 @@ int main(int argc, char **argv) {
     if (!in) { perror(argv[1]); return 1; }
     void *renderer = NULL, *scene = NULL, *session = NULL;
     float w2c[16] = {0}, fov = 0, rad = 0, focus = 0, glossy = 0, thr = 0, clamp = 0;
+    int bounces[3] = {-1, -1, -1};
     int w = 0, h = 0, spp = 0, depth = 0, min_spp = 0, denoise = 0;
     double t0 = now(), t_session = 0;
     uint32_t op;
@@ -67,6 +68,7 @@ int main(int argc, char **argv) {
         case GZ_SESSION_FILTER_GLOSSY: glossy = f32(); break;
         case GZ_SESSION_ADAPTIVE: thr = f32(); min_spp = i32(); break;
         case GZ_SESSION_CLAMP: clamp = f32(); break;
+        case GZ_SESSION_BOUNCES: bounces[0] = i32(); bounces[1] = i32(); bounces[2] = i32(); break;
         case GZ_SESSION_RESOLVE: denoise = i32(); break;
         default: fprintf(stderr, "gzreplay: unknown op %u\n", op); return 2;
         }
@@ -83,6 +85,8 @@ int main(int argc, char **argv) {
     gz_session_set_adaptive(session, thr, min_spp);
     if (getenv("GZ_CLAMP")) clamp = atof(getenv("GZ_CLAMP"));
     gz_session_set_clamp(session, clamp);
+    if (getenv("GZ_BOUNCES")) sscanf(getenv("GZ_BOUNCES"), "%d,%d,%d", &bounces[0], &bounces[1], &bounces[2]);
+    if (bounces[0] >= 0) gz_session_set_bounces(session, bounces[0], bounces[1], bounces[2]);
     if (gz_session_set_camera(session, w2c, fov, w, h) != 0) return 1;
     int done = gz_session_render(session, spp);
     double t_render = now();

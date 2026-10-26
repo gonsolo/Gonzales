@@ -21,7 +21,7 @@ from .bxdf import CoatWalk, coat_walk_begin, coat_walk_enter, coat_walk_at_base,
 from .measured_bxdf_eval import bxdf_eval_measured, bxdf_sample_measured, bxdf_pdf_measured, _nee_weight_measured
 from .rng import PCG32
 from .footprint import CameraFootprint, UVFootprint, TriWorld, tri_world, hit_uv_footprint
-from .bvh import BVH2Node, BVH4, SceneView, any_hit_dispatch, traverse_dispatch, ray_sphere_hit, HairLobeConstants, _hair_precompute, _hair_eval_lobes, _hair_sample_dir, curve_offset_eps, LightSample, _sample_distant_light_nee, _sample_point_light_nee, _sample_sphere_light_nee, _sample_infinite_light_nee, _sample_infinite_light_textured, _equal_area_square_to_sphere, _equal_area_sphere_to_square
+from .bvh import BVH2Node, BVH4, SceneView, any_hit_dispatch, traverse_dispatch, ray_sphere_hit, HairLobeConstants, _hair_precompute, _hair_eval_lobes, _hair_sample_dir_u, curve_offset_eps, LightSample, _sample_distant_light_nee, _sample_point_light_nee, _sample_sphere_light_nee, _sample_infinite_light_nee, _sample_infinite_light_textured, _equal_area_square_to_sphere, _equal_area_sphere_to_square
 from .sampling import power_heuristic, sample_cosine_hemisphere, sample_cosine_hemisphere_world, sample_ggx_vndf, sobol_sample, sobol_sample_n, mix_bits_u64
 from .transform import transform_normal, Mat4
 from .guide import GuideGrid, guide_pos_to_cell, guide_pdf, guide_sample, guide_cell_has_data, guide_record, null_guide, guide_is_active
@@ -187,6 +187,7 @@ struct ShadeContext:
     # Cycles' Filter Glossy (scene.cycles.blur_glossy); 0 = off
     var filter_glossy: Float32
     var clamp: SIMD[DType.float32, 2]   # SceneView.clamp
+    var cycles: SIMD[DType.int32, 4]    # SceneView.cycles
 
 # Orient an emitter triangle's WINDING normal to agree with the mesh's own
 # supplied per-vertex normals, which is what decides whether a one-sided
@@ -1271,7 +1272,7 @@ def shade_diffuse_transmission[use_gpu: Bool, enqueue_shadow: Bool](
     path_ptr[].bounce += 1
 
     var u_rr = pcg.next_float()
-    _apply_russian_roulette(path_ptr, pcg, u_rr)
+    _apply_russian_roulette(path_ptr, ctx.cycles, pcg, u_rr, BOUNCE_TRANSMIT if dot(bounce_normal, -ray_dir) <= Float32(0.0) else BOUNCE_DIFFUSE)
 
 
 # ── CoatedDiffuse (plastic) branch ───────────────────────────────────────────
@@ -1335,7 +1336,8 @@ def _shade_principled[enqueue_shadow: Bool, defer_only: Bool](
         path_ptr[].throughput *= Float32(1) / (Float32(1) - q)
 
     var wi: Vec3f
-    if pcg.next_float() < ps:
+    var spec = pcg.next_float() < ps
+    if spec:
         var frame = Frame.from_z(normal)
         var tx = Vec3f(frame.x.x, frame.x.y, frame.x.z)
         var ty = Vec3f(frame.y.x, frame.y.y, frame.y.z)
@@ -1359,7 +1361,7 @@ def _shade_principled[enqueue_shadow: Bool, defer_only: Bool](
     path_ptr[].lastBsdfPdf = pdf
     path_ptr[].bounce += 1
     var u_rr = pcg.next_float()
-    _apply_russian_roulette(path_ptr, pcg, u_rr)
+    _apply_russian_roulette(path_ptr, ctx.cycles, pcg, u_rr, BOUNCE_GLOSSY if spec else BOUNCE_DIFFUSE)
 
 
 @always_inline
@@ -1616,7 +1618,7 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool, defer_only: Bool =
     path_ptr[].bounce += 1
 
     var u_rr = pcg.next_float()
-    _apply_russian_roulette(path_ptr, pcg, u_rr)
+    _apply_russian_roulette(path_ptr, ctx.cycles, pcg, u_rr, BOUNCE_GLOSSY if bs.specular else BOUNCE_DIFFUSE)
 
 
 @always_inline
@@ -1662,13 +1664,33 @@ comptime RR_THROUGHPUT_CLAMP: Float32 = 32.0
 # 8-line epilogue every shade_* path ends with. u_rr must be drawn by the
 # caller (not inside here) since some callers already drew it earlier in
 # the same bounce for other purposes and must not draw a second one.
+comptime BOUNCE_DIFFUSE = 0
+comptime BOUNCE_GLOSSY = 1
+comptime BOUNCE_TRANSMIT = 2
+comptime BOUNCE_NONE = -1   # not a bounce Cycles counts (a subsurface boundary)
+
+
+@always_inline
+def _count_bounce(path_ptr: Pointer[PathState, MutUntrackedOrigin], cycles: SIMD[DType.int32, 4], kind: Int):
+    """Cycles' diffuse, glossy and transmission bounce limits: past one, the path ends at its next scattering."""
+    if cycles[3] == 0 or kind < 0:
+        return
+    var n = path_ptr[].kind_bounces[kind] + 1
+    path_ptr[].kind_bounces[kind] = n
+    if Int32(n) > cycles[kind]:
+        path_ptr[].at_cap = Int8(1)
+
+
 @always_inline
 def _apply_russian_roulette(
     path_ptr: Pointer[PathState, MutUntrackedOrigin],
+    cycles: SIMD[DType.int32, 4],
     pcg: PCG32,
     u_rr: Float32,
+    kind: Int,
 ):
-    if path_ptr[].bounce > 1:
+    _count_bounce(path_ptr, cycles, kind)
+    if path_ptr[].bounce > 1 and cycles[3] == 0:   # Cycles' sessions roulette at the next surface (shade_nee_core)
         # rr_lum, not raw throughput luma, decides termination -- eta_scale
         # (1.0 for any path that hasn't transmitted through a dielectric)
         # undoes the temporary eta^2 compression bxdf_sample_dielectric
@@ -1715,6 +1737,7 @@ def spawn_origin(hit_point: Vec3f, geo_n: Vec3f, dir: Vec3f) -> Vec3f:
 
 def _finish_delta_bounce(
     path_ptr: Pointer[PathState, MutUntrackedOrigin],
+    cycles: SIMD[DType.int32, 4],
     mut pcg: PCG32,
     bs: BxDFSample,
     f_spec: SpectralSample,
@@ -1746,7 +1769,8 @@ def _finish_delta_bounce(
         path_ptr[].bounce += 1
 
     var u_rr = pcg.next_float()
-    _apply_russian_roulette(path_ptr, pcg, u_rr)
+    var kind = BOUNCE_GLOSSY if Int(bs.flags) & Int(BxDFFlags.reflect) != 0 else BOUNCE_TRANSMIT
+    _apply_russian_roulette(path_ptr, cycles, pcg, u_rr, kind if charge_depth else BOUNCE_NONE)
 
 
 # ── Dielectric (glass) branch ─────────────────────────────────────────────────
@@ -1932,7 +1956,7 @@ def shade_dielectric[use_gpu: Bool, enqueue_shadow: Bool](
             path_ptr[].throughput *= rgb_bands_to_spectral_sample(
                 max(kr, Float32(0.0)), max(kg, Float32(0.0)), max(kb, Float32(0.0)),
                 path_ptr[].wavelengths)
-    _finish_delta_bounce(path_ptr, pcg, bs, SpectralSample(bs.f.r), hit_point, RGB(Float32(1)),
+    _finish_delta_bounce(path_ptr, ctx.cycles, pcg, bs, SpectralSample(bs.f.r), hit_point, RGB(Float32(1)),
                          mat.sss_boundary == Int8(0))
 
 # Rough dielectric: pbrt's DielectricBxDF over a Trowbridge-Reitz
@@ -2003,7 +2027,7 @@ def _shade_rough_dielectric[enqueue_shadow: Bool](
     path_ptr[].lastBsdfPdf = bs.pdf
     path_ptr[].bounce += 1
     var u_rr = pcg.next_float()
-    _apply_russian_roulette(path_ptr, pcg, u_rr)
+    _apply_russian_roulette(path_ptr, ctx.cycles, pcg, u_rr, BOUNCE_TRANSMIT if bs.wi.z * wo_l.z < Float32(0.0) else BOUNCE_GLOSSY)
 
 
 @always_inline
@@ -2046,6 +2070,7 @@ def shade_thin_dielectric(
     meshes: Pointer[TriangleMesh, MutUntrackedOrigin],
     mat: Material,
     spheres: Pointer[Sphere, MutUntrackedOrigin],
+    cycles: SIMD[DType.int32, 4],
 ):
     var (ok, _, geom_normal, ray_dir, ray_org, _, _, _, _) = _hit_geom(path_ptr, inter, meshes, spheres)
     if not ok:
@@ -2059,7 +2084,7 @@ def shade_thin_dielectric(
 
     var is_reflect = (Int(bs.flags) & Int(BxDFFlags.reflect)) != 0
     var hit_point = offset_point(ray_org + ray_dir * inter.tHit, normal if is_reflect else -normal)
-    _finish_delta_bounce(path_ptr, pcg, bs, SpectralSample(bs.f.r), hit_point, RGB(Float32(1)))
+    _finish_delta_bounce(path_ptr, cycles, pcg, bs, SpectralSample(bs.f.r), hit_point, RGB(Float32(1)))
 
 
 # ── Conductor (mirror + GGX microfacet) branch ────────────────────────────────
@@ -2305,9 +2330,9 @@ def shade_conductor[use_gpu: Bool, enqueue_shadow: Bool](
         path_ptr[].lastBsdfPdf = bxdf_pdf_conductor_ggx(normal, wo, bs.wi, alpha_iso)
         path_ptr[].bounce += 1
         var u_rr = pcg.next_float()
-        _apply_russian_roulette(path_ptr, pcg, u_rr)
+        _apply_russian_roulette(path_ptr, ctx.cycles, pcg, u_rr, BOUNCE_GLOSSY)
     else:
-        _finish_delta_bounce(path_ptr, pcg, bs, _to_spec_weight(ctx, bs.f, path_ptr[].wavelengths), hit_point, mat_eff.albedo, geo_n=geo_normal)
+        _finish_delta_bounce(path_ptr, ctx.cycles, pcg, bs, _to_spec_weight(ctx, bs.f, path_ptr[].wavelengths), hit_point, mat_eff.albedo, geo_n=geo_normal)
 
 
 # ── Measured (tabulated Dupuy & Jakob BxDF) ──────────────────────────────────
@@ -2486,7 +2511,7 @@ def shade_measured[use_gpu: Bool, enqueue_shadow: Bool](
     path_ptr[].lastBsdfPdf = bxdf_pdf_measured(mb, wo_l, wi_l)
     path_ptr[].bounce += 1
     var u_rr = pcg.next_float()
-    _apply_russian_roulette(path_ptr, pcg, u_rr)
+    _apply_russian_roulette(path_ptr, ctx.cycles, pcg, u_rr, BOUNCE_GLOSSY)
 
 
 # CoatedConductor: dielectric clearcoat over GGX conductor.
@@ -2538,9 +2563,9 @@ def shade_coated_conductor[use_gpu: Bool, enqueue_shadow: Bool](
         path_ptr[].lastBsdfPdf = bxdf_pdf_conductor_ggx(normal, wo, bs.wi, alpha_cc)
         path_ptr[].bounce += 1
         var u_rr = pcg.next_float()
-        _apply_russian_roulette(path_ptr, pcg, u_rr)
+        _apply_russian_roulette(path_ptr, ctx.cycles, pcg, u_rr, BOUNCE_GLOSSY)
     else:
-        _finish_delta_bounce(path_ptr, pcg, bs, _to_spec_weight(ctx, bs.f, path_ptr[].wavelengths), hit_point, mat.albedo, geo_n=normal)
+        _finish_delta_bounce(path_ptr, ctx.cycles, pcg, bs, _to_spec_weight(ctx, bs.f, path_ptr[].wavelengths), hit_point, mat.albedo, geo_n=normal)
 
 
 # Mix material: randomly select one of two sub-materials using amount as probability.
@@ -3157,7 +3182,12 @@ def shade_hair[use_gpu: Bool, enqueue_shadow: Bool](
     # Delegated to bvh.mojo's _hair_sample_dir (same lobe-pick + vMF/logistic
     # sampling as before this was extracted, identical RNG draw order) —
     # shared with bdpt_*.mojo/sppm.mojo's own hair-vertex bounce continuation.
-    var (wi_s, f_s, pdf, cos_ti_s2) = _hair_sample_dir(hc, pcg)
+    var u_lobe = pcg.next_float()
+    var u_th = pcg.next_float()
+    var u_phi_v = pcg.next_float()
+    var u3 = pcg.next_float()
+    var r_lobe = u_lobe * hc.total_lum < hc.lum0   # Cycles counts the R lobe as glossy, the rest as transmission
+    var (wi_s, f_s, pdf, cos_ti_s2) = _hair_sample_dir_u(hc, u_lobe, u_th, u_phi_v, u3)
     var frs = f_s.r; var fgs = f_s.g; var fbs = f_s.b
 
     # Solid-angle PDF (remove the embedded /cos_ti_s) — used for MIS when indirect path hits env.
@@ -3182,7 +3212,7 @@ def shade_hair[use_gpu: Bool, enqueue_shadow: Bool](
     path_ptr[].bounce += 1
 
     var u_rr_hair = pcg.next_float()
-    _apply_russian_roulette(path_ptr, pcg, u_rr_hair)
+    _apply_russian_roulette(path_ptr, ctx.cycles, pcg, u_rr_hair, BOUNCE_GLOSSY if r_lobe else BOUNCE_TRANSMIT)
 
 
 # 2-vertex MNEE: Newton walk for x0→x1(glass1)→x2(glass2)→x3.
@@ -5331,7 +5361,8 @@ def shade_diffuse[use_gpu: Bool, enqueue_shadow: Bool, mnee: Bool = True, defer_
     thr *= _to_spec_refl(ctx, alb, path_ptr[].wavelengths) * _w
     var bounce_next = bounce_now + Int32(1)
     path_ptr[].bounce = bounce_next
-    if bounce_next > 1:
+    _count_bounce(path_ptr, ctx.cycles, BOUNCE_DIFFUSE)
+    if bounce_next > 1 and ctx.cycles[3] == 0:
         # See _apply_russian_roulette for why rr_lum carries eta_scale.
         var rr_lum = thr.luma() * path_ptr[].eta_scale
         var q = Float32(1.0) - (rr_lum if rr_lum < Float32(0.95) else Float32(0.95))
@@ -5408,7 +5439,7 @@ def _shade_dispatch[use_gpu: Bool, enqueue_shadow: Bool](
     elif mat.type == MatKind.mix:
         shade_mix[use_gpu, enqueue_shadow](path_ptr, inter, ctx, mat)
     elif mat.type == MatKind.thin_dielectric:
-        shade_thin_dielectric(path_ptr, inter, ctx.meshes, mat, ctx.lights.spheres)
+        shade_thin_dielectric(path_ptr, inter, ctx.meshes, mat, ctx.lights.spheres, ctx.cycles)
     elif mat.type == MatKind.interface:
         shade_interface(path_ptr, inter)
     elif mat.type == MatKind.hair:
@@ -5794,6 +5825,19 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
         path_ptr[].active = 0
         return
 
+    # Cycles' Russian roulette (integrator_intersect_terminate): once the ray has hit a surface, so what the ray found
+    # (sky, lights, emission above) is never weighted by it; the survival odds are the sqrt of the largest channel.
+    if ctx.cycles[3] != 0 and mat.type != MatKind.interface and path_ptr[].bounce > 1:
+        var p = min(sqrt(path_ptr[].throughput.max_component() * path_ptr[].eta_scale), Float32(1))
+        if p < Float32(1):
+            var pcg_rr = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
+            var u = pcg_rr.next_float()
+            path_ptr[].pcgState = pcg_rr.state
+            if u >= p:
+                path_ptr[].active = 0
+                return
+            path_ptr[].throughput *= Float32(1) / p
+
     # Any material other than a null interface is a REAL scattering event, so
     # the null-interface distance accumulated on the way here has served its
     # purpose and must not leak into the next segment's MIS. Reset here rather
@@ -5873,6 +5917,7 @@ def cpu_shade_context(
     bvh4: BVH4 = BVH4.none(),
     filter_glossy: Float32 = Float32(0),
     clamp: SIMD[DType.float32, 2] = SIMD[DType.float32, 2](0),
+    cycles: SIMD[DType.int32, 4] = SIMD[DType.int32, 4](0),
 ) -> ShadeContext:
     """The per-render-invariant ShadeContext of the CPU wavefront; build once, set path_idx per path."""
     return ShadeContext(
@@ -5893,7 +5938,7 @@ def cpu_shade_context(
             distant_lights=distantLights, distant_count=distantLightCount,
             point_lights=pointLights, point_count=pointLightCount,
             infinite_lights=infiniteLights, infinite_count=infiniteLightCount,
-            spheres=spheres, sphere_count=sphereCount, light_sampler=light_sampler), filter_glossy=filter_glossy, clamp=clamp)
+            spheres=spheres, sphere_count=sphereCount, light_sampler=light_sampler), filter_glossy=filter_glossy, clamp=clamp, cycles=cycles)
 
 
 @always_inline

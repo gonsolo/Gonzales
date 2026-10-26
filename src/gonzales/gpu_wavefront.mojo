@@ -337,6 +337,7 @@ def gen_primary_rays_wavefront_gpu(
         Float32(0.0),   # cone_len: total path length, accumulated per bounce
         Int8(2) if skip else Int8(0),   # ptex_missed
         MIN_RAY_PDF_NONE,   # min_ray_pdf
+        SIMD[DType.uint8, 4](0),   # kind_bounces
         SssWalk.none(),
     )
 
@@ -2017,6 +2018,7 @@ def gen_primary_rays_gpu(
         Float32(0.0),   # cone_len: total path length, accumulated per bounce
         Int8(0),   # ptex_missed
         MIN_RAY_PDF_NONE,   # min_ray_pdf
+        SIMD[DType.uint8, 4](0),   # kind_bounces
         SssWalk.none(),
     )
 

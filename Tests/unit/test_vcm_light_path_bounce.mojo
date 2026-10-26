@@ -147,6 +147,7 @@ def _build_scene() -> SceneView:
         ThinLens.pinhole(),
         Float32(0),
         SIMD[DType.float32, 2](0),   # clamp
+        SIMD[DType.int32, 4](0),     # cycles
         Int32(-1),   # curveRoot
         CurveBvh.none(),
         Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),

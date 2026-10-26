@@ -47,7 +47,7 @@ def _shade_context(
             distant_lights=sd.distantLights, distant_count=Int(sd.distantLightCount),
             point_lights=sd.pointLights, point_count=Int(sd.pointLightCount),
             infinite_lights=sd.infiniteLights, infinite_count=Int(sd.infiniteLightCount),
-            spheres=sd.spheres, sphere_count=Int(sd.sphereCount), light_sampler=sd.lightSampler), filter_glossy=sd.filterGlossy, clamp=sd.clamp)
+            spheres=sd.spheres, sphere_count=Int(sd.sphereCount), light_sampler=sd.lightSampler), filter_glossy=sd.filterGlossy, clamp=sd.clamp, cycles=sd.cycles)
 
 
 def shared_shade_context(
@@ -432,7 +432,7 @@ def shade_thin_dielectric_gpu(
     path_ptr[].pending_mat = Int8(0)
     var inter = intersections[unsafe_offset=tid]
     var mat = sd.materials[unsafe_offset=Int(inter.primId.materialIndex)]
-    shade_thin_dielectric(path_ptr, inter, sd.meshes, mat, sd.spheres)
+    shade_thin_dielectric(path_ptr, inter, sd.meshes, mat, sd.spheres, sd.cycles)
 
 
 @__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
@@ -570,7 +570,7 @@ def shade_enqueue_shadow_gpu(
             distant_lights=Pointer[DistantLight, MutUntrackedOrigin](), distant_count=0,
             point_lights=Pointer[PointLight, MutUntrackedOrigin](), point_count=0,
             infinite_lights=infiniteLights, infinite_count=n_infinite_lights,
-            spheres=spheres, sphere_count=n_spheres, light_sampler=ls_shadow), filter_glossy=Float32(0), clamp=SIMD[DType.float32, 2](0))
+            spheres=spheres, sphere_count=n_spheres, light_sampler=ls_shadow), filter_glossy=Float32(0), clamp=SIMD[DType.float32, 2](0), cycles=SIMD[DType.int32, 4](0))
     shade_nee_core[True, True](path_ptr, inter, ctx_shadow)
 
 

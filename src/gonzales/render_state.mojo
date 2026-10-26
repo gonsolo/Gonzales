@@ -243,6 +243,7 @@ struct PathState(TrivialRegisterPassable):
     # withheld from the film and rendered again later; 2 = not rendered in this pass (gpu_wavefront.mojo).
     var ptex_missed: Int8
     var min_ray_pdf: Float32   # smallest scatter pdf so far: Cycles' Filter Glossy blurs lobes by it
+    var kind_bounces: SIMD[DType.uint8, 4]   # diffuse, glossy and transmission bounces so far, for Cycles' limits
     var sss: SssWalk
 # <</listing>>
 # PathState layout: 24+12+12+12+4+8+8+1+1+1+1+4+4+4+4+4+4+4+8+20+4+4+4 = 148 bytes (was 144 -- +4 for cone_len);

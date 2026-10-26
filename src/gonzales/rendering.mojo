@@ -231,6 +231,7 @@ def render_tile[Osp: Origin[mut=True], Oc2w: Origin[mut=True]](
                     Float32(0.0),   # cone_len: total path length, accumulated per bounce
                     Int8(0),   # ptex_missed
                     MIN_RAY_PDF_NONE,   # min_ray_pdf
+                    SIMD[DType.uint8, 4](0),   # kind_bounces
                     SssWalk.none(),
                 )
                 pixel_idx_buf[unsafe_offset=idx] = this_pixel_idx
@@ -248,7 +249,7 @@ def render_tile[Osp: Origin[mut=True], Oc2w: Origin[mut=True]](
         gi_pending=gi_pending_buf, gi_io=gi_io,
         nmaps=scene.normalSlopeMaps,
         textures=scene.gpuTextures, n_textures=Int(scene.gpuTextureCount),
-        has_glass=scene.hasGlass != Int32(0), mnee_stats=scene.mneeStats, bvh4=scene.bvh4, filter_glossy=scene.filterGlossy, clamp=scene.clamp)
+        has_glass=scene.hasGlass != Int32(0), mnee_stats=scene.mneeStats, bvh4=scene.bvh4, filter_glossy=scene.filterGlossy, clamp=scene.clamp, cycles=scene.cycles)
 
     # Multi-bounce path trace
     for _ in range(maxD):

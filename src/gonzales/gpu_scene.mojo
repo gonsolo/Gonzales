@@ -915,6 +915,7 @@ struct GpuSceneHandle(Movable):
     var lens: ThinLens
     var filter_glossy: Float32
     var clamp: SIMD[DType.float32, 2]           # SceneView.clamp
+    var cycles: SIMD[DType.int32, 4]            # SceneView.cycles
     var curve_root: Int32
     var curve_bvh: CurveBvh
     var curve_bvh_bufs: List[DeviceBuffer[DType.uint8]]
@@ -969,6 +970,7 @@ struct GpuSceneHandle(Movable):
             lens=self.lens,
             filterGlossy=self.filter_glossy,
             clamp=self.clamp,
+            cycles=self.cycles,
             curveRoot=self.curve_root,
             curveBvh=self.curve_bvh,
             walkNodesArr=typed_ptr[Pointer[BVH2Node, MutUntrackedOrigin]](self.walk_bvh.nodes_ptrs_buf),
@@ -1330,6 +1332,7 @@ def gpu_upload_scene(
                 lens=ThinLens(s.camera_lens_radius, s.camera_focal_distance),
                 filter_glossy=Float32(0),
                 clamp=SIMD[DType.float32, 2](0),
+                cycles=SIMD[DType.int32, 4](0),
                 curve_root=s.curve_root,
                 curve_bvh=CurveBvh.none(),
                 curve_bvh_bufs=List[DeviceBuffer[DType.uint8]](),

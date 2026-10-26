@@ -781,7 +781,7 @@ void *_Renderer() {
 struct View {
     GfMatrix4f worldToCamera{1.0f};
     float fov = 0, lensRadius = 0, focusDistance = 0, filterGlossy = 0, adaptiveThreshold = 0, clamp = 0;
-    int adaptiveMinSamples = 0;
+    int adaptiveMinSamples = 0, diffuseBounces = -1, glossyBounces = -1, transmissionBounces = -1;
     int width = 0, height = 0, spp = 0, maxDepth = 0;
     bool denoise = true;
     RenderBuffer *color = nullptr;
@@ -789,7 +789,8 @@ struct View {
     bool operator==(View const &o) const {
         return worldToCamera == o.worldToCamera && fov == o.fov && lensRadius == o.lensRadius &&
                focusDistance == o.focusDistance && filterGlossy == o.filterGlossy &&
-               adaptiveThreshold == o.adaptiveThreshold && adaptiveMinSamples == o.adaptiveMinSamples && clamp == o.clamp && width == o.width && height == o.height &&
+               adaptiveThreshold == o.adaptiveThreshold && adaptiveMinSamples == o.adaptiveMinSamples && clamp == o.clamp &&
+               diffuseBounces == o.diffuseBounces && glossyBounces == o.glossyBounces && transmissionBounces == o.transmissionBounces && width == o.width && height == o.height &&
                spp == o.spp && maxDepth == o.maxDepth && denoise == o.denoise && color == o.color;
     }
 };
@@ -1001,6 +1002,7 @@ public:
         gz_session_set_filter_glossy(_session, v.filterGlossy);
         gz_session_set_adaptive(_session, v.adaptiveThreshold, v.adaptiveMinSamples);
         gz_session_set_clamp(_session, v.clamp);
+        if (v.diffuseBounces >= 0) gz_session_set_bounces(_session, v.diffuseBounces, v.glossyBounces, v.transmissionBounces);
         if (gz_session_set_camera(_session, v.worldToCamera.data(), v.fov, v.width, v.height) != 0) {
             v.color->SetConverged(true);
             return;
@@ -1081,6 +1083,9 @@ protected:
         v.adaptiveThreshold = delegate->GetRenderSetting<float>(TfToken("gonzales:adaptiveThreshold"), 0.0f);
         v.adaptiveMinSamples = delegate->GetRenderSetting<int>(TfToken("gonzales:adaptiveMinSamples"), 0);
         v.clamp = delegate->GetRenderSetting<float>(TfToken("gonzales:clamp"), 0.0f);
+        v.diffuseBounces = delegate->GetRenderSetting<int>(TfToken("gonzales:diffuseBounces"), -1);
+        v.glossyBounces = delegate->GetRenderSetting<int>(TfToken("gonzales:glossyBounces"), -1);
+        v.transmissionBounces = delegate->GetRenderSetting<int>(TfToken("gonzales:transmissionBounces"), -1);
         std::string overrides = delegate->GetRenderSetting<std::string>(TfToken("gonzales:materials"), std::string());
         std::string world = delegate->GetRenderSetting<std::string>(TfToken("gonzales:world"), std::string());
         if (world != _scene->worldPath) {

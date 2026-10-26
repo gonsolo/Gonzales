@@ -301,6 +301,7 @@ struct SceneView(TrivialRegisterPassable, DevicePassable):
     var lens: ThinLens
     var filterGlossy: Float32   # Cycles' Filter Glossy; 0 = off
     var clamp: SIMD[DType.float32, 2]   # Cycles' Clamp Direct and Clamp Indirect (shading._clamped); 0 = off
+    var cycles: SIMD[DType.int32, 4]    # Cycles' diffuse, glossy and transmission bounce limits, w = 1 to use them
     var curveRoot: Int32        # bvh2Nodes' curve-only subtree (ParsedScene_Mojo.curve_root); -1: none
     var curveBvh: CurveBvh      # the curve leaves in fiber-aligned clusters (curve_bvh.mojo); n_clusters 0: none
     # Per-mesh BVHs for subsurface walks (gpu_scene.WalkBvhBuffers); walkBvhOfMesh dangling = walk the scene BVH.

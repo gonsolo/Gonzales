@@ -138,6 +138,7 @@ def _dummy_sd() -> SceneView:
         ThinLens.pinhole(),
         Float32(0),
         SIMD[DType.float32, 2](0),   # clamp
+        SIMD[DType.int32, 4](0),     # cycles
         Int32(-1),   # curveRoot
         CurveBvh.none(),
         Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
@@ -357,6 +358,7 @@ def test_bdpt_connect_to_cache_sums_one_paired_light_path() raises:
         ThinLens.pinhole(),
         Float32(0),
         SIMD[DType.float32, 2](0),   # clamp
+        SIMD[DType.int32, 4](0),     # cycles
         Int32(-1),   # curveRoot
         CurveBvh.none(),
         Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),

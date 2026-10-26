@@ -99,6 +99,7 @@ def _make_ctx_with_light(
         Pointer[Grid, MutUntrackedOrigin].unsafe_dangling(), Pointer[NvdbGrid, MutUntrackedOrigin].unsafe_dangling(),
         Float32(0),
         SIMD[DType.float32, 2](0),
+        SIMD[DType.int32, 4](0),
     )
 
 # ── Shared fixture: a small light triangle near (0,10,0) facing straight
@@ -256,6 +257,7 @@ def _make_path(org: Vec3f, dir: Vec3f) -> PathState:
         Float32(0.0),   # cone_len
         Int8(0),   # ptex_missed
         MIN_RAY_PDF_NONE,   # min_ray_pdf
+        SIMD[DType.uint8, 4](0),   # kind_bounces
         SssWalk.none(),
     )
 

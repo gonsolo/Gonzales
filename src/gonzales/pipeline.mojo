@@ -3436,6 +3436,15 @@ def session_set_clamp(s: SessionPtr, clamp: Float32):
     h.clamp[1] = limit
     session_clear(s)
 
+def session_set_bounces(s: SessionPtr, diffuse: Int32, glossy: Int32, transmission: Int32):
+    """Cycles' diffuse, glossy and transmission bounce limits; a session given them also takes Cycles' Russian roulette."""
+    ref h = s[].renderer.handle[]
+    var c = SIMD[DType.int32, 4](diffuse, glossy, transmission, 1)
+    if c == h.cycles:
+        return
+    h.cycles = c
+    session_clear(s)
+
 def session_set_adaptive(s: SessionPtr, threshold: Float32, min_samples: Int32):
     """Cycles' adaptive sampling: its noise threshold (0 is off) and minimum samples (0 is Cycles' automatic count)."""
     var handle = s[].renderer.handle

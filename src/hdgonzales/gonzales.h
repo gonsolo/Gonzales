@@ -33,6 +33,7 @@ void gz_session_set_lens(void *session, float radius, float focal_distance);
 void gz_session_set_filter_glossy(void *session, float filter);
 void gz_session_set_adaptive(void *session, float threshold, int min_samples);
 void gz_session_set_clamp(void *session, float clamp);
+void gz_session_set_bounces(void *session, int diffuse, int glossy, int transmission);
 int gz_session_render(void *session, int n_spp);
 int gz_session_resolve(void *session, float *out_rgb, int denoise);
 void gz_session_free(void *session);

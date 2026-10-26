@@ -30,6 +30,7 @@ def _dummy_path(ray: Ray, throughput: SpectralSample) -> PathState:
         Float32(0.0),   # cone_len
         Int8(0),   # ptex_missed
         MIN_RAY_PDF_NONE,   # min_ray_pdf
+        SIMD[DType.uint8, 4](0),   # kind_bounces
         SssWalk.none(),
     )
 
