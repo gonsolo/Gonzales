@@ -186,6 +186,7 @@ struct ShadeContext:
     var nvdb_grids:    Pointer[NvdbGrid, MutUntrackedOrigin]
     # Cycles' Filter Glossy (scene.cycles.blur_glossy); 0 = off
     var filter_glossy: Float32
+    var clamp: SIMD[DType.float32, 2]   # SceneView.clamp
 
 # Orient an emitter triangle's WINDING normal to agree with the mesh's own
 # supplied per-vertex normals, which is what decides whether a one-sided
@@ -1020,6 +1021,18 @@ def _hit_emission[use_gpu: Bool](mat: Material, inter: Intersection, ctx: ShadeC
                                    ctx.n_textures, found)
 
 
+@always_inline
+def _clamped(ctx: ShadeContext, c: SpectralSample, bounce: Int) -> SpectralSample:
+    """Cycles' sample clamp (film_clamp_light): a light contribution whose channels sum past the limit is scaled down to
+    it. `bounce` is Cycles' index: 0 for light reaching the camera through the first scattering vertex (direct),
+    above for indirect; emission found by a path counts one less than the path's bounces. A limit of 0 is none."""
+    var limit = ctx.clamp[1] if bounce > 0 else ctx.clamp[0]
+    if limit <= Float32(0):
+        return c
+    var s = (abs(c.v0) + abs(c.v1) + abs(c.v2) + abs(c.v3)) * Float32(0.75)   # four wavelengths for Cycles' three channels
+    return c * (limit / s) if s > limit else c
+
+
 def _to_spec_illum(ctx: ShadeContext, c: RGB, wl: SampledWavelengths) -> SpectralSample:
     """RGB EMISSION -> spectral, at the light boundary. Uses the ILLUMINANT
     upsampling (unbounded, energy-normalised for light spectra), which is a
@@ -1080,9 +1093,10 @@ def _shadow_contribute[enqueue_shadow: Bool, defer_only: Bool = False](
     origin: Vec3f,
     dir: Vec3f,
     tmax: Float32,
-    contrib: SpectralSample,
+    contrib_in: SpectralSample,
     guide_write: GuideGrid = null_guide(),
 ):
+    var contrib = _clamped(ctx, contrib_in, Int(path_ptr[].bounce))
     # Deferral needs a real task buffer (only handed out for --rt-hardware) and no guiding; it takes the first free of the
     # path's SHADOW_SLOTS slots, and a candidate that finds none is traced inline below.
     comptime if defer_only:
@@ -1128,7 +1142,7 @@ def _shadow_contribute[enqueue_shadow: Bool, defer_only: Bool = False](
                                     ctx.lights.spheres, ctx.lights.sphere_count,
                                     materials=ctx.materials)
     if not blocked:
-        path_ptr[].estimate += contrib * tr
+        path_ptr[].estimate += _clamped(ctx, contrib * tr, Int(path_ptr[].bounce))
         # Record in the guide at the PARENT surface (one bounce back):
         # "scatter direction ray.dir from parent_cell leads to illumination W here."
         # This teaches indirect-illumination guiding — path_ptr[].ray.origin is where
@@ -1374,7 +1388,7 @@ def _principled_nee[enqueue_shadow: Bool, defer_only: Bool](
     var f_spec = bxdf_eval_conductor_ggx(n, wo, ls.wi, alpha, RGB(f0)).r
     var contrib = path_ptr[].throughput * (Rd + SpectralSample(f_spec)) * _to_spec_illum(ctx, ls.Li, path_ptr[].wavelengths) * w
     if inline_shadow:
-        path_ptr[].estimate += contrib
+        path_ptr[].estimate += _clamped(ctx, contrib, Int(path_ptr[].bounce))
     else:
         _shadow_contribute[enqueue_shadow, defer_only](path_ptr, ctx, hit_point, ls.wi, tmax, contrib)
 
@@ -1637,7 +1651,7 @@ def _layered_nee[enqueue_shadow: Bool, defer_only: Bool = False](
         w *= power_heuristic(ls.pdf, layered_pdf(wo_l, wi_l, ior, alpha, True)) / ls.pdf
     var contrib = path_ptr[].throughput * f * _to_spec_illum(ctx, ls.Li, path_ptr[].wavelengths) * w
     if inline_shadow:
-        path_ptr[].estimate += contrib
+        path_ptr[].estimate += _clamped(ctx, contrib, Int(path_ptr[].bounce))
     else:
         _shadow_contribute[enqueue_shadow, defer_only](path_ptr, ctx, hit_point, ls.wi, tmax, contrib)
 
@@ -4226,7 +4240,7 @@ def _mnee_area_light_contribute(
     # the 1-/2-vertex fast path (no Bernoulli-trial estimator there) so
     # this reduces to the original formula unchanged in that case.
     var mnee_wt = _to_spec_diffuse_lit(ctx, alb, al.emission, path_ptr[].wavelengths) * (cos_s_x0 * g * bsdf_product * lobe_w * inv_pdf_area * trials)
-    path_ptr[].estimate += path_ptr[].throughput * mnee_wt
+    path_ptr[].estimate += _clamped(ctx, path_ptr[].throughput * mnee_wt, Int(path_ptr[].bounce))
     return True
 
 # ── ReSTIR SMS (Phase 6's remaining first piece: candidate generation) ──────
@@ -4374,7 +4388,7 @@ def sms_resolve(
                           ign_center, ign_radius, materials=ctx.materials):
         return
     var contrib = _to_spec_diffuse_lit(ctx, alb, res.le, path_ptr[].wavelengths) * (cos_s_x0 * res.state.w)
-    path_ptr[].estimate += path_ptr[].throughput * contrib
+    path_ptr[].estimate += _clamped(ctx, path_ptr[].throughput * contrib, Int(path_ptr[].bounce))
 
 def sms_temporal_step(
     path_ptr: Pointer[PathState, MutUntrackedOrigin], ctx: ShadeContext,
@@ -4530,7 +4544,7 @@ def _nee_area_lights[enqueue_shadow: Bool, mnee: Bool = True, defer_only: Bool =
                     # A clear straight ray means no glass is in the way, so the MNEE probe is only needed when
                     # something blocks it (the probe's segment lies inside the shadow ray's).
                     if not _shadow_blocked(ctx, hit_point, shadow_dir, dist * Float32(0.9999)):
-                        path_ptr[].estimate += path_ptr[].throughput * spec_w
+                        path_ptr[].estimate += _clamped(ctx, path_ptr[].throughput * spec_w, Int(path_ptr[].bounce))
                     else:
                         _ = _mnee_area_light_contribute(
                             path_ptr, ctx, normal, hit_point, alb, shadow_dir, dist,
@@ -5578,7 +5592,7 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
                         if _is_real_ptr(ilight.pixels_ptr):
                             env_rgb_contrib = il_rgb(ilight, py * iw + px) * ilight.scale
                 mis_weight = power_heuristic(pdf_bsdf, pdf_light)
-            path_ptr[].estimate += path_ptr[].throughput * _to_spec_illum(ctx, env_rgb_contrib, path_ptr[].wavelengths) * mis_weight
+            path_ptr[].estimate += _clamped(ctx, path_ptr[].throughput * _to_spec_illum(ctx, env_rgb_contrib, path_ptr[].wavelengths) * mis_weight, Int(path_ptr[].bounce) - 1)
         if path_ptr[].bounce == 0 or path_ptr[].specularBounce == Int8(1):
             path_ptr[].albedo = miss_albedo
         path_ptr[].active = 0
@@ -5599,7 +5613,7 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
         var sph = ctx.lights.spheres[unsafe_offset=sph_idx]
         if sph.isAreaLight == Int8(1):
             if path_ptr[].bounce == 0 or path_ptr[].specularBounce == Int8(1):
-                path_ptr[].estimate += path_ptr[].throughput * _to_spec_illum(ctx, sph.emission, path_ptr[].wavelengths)
+                path_ptr[].estimate += _clamped(ctx, path_ptr[].throughput * _to_spec_illum(ctx, sph.emission, path_ptr[].wavelengths), Int(path_ptr[].bounce) - 1)
             else:
                 # MIS: BSDF pdf vs sphere solid-angle pdf from previous shading point
                 var pdf_bsdf = path_ptr[].lastBsdfPdf
@@ -5616,7 +5630,7 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
                     # whose pdf this must match exactly for MIS to be right.
                     var pdf_light = Float32(1.0) / solid_angle
                     var w = power_heuristic(pdf_bsdf, pdf_light)
-                    path_ptr[].estimate += path_ptr[].throughput * _to_spec_illum(ctx, sph.emission, path_ptr[].wavelengths) * w
+                    path_ptr[].estimate += _clamped(ctx, path_ptr[].throughput * _to_spec_illum(ctx, sph.emission, path_ptr[].wavelengths) * w, Int(path_ptr[].bounce) - 1)
             path_ptr[].active = 0
             return
 
@@ -5693,7 +5707,7 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
             e_front = area_light_hit_cos(inter, ctx.meshes, ctx.instances, edir) > Float32(0.0)
         if path_ptr[].bounce == 0 or path_ptr[].specularBounce == Int8(1):
             if e_front:
-                path_ptr[].estimate += path_ptr[].throughput * _to_spec_illum(ctx, emission, path_ptr[].wavelengths)
+                path_ptr[].estimate += _clamped(ctx, path_ptr[].throughput * _to_spec_illum(ctx, emission, path_ptr[].wavelengths), Int(path_ptr[].bounce) - 1)
         else:
             var pdf_bsdf = path_ptr[].lastBsdfPdf
             if pdf_bsdf > Float32(0.0):
@@ -5726,7 +5740,7 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
                         al_sel_pdf = light_sampler_pdf_at(ls, Int32(al_idx), path_ptr[].last_ns_p)
                     var pdf_light = dist2 * max(al_sel_pdf, Float32(1e-6)) / (cos_l * al.total_area)
                     var w = power_heuristic(pdf_bsdf, pdf_light)
-                    path_ptr[].estimate += path_ptr[].throughput * _to_spec_illum(ctx, emission, path_ptr[].wavelengths) * w
+                    path_ptr[].estimate += _clamped(ctx, path_ptr[].throughput * _to_spec_illum(ctx, emission, path_ptr[].wavelengths) * w, Int(path_ptr[].bounce) - 1)
         path_ptr[].active = 0
         return
 
@@ -5739,7 +5753,7 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
         # count against the NEE strategy now that one exists).
         var emission = mat.emission
         if path_ptr[].bounce == 0 or path_ptr[].specularBounce == Int8(1):
-            path_ptr[].estimate += path_ptr[].throughput * _to_spec_illum(ctx, emission, path_ptr[].wavelengths)
+            path_ptr[].estimate += _clamped(ctx, path_ptr[].throughput * _to_spec_illum(ctx, emission, path_ptr[].wavelengths), Int(path_ptr[].bounce) - 1)
         else:
             var pdf_bsdf = path_ptr[].lastBsdfPdf
             if pdf_bsdf > Float32(0.0):
@@ -5757,12 +5771,12 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
                                 al_sel_pdf = light_sampler_pdf_at(ls, Int32(al_idx), path_ptr[].last_ns_p)
                             var pdf_light = dist2 * max(al_sel_pdf, Float32(1e-6)) / (cos_l * al.total_area)
                             var w = power_heuristic(pdf_bsdf, pdf_light)
-                            path_ptr[].estimate += path_ptr[].throughput * _to_spec_illum(ctx, emission, path_ptr[].wavelengths) * w
+                            path_ptr[].estimate += _clamped(ctx, path_ptr[].throughput * _to_spec_illum(ctx, emission, path_ptr[].wavelengths) * w, Int(path_ptr[].bounce) - 1)
         path_ptr[].active = 0
         return
 
     if mat.emit_tex_idx >= Int32(0) and inter.primId.type == Int8(0):
-        path_ptr[].estimate += path_ptr[].throughput * _to_spec_illum(ctx, _hit_emission[use_gpu](mat, inter, ctx), path_ptr[].wavelengths)
+        path_ptr[].estimate += _clamped(ctx, path_ptr[].throughput * _to_spec_illum(ctx, _hit_emission[use_gpu](mat, inter, ctx), path_ptr[].wavelengths), Int(path_ptr[].bounce) - 1)
 
     # A path that has used its full maxdepth budget dies HERE, at the next
     # real scattering event -- after any emission this segment landed on has
@@ -5858,6 +5872,7 @@ def cpu_shade_context(
     mnee_stats: Pointer[Int32, MutUntrackedOrigin] = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
     bvh4: BVH4 = BVH4.none(),
     filter_glossy: Float32 = Float32(0),
+    clamp: SIMD[DType.float32, 2] = SIMD[DType.float32, 2](0),
 ) -> ShadeContext:
     """The per-render-invariant ShadeContext of the CPU wavefront; build once, set path_idx per path."""
     return ShadeContext(
@@ -5878,7 +5893,7 @@ def cpu_shade_context(
             distant_lights=distantLights, distant_count=distantLightCount,
             point_lights=pointLights, point_count=pointLightCount,
             infinite_lights=infiniteLights, infinite_count=infiniteLightCount,
-            spheres=spheres, sphere_count=sphereCount, light_sampler=light_sampler), filter_glossy=filter_glossy)
+            spheres=spheres, sphere_count=sphereCount, light_sampler=light_sampler), filter_glossy=filter_glossy, clamp=clamp)
 
 
 @always_inline

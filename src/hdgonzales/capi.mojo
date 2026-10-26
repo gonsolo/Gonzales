@@ -202,7 +202,7 @@ def gz_session_set_lens(s: SessionPtr, radius: Float32, focal_distance: Float32)
 
 @export
 def gz_session_set_clamp(s: SessionPtr, clamp: Float32) abi("C"):
-    """A per-sample radiance limit (Cycles' Clamp Indirect, applied to whole samples); 0 is off."""
+    """Cycles' Clamp Indirect: a limit on each indirect light contribution; 0 is off."""
     session_set_clamp(s, clamp)
 
 @export

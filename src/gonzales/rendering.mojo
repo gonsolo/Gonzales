@@ -248,7 +248,7 @@ def render_tile[Osp: Origin[mut=True], Oc2w: Origin[mut=True]](
         gi_pending=gi_pending_buf, gi_io=gi_io,
         nmaps=scene.normalSlopeMaps,
         textures=scene.gpuTextures, n_textures=Int(scene.gpuTextureCount),
-        has_glass=scene.hasGlass != Int32(0), mnee_stats=scene.mneeStats, bvh4=scene.bvh4, filter_glossy=scene.filterGlossy)
+        has_glass=scene.hasGlass != Int32(0), mnee_stats=scene.mneeStats, bvh4=scene.bvh4, filter_glossy=scene.filterGlossy, clamp=scene.clamp)
 
     # Multi-bounce path trace
     for _ in range(maxD):

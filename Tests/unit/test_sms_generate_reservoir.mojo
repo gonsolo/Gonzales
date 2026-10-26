@@ -98,6 +98,7 @@ def _make_ctx(
         0, Pointer[Medium, MutUntrackedOrigin].unsafe_dangling(), Pointer[MediumInterface, MutUntrackedOrigin].unsafe_dangling(),
         Pointer[Grid, MutUntrackedOrigin].unsafe_dangling(), Pointer[NvdbGrid, MutUntrackedOrigin].unsafe_dangling(),
         Float32(0),
+        SIMD[DType.float32, 2](0),
     )
 
 # ── Shared fixture: a flat glass plane at z=1 between hit_point (origin,

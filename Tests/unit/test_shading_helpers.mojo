@@ -112,6 +112,7 @@ def _make_ctx(
         0, Pointer[Medium, MutUntrackedOrigin].unsafe_dangling(), Pointer[MediumInterface, MutUntrackedOrigin].unsafe_dangling(),
         Pointer[Grid, MutUntrackedOrigin].unsafe_dangling(), Pointer[NvdbGrid, MutUntrackedOrigin].unsafe_dangling(),
         Float32(0),
+        SIMD[DType.float32, 2](0),
     )
 
 def _make_path(org: Vec3f, dir: Vec3f) -> PathState:
@@ -326,6 +327,7 @@ def test_build_geom_context_full_sphere_prim_returns_exact_analytic_normal() rai
         0, Pointer[Medium, MutUntrackedOrigin].unsafe_dangling(), Pointer[MediumInterface, MutUntrackedOrigin].unsafe_dangling(),
         Pointer[Grid, MutUntrackedOrigin].unsafe_dangling(), Pointer[NvdbGrid, MutUntrackedOrigin].unsafe_dangling(),
         Float32(0),
+        SIMD[DType.float32, 2](0),
     )
 
     var org = Vec3f(0.0, 0.0, 5.0)

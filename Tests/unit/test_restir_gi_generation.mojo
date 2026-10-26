@@ -98,6 +98,7 @@ def _make_ctx_with_light(
         0, Pointer[Medium, MutUntrackedOrigin].unsafe_dangling(), Pointer[MediumInterface, MutUntrackedOrigin].unsafe_dangling(),
         Pointer[Grid, MutUntrackedOrigin].unsafe_dangling(), Pointer[NvdbGrid, MutUntrackedOrigin].unsafe_dangling(),
         Float32(0),
+        SIMD[DType.float32, 2](0),
     )
 
 # ── Shared fixture: a small light triangle near (0,10,0) facing straight

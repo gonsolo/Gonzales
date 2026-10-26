@@ -3428,10 +3428,11 @@ def session_set_lens(s: SessionPtr, radius: Float32, focal_distance: Float32):
     session_clear(s)
 
 def session_set_clamp(s: SessionPtr, clamp: Float32):
-    """A per-sample limit on radiance, for Cycles' Clamp Indirect (applied to whole samples); 0 is off."""
-    if clamp == s[].psc[unsafe_offset=0].film_max_comp:
+    """Cycles' Clamp Indirect: a limit on each indirect light contribution (shading._clamped); 0 is off."""
+    ref h = s[].renderer.handle[]
+    if clamp == h.clamp[1]:
         return
-    s[].psc[unsafe_offset=0].film_max_comp = clamp
+    h.clamp[1] = clamp
     session_clear(s)
 
 def session_set_adaptive(s: SessionPtr, threshold: Float32, min_samples: Int32):

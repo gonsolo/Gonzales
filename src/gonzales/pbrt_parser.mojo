@@ -4562,6 +4562,7 @@ def mojo_parsed_scene_descriptor(
     sd[unsafe_offset=0].hasGlass        = Int32(1) if any_glass else Int32(0)
     sd[unsafe_offset=0].lens            = ThinLens(psc[unsafe_offset=0].camera_lens_radius, psc[unsafe_offset=0].camera_focal_distance)
     sd[unsafe_offset=0].filterGlossy    = Float32(0)
+    sd[unsafe_offset=0].clamp           = SIMD[DType.float32, 2](0)
     sd[unsafe_offset=0].walkNodesArr    = Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling()
     sd[unsafe_offset=0].walkPrimsArr    = Pointer[Pointer[PrimId, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling()
     sd[unsafe_offset=0].walkBvhOfMesh   = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling()

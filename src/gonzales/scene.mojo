@@ -178,6 +178,7 @@ struct Scene(Movable):
             hasGlass          = Int32(1),
             lens              = ThinLens.pinhole(),
             filterGlossy      = Float32(0),
+            clamp             = SIMD[DType.float32, 2](0),
             curveRoot         = Int32(-1),
             curveBvh          = CurveBvh.none(),
             walkNodesArr      = Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
