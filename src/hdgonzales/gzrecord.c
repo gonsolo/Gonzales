@@ -108,6 +108,7 @@ void gz_session_set_clamp(void *s, float c) { FWD(gz_session_set_clamp); op(GZ_S
 void gz_session_set_bounces(void *s, int d, int g, int t) {
     FWD(gz_session_set_bounces); op(GZ_SESSION_BOUNCES); i32(d); i32(g); i32(t); real(s, d, g, t);
 }
+void gz_session_set_integrator(void *s, int k) { FWD(gz_session_set_integrator); op(GZ_SESSION_INTEGRATOR); i32(k); real(s, k); }
 int gz_session_render(void *s, int n) { FWD(gz_session_render); return real(s, n); }
 int gz_session_resolve(void *s, float *rgb, int denoise) {
     FWD(gz_session_resolve); op(GZ_SESSION_RESOLVE); i32(denoise); fflush(out); return real(s, rgb, denoise);

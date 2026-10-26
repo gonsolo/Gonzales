@@ -23,6 +23,7 @@ class GonzalesRenderEngine(bpy.types.HydraRenderEngine):
         scene = bpy.context.scene
         spp = scene.gonzales_viewport_spp if engine_type == 'VIEWPORT' else scene.gonzales_spp
         result = {'convergedSamplesPerPixel': spp, 'maxDepth': scene.gonzales_max_depth,
+                  'gonzales:integrator': ('PATH', 'BDPT', 'VCM').index(scene.gonzales_integrator),
                   'gonzales:denoise': scene.gonzales_denoise,
                   'gonzales:assetRoot': bpy.path.abspath('//'),
                   'gonzales:sunScale': 4.0,   # Blender's Hydra export divides a sun's strength by 4; Cycles does not
@@ -80,6 +81,7 @@ class GONZALES_RENDER_PT_sampling(bpy.types.Panel):
         layout.use_property_split = True
         layout.use_property_decorate = False
         scene = context.scene
+        layout.prop(scene, "gonzales_integrator")
         col = layout.column(align=True)
         col.prop(scene, "gonzales_viewport_spp", text="Viewport Samples")
         col.prop(scene, "gonzales_spp", text="Render Samples")
@@ -94,6 +96,10 @@ def register():
     bpy.types.Scene.gonzales_viewport_spp = bpy.props.IntProperty(name="Viewport Samples", default=32, min=1)
     bpy.types.Scene.gonzales_max_depth = bpy.props.IntProperty(name="Max Depth", default=12, min=1)
     bpy.types.Scene.gonzales_denoise = bpy.props.BoolProperty(name="Denoise", default=True)
+    bpy.types.Scene.gonzales_integrator = bpy.props.EnumProperty(name="Integrator", default='PATH', items=[
+        ('PATH', "Path Tracing", "Unidirectional path tracing with next-event estimation and MNEE"),
+        ('BDPT', "BDPT", "Bidirectional path tracing: VCM without merging"),
+        ('VCM', "VCM", "Vertex connection and merging: bidirectional with photon merging, for caustics")])
     bpy.utils.register_class(GonzalesRenderEngine)
     bpy.utils.register_class(GONZALES_RENDER_PT_sampling)
 
@@ -105,3 +111,4 @@ def unregister():
     del bpy.types.Scene.gonzales_viewport_spp
     del bpy.types.Scene.gonzales_max_depth
     del bpy.types.Scene.gonzales_denoise
+    del bpy.types.Scene.gonzales_integrator

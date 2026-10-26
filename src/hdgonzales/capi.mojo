@@ -10,7 +10,7 @@ from gonzales.geometry import RGB, _is_real_ptr
 from gonzales.materials import MatKind
 from gonzales.parse_types import SceneParseState, NamedMaterial
 from gonzales.pbrt_parser import ParsedScene_Mojo, finalize_scene, mojo_apply_overrides
-from gonzales.pipeline import (_generate_sobol_matrices, RenderSession, SessionPtr, session_new, session_set_camera, session_set_samples, session_set_lens, session_set_filter_glossy, session_set_adaptive, session_set_clamp, session_set_bounces,
+from gonzales.pipeline import (_generate_sobol_matrices, RenderSession, SessionPtr, session_new, session_set_camera, session_set_samples, session_set_lens, session_set_filter_glossy, session_set_adaptive, session_set_clamp, session_set_bounces, session_set_integrator,
                                session_render, session_resolve, session_free)
 from gonzales.scene_builder import store_mesh
 from gonzales.spectrum import load_spectral_context, spectral_handle, SpectralContext
@@ -211,6 +211,11 @@ def gz_session_set_clamp(s: SessionPtr, clamp: Float32) abi("C"):
 def gz_session_set_bounces(s: SessionPtr, diffuse: Int32, glossy: Int32, transmission: Int32) abi("C"):
     """Cycles' diffuse, glossy and transmission bounce limits, with its Russian roulette."""
     session_set_bounces(s, diffuse, glossy, transmission)
+
+@export
+def gz_session_set_integrator(s: SessionPtr, integrator: Int32) abi("C"):
+    """0 path tracing, 1 BDPT (VCM without merging), 2 VCM."""
+    session_set_integrator(s, integrator)
 
 @export
 def gz_session_set_adaptive(s: SessionPtr, threshold: Float32, min_samples: Int32) abi("C"):
