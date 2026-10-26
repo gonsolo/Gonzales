@@ -38,7 +38,7 @@ def _material(type: Int8, albedo: RGB, emission: RGB, rough: Float32) -> Materia
     return Material(type, Int8(0), Int8(0), Int8(0), albedo, emission,
         Int32(-1), rough, rough, Int32(-1), Int32(-1), Float32(1.0), Int32(-1), Int32(-1),
         RGB(Float32(0.0)), RGB(Float32(0.0)), Float32(1.0), Float32(1.0), Int32(-1),
-        RGB(Float32(1.0)), RGB(Float32(0.0)), RGB(Float32(1.0)))
+        RGB(Float32(1.0)), RGB(Float32(0.0)), RGB(Float32(1.0)), Int32(-1))
 
 
 def _tables() -> LobeTables:

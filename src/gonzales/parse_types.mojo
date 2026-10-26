@@ -85,6 +85,7 @@ struct NamedMaterial(Copyable, ImplicitlyCopyable, Movable):
     var sss_g:          Float32   # its anisotropy
     var sss_van_de_hulst: Int32   # 1: Cycles' newer albedo mapping (van de Hulst), 0: its Legacy fit
     var principled:     Bool      # coateddiffuse as Cycles' Principled layering, not pbrt's layered coat
+    var emit_tex_idx:   Int32     # Material.emit_tex_idx
     var tex_bias:       RGB
     # UV scale applied to an imagemap `tex_idx` texture's mesh UVs at parse
     # time (Mitsuba's `<transform name="to_uv"><scale .../></transform>`,
@@ -136,6 +137,7 @@ struct NamedMaterial(Copyable, ImplicitlyCopyable, Movable):
         self.dt_tex_lobes   = Int8(0)
         self.normal_tex_idx = Int32(-1)
         self.rough_tex_idx  = Int32(-1)
+        self.emit_tex_idx   = Int32(-1)
         self.bump_tex_idx   = Int32(-1)
         self.bump_scale     = Float32(1)
         self.tex_scale      = RGB(Float32(1))

@@ -56,6 +56,7 @@ def test_emissive_curve_hit_adds_emission_and_retires_path() raises:
         RGB(Float32(0.0)), RGB(Float32(0.0)), Float32(1.0), Float32(1.0), Int32(-1),
         RGB(Float32(1.0)), RGB(Float32(0.0)),
         RGB(Float32(1.0)),   # sss_mean_refl (inert)
+        Int32(-1),           # emit_tex_idx
     )
 
     var ray = Ray(Point3f(0.2, 0.2, -5.0), Vec3f(0.0, 0.0, 1.0))
@@ -108,6 +109,7 @@ def test_nonemissive_curve_hit_does_not_self_terminate_via_the_arealight_path() 
         RGB(Float32(0.0)), RGB(Float32(0.0)), Float32(1.0), Float32(1.0), Int32(-1),
         RGB(Float32(1.0)), RGB(Float32(0.0)),
         RGB(Float32(1.0)),   # sss_mean_refl (inert)
+        Int32(-1),           # emit_tex_idx
     )
     assert_true(materials[unsafe_offset=0].type != MatKind.area_light)
 
@@ -147,6 +149,7 @@ def test_emissive_curve_bounce_hit_mis_weights_against_its_own_light_pdf() raise
         RGB(Float32(0.0)), RGB(Float32(0.0)), Float32(1.0), Float32(1.0), Int32(-1),
         RGB(Float32(1.0)), RGB(Float32(0.0)),
         RGB(Float32(1.0)),   # sss_mean_refl (inert)
+        Int32(-1),           # emit_tex_idx
     )
 
     var total_area = curve_light_tube_area(curve)

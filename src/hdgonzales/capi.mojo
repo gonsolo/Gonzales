@@ -288,6 +288,12 @@ def gz_scene_set_subsurface(s: ScenePtr, material: Int32, weight: Float32, radiu
     nm.sss_van_de_hulst = van_de_hulst
 
 @export
+def gz_scene_set_emission(s: ScenePtr, material: Int32, texture: Pointer[UInt8, MutUntrackedOrigin]) abi("C"):
+    """Gives a material emitted radiance from an image of linear RGB (Blender's Principled emission colour times strength)."""
+    ref nm = s[unsafe_offset=0].named_materials[Int(material)]
+    nm.emit_tex_idx = _register_texture(s, nm.name + "_emission", texture)
+
+@export
 def gz_scene_add_dielectric(s: ScenePtr, ior: Float32, alpha: Float32) abi("C") -> Int32:
     """Glass with GGX roughness `alpha` (0 is smooth)."""
     var nm = NamedMaterial(String("m") + String(len(s[unsafe_offset=0].named_materials)))

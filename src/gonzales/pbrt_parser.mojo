@@ -2503,6 +2503,8 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
     psc[unsafe_offset=0].measured_brdfs = measured_brdfs_buf
 
     var mats = unsafe_alloc[Material](max(n_mats, 1))
+    for i in range(max(n_mats, 1)):
+        mats[unsafe_offset=i].emit_tex_idx = Int32(-1)       # unsafe_alloc does not zero; only regular materials emit
     for i in range(n_regular):
         var nm3 = s[unsafe_offset=0].named_materials[i]
         var material_kind = nm3.kind
@@ -2519,6 +2521,7 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
         mats[unsafe_offset=i].sss_mean_refl = nm3.sss_mean_refl
         mats[unsafe_offset=i].tex_bias = nm3.tex_bias
         mats[unsafe_offset=i].rough_tex_idx = nm3.rough_tex_idx
+        mats[unsafe_offset=i].emit_tex_idx = nm3.emit_tex_idx
         mats[unsafe_offset=i].medium_interface_idx = Int32(-1)
         # `mats` comes from unsafe_alloc, which does NOT zero. Every other
         # field is assigned below, but sss_boundary was only ever written on

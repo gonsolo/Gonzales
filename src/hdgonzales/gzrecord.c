@@ -87,6 +87,9 @@ void gz_scene_set_subsurface(void *s, int material, float weight, float rr, floa
     FWD(gz_scene_set_subsurface); op(GZ_SET_SUBSURFACE); i32(material); f32(weight); f32(rr); f32(rg); f32(rb); f32(aniso); i32(vdh);
     real(s, material, weight, rr, rg, rb, aniso, vdh);
 }
+void gz_scene_set_emission(void *s, int material, const char *texture) {
+    FWD(gz_scene_set_emission); op(GZ_SET_EMISSION); i32(material); str(texture); real(s, material, texture);
+}
 void gz_scene_set_camera(void *s, const float *w2c, float fov, int w, int h) {
     FWD(gz_scene_set_camera); op(GZ_SET_CAMERA); arr(w2c, 64); f32(fov); i32(w); i32(h); real(s, w2c, fov, w, h);
 }

@@ -124,6 +124,8 @@ struct Material(TrivialRegisterPassable):
     # reflectance texture graph, so dividing that lookup by this mean gives
     # the per-point correction. RGB(1) (i.e. inert) for every other material.
     var sss_mean_refl: RGB
+    # -1, or a texture of emitted radiance (Blender's Principled emission), added on every hit; not a light to sample.
+    var emit_tex_idx: Int32
 
 # ── Measured (tabulated) BRDF ────────────────────────────────────────────────
 # One instance per distinct ".bsdf" tensor file (deduped by path — a scene may

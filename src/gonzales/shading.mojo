@@ -1006,6 +1006,20 @@ def _to_spec_weight(ctx: ShadeContext, c: RGB, wl: SampledWavelengths) -> Spectr
         ctx.spectral.d65, c.r, c.g, c.b, wl)
 
 @always_inline
+@always_inline
+def _hit_emission[use_gpu: Bool](mat: Material, inter: Intersection, ctx: ShadeContext) -> RGB:
+    """A material's emitted radiance (Material.emit_tex_idx) at a mesh hit; no light samples it, so it counts in full."""
+    var (mesh, v0, v1, v2, ok) = _get_tri_verts(inter, ctx.meshes)
+    if not ok or not mesh_has_uvs(mesh):
+        return RGB(Float32(0.0))
+    var w0 = Float32(1.0) - inter.u - inter.v
+    var su = w0 * mesh_uv(mesh, v0)[0] + inter.u * mesh_uv(mesh, v1)[0] + inter.v * mesh_uv(mesh, v2)[0]
+    var sv = w0 * mesh_uv(mesh, v0)[1] + inter.u * mesh_uv(mesh, v1)[1] + inter.v * mesh_uv(mesh, v2)[1]
+    var found = False
+    return sample_texture[use_gpu](Int(mat.emit_tex_idx), su, sv, True, Float32(0.0), ctx.tex_filenames, ctx.textures,
+                                   ctx.n_textures, found)
+
+
 def _to_spec_illum(ctx: ShadeContext, c: RGB, wl: SampledWavelengths) -> SpectralSample:
     """RGB EMISSION -> spectral, at the light boundary. Uses the ILLUMINANT
     upsampling (unbounded, energy-normalised for light spectra), which is a
@@ -5746,6 +5760,9 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
                             path_ptr[].estimate += path_ptr[].throughput * _to_spec_illum(ctx, emission, path_ptr[].wavelengths) * w
         path_ptr[].active = 0
         return
+
+    if mat.emit_tex_idx >= Int32(0) and inter.primId.type == Int8(0):
+        path_ptr[].estimate += path_ptr[].throughput * _to_spec_illum(ctx, _hit_emission[use_gpu](mat, inter, ctx), path_ptr[].wavelengths)
 
     # A path that has used its full maxdepth budget dies HERE, at the next
     # real scattering event -- after any emission this segment landed on has

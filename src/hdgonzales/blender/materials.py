@@ -3,9 +3,10 @@
 #   <M> hair sr sg sb beta_m beta_n ior alpha                          hair with one colour
 #   <M> hairlut path n_intercept n_random res beta_m beta_n ior alpha  hair colour per (u, v, intercept, random)
 #   <M> glass ior alpha
-#   <M> principled alpha ior metallic path [w r g b aniso vdh] [nonormal]   a Principled BSDF; path: baked base colour
-#                     or -; then its subsurface weight, mean free path, anisotropy and 1 for Cycles' van de Hulst albedo;
-#                     then "nonormal" when its normal is a Bump node, whose height image Hydra passes on as a normal map
+#   <M> principled alpha ior metallic path [w r g b aniso vdh] [emission path] [nonormal]   a Principled BSDF; path: baked
+#                     base colour or -; then its subsurface weight, mean free path, anisotropy and 1 for Cycles' van de Hulst
+#                     albedo; then its emitted radiance (colour times strength), baked; then "nonormal" when its
+#                     normal is a Bump node, whose height image Hydra passes on as a normal map
 #   <M> diffuse r g b path                                       a Diffuse BSDF, whose colour Hydra does not export
 # Node graphs are evaluated with numpy over many samples at once. Without UVs, images give their mean.
 import hashlib
@@ -341,6 +342,26 @@ def _bake_base_colour(material, socket):
     return path
 
 
+def _bake_emission(material, node):
+    """A Principled BSDF's emission colour times strength, baked per texel (one texel when constant); None if dark."""
+    colour, strength = _socket(node, 'Emission Color'), _socket(node, 'Emission Strength')
+    if colour is None or strength is None or not (strength.is_linked or _scalar(strength) > 0):
+        return None
+    path = os.path.join(tempfile.gettempdir(), f"gonzales_emission_{_signature(material)}.pfm")
+    if not os.path.exists(path):
+        r = 1
+        if _depends(colour, 'uv') or _depends(strength, 'uv'):
+            sizes = [max(n.image.size) for n in material.node_tree.nodes if n.bl_idname == 'ShaderNodeTexImage' and n.image]
+            r = min(max(sizes or [256]), BAKE_MAX)
+        u, v = np.meshgrid((np.arange(r) + 0.5) / r, (np.arange(r) + 0.5) / r)
+        ctx = Context(r * r, np.stack([u.ravel(), v.ravel()], axis=1).astype(np.float32))
+        c = _rgb(value(colour, ctx), ctx.n) * _float(value(strength, ctx), ctx.n)[:, None]
+        if c.max() <= 0:
+            return None
+        _write_pfm(path, np.clip(c, 0, None).reshape(r, r, 3))
+    return path
+
+
 def _surface(material):
     out = next((n for n in material.node_tree.nodes
                 if n.bl_idname == 'ShaderNodeOutputMaterial' and n.is_active_output), None)
@@ -387,6 +408,9 @@ def _line(material):
                 radius = radius * (0.25 / math.pi)   # Cycles' bssrdf_setup_radius
             vdh = 0 if legacy and aniso >= 0 else 1
             line += f" {weight:.6g} {radius[0]:.6g} {radius[1]:.6g} {radius[2]:.6g} {aniso:.6g} {vdh}"
+        emission = _bake_emission(material, node)
+        if emission:
+            line += f" emission {emission}"
         normal = _socket(node, 'Normal')
         if normal is not None and normal.is_linked and normal.links[0].from_node.bl_idname == 'ShaderNodeBump':
             line += " nonormal"

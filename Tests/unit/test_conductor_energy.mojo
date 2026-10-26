@@ -69,7 +69,7 @@ def _white_material(alpha: Float32) -> Material:
         RGB(Float32(0.0)), Int32(-1), alpha, alpha, Int32(-1), Int32(-1),
         Float32(1.0), Int32(-1), Int32(-1), RGB(Float32(0.0)), RGB(Float32(0.0)),
         Float32(1.0), Float32(1.0), Int32(-1), RGB(Float32(1.0)),
-        RGB(Float32(0.0)), RGB(Float32(1.0)))
+        RGB(Float32(0.0)), RGB(Float32(1.0)), Int32(-1))
 
 
 def _wo_at(mu: Float32) -> Vec3f:

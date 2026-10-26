@@ -150,6 +150,7 @@ struct Override {
     int sssVanDeHulst = 0;
     GfVec3f sssRadius{1.0f};
     std::string path;          // hairlut: colour tables; basecolor: the baked texture
+    std::string emission;      // principled: the baked emitted radiance, or empty
     bool noNormal = false;     // principled: Hydra's normal map is a bump height image, not a normal map
     int intercepts = 0, randoms = 0, res = 0;
 };
@@ -181,10 +182,10 @@ std::map<std::string, Override> _ParseOverrides(std::string const &text) {
         else if (kind == "principled" && (in >> o.alpha >> o.ior >> o.metallic >> o.path)) {
             if (o.path == "-")
                 o.path.clear();
-            // Then optionally the subsurface fields, then optionally "nonormal".
+            // Then optionally the subsurface fields, then optionally "emission <path>" and "nonormal".
             std::vector<std::string> rest{std::istream_iterator<std::string>(in), std::istream_iterator<std::string>()};
             size_t k = 0;
-            if (rest.size() >= 6 && rest[0] != "nonormal") {
+            if (rest.size() >= 6 && rest[0] != "emission" && rest[0] != "nonormal") {
                 o.sssWeight = std::stof(rest[0]);
                 o.sssRadius = GfVec3f(std::stof(rest[1]), std::stof(rest[2]), std::stof(rest[3]));
                 o.sssAniso = std::stof(rest[4]);
@@ -192,7 +193,9 @@ std::map<std::string, Override> _ParseOverrides(std::string const &text) {
                 k = 6;
             }
             for (; k < rest.size(); ++k)
-                if (rest[k] == "nonormal")
+                if (rest[k] == "emission" && k + 1 < rest.size())
+                    o.emission = rest[++k];
+                else if (rest[k] == "nonormal")
                     o.noNormal = true;
             result[name] = o;
         }
@@ -860,6 +863,8 @@ void *_BuildScene(Scene &synced, int *version) {
             if (pr->sssWeight > 0)
                 gz_scene_set_subsurface(scene, materials[id], pr->sssWeight, pr->sssRadius[0], pr->sssRadius[1],
                                         pr->sssRadius[2], pr->sssAniso, pr->sssVanDeHulst);
+            if (!pr->emission.empty())
+                gz_scene_set_emission(scene, materials[id], pr->emission.c_str());
         }
         else
             materials[id] = gz_scene_add_diffuse(scene, mat.diffuse[0], mat.diffuse[1], mat.diffuse[2],

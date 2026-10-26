@@ -57,6 +57,7 @@ int main(int argc, char **argv) {
             gz_scene_add_curves(scene, p, x, n, m, idx); free(p); free(x); free(idx); break;
         case GZ_SET_SUBSURFACE: m = i32(); a = f32(); b = f32(); c = f32(); d = f32(); e = f32(); n = i32();
             gz_scene_set_subsurface(scene, m, a, b, c, d, e, n); break;
+        case GZ_SET_EMISSION: { m = i32(); char *t = arr(); gz_scene_set_emission(scene, m, t); free(t); } break;
         case GZ_SET_CAMERA: x = arr(); a = f32(); nv = i32(); nt = i32(); gz_scene_set_camera(scene, x, a, nv, nt); free(x); break;
         case GZ_SET_LENS: a = f32(); b = f32(); gz_scene_set_lens(scene, a, b); break;
         case GZ_SESSION_NEW: spp = i32(); depth = i32(); break;
