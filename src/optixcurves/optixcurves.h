@@ -10,8 +10,8 @@ extern "C" {
 #endif
 
 void *oxc_create(void);       // on the current CUDA context; null without OptiX
-// n segments: verts 6 floats (both ends), radii 2 floats; refs 3 ints (curve, PrimId.id2, material) and curves (the
-// Curve array) stay the caller's and must outlive the handle. verts and radii may be freed after the call.
+// n segments: verts 6 floats (both ends), radii 2 floats; refs 3 ints (curve, PrimId.id2, material), or 0 when segment
+// k is curve k's one piece in its own material, and curves (the Curve array) stay the caller's and must outlive the handle. verts and radii may be freed after the call.
 int oxc_build(void *h, uint64_t verts, uint64_t radii, uint32_t n, uint64_t refs, uint64_t curves, void *stream);
 // Closest: every ray of rays/results (the RT-core layouts) not decided elsewhere gets its curve hit in front of the
 // triangle hit written into results.

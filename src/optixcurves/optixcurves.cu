@@ -32,11 +32,17 @@ static __device__ float3 perp_axis(float3 t) {   // curves._curve_perp_axis
     return l > 1e-12f ? v * (1 / l) : make_float3(1, 0, 0);
 }
 
+// The curve, PrimId.id2 and material of segment k: from refs, or without them segment k is curve k's only piece.
+static __device__ int3 seg_ref(unsigned int k) {
+    if (params.refs) return make_int3(params.refs[3 * k], params.refs[3 * k + 1], params.refs[3 * k + 2]);
+    return make_int3(int(k), 1, ((const Curve *)params.curves)[k].material);
+}
+
 // (h, v) of a hit at distance t on segment k, as curves.intersect_curve computes them.
 static __device__ float2 hit_hv(unsigned int k, float3 o, float3 d, float t) {
-    const int *r = params.refs + 3 * k;
-    const Curve &c = ((const Curve *)params.curves)[r[0]];
-    int piece = r[1] / 8;
+    int3 r = seg_ref(k);
+    const Curve &c = ((const Curve *)params.curves)[r.x];
+    int piece = r.y / 8;
     float n = float(c.n_pieces), t0 = piece / n, t1 = (piece + 1) / n;
     float3 q0 = bspline(c, t0), q1 = bspline(c, t1);
     float rad = (c.width0 + (c.width1 - c.width0) * (t0 + t1) * 0.5f) * 0.5f;
@@ -67,14 +73,14 @@ extern "C" __global__ void __raygen__closest() {
     if (k == 0xffffffffu) return;
     float t = __uint_as_float(tb);
     float2 hv = hit_hv(k, o, d, t);
-    const int *r = params.refs + 3 * k;
+    int3 r = seg_ref(k);
     res[0] = __float_as_uint(t);
     res[1] = __float_as_uint(hv.x);
     res[2] = __float_as_uint(hv.y);
     res[3] = 0xffffffffu;                                       // instance -1
-    res[4] = r[0];
-    res[5] = r[1];
-    res[7] = r[2];
+    res[4] = r.x;
+    res[5] = r.y;
+    res[7] = r.z;
     res[6] = 2;
 }
 
