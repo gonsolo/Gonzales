@@ -15,7 +15,7 @@ from .lights import AreaLight, DistantLight, PointLight, InfiniteLight, LightSam
 from .portal_light import portal_frame, portal_ray_crosses
 from .media import Medium, MediumInterface, Grid, NvdbGrid
 from .shadow_media import shadow_transmittance
-from .curves import Curve, CURVE_N_PIECES, curve_piece_endpoints, _curve_perp_axis, curve_hit_normal
+from .curves import Curve, curve_at, CURVE_N_PIECES, curve_piece_endpoints, _curve_perp_axis, curve_hit_normal
 from .layered import layered_f, layered_sample, layered_pdf, diel_f, diel_pdf, diel_sample
 from .bxdf import CoatWalk, coat_walk_begin, coat_walk_enter, coat_walk_at_base, coat_walk_scatter, COAT_WALKING, COAT_REFLECT, COAT_EXIT, COAT_ABSORB, BxDFSample, GeomContext, SobolSamples8, BxDFFlags, bxdf_is_delta, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_sample_dielectric, bxdf_sample_thin_dielectric, bxdf_eval_diffuse, bxdf_pdf_diffuse, bxdf_sample_diffuse, bxdf_sample_diffuse_transmit, ggx_D, ggx_G1, ggx_G2, ggx_vndf_pdf, bxdf_eval_conductor_ggx, ggx_albedo, bxdf_pdf_conductor_ggx, _nee_weight_simple, _nee_weight_hair, _nee_weight_simple_spectral, _nee_weight_coated_coat_lobe, _nee_weight_coated_diffuse_base, LobeTables
 from .measured_bxdf_eval import bxdf_eval_measured, bxdf_sample_measured, bxdf_pdf_measured, _nee_weight_measured
@@ -301,7 +301,7 @@ def curve_light_hit(
         if cand.kind == Int8(1) and Int(cand.meshIdx) == curve_idx:
             al_idx = li
             break
-    var curve = curves[unsafe_offset=curve_idx]
+    var curve = curve_at(curves, curve_idx)
     var h = max(Float32(-0.99), min(Float32(0.99), inter.u))
     var piece = min(Int(curve.n_pieces) - 1, max(0, Int(inter.v * Float32(curve.n_pieces))))
     var (q0, q1, _, _) = curve_piece_endpoints(curve, piece)
@@ -875,7 +875,7 @@ def _hit_curve(inter: Intersection, curves: Pointer[Curve, MutUntrackedOrigin],
     """The curve a hit is on, in world space. A curve of an object template is stored in the template's
     space; its control points go through the hit instance's transform (a cubic's control points transform
     like the curve) and its widths through that transform's mean scale."""
-    var curve = curves[unsafe_offset=Int(inter.primId.id1)]
+    var curve = curve_at(curves, Int(inter.primId.id1))
     if inter.primId.instanceIdx >= Int32(0) and _is_real_ptr(instances):
         var o2w = instances[unsafe_offset=Int(inter.primId.instanceIdx)].obj_to_world()
         var m = Mat4(o2w)
@@ -3467,7 +3467,7 @@ def _sample_light_point_and_normal(
     of (u1, u2) — mirrors the pre-existing mesh-light behaviour of picking
     a uniform random triangle rather than area-weighting by triangle."""
     if al.kind == Int8(1):
-        var curve = ctx.curves[unsafe_offset=Int(al.meshIdx)]
+        var curve = curve_at(ctx.curves, Int(al.meshIdx))
         var piece = Int(pcg.next_uint() % UInt32(max(Int(curve.n_pieces), 1)))
         var (q0, q1, r0, r1) = curve_piece_endpoints(curve, piece)
         var axis = q1 - q0

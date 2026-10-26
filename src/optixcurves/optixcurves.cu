@@ -13,6 +13,17 @@ struct Curve {          // curves.mojo
     int material, n_pieces, flat;
 };
 
+struct CurveSeg {       // curves.mojo: a one-piece curve as its piece; params.curves has bit 0 set for these
+    float p0[3], p1[3];
+    float width0, width1;
+    int material, flat;
+};
+
+static __device__ const CurveSeg *segs() {
+    unsigned long long a = (unsigned long long)params.curves;
+    return a & 1 ? (const CurveSeg *)(a - 1) : nullptr;
+}
+
 static __device__ float3 f3(const float *p) { return make_float3(p[0], p[1], p[2]); }
 static __device__ float3 operator+(float3 a, float3 b) { return make_float3(a.x + b.x, a.y + b.y, a.z + b.z); }
 static __device__ float3 operator-(float3 a, float3 b) { return make_float3(a.x - b.x, a.y - b.y, a.z - b.z); }
@@ -35,17 +46,26 @@ static __device__ float3 perp_axis(float3 t) {   // curves._curve_perp_axis
 // The curve, PrimId.id2 and material of segment k: from refs, or without them segment k is curve k's only piece.
 static __device__ int3 seg_ref(unsigned int k) {
     if (params.refs) return make_int3(params.refs[3 * k], params.refs[3 * k + 1], params.refs[3 * k + 2]);
-    return make_int3(int(k), 1, ((const Curve *)params.curves)[k].material);
+    const CurveSeg *sg = segs();
+    return make_int3(int(k), 1, sg ? sg[k].material : ((const Curve *)params.curves)[k].material);
 }
 
 // (h, v) of a hit at distance t on segment k, as curves.intersect_curve computes them.
 static __device__ float2 hit_hv(unsigned int k, float3 o, float3 d, float t) {
     int3 r = seg_ref(k);
-    const Curve &c = ((const Curve *)params.curves)[r.x];
     int piece = r.y / 8;
-    float n = float(c.n_pieces), t0 = piece / n, t1 = (piece + 1) / n;
-    float3 q0 = bspline(c, t0), q1 = bspline(c, t1);
-    float rad = (c.width0 + (c.width1 - c.width0) * (t0 + t1) * 0.5f) * 0.5f;
+    float n = 1, rad;
+    float3 q0, q1;
+    if (const CurveSeg *sg = segs()) {
+        q0 = f3(sg[r.x].p0); q1 = f3(sg[r.x].p1);
+        rad = (sg[r.x].width0 + sg[r.x].width1) * 0.25f;
+    } else {
+        const Curve &c = ((const Curve *)params.curves)[r.x];
+        n = float(c.n_pieces);
+        float t0 = piece / n, t1 = (piece + 1) / n;
+        q0 = bspline(c, t0); q1 = bspline(c, t1);
+        rad = (c.width0 + (c.width1 - c.width0) * (t0 + t1) * 0.5f) * 0.5f;
+    }
     float3 axis = q1 - q0;
     float len = sqrtf(dot(axis, axis));
     float3 ad = axis * (1 / len);

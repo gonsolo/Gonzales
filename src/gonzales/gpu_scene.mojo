@@ -1,9 +1,10 @@
 from max.gpu import MAX_THREADS_PER_BLOCK_METADATA
 from std.utils import StaticTuple
 from .bvh import BVH2Node, BVH4, SceneView, build_bvh2
-from .curves import CURVE_DEFER_K, Curve, CurveBvh
+from max.algorithm import parallelize
+from .curves import CURVE_DEFER_K, Curve, CurveBvh, CurveSeg, curve_piece_endpoints
 from .curve_bvh import CurveBvhDev
-from .geometry import _is_real_ptr
+from .geometry import Point3f, _is_real_ptr
 from .guide import GuideGrid, null_guide
 from .lights import AreaLight, DistantLight, InfiniteLight, PointLight, LightSampler, LIGHT_BOUNDS_STRIDE, env_build_cdf, env_downsample
 from .materials import MatKind, Material, MeasuredBRDF, is_specular_glass
@@ -558,8 +559,9 @@ struct LightBuffers(Movable):
 
 @fieldwise_init
 struct CurveBuffers(Movable):
-    var curves_buf: DeviceBuffer[DType.uint8]    # n_curves × sizeof(Curve)
+    var curves_buf: DeviceBuffer[DType.uint8]    # n_curves Curves, or CurveSegs when every curve is one piece
     var n_curves: Int
+    var segs: Bool
     # Curve-divergence-mitigation scratch (see traverse_bvh2_core_defer_curves).
     # Only meaningfully sized when n_curves > 0; otherwise 1-byte dummies.
     var cand_prim_buf: DeviceBuffer[DType.uint8]      # n_pixels×WAVEFRONT_BATCH×CURVE_DEFER_K × Int32
@@ -578,7 +580,9 @@ struct CurveBuffers(Movable):
 
     @always_inline
     def curves_ptr(mut self) -> Pointer[Curve, MutUntrackedOrigin]:
-        return typed_ptr[Curve](self.curves_buf)
+        """The device curves, as curves.curve_at reads them (CurveSegs: bit 0 set)."""
+        var p = typed_ptr[Curve](self.curves_buf)
+        return Pointer[Curve, MutUntrackedOrigin](unsafe_from_address=Int(p) + 1) if self.segs else p
 
     @always_inline
     def cand_prim_ptr(mut self) -> Pointer[Int32, MutUntrackedOrigin]:
@@ -602,9 +606,31 @@ struct CurveBuffers(Movable):
 
     @staticmethod
     def upload(ctx: DeviceContext, ref s: ParsedScene_Mojo, n_pix: Int) raises -> Self:
-        # Upload curves (native hair/fur primitives — control points only, no tessellation)
-        var curve_buf = _gpu_upload_array[Curve](ctx, s.curves, Int(s.curve_count))
-        var c = Self(curves_buf=curve_buf^, n_curves=Int(s.curve_count), cand_prim_buf=_gpu_placeholder(ctx),
+        # Upload curves (native hair/fur primitives — control points only, no tessellation). One-piece curves, as
+        # Blender's hair, go up as their pieces (CurveSeg, 40 bytes instead of 68).
+        var n = Int(s.curve_count)
+        var one_piece = n > 0
+        for i in range(n):
+            if s.curves[unsafe_offset=i].n_pieces != Int32(1):
+                one_piece = False
+                break
+        var curve_buf: DeviceBuffer[DType.uint8]
+        if one_piece:
+            var segs = unsafe_alloc[CurveSeg](n)
+            var src = s.curves
+            def seg_chunk(k: Int) {imm}:
+                for i in range(k * 65536, min(k * 65536 + 65536, n)):
+                    var c = src[unsafe_offset=i]
+                    var e = curve_piece_endpoints(c, 0)
+                    segs[unsafe_offset=i] = CurveSeg(Point3f(e[0][0], e[0][1], e[0][2]), Point3f(e[1][0], e[1][1], e[1][2]),
+                                                     c.width0, c.width1, c.materialIndex, c.flat)
+            parallelize(seg_chunk, (n + 65535) // 65536)
+            curve_buf = _gpu_upload_array[CurveSeg](ctx, segs, n)
+            ctx.synchronize()
+            segs.unsafe_free()
+        else:
+            curve_buf = _gpu_upload_array[Curve](ctx, s.curves, n)
+        var c = Self(curves_buf=curve_buf^, n_curves=n, segs=one_piece, cand_prim_buf=_gpu_placeholder(ctx),
                      cand_count_buf=_gpu_placeholder(ctx), cand_offset_buf=_gpu_placeholder(ctx),
                      compact_path_buf=_gpu_placeholder(ctx), compact_counter_buf=ctx.enqueue_create_buffer[DType.uint8](4))
         c.alloc_paths(ctx, n_pix * WAVEFRONT_BATCH)

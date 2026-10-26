@@ -59,6 +59,30 @@ struct CurveBvh(TrivialRegisterPassable):
                     Pointer[UInt32, MutUntrackedOrigin].unsafe_dangling(), Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(), Int32(0),
                     SIMD[DType.float32, 8](1))
 
+# A one-piece curve kept as its piece: both ends, widths, material and flat flag, 40 bytes instead of 68. A device
+# curve array of these is passed as a Pointer[Curve] with bit 0 set; curve_at reads either kind.
+@fieldwise_init
+struct CurveSeg(TrivialRegisterPassable):
+    var p0: Point3f
+    var p1: Point3f
+    var width0: Float32
+    var width1: Float32
+    var materialIndex: Int32
+    var flat: Int32
+
+
+@always_inline
+def curve_at(curves: Pointer[Curve, MutUntrackedOrigin], i: Int) -> Curve:
+    """Curve i of an array of Curves, or of CurveSegs (bit 0 of the address set): a segment comes back as the uniform
+    B-spline whose one piece it is (control points 2 p0 - p1, p0, p1, 2 p1 - p0)."""
+    if Int(curves) & 1 == 0:
+        return curves[unsafe_offset=i]
+    var s = Pointer[CurveSeg, MutUntrackedOrigin](unsafe_from_address=Int(curves) - 1)[unsafe_offset=i]
+    var a = s.p0; var b = s.p1
+    return Curve(Point3f(2 * a.x - b.x, 2 * a.y - b.y, 2 * a.z - b.z), a, b, Point3f(2 * b.x - a.x, 2 * b.y - a.y, 2 * b.z - a.z),
+                 s.width0, s.width1, s.materialIndex, Int32(1), s.flat)
+
+
 comptime CURVE_N_PIECES: Int = 7   # max locally-linear pieces per segment (8 samples)
 
 # Divergence experiment (traverse_paths_gpu): max curve-leaf candidates recorded

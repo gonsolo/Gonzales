@@ -20,7 +20,7 @@ from .primitives import Ray, Intersection, PrimId, TriangleMesh, Sphere, Instanc
 from .primitives import mesh_pos
 from .media import Medium, MediumInterface, Grid, NvdbGrid, FreeFlight, sample_homogeneous_free_flight, sample_free_flight, medium_is_heterogeneous, medium_sigma_t_spectral, medium_grid_for, medium_nvdb_for, grid_sample_density, nvdb_sample_density, SSS_WALK_ROUNDS, medium_transmittance_ratio_spectral, spectral_free_flight_weight
 from .lights import area_light_pick_triangle, AreaLight, DistantLight, InfiniteLight, PointLight
-from .curves import Curve, curve_piece_endpoints, _curve_perp_axis
+from .curves import Curve, curve_at, curve_piece_endpoints, _curve_perp_axis
 from .bssrdf import dipole_rd, dipole_max_radius
 from .bvh import traverse_dispatch, any_hit_dispatch
 from .bvh import (
@@ -625,7 +625,7 @@ def sample_area_light_point(
     the light itself -- VCM's power-proportional pick, whose densities
     assume the light it picked is the light that emits."""
     if al.kind == Int8(1):
-        var curve = curves[unsafe_offset=Int(al.meshIdx)]
+        var curve = curve_at(curves, Int(al.meshIdx))
         var piece = Int(pcg.next_uint() % UInt32(max(Int(curve.n_pieces), 1)))
         var (q0, q1, r0, r1) = curve_piece_endpoints(curve, piece)
         var axis = q1 - q0

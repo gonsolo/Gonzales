@@ -6,7 +6,7 @@ from .gpu_tuning import MINCTA_TRAVERSE
 from std.sys import get_defined_int
 from .bvh import _node_box_hit, _node_hi, _node_lo, _node_oc, _bvh_has_nodes, _shadow_is_null_material, _traverse_instances, BVH2Node, any_hit_bvh2_core, ray_sphere_hit, test_spheres, traverse_bvh2_core, traverse_bvh2_core_defer_curves, SceneView
 from .curve_bvh import curve_bvh_occluded, curve_bvh_closest, curve_bvh_prim
-from .curves import CURVE_DEFER_K, Curve, _curve_perp_axis, curve_piece_endpoints, intersect_curve, curve_hit_normal
+from .curves import CURVE_DEFER_K, Curve, curve_at, _curve_perp_axis, curve_piece_endpoints, intersect_curve, curve_hit_normal
 from .geometry import INV_FOUR_PI, Point3f, RGB, Vec3f, _is_real_ptr, cross, dot, store_vec3, vec3f
 from .materials import Material
 from .primitives import Instance, Intersection, PrimId, Ray, Sphere, TriangleMesh, alpha_killed, intersect_triangle, sphere_outward_normal, mesh_vi
@@ -1424,7 +1424,7 @@ def any_hit_bvh2_gpu[curves_on: Bool, inst_on: Bool, alpha_on: Bool](
                 elif curves_on and prim.type == 5:
                     if _shadow_is_null_material(sd.materials, prim.materialIndex):
                         continue
-                    var curve = sd.curves[unsafe_offset=Int(prim.id1)]
+                    var curve = curve_at(sd.curves, Int(prim.id1))
                     if intersect_curve(ray_org, ray_dir, curve, Int(prim.id2) // 8, Int(prim.id2) % 8, tMax)[0]:
                         return True
                     continue
@@ -1950,7 +1950,7 @@ def resolve_curve_candidates_gpu(
     for i in range(n_cand):
         var primIdx = Int(curve_cand_prim[unsafe_offset=base + i])
         var prim = sd.primIds[unsafe_offset=primIdx]
-        var curve = sd.curves[unsafe_offset=Int(prim.id1)]
+        var curve = curve_at(sd.curves, Int(prim.id1))
         var curve_hit = intersect_curve(ray_org, ray_dir, curve, Int(prim.id2) // 8, Int(prim.id2) % 8, best_t)
         if curve_hit[0]:
             best_t = curve_hit[1]
@@ -2138,7 +2138,7 @@ def gen_aux_buffers_gpu(
             # (stored in isects_tmp.u) doesn't uniquely fix the azimuthal sign,
             # so this picks one consistent side — fine for denoising, not used
             # for shading (shade_hair derives its own frame independently).
-            var curve = curves[unsafe_offset=Int(isects_tmp[unsafe_offset=tid].primId.id1)]
+            var curve = curve_at(curves, Int(isects_tmp[unsafe_offset=tid].primId.id1))
             var piece = min(Int(curve.n_pieces) - 1, Int(isects_tmp[unsafe_offset=tid].v * Float32(curve.n_pieces)))
             var (cq0, cq1, _, _) = curve_piece_endpoints(curve, piece)
             var caxis = cq1 - cq0

@@ -18,7 +18,7 @@ from .primitives import mesh_pos, mesh_point
 from .media import Medium, MediumInterface, Grid, NvdbGrid
 from .lights import AreaLight, DistantLight, PointLight, InfiniteLight, LightSampler, il_rgb
 from .portal_light import portal_frame, portal_ray_crosses
-from .curves import Curve, CurveBvh, intersect_curve, CURVE_DEFER_K, CURVE_N_PIECES, curve_piece_endpoints, _curve_perp_axis, curve_view_frame, curve_hit_normal
+from .curves import Curve, curve_at, CurveBvh, intersect_curve, CURVE_DEFER_K, CURVE_N_PIECES, curve_piece_endpoints, _curve_perp_axis, curve_view_frame, curve_hit_normal
 from .rng import PCG32
 from .footprint import CameraFootprint
 from .spectrum import SpectralHandle
@@ -960,7 +960,7 @@ def _hair_precompute(
     bdpt_*.mojo/sppm.mojo's connectible-vertex/gather/NEE evaluation of a
     stored hair vertex."""
     var h = max(Float32(-0.99), min(Float32(0.99), h_raw))
-    var curve = curves[unsafe_offset=curve_idx]
+    var curve = curve_at(curves, curve_idx)
     var piece = min(Int(curve.n_pieces) - 1, max(0, Int(v_global * Float32(curve.n_pieces))))
     var (q0, q1, r0, r1) = curve_piece_endpoints(curve, piece)
     var radius = (r0 + r1) * Float32(0.5)
@@ -1564,7 +1564,7 @@ def _traverse_blas_curves(
         if node.count > 0:
             for j in range(Int(node.count)):
                 var prim = prims[unsafe_offset=Int(node.offset) + j]
-                var ch = intersect_curve(ray_org, unit, curves[unsafe_offset=Int(prim.id1)], Int(prim.id2) // 8, Int(prim.id2) % 8,
+                var ch = intersect_curve(ray_org, unit, curve_at(curves, Int(prim.id1)), Int(prim.id2) // 8, Int(prim.id2) % 8,
                                          localTHit * dlen)
                 if ch[0]:
                     hasHit = True
@@ -1804,7 +1804,7 @@ def traverse_bvh2_core[Or: Origin[mut=True]](
                     mesh_idx = Int(prim.id2 >> 32)
                     base_vidx = Int(prim.id2 & 0xFFFFFFFF) * 3
                 elif prim.type == 5:
-                    var curve = curves[unsafe_offset=Int(prim.id1)]
+                    var curve = curve_at(curves, Int(prim.id1))
                     var curve_hit = intersect_curve(ray_org, ray_dir, curve, Int(prim.id2) // 8, Int(prim.id2) % 8, localTHit)
                     if curve_hit[0]:
                         localTHit = curve_hit[1]
@@ -2005,7 +2005,7 @@ def traverse_bvh2_core_defer_curves[curves_on: Bool = True, inst_on: Bool = True
                         curve_cand_prim[unsafe_offset=Int(slot)] = Int32(offset + j)
                         curve_cand_count[unsafe_offset=0] = slot + Int32(1)
                     else:
-                        var curve = curves[unsafe_offset=Int(prim.id1)]
+                        var curve = curve_at(curves, Int(prim.id1))
                         var curve_hit = intersect_curve(ray_org, ray_dir, curve, Int(prim.id2) // 8, Int(prim.id2) % 8, localTHit)
                         if curve_hit[0]:
                             localTHit = curve_hit[1]
@@ -2227,7 +2227,7 @@ def any_hit_bvh2_core[wide_on: Bool = True](
                     # only -- must not occlude. See _shadow_is_null_material.
                     if _shadow_is_null_material(materials, prim.materialIndex):
                         continue
-                    var curve = curves[unsafe_offset=Int(prim.id1)]
+                    var curve = curve_at(curves, Int(prim.id1))
                     if intersect_curve(ray_org, ray_dir, curve, Int(prim.id2) // 8, Int(prim.id2) % 8, tMax)[0]:
                         return True
                     continue
@@ -2690,7 +2690,7 @@ def traverse_bvh4_core[Or: Origin[mut=True]](
                     continue
                 var prim = primIds[unsafe_offset=slot]
                 if prim.type == 5:
-                    var curve = curves[unsafe_offset=Int(prim.id1)]
+                    var curve = curve_at(curves, Int(prim.id1))
                     var curve_hit = intersect_curve(ray_org, ray_dir, curve, Int(prim.id2) // 8, Int(prim.id2) % 8, localTHit)
                     if curve_hit[0]:
                         localTHit = curve_hit[1]
@@ -2857,7 +2857,7 @@ def any_hit_bvh4_core(
                 if prim.type == 5:
                     if _shadow_is_null_material(materials, prim.materialIndex):
                         continue
-                    var curve = curves[unsafe_offset=Int(prim.id1)]
+                    var curve = curve_at(curves, Int(prim.id1))
                     if intersect_curve(ray_org, ray_dir, curve, Int(prim.id2) // 8, Int(prim.id2) % 8, tMax)[0]:
                         return True
                 elif prim.type == 8:
@@ -3428,7 +3428,7 @@ def render_aux_buffers[Osc: Origin[mut=True], Onm: Origin[mut=True], Oc2w: Origi
                 # intersect_curve via Intersection.u/.v, no tessellated mesh.
                 var curve_idx = Int(isects[unsafe_offset=i].primId.id1)
                 if curve_idx >= 0 and curve_idx < Int(sd.curveCount):
-                    var curve = sd.curves[unsafe_offset=curve_idx]
+                    var curve = curve_at(sd.curves, curve_idx)
                     var h = max(Float32(-0.99), min(Float32(0.99), isects[unsafe_offset=i].u))
                     var piece = min(Int(curve.n_pieces) - 1, max(0, Int(isects[unsafe_offset=i].v * Float32(curve.n_pieces))))
                     var (q0, q1, _, _) = curve_piece_endpoints(curve, piece)

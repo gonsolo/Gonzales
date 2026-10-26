@@ -15,7 +15,7 @@ from max.gpu.primitives import warp
 from max.gpu.primitives.warp import match_any, shuffle_idx, vote
 from max.gpu.sync import barrier, syncwarp
 from .bvh import BVH2Node, _node_box_hit, _shadow_is_null_material
-from .curves import Curve, CurveBvh, intersect_curve, curve_piece_endpoints, _curve_perp_axis
+from .curves import Curve, curve_at, CurveBvh, intersect_curve, curve_piece_endpoints, _curve_perp_axis
 from .geometry import Point3f, Vec3f, cross
 from .gpu_bvh import TPB, MaskT, _buf, _p, _tid, _seg_of, _ord, _unord
 from .materials import Material
@@ -49,7 +49,7 @@ def _fiber_frame(prim_ids: Pointer[PrimId, MutUntrackedOrigin], curves: Pointer[
     var lx = Float64(0); var ly = Float64(0); var lz = Float64(0)
     for k in range(a, a + n):
         var p = prim_ids[unsafe_offset=k]
-        var curve = curves[unsafe_offset=Int(p.id1)]
+        var curve = curve_at(curves, Int(p.id1))
         for piece in range(Int(p.id2) // 8, Int(p.id2) // 8 + Int(p.id2) % 8):
             var e = curve_piece_endpoints(curve, piece)
             var dx = Float64(e[1].x - e[0].x); var dy = Float64(e[1].y - e[0].y); var dz = Float64(e[1].z - e[0].z)
@@ -204,7 +204,7 @@ struct CurveWalk(Movable):
                         if _shadow_is_null_material(materials, Int64(r[unsafe_offset=2])):
                             continue
                     var id2 = Int(r[unsafe_offset=1])
-                    var h = intersect_curve(self.wo, self.wd, curves[unsafe_offset=Int(r[unsafe_offset=0])], id2 // 8, id2 % 8, self.tmax)
+                    var h = intersect_curve(self.wo, self.wd, curve_at(curves, Int(r[unsafe_offset=0])), id2 // 8, id2 % 8, self.tmax)
                     if h[0]:
                         self.best = off + j; self.tmax = h[1]; self.bu = h[2]; self.bv = h[3]
                         comptime if any_hit:
@@ -269,7 +269,7 @@ struct CurveBvhDev(Movable):
 
 @always_inline
 def _prim_box[framed: Bool](p: PrimId, curves: Pointer[Curve, MutUntrackedOrigin], f: Pointer[Float32, MutUntrackedOrigin]) -> Tuple[SIMD[DType.float32, 4], SIMD[DType.float32, 4]]:
-    var curve = curves[unsafe_offset=Int(p.id1)]
+    var curve = curve_at(curves, Int(p.id1))
     var lo = SIMD[DType.float32, 4](Float32(1e30))
     var hi = SIMD[DType.float32, 4](Float32(-1e30))
     for piece in range(Int(p.id2) // 8, Int(p.id2) // 8 + Int(p.id2) % 8):
@@ -457,7 +457,7 @@ def _frames_kernel(prim_ids: Pointer[PrimId, MutUntrackedOrigin], curves: Pointe
     var j = Int(cl_lo[unsafe_offset=c]) + k
     while j < Int(cl_lo[unsafe_offset=c + 1]):
         var p = prim_ids[unsafe_offset=Int(a_dp) + Int(pslot[unsafe_offset=j])]
-        var curve = curves[unsafe_offset=Int(p.id1)]
+        var curve = curve_at(curves, Int(p.id1))
         for piece in range(Int(p.id2) // 8, Int(p.id2) // 8 + Int(p.id2) % 8):
             var e = curve_piece_endpoints(curve, piece)
             var dx = e[1].x - e[0].x; var dy = e[1].y - e[0].y; var dz = e[1].z - e[0].z

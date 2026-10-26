@@ -4,7 +4,7 @@ from std.math import ceildiv
 from max.gpu import block_idx, block_dim, thread_idx
 from max.gpu.host import DeviceContext, DeviceBuffer
 from max.gpu.host._nvidia_cuda import CUDA, CUstream
-from .curves import Curve, curve_piece_endpoints
+from .curves import Curve, curve_at, curve_piece_endpoints
 from .materials import Material, MatKind
 from .primitives import PrimId
 
@@ -53,7 +53,7 @@ def _segments_kernel(prim_ids: Pointer[PrimId, MutUntrackedOrigin], curves: Poin
     var p = prim_ids[unsafe_offset=k]
     if p.id2 % 8 != Int64(1) or (p.materialIndex >= Int64(0) and materials[unsafe_offset=Int(p.materialIndex)].type == MatKind.interface):
         bad[unsafe_offset=0] = Int32(1)
-    var curve = curves[unsafe_offset=Int(p.id1)]
+    var curve = curve_at(curves, Int(p.id1))
     if p.id1 != Int64(k) or p.id2 != Int64(1) or p.materialIndex != Int64(curve.materialIndex):
         bad[unsafe_offset=1] = Int32(1)
     var e = curve_piece_endpoints(curve, Int(p.id2 // 8))
