@@ -33,7 +33,7 @@ from .sms import (
     MAX_SMS_VERTICES, SMSVertex, sms_vertex_init, sms_vertex_flat, sms_vertex_sphere, sms_vertex_mats,
     mat22_mul, mat22_mul_v, mat22_inv, sms_walk, SMS_SOLVER_THRESHOLD,
     mnee_orthonormal_basis,
-    sms_refresh_solved_frames, sms_refresh_mesh_frames, sms_vertex_mesh, sms_curved,
+    sms_refresh_solved_frames, sms_refresh_mesh_frames, sms_vertex_mesh, sms_curved, tri_barycentrics,
 )
 from .restir_sms import SMSReservoir, sms_reservoir_init, sms_target_pdf, SMSReservoirIO, sms_reservoir_io_null, sms_spatial_combine
 
@@ -3679,6 +3679,13 @@ def _sms_vertex_from_hit(
     else:
         return (sms_vertex_init(), False)
 
+@always_inline
+def _sms_on_probed_triangle(ctx: ShadeContext, inter: Intersection, pos: Vec3f) -> Bool:
+    """A flat solve runs on the probed triangle's plane; a root outside the triangle belongs to another facet's chain."""
+    var (mesh, v0, v1, v2, _) = _get_tri_verts(inter, ctx.meshes)
+    var p0 = mesh_pos(mesh, v0)
+    return tri_barycentrics(p0, mesh_pos(mesh, v1) - p0, mesh_pos(mesh, v2) - p0, pos)[2]
+
 def _sms_probe_glass_chain(
     ctx: ShadeContext,
     start_point: Vec3f,
@@ -3874,7 +3881,7 @@ def _sms_solve_from_probe(
         # --- 1-vertex MNEE fast path (flat triangle only, unchanged) ---
         var (mnee_ok, x1_f, det_b, eta_f) = _mnee_walk(
             hit_point, light_point, x1_init, pgeo_n, pdp_du, pdp_dv, eta1)
-        if not mnee_ok:
+        if not mnee_ok or not _sms_on_probed_triangle(ctx, probe_inter, x1_f):
             return (True, False, 1, verts1.copy(), Float32(0.0), Float32(0.0), Float32(0.0))
         var wi_f = hit_point - x1_f
         var wi_len2_f = dot(wi_f, wi_f)
@@ -3954,7 +3961,7 @@ def _sms_solve_from_probe(
             x1_init, pgeo_n, pdp_du, pdp_dv, eta1,
             x2_init, pgeo_n2, pdp_du2, pdp_dv2, eta2,
             ldp_du_v, ldp_dv_v)
-        if not ok2:
+        if not ok2 or not _sms_on_probed_triangle(ctx, probe_inter, x1_f2) or not _sms_on_probed_triangle(ctx, probe2_inter, x2_f2):
             return (True, False, 2, verts2.copy(), Float32(0.0), Float32(0.0), Float32(0.0))
         verts2[0].pos = x1_f2
         verts2[1].pos = x2_f2
