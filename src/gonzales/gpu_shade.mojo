@@ -15,39 +15,10 @@ from .restir_di import DIReservoir, ReservoirIO, reservoir_io_null
 from .restir_gi import gi_reservoir_io_null
 from .rng import PCG32
 from .footprint import CameraFootprint
-from .shading import GIPendingX1, LightContext, ShadeContext, _shade_sss_exit, shade_coated_conductor, shade_coated_diffuse, shade_conductor, shade_core, shade_dielectric, shade_diffuse, shade_diffuse_transmission, shade_hair, shade_interface, shade_measured, shade_nee_core, shade_thin_dielectric, _mnee_first_probe, _mnee_bsdf_weight
+from .shading import GIPendingX1, LightContext, ShadeContext, _shade_context, _shade_sss_exit, shade_coated_conductor, shade_coated_diffuse, shade_conductor, shade_core, shade_dielectric, shade_diffuse, shade_diffuse_transmission, shade_hair, shade_interface, shade_measured, shade_nee_core, shade_thin_dielectric, _mnee_first_probe, _mnee_bsdf_weight
 from .spectrum import SpectralHandle
 from max.gpu import block_dim, block_idx, thread_idx
 from .gpu_scene import GpuSceneHandle
-
-@always_inline
-def _shade_context(
-    sd: SceneView,
-    sobol_matrices: Pointer[UInt32, MutUntrackedOrigin],
-    path_idx: Int = 0,
-    use_restir: Bool = False,
-    shadow_tasks: Pointer[ShadowTask, MutUntrackedOrigin] = Pointer[ShadowTask, MutUntrackedOrigin].unsafe_dangling(),
-    suppress_tasks: Pointer[SuppressTask, MutUntrackedOrigin] = Pointer[SuppressTask, MutUntrackedOrigin].unsafe_dangling(),
-) -> ShadeContext:
-    return ShadeContext(
-        paths_base=Pointer[PathState, MutUntrackedOrigin].unsafe_dangling(), has_glass=sd.hasGlass != Int32(0), mnee_stats=Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(), bvh4=BVH4.none(), suppress_tasks=suppress_tasks,
-        n_mediums=Int(sd.mediumCount), mediums=sd.mediums, medium_ifaces=sd.mediumInterfaces, grids=sd.grids, nvdb_grids=sd.nvdbGrids,
-        path_idx=path_idx, bvh2Nodes=sd.bvh2Nodes, primIds=sd.primIds, meshes=sd.meshes, curves=sd.curves,
-        materials=sd.materials,
-        tex_filenames=Pointer[Pointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
-        textures=sd.gpuTextures, n_textures=Int(sd.gpuTextureCount),
-        nmaps=Pointer[NormalSlopeMap, MutUntrackedOrigin].unsafe_dangling(),
-        shadow_tasks=shadow_tasks,
-        cam_fp=sd.camFp, sobol_matrices=sobol_matrices, guide=null_guide(), guide_write=null_guide(), use_restir=use_restir,
-        blasNodesArr=sd.blasNodesArr, blasPrimIdsArr=sd.blasPrimIdsArr, instances=sd.instances,
-        spectral=sd.spectral, measured_brdfs=sd.measuredBrdfs,
-        gi_pending=Pointer[GIPendingX1, MutUntrackedOrigin].unsafe_dangling(), gi_io=gi_reservoir_io_null(),
-        lights=LightContext(
-            area_lights=sd.areaLights, area_light_count=Int(sd.areaLightCount),
-            distant_lights=sd.distantLights, distant_count=Int(sd.distantLightCount),
-            point_lights=sd.pointLights, point_count=Int(sd.pointLightCount),
-            infinite_lights=sd.infiniteLights, infinite_count=Int(sd.infiniteLightCount),
-            spheres=sd.spheres, sphere_count=Int(sd.sphereCount), light_sampler=sd.lightSampler), filter_glossy=sd.filterGlossy, clamp=sd.clamp, cycles=sd.cycles)
 
 
 def shared_shade_context(
@@ -140,7 +111,7 @@ def resolve_suppress_gpu(
         var seg_dir = seg * (Float32(1.0) / seg_len)
         var (glass, pr) = _mnee_first_probe(ctx, x0, seg_dir, seg_len)
         if glass:
-            w = _mnee_bsdf_weight(ctx, path_ptr, inter, pr, seg_dir, seg_len, hp)
+            w = _mnee_bsdf_weight(ctx, path_ptr, inter, pr, hp)
     if w > Float32(0.0):
         path_ptr[].estimate += tasks[unsafe_offset=tid].contrib * w
 

@@ -189,6 +189,38 @@ struct ShadeContext:
     var clamp: SIMD[DType.float32, 2]   # SceneView.clamp
     var cycles: SIMD[DType.int32, 4]    # SceneView.cycles
 
+
+@always_inline
+def _shade_context(
+    sd: SceneView,
+    sobol_matrices: Pointer[UInt32, MutUntrackedOrigin],
+    path_idx: Int = 0,
+    use_restir: Bool = False,
+    shadow_tasks: Pointer[ShadowTask, MutUntrackedOrigin] = Pointer[ShadowTask, MutUntrackedOrigin].unsafe_dangling(),
+    suppress_tasks: Pointer[SuppressTask, MutUntrackedOrigin] = Pointer[SuppressTask, MutUntrackedOrigin].unsafe_dangling(),
+) -> ShadeContext:
+    """A ShadeContext over a SceneView: the GPU kernels' and VCM's way to reach the shading code."""
+    return ShadeContext(
+        paths_base=Pointer[PathState, MutUntrackedOrigin].unsafe_dangling(), has_glass=sd.hasGlass != Int32(0), mnee_stats=Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(), bvh4=BVH4.none(), suppress_tasks=suppress_tasks,
+        n_mediums=Int(sd.mediumCount), mediums=sd.mediums, medium_ifaces=sd.mediumInterfaces, grids=sd.grids, nvdb_grids=sd.nvdbGrids,
+        path_idx=path_idx, bvh2Nodes=sd.bvh2Nodes, primIds=sd.primIds, meshes=sd.meshes, curves=sd.curves,
+        materials=sd.materials,
+        tex_filenames=Pointer[Pointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
+        textures=sd.gpuTextures, n_textures=Int(sd.gpuTextureCount),
+        nmaps=Pointer[NormalSlopeMap, MutUntrackedOrigin].unsafe_dangling(),
+        shadow_tasks=shadow_tasks,
+        cam_fp=sd.camFp, sobol_matrices=sobol_matrices, guide=null_guide(), guide_write=null_guide(), use_restir=use_restir,
+        blasNodesArr=sd.blasNodesArr, blasPrimIdsArr=sd.blasPrimIdsArr, instances=sd.instances,
+        spectral=sd.spectral, measured_brdfs=sd.measuredBrdfs,
+        gi_pending=Pointer[GIPendingX1, MutUntrackedOrigin].unsafe_dangling(), gi_io=gi_reservoir_io_null(),
+        lights=LightContext(
+            area_lights=sd.areaLights, area_light_count=Int(sd.areaLightCount),
+            distant_lights=sd.distantLights, distant_count=Int(sd.distantLightCount),
+            point_lights=sd.pointLights, point_count=Int(sd.pointLightCount),
+            infinite_lights=sd.infiniteLights, infinite_count=Int(sd.infiniteLightCount),
+            spheres=sd.spheres, sphere_count=Int(sd.sphereCount), light_sampler=sd.lightSampler), filter_glossy=sd.filterGlossy, clamp=sd.clamp, cycles=sd.cycles)
+
+
 # Orient an emitter triangle's WINDING normal to agree with the mesh's own
 # supplied per-vertex normals, which is what decides whether a one-sided
 # pbrt area light faces a given direction.
@@ -3788,7 +3820,7 @@ def _sms_probe_and_solve(
     return _sms_solve_from_probe(ctx, hit_point, shadow_dir, dist, light_point, ldp_du_v, ldp_dv_v, pcg, probe_inter)
 
 
-@always_inline
+@no_inline   # one copy of the solver per kernel; inlined at every caller it made VCM's compile take tens of minutes
 def _sms_solve_from_probe(
     ctx: ShadeContext,
     hit_point: Vec3f,
@@ -4034,17 +4066,53 @@ def _mnee_mis_weight(
         return Float32(1.0)
     var d = verts[0].pos - x0
     var p_bsdf = bxdf_pdf_diffuse(dot(normal, d) / sqrt(max(dot(d, d), Float32(1e-30))))
+    return power_heuristic(pdf_area / g, p_bsdf * _mnee_chain_t_eta(x0, verts, n)[0])
+
+
+@always_inline
+def _mnee_chain_t_eta(x0: Vec3f, verts: Array[SMSVertex, MAX_SMS_VERTICES], n: Int) -> Tuple[Float32, Float32]:
+    """(probability of refracting at every vertex, the product of 1 - F; the product of the vertices' eta, which is
+    n_light / n_x0 for the media at the chain's two ends)."""
+    var t = Float32(1.0)
+    var eta = Float32(1.0)
     for i in range(n):
         var prev = x0 if i == 0 else verts[i-1].pos
         var wi = prev - verts[i].pos
         var cos_i = abs(dot(verts[i].normal, wi)) / sqrt(max(dot(wi, wi), Float32(1e-30)))
-        p_bsdf *= Float32(1.0) - fr_dielectric(cos_i, verts[i].eta)
-    return power_heuristic(pdf_area / g, p_bsdf)
+        t *= Float32(1.0) - fr_dielectric(cos_i, verts[i].eta)
+        eta *= verts[i].eta
+    return (t, eta)
+
+
+def _mnee_reproduce(
+    ctx: ShadeContext, x0: Vec3f, n_spec: Int, last_spec: Vec3f, light_hit: Vec3f, l_du: Vec3f, l_dv: Vec3f,
+    probe_inter: Intersection, mut pcg: PCG32,
+) -> Tuple[Int, Int, Array[SMSVertex, MAX_SMS_VERTICES], Float32]:
+    """Whether MNEE's deterministic solve from x0 to light_hit is the path that got there through n_spec glass
+    vertices, the last at last_spec: (1 it is, 0 it is not, -1 the solve found no glass), with the chain and its g.
+    The probe is the caller's: the straight segment's first hit, which must be glass."""
+    var seg = light_hit - x0
+    var seg_len = sqrt(dot(seg, seg))
+    var (o_du, o_dv) = mnee_orthonormal_basis(l_du, l_dv)
+    var res = _sms_solve_from_probe(ctx, x0, seg * (Float32(1.0) / max(seg_len, Float32(1e-12))), seg_len, light_hit,
+                                    o_du, o_dv, pcg, probe_inter)
+    var n = res[2]
+    var verts = res[3].copy()
+    if not res[0]:
+        return (-1, n, verts^, Float32(0.0))
+    if n_spec != n or not res[1]:
+        return (0, n, verts^, Float32(0.0))
+    var d = verts[n-1].pos - last_spec
+    var r = last_spec - x0
+    if dot(d, d) > Float32(1e-4) * dot(r, r):   # 1% of the distance: another root of the same chain is further away
+        return (0, n, verts^, Float32(0.0))
+    var g = _mnee_chain_g(x0, verts, res[5])
+    return (1, n, verts^, g)
 
 @no_inline
 def _mnee_bsdf_weight(
     ctx: ShadeContext, path_ptr: Pointer[PathState, MutUntrackedOrigin], inter: Intersection, probe_inter: Intersection,
-    seg_dir: Vec3f, seg_len: Float32, light_hit: Vec3f,
+    light_hit: Vec3f,
 ) -> Float32:
     """The weight of this BSDF path to the emitter against MNEE, which may sample the very same path.
 
@@ -4053,28 +4121,17 @@ def _mnee_bsdf_weight(
     by MIS (_mnee_mis_weight); any other path (another topology, another root, no root) is the BSDF's alone."""
     var (lmesh, lv0, lv1, lv2, _) = _get_tri_verts(inter, ctx.meshes)
     var lp0 = mesh_pos(lmesh, lv0)
-    var lp1 = mesh_pos(lmesh, lv1)
-    var lp2 = mesh_pos(lmesh, lv2)
-    var (l_du, l_dv) = mnee_orthonormal_basis(lp1 - lp0, lp2 - lp0)
-    var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
     var x0 = path_ptr[].last_ns_p
-    var res = _sms_solve_from_probe(ctx, x0, seg_dir, seg_len, light_hit, l_du, l_dv, pcg, probe_inter)
-    if not res[0]:
-        return Float32(0.0)
-    var n = res[2]
-    if Int(path_ptr[].ns_spec) != n or not res[1]:
-        return Float32(1.0)
-    var verts = res[3].copy()
     var o = path_ptr[].ray.origin
-    var d = verts[n-1].pos - Vec3f(o.x, o.y, o.z)
-    var r = Vec3f(o.x, o.y, o.z) - x0
-    if dot(d, d) > Float32(1e-4) * dot(r, r):   # 1% of the distance: another root of the same chain is further away
-        return Float32(1.0)
+    var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
+    var rp = _mnee_reproduce(ctx, x0, Int(path_ptr[].ns_spec), Vec3f(o.x, o.y, o.z), light_hit,
+                             mesh_pos(lmesh, lv1) - lp0, mesh_pos(lmesh, lv2) - lp0, probe_inter, pcg)
+    if rp[0] != 1:
+        return Float32(0.0) if rp[0] < 0 else Float32(1.0)
     var al_idx = Int(inter.primId.id1)
     var al = ctx.lights.area_lights[unsafe_offset=al_idx]
     var pdf_area = light_sampler_pdf_at(ctx.lights.light_sampler, Int32(al_idx), x0) / max(al.total_area, Float32(1e-30))
-    var g = _mnee_chain_g(x0, verts, res[5])
-    return Float32(1.0) - _mnee_mis_weight(path_ptr[].last_ns_n, x0, verts, n, g, pdf_area)
+    return Float32(1.0) - _mnee_mis_weight(path_ptr[].last_ns_n, x0, rp[2], rp[1], rp[3], pdf_area)
 
 
 @always_inline
@@ -4087,6 +4144,64 @@ def _mnee_live(ctx: ShadeContext) -> Bool:
     if _is_real_ptr(ctx.mnee_stats) and ctx.mnee_stats[unsafe_offset=2] != Int32(0):
         return False
     return True
+
+
+def _mnee_chain(
+    ctx: ShadeContext, normal: Vec3f, hit_point: Vec3f, shadow_dir: Vec3f, dist: Float32,
+    light_point: Vec3f, ldp_du_v: Vec3f, ldp_dv_v: Vec3f, mut pcg: PCG32, probe_inter: Intersection,
+) -> Tuple[Bool, Bool, Int, Array[SMSVertex, MAX_SMS_VERTICES], Float32, Float32, Float32]:
+    """MNEE's chain from hit_point through the glass the probe found to light_point, shared by the path tracer and VCM:
+    (glass found, solved and visible, vertex count, solved vertices, BSDF product, g = dw0/dA_light, cos at hit_point)."""
+    # ORTHONORMALIZE the light's tangent basis before handing it to the
+    # manifold walk. `_sample_light_point_and_normal` returns raw triangle
+    # EDGES (lp1-lp0, lp2-lp0), which are neither unit-length nor
+    # perpendicular, so d(constraint)/d(light) comes out in that triangle's
+    # own parametric units -- while `inv_pdf_area` is an AREA-measure
+    # density. The two only pair up when the light basis is orthonormal, and
+    # the reference makes exactly this call (`vy.make_orthonormal()` on the
+    # emitter vertex inside geometric_term) for the same reason.
+    var (l_du, l_dv) = mnee_orthonormal_basis(ldp_du_v, ldp_dv_v)
+    var _probe_res = _sms_solve_from_probe(
+        ctx, hit_point, shadow_dir, dist, light_point, l_du, l_dv, pcg, probe_inter)
+    var n = _probe_res[2]
+    var verts = _probe_res[3].copy()
+    var fail = (_probe_res[0], False, n, verts.copy(), Float32(0.0), Float32(0.0), Float32(0.0))
+    if not _probe_res[0] or not _probe_res[1]:
+        return fail^
+
+    var first_vertex = verts[0].pos
+    var last_vertex = verts[n-1].pos
+    var wi_f = hit_point - first_vertex
+    var wi_len = sqrt(dot(wi_f, wi_f))
+    if wi_len <= Float32(1e-8):
+        return fail^
+    var wi_fn = wi_f * (Float32(1.0) / wi_len)
+    var cos_s_x0 = dot(normal, -wi_fn)
+    if cos_s_x0 <= Float32(0.0):
+        return fail^
+    var g = _mnee_chain_g(hit_point, verts, _probe_res[5])
+    var wo_f = light_point - last_vertex
+    var wo_len = sqrt(dot(wo_f, wo_f))
+    if wo_len <= Float32(1e-8):
+        return fail^
+    var wo_fn = wo_f * (Float32(1.0) / wo_len)
+    var vis_org = last_vertex + wo_fn * Float32(0.001)
+    var vis_ray = Ray(Point3f(vis_org[0], vis_org[1], vis_org[2]), Vec3f(wo_fn[0], wo_fn[1], wo_fn[2]))
+    # A sphere caustic caster's outgoing leg necessarily re-crosses its OWN
+    # far side (the unmodeled exit refraction of the single-vertex model,
+    # see any_hit_bvh2_core's own docstring) -- exclude just that one
+    # sphere from this occlusion test, not a real distinct occluder.
+    var ign_center = Vec3f(Float32(0.0))
+    var ign_radius = Float32(-1.0)
+    if verts[n-1].is_sphere != Int8(0):
+        ign_center = verts[n-1].sphere_center
+        ign_radius = verts[n-1].sphere_radius
+    if any_hit_dispatch(ctx.bvh4, ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves, vis_ray, wo_len * Float32(0.999),
+                          ctx.blasNodesArr, ctx.blasPrimIdsArr, ctx.instances,
+                          ctx.lights.spheres, ctx.lights.sphere_count,
+                          ign_center, ign_radius, materials=ctx.materials):
+        return fail^
+    return (True, True, n, verts.copy(), _probe_res[4], g, cos_s_x0)
 
 
 @always_inline
@@ -4159,69 +4274,15 @@ def _mnee_area_light_contribute(
         return False
 
     var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
-    # ORTHONORMALIZE the light's tangent basis before handing it to the
-    # manifold walk. `_sample_light_point_and_normal` returns raw triangle
-    # EDGES (lp1-lp0, lp2-lp0), which are neither unit-length nor
-    # perpendicular, so d(constraint)/d(light) comes out in that triangle's
-    # own parametric units -- while `inv_pdf_area` is an AREA-measure
-    # density. The two only pair up when the light basis is orthonormal, and
-    # the reference makes exactly this call (`vy.make_orthonormal()` on the
-    # emitter vertex inside geometric_term) for the same reason.
-    var (l_du, l_dv) = mnee_orthonormal_basis(ldp_du_v, ldp_dv_v)
-    var _probe_res = _sms_solve_from_probe(
-        ctx, hit_point, shadow_dir, dist, light_point, l_du, l_dv, pcg, probe_inter)
-    var dielectric_found = _probe_res[0]
-    var solve_ok = _probe_res[1]
-    var n = _probe_res[2]
-    var verts = _probe_res[3].copy()
-    var bsdf_product = _probe_res[4]
-    var dx1_dxlight = _probe_res[5]
-    var trials = _probe_res[6]
+    var c = _mnee_chain(ctx, normal, hit_point, shadow_dir, dist, light_point, ldp_du_v, ldp_dv_v, pcg, probe_inter)
     path_ptr[].pcgState = pcg.state
-    if not dielectric_found:
+    if not c[0]:
         return False
-    if not solve_ok:
+    if not c[1]:
         return True
-
-    # Unified "use the solved chain" step -- one formula regardless of
-    # whether it came from the 1-/2-vertex MNEE fast path or sms.mojo's
-    # general N-vertex walk (Phase 5.1's own module docstring explains why
-    # the two are physically the same quantity, just chain-length-general).
-    var first_vertex = verts[0].pos
-    var last_vertex = verts[n-1].pos
-    var wi_f = hit_point - first_vertex
-    var wi_len = sqrt(dot(wi_f, wi_f))
-    if wi_len <= Float32(1e-8):
-        return True
-    var wi_fn = wi_f * (Float32(1.0) / wi_len)
-    var cos_s_x0 = dot(normal, -wi_fn)
-    if cos_s_x0 <= Float32(0.0):
-        return True
-    var g = _mnee_chain_g(hit_point, verts, dx1_dxlight)
-    var wo_f = light_point - last_vertex
-    var wo_len = sqrt(dot(wo_f, wo_f))
-    if wo_len <= Float32(1e-8):
-        return True
-    var wo_fn = wo_f * (Float32(1.0) / wo_len)
-    var vis_org = last_vertex + wo_fn * Float32(0.001)
-    var vis_ray = Ray(Point3f(vis_org[0], vis_org[1], vis_org[2]), Vec3f(wo_fn[0], wo_fn[1], wo_fn[2]))
-    # A sphere caustic caster's outgoing leg necessarily re-crosses its OWN
-    # far side (the unmodeled exit refraction of the single-vertex model,
-    # see any_hit_bvh2_core's own docstring) -- exclude just that one
-    # sphere from this occlusion test, not a real distinct occluder.
-    var ign_center = Vec3f(Float32(0.0))
-    var ign_radius = Float32(-1.0)
-    if verts[n-1].is_sphere != Int8(0):
-        ign_center = verts[n-1].sphere_center
-        ign_radius = verts[n-1].sphere_radius
-    if any_hit_dispatch(ctx.bvh4, ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves, vis_ray, wo_len * Float32(0.999),
-                          ctx.blasNodesArr, ctx.blasPrimIdsArr, ctx.instances,
-                          ctx.lights.spheres, ctx.lights.sphere_count,
-                          ign_center, ign_radius, materials=ctx.materials):
-        return True
-    # MIS against the BSDF path through the same chain (_mnee_bsdf_weight gives it the rest). `trials` is always 1.0.
-    var w_mnee = _mnee_mis_weight(normal, hit_point, verts, n, g, Float32(1.0) / inv_pdf_area)
-    var mnee_wt = _to_spec_diffuse_lit(ctx, alb, al.emission, path_ptr[].wavelengths) * (cos_s_x0 * g * bsdf_product * lobe_w * inv_pdf_area * trials * w_mnee)
+    # MIS against the BSDF path through the same chain (_mnee_bsdf_weight gives it the rest).
+    var w_mnee = _mnee_mis_weight(normal, hit_point, c[3], c[2], c[5], Float32(1.0) / inv_pdf_area)
+    var mnee_wt = _to_spec_diffuse_lit(ctx, alb, al.emission, path_ptr[].wavelengths) * (c[6] * c[5] * c[4] * lobe_w * inv_pdf_area * w_mnee)
     path_ptr[].estimate += _clamped(ctx, path_ptr[].throughput * mnee_wt, Int(path_ptr[].bounce))
     return True
 
@@ -5677,7 +5738,7 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
                                 path_ptr[].active = 0
                                 return
                             else:
-                                mnee_w_b = _mnee_bsdf_weight(ctx, path_ptr, inter, pr, seg_dir, seg_len, hp)
+                                mnee_w_b = _mnee_bsdf_weight(ctx, path_ptr, inter, pr, hp)
         # A pbrt area light emits from its FRONT face only
         # (DiffuseAreaLight::L: `if (!twoSided && Dot(n, w) < 0) return 0`).
         # The MIS branch below has always enforced that via its own
