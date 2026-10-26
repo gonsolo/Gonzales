@@ -150,6 +150,7 @@ struct Override {
     int sssVanDeHulst = 0;
     GfVec3f sssRadius{1.0f};
     std::string path;          // hairlut: colour tables; basecolor: the baked texture
+    bool noNormal = false;     // principled: Hydra's normal map is a bump height image, not a normal map
     int intercepts = 0, randoms = 0, res = 0;
 };
 
@@ -180,8 +181,19 @@ std::map<std::string, Override> _ParseOverrides(std::string const &text) {
         else if (kind == "principled" && (in >> o.alpha >> o.ior >> o.metallic >> o.path)) {
             if (o.path == "-")
                 o.path.clear();
-            if (!(in >> o.sssWeight >> o.sssRadius[0] >> o.sssRadius[1] >> o.sssRadius[2] >> o.sssAniso >> o.sssVanDeHulst))
-                o.sssWeight = 0.0f;
+            // Then optionally the subsurface fields, then optionally "nonormal".
+            std::vector<std::string> rest{std::istream_iterator<std::string>(in), std::istream_iterator<std::string>()};
+            size_t k = 0;
+            if (rest.size() >= 6 && rest[0] != "nonormal") {
+                o.sssWeight = std::stof(rest[0]);
+                o.sssRadius = GfVec3f(std::stof(rest[1]), std::stof(rest[2]), std::stof(rest[3]));
+                o.sssAniso = std::stof(rest[4]);
+                o.sssVanDeHulst = std::stoi(rest[5]);
+                k = 6;
+            }
+            for (; k < rest.size(); ++k)
+                if (rest[k] == "nonormal")
+                    o.noNormal = true;
             result[name] = o;
         }
     }
@@ -843,7 +855,8 @@ void *_BuildScene(Scene &synced, int *version) {
             // A baked base colour replaces Hydra's texture; otherwise Hydra's colour or texture stays.
             std::string const &texture = pr->path.empty() ? mat.texture : pr->path;
             GfVec3f c = pr->path.empty() ? mat.diffuse : GfVec3f(1);
-            materials[id] = gz_scene_add_coated(scene, c[0], c[1], c[2], path(texture), path(mat.normalMap), pr->alpha, pr->ior);
+            materials[id] = gz_scene_add_coated(scene, c[0], c[1], c[2], path(texture), pr->noNormal ? nullptr : path(mat.normalMap),
+                                                pr->alpha, pr->ior);
             if (pr->sssWeight > 0)
                 gz_scene_set_subsurface(scene, materials[id], pr->sssWeight, pr->sssRadius[0], pr->sssRadius[1],
                                         pr->sssRadius[2], pr->sssAniso, pr->sssVanDeHulst);

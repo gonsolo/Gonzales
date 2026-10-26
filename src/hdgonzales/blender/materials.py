@@ -3,8 +3,9 @@
 #   <M> hair sr sg sb beta_m beta_n ior alpha                          hair with one colour
 #   <M> hairlut path n_intercept n_random res beta_m beta_n ior alpha  hair colour per (u, v, intercept, random)
 #   <M> glass ior alpha
-#   <M> principled alpha ior metallic path [w r g b aniso vdh]   a Principled BSDF; path: baked base colour or -;
-#                     then its subsurface weight, mean free path, anisotropy and 1 for Cycles' van de Hulst albedo
+#   <M> principled alpha ior metallic path [w r g b aniso vdh] [nonormal]   a Principled BSDF; path: baked base colour
+#                     or -; then its subsurface weight, mean free path, anisotropy and 1 for Cycles' van de Hulst albedo;
+#                     then "nonormal" when its normal is a Bump node, whose height image Hydra passes on as a normal map
 #   <M> diffuse r g b path                                       a Diffuse BSDF, whose colour Hydra does not export
 # Node graphs are evaluated with numpy over many samples at once. Without UVs, images give their mean.
 import hashlib
@@ -386,6 +387,9 @@ def _line(material):
                 radius = radius * (0.25 / math.pi)   # Cycles' bssrdf_setup_radius
             vdh = 0 if legacy and aniso >= 0 else 1
             line += f" {weight:.6g} {radius[0]:.6g} {radius[1]:.6g} {radius[2]:.6g} {aniso:.6g} {vdh}"
+        normal = _socket(node, 'Normal')
+        if normal is not None and normal.is_linked and normal.links[0].from_node.bl_idname == 'ShaderNodeBump':
+            line += " nonormal"
         return line
     return None
 
