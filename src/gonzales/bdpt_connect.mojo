@@ -46,7 +46,6 @@ def _bdpt_store_lvc_vertex(
 # ── LVC connection scale factor ──────────────────────────────────────────────
 
 @always_inline
-@always_inline
 def _bdpt_world_to_raster(
     p_world: Vec3f,
     w2c: Pointer[Float32, MutUntrackedOrigin],     # inverse(cameraToWorld), col-major
@@ -324,13 +323,6 @@ def _bdpt_connect_to_cache_deferred(
         shadow_seg_med[unsafe_offset=base + local] = cv.med_idx
         shadow_valid[unsafe_offset=base + local] = Int8(1)
 
-# ── VCM vertex merging: spatial hash grid over the LVC ───────────────────────
-# THE thinned hash grid SPPM's photons use (sppm.mojo, grid_reset_cell ..
-# grid_weight), keyed on BDPTVertex.pos instead of SPPMPhoton.pos, and using a
-
-# Stochastic merge thinning: the shared thinned grid (sppm.mojo, grid_keep and
-# friends). What is VCM's own is the MIS: merging's density in a thinned
-
 def _connect(
     cv: BDPTVertex,  # camera-subpath vertex
     lv: BDPTVertex,  # light-subpath vertex (including light point itself)
@@ -507,5 +499,3 @@ def _bdpt_connect_mis_weight(
             var pdf_light_w_vol = lv.pdf_fwd * dist2 / cos_lv_vol
             return power_heuristic(pdf_light_w_vol, INV_FOUR_PI)
     return Float32(1)
-
-# ── Main BDPT render ──────────────────────────────────────────────────────────

@@ -478,13 +478,3 @@ def vcm_render_gpu_wavefront(
         print("VCM GPU wavefront: no accelerator")
         ret = Int32(-1)
     return ret
-
-
-
-
-# ── SPPM GPU driver + kernels (relocated from sppm.mojo) ─────────────────────
-# Moved here as a workaround for a reproducible Mojo 1.0.0 / Modular 26.5.0
-# compiler bug: every ctx.enqueue_function[kernel] call defined/used from
-# ── GPU kernels ───────────────────────────────────────────────────────────────
-# Each kernel is a thin wrapper: compute this thread's index, then with the
-# host-built SceneView `sd` call the EXACT SAME

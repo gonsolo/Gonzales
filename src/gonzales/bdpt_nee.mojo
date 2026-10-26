@@ -181,5 +181,3 @@ def _bdpt_nee_contribute(
     if not Tr.is_black():
         return beta * w * Tr
     return SpectralSample(Float32(0))
-
-# ── Cosine-area PDF conversion ────────────────────────────────────────────────

@@ -178,5 +178,3 @@ def _bdpt_merge_from_cache(
         _ = Atomic[Float32].fetch_add(sd.vcmStatOut.unsafe_offset(2 * h0), Float32(1))
         _ = Atomic[Float32].fetch_add(sd.vcmStatOut.unsafe_offset(2 * h0 + 1), lum * lum * _vcm_keep(sd, cv.pos))
     return result
-
-# ── Trace one camera subpath, connecting to the shared cache inline ─────────

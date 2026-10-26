@@ -206,8 +206,7 @@ def _bdpt_camera_path_init[use_gpu: Bool](
     start_med_idx: Int32 = Int32(-1),
     lens: ThinLens = ThinLens.pinhole(),
 ) -> VCMCameraPathState:
-    """Task #163 stage 4: camera-ray generation + MIS-origin setup half of
-    `_bdpt_trace_camera_and_connect` (bdpt_*.mojo:830-886), split out to seed"""
+    """A camera subpath's start: the primary ray and its MIS carries."""
     # JITTER. This was `px + 0.5` -- the pixel CENTRE, identically for every
     # sample. VCM was the only integrator that did not jitter: the path tracer
     var u_fx = pcg.next_float()
@@ -409,8 +408,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
     # _bdpt_trace_camera_and_connect's matching parameter.
     n_light_paths_f: Float32 = Float32(0),
 ) -> Bool:
-    """Task #163 stage 4: wavefront-staged variant of ONE bounce iteration of
-    `_bdpt_trace_camera_and_connect`'s main loop (bdpt_*.mojo:887-1684), the"""
+    """One bounce of a camera subpath, shared by the per-path loop and the wavefront kernels; False ends the path."""
         if n_verts >= _BDPT_MAX_VERTS:
             return False   # mirrors the original loop's top-of-iteration guard
         if inter.hit == Int8(0):
@@ -1019,5 +1017,3 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
 
 
         return True   # bounce processed normally, path continues
-
-# ── Trace one light subpath, storing its vertices into the shared cache ─────

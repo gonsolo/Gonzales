@@ -229,7 +229,7 @@ def _bdpt_render_core(
     splat_fx.unsafe_free(); splat_fy.unsafe_free(); splat_val.unsafe_free()
 
     # Split into caller-owned output buffers (no clamp, no denoise/write
-    # here -- see vcm_render/vcm_render_gpu, this function's two callers,
+    # here -- see vcm_render/vcm_render_gpu, its caller,
     var inv_spp = iso_scale / Float32(n_spp)
     var pixels = unsafe_alloc[Float32](n_pix * 3)
     var caustic_pixels = unsafe_alloc[Float32](n_pix * 3)
@@ -269,11 +269,3 @@ def vcm_render(
     _ = finish_render(psc, sd, pixels, albedo_pixels, no_denoise, caustic_pixels)
     pixels.unsafe_free(); caustic_pixels.unsafe_free(); albedo_pixels.unsafe_free()
     return Int32(0)
-
-# ── GPU port ───────────────────────────────────────────────────────────────
-# Everything below reuses _bdpt_trace_light_path[True]/_bdpt_trace_camera_
-# and_connect[True] verbatim — the SAME functions vcm_render (CPU) calls
-
-# ── Kernels ───────────────────────────────────────────────────────────────
-# Every kernel takes the scene as one `sd: SceneView`, built on the
-# host by GpuSceneHandle.scene_descriptor() (+ with_vcm() for a VCM pass).

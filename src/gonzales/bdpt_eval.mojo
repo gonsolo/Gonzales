@@ -51,13 +51,6 @@ def _vcm_point_slot(ref sd: SceneView, j: Int) -> Int:
             + Int(sd.infiniteLightCount) + j)
 
 
-@always_inline
-def _bdpt_n_lights(ref sd: SceneView) -> Float32:
-    """The light-pick denominator the light path used, needed on the camera
-    side because its NEE loops every light with no pick: the MIS densities
-    must describe the same experiment on both subpaths."""
-    return Float32(light_path_count(sd))
-
 def _vcm_simple_light_policy(
     ref sd: SceneView, i: Int, ls: LightSample, v: BDPTVertex, eta_x: Float32,
     dvcm: Float32, dvc: Float32, cos_geo: Float32, wavelengths: SampledWavelengths,
@@ -202,9 +195,6 @@ def _bdpt_vertex_mis_scoped(v: BDPTVertex) -> Bool:
 def _bdpt_connect_pair_weighted(cv: BDPTVertex, lv: BDPTVertex) -> Bool:
     """True when _connect applies a real per-pair MIS weight to (cv, lv)."""
     return _bdpt_vertex_mis_scoped(cv) and (lv.is_light == Int32(1) or _bdpt_vertex_mis_scoped(lv))
-
-# ── Connect one camera vertex to one light vertex ─────────────────────────────
-
 
 # ── MNEE as one more VCM strategy ───────────────────────────────────────────
 # Scenes/vcm_mnee_mis_derivation.py derives every term below. MNEE draws its light point exactly like a light path's

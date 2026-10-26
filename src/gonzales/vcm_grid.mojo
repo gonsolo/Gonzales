@@ -72,8 +72,6 @@ comptime _VCM_BUDGET_MIN_KEEP = Float32(4.0)
 # gather_disk_coverage). A comptime switch for A/B builds only.
 comptime _MERGE_COVERAGE = True
 
-# CAMIS-prefix class-gated hybrid (plan deep-hugging-locket; vcm_camis.mojo;
-# Scenes/vcm_camis_hybrid_derivation.py). ON: the carries' third slot (dVM,
 comptime _VCM_FINE_LEVELS = 4
 comptime _VCM_MN_STRIDE = 1 + _VCM_FINE_LEVELS
 comptime _VCM_HEADS_SIZE = (2 + _VCM_FINE_LEVELS) * _HSIZE

@@ -111,14 +111,13 @@ def _bdpt_light_path_init[use_gpu: Bool](
     mis_vc_weight_factor: Float32,
     pass_wl: SampledWavelengths,
 ) -> VCMLightPathState:
-    """Task #163 stage 4: light-emission setup half of
-    `_bdpt_trace_light_path` (bdpt_*.mojo:1734-1880), split out to seed a"""
+    """A light subpath's emission: its origin vertex, first ray and MIS carries."""
     var n_area = Int(sd.areaLightCount)
     var n_sphere = Int(sd.sphereLightCount)
     var n_distant = Int(sd.distantLightCount)
     var n_infinite = Int(sd.infiniteLightCount)
     var n_point = Int(sd.pointLightCount)
-    var n_lights = n_area + n_sphere + n_distant + n_infinite + n_point   # == _bdpt_n_lights
+    var n_lights = n_area + n_sphere + n_distant + n_infinite + n_point   # == light_path_count
     lvc_path_len[unsafe_offset=lp_idx] = Int32(0)
     if n_lights == 0:
         return _null_light_path_state()   # no lights in the scene
@@ -336,8 +335,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
     camis_recs: Pointer[CamisLightRecord, MutUntrackedOrigin],
     mut mnee_l: VCMMneeLightTrack,
 ) -> Bool:
-    """Task #163 stage 4: wavefront-staged variant of ONE bounce iteration of
-    `_bdpt_trace_light_path`'s main loop (bdpt_*.mojo:1882-2383), split out so a"""
+    """One bounce of a light subpath, shared by the per-path loop and the wavefront kernels; False ends the path."""
         if n_verts >= _BDPT_MAX_VERTS:
             return False   # mirrors the original loop's top-of-iteration guard
         # The next vertex stored would be interior vertex n_verts (after an area
@@ -815,5 +813,3 @@ def _bdpt_trace_light_path[use_gpu: Bool](
 
     lvc_path_len[unsafe_offset=lp_idx] = Int32(n_verts)
     return
-
-# ── BSDF/phase evaluation at a vertex ────────────────────────────────────────

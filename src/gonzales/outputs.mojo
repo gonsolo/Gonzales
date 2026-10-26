@@ -206,8 +206,7 @@ def finish_render[Op: Origin[mut=True], Oa: Origin[mut=True]](
     here, rather than clamping global and caustic separately beforehand,
     matters for the ~48 corpus scenes that set `maxcomponentvalue`: clamping
     each half independently against the same absolute limit would
-    under-clamp their sum. VCM's three call sites never pass a real pointer
-    here, so they are unaffected -- and already clamp before calling in."""
+    under-clamp their sum."""
     var fw = psc[unsafe_offset=0].film_w
     var fh = psc[unsafe_offset=0].film_h
     var n_pix = Int(fw) * Int(fh)

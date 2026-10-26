@@ -857,8 +857,6 @@ def vcm_budget_reduce_gpu(
     _ = Atomic[Float32].fetch_add(red.unsafe_offset(1), b)
 
 
-# ── Host driver ───────────────────────────────────────────────────────────
-
 @__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
 @__llvm_metadata(`nvvm.minctasm`=SIMDLength(1))    # NVIDIA keeps its old register budget; AMD ignores this
 def reset_shadow_valid_gpu(

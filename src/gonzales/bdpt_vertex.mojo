@@ -16,18 +16,6 @@ comptime _BDPT_MAX_DEPTH = 40  # max surface/medium interactions per subpath (in
 comptime _BDPT_MAX_VERTS = 10  # max non-delta vertices per subpath. NOT light-only,
                                 # despite the name: it caps how many vertices a light
                                 # subpath stores in the shared cache (_bdpt_light_path_bounce)
-comptime _MNEE_MAX_SPHERES = 4  # cap on sphere-light MNEE call sites, unrolled via `if`
-                                  # guards instead of a `for` loop -- see
-                                  # _bdpt_mnee_sphere_light's own docstring for the real
-
-# ── VCM (Vertex Connection and Merging, Georgiev et al. 2012) ────────────────
-# Real VCM combines vertex CONNECTION (_bdpt_connect_to_cache/_connect) and
-# vertex MERGING (_bdpt_merge_from_cache) by running BOTH, unconditionally,
-
-# ── Light Vertex Cache (LVC-BPT, Davidovic et al. 2014, restructured VCM ─────
-# Stage 2b for standard Veach pairing) ────────────────────────────────────────
-# One light subpath is traced per pixel (`n_light_paths == n_pix`), each into
-# its own dedicated slice of a shared `lvc` buffer (see
 
 # ── Vertex types ──────────────────────────────────────────────────────────────
 
@@ -43,8 +31,7 @@ struct BDPTVertex(TrivialRegisterPassable):
     var shading_normal: Vec3f
     var beta: SpectralSample  # throughput to here, at THIS PASS's hero wavelengths
     var alb:  RGB  # BSDF albedo (F0 for conductor)
-    var pdf_fwd: Float32  # area PDF forward (from previous vertex) -- unused by the
-                           # dVCM/dVC/dVM MIS scheme below (kept for other callers)
+    var pdf_fwd: Float32  # a light origin's area pdf, a volume vertex's free-flight density
     var pdf_bwd: Float32  # repurposed to hold the isotropic GGX alpha for mat_kind=1
                            # (conductor) vertices -- NOT a Veach reverse-pdf
     # VCM Stage 2b (2026-07-10): real per-vertex MIS quantities, ported
@@ -87,5 +74,3 @@ def _null_vertex() -> BDPTVertex:
         mat_idx=Int32(-1), hair_curve_idx=Int32(-1), hair_h=Float32(0), hair_v=Float32(0),
         wavelengths=SampledWavelengths(Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0)),
     )
-
-# ── Geometry helpers ──────────────────────────────────────────────────────────
