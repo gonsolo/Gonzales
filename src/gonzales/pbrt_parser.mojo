@@ -3919,14 +3919,18 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
     var nc = len(s[unsafe_offset=0].curves_mat)
     if nc > 0:
         var curve_buf = unsafe_alloc[Curve](nc)
-        for i in range(nc):
-            var cb = i * 12
-            curve_buf[unsafe_offset=i] = Curve(
-                Point3f(s[unsafe_offset=0].curves_cp[cb+0], s[unsafe_offset=0].curves_cp[cb+1], s[unsafe_offset=0].curves_cp[cb+2]),
-                Point3f(s[unsafe_offset=0].curves_cp[cb+3], s[unsafe_offset=0].curves_cp[cb+4], s[unsafe_offset=0].curves_cp[cb+5]),
-                Point3f(s[unsafe_offset=0].curves_cp[cb+6], s[unsafe_offset=0].curves_cp[cb+7], s[unsafe_offset=0].curves_cp[cb+8]),
-                Point3f(s[unsafe_offset=0].curves_cp[cb+9], s[unsafe_offset=0].curves_cp[cb+10], s[unsafe_offset=0].curves_cp[cb+11]),
-                s[unsafe_offset=0].curves_w0[i], s[unsafe_offset=0].curves_w1[i], s[unsafe_offset=0].curves_mat[i], curve_n_pieces[unsafe_offset=i], s[unsafe_offset=0].curves_flat[i])
+
+        def curve_chunk(chunk: Int) {imm}:
+            for i in range(chunk * CURVE_CHUNK, min(chunk * CURVE_CHUNK + CURVE_CHUNK, nc)):
+                var cb = i * 12
+                curve_buf[unsafe_offset=i] = Curve(
+                    Point3f(s[unsafe_offset=0].curves_cp[cb+0], s[unsafe_offset=0].curves_cp[cb+1], s[unsafe_offset=0].curves_cp[cb+2]),
+                    Point3f(s[unsafe_offset=0].curves_cp[cb+3], s[unsafe_offset=0].curves_cp[cb+4], s[unsafe_offset=0].curves_cp[cb+5]),
+                    Point3f(s[unsafe_offset=0].curves_cp[cb+6], s[unsafe_offset=0].curves_cp[cb+7], s[unsafe_offset=0].curves_cp[cb+8]),
+                    Point3f(s[unsafe_offset=0].curves_cp[cb+9], s[unsafe_offset=0].curves_cp[cb+10], s[unsafe_offset=0].curves_cp[cb+11]),
+                    s[unsafe_offset=0].curves_w0[i], s[unsafe_offset=0].curves_w1[i], s[unsafe_offset=0].curves_mat[i], curve_n_pieces[unsafe_offset=i], s[unsafe_offset=0].curves_flat[i])
+
+        parallelize(curve_chunk, n_curve_chunks)
         psc[unsafe_offset=0].curves = curve_buf
     else:
         psc[unsafe_offset=0].curves = Pointer[Curve, MutUntrackedOrigin].unsafe_dangling()
