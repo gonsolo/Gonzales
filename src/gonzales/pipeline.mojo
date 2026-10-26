@@ -24,7 +24,7 @@ from .sppm import sppm_render
 from .sppm_gpu import sppm_render_gpu
 from .bdpt_render import vcm_render
 from .vcm_gpu import vcm_render_gpu, VcmGpu
-from .vcm_wavefront import vcm_render_gpu_wavefront
+from .vcm_rt import VcmRt
 from .bdpt_vertex import _BDPT_MAX_VERTS
 from .guide import GuideGrid, GuidedRenderer, null_guide, train_guided
 from .gpu_guide import gpu_guide_begin, gpu_guide_end
@@ -1916,12 +1916,7 @@ def parse_and_render(
     # docstring in gpu.mojo) -- falls back to CUDA traversal with a
     # warning otherwise.
     use_vulkan_rt_shade: Bool = False,
-    # Task #163 stage 4 part 3: route --vcm --gpu through
-    # vcm_render_gpu_wavefront (staged intersect+bounce kernels, one launch
-    # per depth level) instead of vcm_render_gpu's single-mega-kernel-per-
-    # subpath design. Same software-BVH intersect either way -- this only
-    # exercises the staging itself, a prerequisite for a future Vulkan RT
-    # swap, not yet a speed win. See vcm_render_gpu_wavefront's docstring.
+    # --vcm-wavefront: staged intersect and bounce kernels, one launch per depth, so RT cores can do the intersect.
     use_vcm_wavefront: Bool = False,
     # docs/A2_restir_migration_plan.md Phase 2/3: ReSTIR DI, wired into both
     # the CPU path and the plain --gpu path (batch mode renders 1 sample/
@@ -2165,12 +2160,19 @@ def parse_and_render(
                             rt_scratch_buf_vcm = handle[].ctx.enqueue_create_buffer[DType.uint8](max_rays_vk_vcm * 32)
                     inst_base_host_vcm.unsafe_free()
 
-            ret = vcm_render_gpu_wavefront(
-                handle, psc, sd[unsafe_offset=0], resolved_vcm_spp, n_photons, no_denoise, verbose,
-                use_vk_vcm, interop_scene_vcm, interop_rays_buf_vcm, interop_results_buf_vcm,
-                mesh_material_idx_buf_vcm, mesh_al_idx_buf_vcm, n_meshes_vk_vcm,
-                rt_scratch_buf_vcm, instance_base_mesh_buf_vcm,
-            )
+            var rt_vcm = VcmRt()
+            rt_vcm.active = use_vk_vcm
+            rt_vcm.scene = interop_scene_vcm
+            rt_vcm.rays = interop_rays_buf_vcm^
+            rt_vcm.results = interop_results_buf_vcm^
+            rt_vcm.mesh_material_idx = mesh_material_idx_buf_vcm^
+            rt_vcm.mesh_al_idx = mesh_al_idx_buf_vcm^
+            rt_vcm.n_meshes = n_meshes_vk_vcm
+            rt_vcm.rt_scratch = rt_scratch_buf_vcm^
+            rt_vcm.instance_base_mesh = instance_base_mesh_buf_vcm^
+            ret = vcm_render_gpu(handle, psc, sd[unsafe_offset=0], resolved_vcm_spp, n_photons, no_denoise, verbose, vcm_budget,
+                                 vcm_cap, vcm_no_keep_mis, vcm_radius_from_camera, vcm_radius_cam_percentile,
+                                 vcm_radius_cam_fraction_mult, vcm_no_footprint, vcm_radius_scale, wavefront=True, rt=rt_vcm)
             if use_vk_vcm:
                 var rt_hw_end_v = rtcore_active()
                 if Int(rt_hw_end_v) != 0:

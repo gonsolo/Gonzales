@@ -1,28 +1,31 @@
-# VCM GPU megakernel driver.
+# The GPU VCM driver: one kernel per subpath, or staged kernels per depth (wavefront).
 # Part of the BDPT/VCM machinery that used to be one file (bdpt_*.mojo).
 
 from std.sys import has_accelerator
 from std.sys.info import size_of
 from max.gpu import block_dim
-from max.gpu.host import DeviceContext, DeviceBuffer
+from max.gpu.host import DeviceBuffer
 from std.math import tan, max, abs, ceildiv
 from std.memory.alloc import unsafe_alloc
 from .geometry import RGB, PI
 from .primitives import Intersection
 from .vcm_camis import CamisLightRecord
 from .bvh import SceneView, _scene_bounding_sphere
-from .sampling import film_filter_of
+from .sampling import film_filter_of, FilmFilter
 from .footprint import camera_footprint
 from .transform import matrix_invert
 from .pbrt_parser import ParsedScene_Mojo
 from .sppm import _HSIZE
 from .gpu_scene import GpuSceneHandle
-from max.gpu.host._nvidia_cuda import CUDA
 from .progress import Progress
 from .outputs import finish_render, _sidecar_name, _write_channels
-from .bdpt_vertex import _BDPT_MAX_VERTS, BDPTVertex
+from .bdpt_vertex import _BDPT_MAX_DEPTH, _BDPT_MAX_VERTS, BDPTVertex
+from .bdpt_camera import VCMCameraPathState
+from .bdpt_light import VCMLightPathState
+from .spectrum import SpectralSample
+from .vcm_rt import VcmRt
 from .vcm_grid import (
-    _VCM_VISIT_INSTRUMENT,
+    _VCM_VISIT_INSTRUMENT, _VCM_CAMIS,
     _VCM_MN_STRIDE, _VCM_HEADS_SIZE, _CAMIS_LVC_PER_SLOT, _VCM_FOOTPRINT_PIXELS, _vcm_grid_inv_cell,
     _camera_typical_distance, vcm_merge_radius,
 )
@@ -30,7 +33,10 @@ from .bdpt_render import _vcm_finalize_one_pixel
 from .vcm_kernels import (
     _bdpt_emit_light_paths_gpu, _bdpt_splat_light_paths_gpu, _bdpt_camera_connect_gpu,
     bdpt_merge_grid_reset_gpu, bdpt_merge_grid_count_gpu, bdpt_merge_grid_insert_gpu,
-    _VCM_BUDGET_REDUCE_THREADS, vcm_budget_reduce_gpu,
+    _VCM_BUDGET_REDUCE_THREADS, vcm_budget_reduce_gpu, _bdpt_light_path_init_gpu, _bdpt_light_path_intersect_gpu,
+    _bdpt_light_path_bounce_gpu, _bdpt_camera_path_init_gpu, _bdpt_camera_path_intersect_gpu,
+    _bdpt_camera_path_bounce_gpu, _bdpt_camera_path_accumulate_gpu, reset_shadow_valid_gpu,
+    resolve_shadow_connect_gpu, sum_shadow_connect_gpu,
 )
 
 @always_inline
@@ -52,7 +58,8 @@ def _vcm_write(buf: DeviceBuffer[DType.uint8], src: Pointer[Float32, MutUntracke
 
 struct VcmGpu(Movable):
     """GPU VCM's buffers and per-render constants. A batch render runs all its passes on one, a session one pass per
-    sample. `merging` False is BDPT: no merge grid, and merging's MIS weight is 0."""
+    sample. `merging` False is BDPT: no merge grid, and merging's MIS weight is 0. `wavefront` adds the path states and
+    the shadow-ray queue of the staged kernels (run_pass_wavefront)."""
     var handle: Pointer[GpuSceneHandle, MutUntrackedOrigin]
     var n_pix: Int
     var fw: Int
@@ -89,13 +96,22 @@ struct VcmGpu(Movable):
     var c2w: DeviceBuffer[DType.uint8]
     var w2c: DeviceBuffer[DType.uint8]
     var c2r: DeviceBuffer[DType.uint8]
+    var wavefront: Bool
+    var shadow_batch: Bool                       # wavefront: connect shadow rays traced in one batch per bounce
+    var light_states: DeviceBuffer[DType.uint8]
+    var cam_states: DeviceBuffer[DType.uint8]
+    var shadow_rays: DeviceBuffer[DType.uint8]   # _BDPT_MAX_VERTS slots per pixel
+    var shadow_pending: DeviceBuffer[DType.uint8]
+    var shadow_valid: DeviceBuffer[DType.uint8]
+    var shadow_seg_med: DeviceBuffer[DType.uint8]
+    var shadow_scratch: DeviceBuffer[DType.uint8]
 
     def __init__(
         out self, handle: Pointer[GpuSceneHandle, MutUntrackedOrigin], psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin],
         ref sd: SceneView, n_photons_req: Int, merging: Bool = True, budget: Bool = False, cap: Int32 = Int32(0),
         no_keep_mis: Bool = False, radius_from_camera: Bool = False, cam_percentile: Float32 = Float32(0.5),
         cam_fraction_mult: Float32 = Float32(1.0), no_footprint: Bool = False, radius_scale: Float32 = Float32(1.0),
-        verbose: Bool = False,
+        verbose: Bool = False, wavefront: Bool = False,
     ) raises:
         """`sd` is the host scene: its bounding sphere and media set the merge radius and the emission medium."""
         self.handle = handle
@@ -154,6 +170,18 @@ struct VcmGpu(Movable):
         self.c2w = ctx.enqueue_create_buffer[DType.uint8](16 * size_of[Float32]())
         self.w2c = ctx.enqueue_create_buffer[DType.uint8](16 * size_of[Float32]())
         self.c2r = ctx.enqueue_create_buffer[DType.uint8](9 * size_of[Float32]())
+        self.wavefront = wavefront
+        self.shadow_batch = False
+        var n_l = self.n_light_paths if wavefront else 0
+        var n_c = self.n_pix if wavefront else 0
+        var n_s = self.n_pix * _BDPT_MAX_VERTS if wavefront else 0
+        self.light_states = ctx.enqueue_create_buffer[DType.uint8](max(n_l * size_of[VCMLightPathState](), 1))
+        self.cam_states = ctx.enqueue_create_buffer[DType.uint8](max(n_c * size_of[VCMCameraPathState](), 1))
+        self.shadow_rays = ctx.enqueue_create_buffer[DType.uint8](max(n_s * 8 * size_of[Float32](), 1))
+        self.shadow_pending = ctx.enqueue_create_buffer[DType.uint8](max(n_s * size_of[SpectralSample](), 1))
+        self.shadow_valid = ctx.enqueue_create_buffer[DType.uint8](max(n_s, 1))
+        self.shadow_seg_med = ctx.enqueue_create_buffer[DType.uint8](max(n_s * size_of[Int32](), 1))
+        self.shadow_scratch = ctx.enqueue_create_buffer[DType.uint8](max(n_s * size_of[Intersection](), 1))
         self.upload_camera(psc)
         self.clear()
 
@@ -193,13 +221,8 @@ struct VcmGpu(Movable):
         self.visit_accum.enqueue_fill(UInt8(0))
         self.vcm_lambda = Float32(0)
 
-    def run_pass(mut self, psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin], si: Int,
-                 film: Pointer[Float32, MutUntrackedOrigin], albedo: Pointer[Float32, MutUntrackedOrigin],
-                 verbose: Bool = False) raises:
-        """Pass `si`: light paths, the merge grid, camera paths into `film`/`albedo` (merging into accum_merge),
-        t=1 splats. The merge radius shrinks with si (vcm_merge_radius)."""
-        comptime block_size = 256
-        ref ctx = self.handle[].ctx
+    def _begin_pass(mut self, psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin], si: Int) raises -> VcmPass:
+        """Pass `si`'s constants. The merge radius shrinks with si (vcm_merge_radius)."""
         var gsd = self.handle[].scene_descriptor()
         var radius_i = vcm_merge_radius(self.scene_radius, si)
         # The footprint radius shrinks on the global schedule; 0 (--vcm-no-footprint) is the fixed global radius.
@@ -220,22 +243,16 @@ struct VcmGpu(Movable):
             keep_inv_cell = Float32(1.0) / max(radius_prev, Float32(1e-6))
             keep_scale = (radius_i / radius_prev) * (radius_i / radius_prev)
         var merge_r2 = radius_i * radius_i
-        var merge_inv_cell = _vcm_grid_inv_cell(gsd, radius_i)
-        var merge_norm = Float32(1.0) / (Float32(self.n_light_paths) * PI * max(merge_r2, Float32(1e-12)))
         var eta_vcm = PI * max(merge_r2, Float32(1e-12)) * Float32(self.n_light_paths)
-        var mis_vm_weight_factor = eta_vcm if self.merging else Float32(0)
-        var mis_vc_weight_factor = Float32(1.0) / eta_vcm if self.merging else Float32(0)
         if not self.merging:   # BDPT: _bdpt_merge_from_cache returns 0 without a grid
             merge_heads = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling()
             merge_next = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling()
-        var base_seed = psc[unsafe_offset=0].rng_seed
-        var pass_seed = base_seed ^ UInt64(si * 2654435761 + 1)
         var vsd = gsd.with_vcm(keep, keep_inv_cell, keep_scale, psc[unsafe_offset=0].max_depth, self.cam, vcm_footprint,
                                radius_i).with_vcm_cap(self.cap)
-        var stat_a = Pointer[Float32, MutUntrackedOrigin](unsafe_from_address=Int(self.stat_a.unsafe_ptr()))
-        var stat_b = Pointer[Float32, MutUntrackedOrigin](unsafe_from_address=Int(self.stat_b.unsafe_ptr()))
         if self.budget:
             # Accumulate into one table, read the other, whose lambda the last pass's reduction set (0 at first: the cap).
+            var stat_a = Pointer[Float32, MutUntrackedOrigin](unsafe_from_address=Int(self.stat_a.unsafe_ptr()))
+            var stat_b = Pointer[Float32, MutUntrackedOrigin](unsafe_from_address=Int(self.stat_b.unsafe_ptr()))
             if si % 2 == 0:
                 self.stat_a.enqueue_fill(Float32(0))
             else:
@@ -243,43 +260,49 @@ struct VcmGpu(Movable):
             vsd = vsd.with_vcm_budget(
                 (stat_b if si % 2 == 0 else stat_a) if si > 0 else Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
                 stat_a if si % 2 == 0 else stat_b, self.vcm_lambda)
+        var base_seed = psc[unsafe_offset=0].rng_seed
+        return VcmPass(
+            gsd=gsd, vsd=vsd, si=si, merge_heads=merge_heads, merge_next=merge_next, merge_r2=merge_r2,
+            merge_inv_cell=_vcm_grid_inv_cell(gsd, radius_i),
+            merge_norm=Float32(1.0) / (Float32(self.n_light_paths) * PI * max(merge_r2, Float32(1e-12))),
+            mis_vm=eta_vcm if self.merging else Float32(0), mis_vc=Float32(1.0) / eta_vcm if self.merging else Float32(0),
+            base_seed=base_seed, pass_seed=base_seed ^ UInt64(si * 2654435761 + 1),
+            filt=film_filter_of(psc[unsafe_offset=0].filter_type, psc[unsafe_offset=0].filter_sigma,
+                                psc[unsafe_offset=0].filter_support_x, psc[unsafe_offset=0].filter_support_y))
+
+    def _build_grid(self, p: VcmPass) raises:
+        """The merge grid over this pass's light vertices."""
+        if not self.merging:
+            return
+        comptime block_size = 256
+        ref ctx = self.handle[].ctx
         var lvc = self.lvc.unsafe_ptr().unsafe_bitcast[BDPTVertex]()
         var path_len = self.path_len.unsafe_ptr().unsafe_bitcast[Int32]()
+        var grid_merge_ins = ceildiv(max(self.lvc_cap, 1), block_size)
+        ctx.enqueue_function[bdpt_merge_grid_reset_gpu](
+            p.merge_heads, Int64(_HSIZE), grid_dim=ceildiv(_HSIZE, block_size), block_dim=block_size)
+        ctx.enqueue_function[bdpt_merge_grid_count_gpu](
+            lvc, path_len, Int64(self.lvc_cap), p.merge_heads, p.merge_inv_cell, grid_dim=grid_merge_ins, block_dim=block_size)
+        ctx.enqueue_function[bdpt_merge_grid_insert_gpu](
+            lvc, path_len, Int64(self.lvc_cap), p.merge_next, p.merge_heads, p.merge_inv_cell, p.vsd,
+            grid_dim=grid_merge_ins, block_dim=block_size)
+
+    def _end_pass(mut self, p: VcmPass, film: Pointer[Float32, MutUntrackedOrigin], verbose: Bool) raises:
+        """t=1 light tracing after the camera paths, then --vcm-budget's lambda for the next pass."""
+        comptime block_size = 256
+        ref ctx = self.handle[].ctx
         var lvc_camis = self.lvc_camis.unsafe_ptr().unsafe_bitcast[CamisLightRecord]()
-        var inter_light = self.inter_light.unsafe_ptr().unsafe_bitcast[Intersection]()
-        var filt = film_filter_of(psc[unsafe_offset=0].filter_type, psc[unsafe_offset=0].filter_sigma,
-                                  psc[unsafe_offset=0].filter_support_x, psc[unsafe_offset=0].filter_support_y)
-        var grid_light = ceildiv(max(self.n_light_paths, 1), block_size)
-        ctx.enqueue_function[_bdpt_emit_light_paths_gpu](
-            lvc, path_len, lvc_camis, mis_vc_weight_factor, mis_vm_weight_factor, inter_light,
-            Int64(self.n_light_paths), self.default_emit_med, pass_seed, Int64(si), _f32(self.c2w), self.px_scale, vsd,
-            grid_dim=grid_light, block_dim=block_size)
-        if self.merging:
-            var grid_merge_ins = ceildiv(max(self.lvc_cap, 1), block_size)
-            ctx.enqueue_function[bdpt_merge_grid_reset_gpu](
-                merge_heads, Int64(_HSIZE), grid_dim=ceildiv(_HSIZE, block_size), block_dim=block_size)
-            ctx.enqueue_function[bdpt_merge_grid_count_gpu](
-                lvc, path_len, Int64(self.lvc_cap), merge_heads, merge_inv_cell, grid_dim=grid_merge_ins, block_dim=block_size)
-            ctx.enqueue_function[bdpt_merge_grid_insert_gpu](
-                lvc, path_len, Int64(self.lvc_cap), merge_next, merge_heads, merge_inv_cell, vsd,
-                grid_dim=grid_merge_ins, block_dim=block_size)
-        ctx.enqueue_function[_bdpt_camera_connect_gpu](
-            film, _f32(self.accum_merge), albedo, _f32(self.visit_accum), Int64(self.n_pix), Int64(self.fw),
-            _f32(self.r2c), _f32(self.c2w), self.inter_cam.unsafe_ptr().unsafe_bitcast[Intersection](),
-            lvc, path_len, lvc_camis, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm, self.px_scale,
-            mis_vc_weight_factor, mis_vm_weight_factor, Float32(self.n_light_paths), filt, base_seed, Int64(si), vsd,
-            grid_dim=ceildiv(self.n_pix, block_size), block_dim=block_size)
-        # t=1 light tracing, after the camera paths on the same stream.
         ctx.enqueue_function[_bdpt_splat_light_paths_gpu](
-            film, lvc, path_len, Int64(self.n_light_paths), inter_light, _f32(self.w2c), _f32(self.c2r), _f32(self.c2w),
-            Int64(self.fw), Int64(self.fh), self.px_scale, mis_vm_weight_factor, filt, vsd, lvc_camis,
-            grid_dim=grid_light, block_dim=block_size)
+            film, self.lvc.unsafe_ptr().unsafe_bitcast[BDPTVertex](), self.path_len.unsafe_ptr().unsafe_bitcast[Int32](),
+            Int64(self.n_light_paths), self.inter_light.unsafe_ptr().unsafe_bitcast[Intersection](), _f32(self.w2c),
+            _f32(self.c2r), _f32(self.c2w), Int64(self.fw), Int64(self.fh), self.px_scale, p.mis_vm, p.filt, p.vsd, lvc_camis,
+            grid_dim=ceildiv(max(self.n_light_paths, 1), block_size), block_dim=block_size)
         if self.budget:
-            # lambda for the next pass: the budget is the merge work the fixed cap would have spent, sum Q min(n, cap).
+            # The budget is the merge work the fixed cap would have spent, sum Q min(n, cap).
             self.budget_red.enqueue_fill(Float32(0))
             var budget_red = Pointer[Float32, MutUntrackedOrigin](unsafe_from_address=Int(self.budget_red.unsafe_ptr()))
             ctx.enqueue_function[vcm_budget_reduce_gpu](
-                vsd.vcmStatOut, merge_heads, budget_red,
+                p.vsd.vcmStatOut, p.merge_heads, budget_red,
                 grid_dim=_VCM_BUDGET_REDUCE_THREADS // block_size, block_dim=block_size)
             with self.budget_red.map_to_host() as red:
                 var s_sum = red.unsafe_ptr()[unsafe_offset=0]
@@ -287,6 +310,135 @@ struct VcmGpu(Movable):
                 self.vcm_lambda = b_sum / s_sum if s_sum > Float32(0) else Float32(0)
             if verbose:
                 print("VCM (GPU): budget lambda " + String(self.vcm_lambda))
+
+    def run_pass(mut self, psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin], si: Int,
+                 film: Pointer[Float32, MutUntrackedOrigin], albedo: Pointer[Float32, MutUntrackedOrigin],
+                 verbose: Bool = False) raises:
+        """Pass `si` with one kernel per subpath: light paths, the merge grid, camera paths into `film`/`albedo`
+        (merging into accum_merge), t=1 splats."""
+        comptime block_size = 256
+        ref ctx = self.handle[].ctx
+        var p = self._begin_pass(psc, si)
+        var lvc = self.lvc.unsafe_ptr().unsafe_bitcast[BDPTVertex]()
+        var path_len = self.path_len.unsafe_ptr().unsafe_bitcast[Int32]()
+        var lvc_camis = self.lvc_camis.unsafe_ptr().unsafe_bitcast[CamisLightRecord]()
+        ctx.enqueue_function[_bdpt_emit_light_paths_gpu](
+            lvc, path_len, lvc_camis, p.mis_vc, p.mis_vm, self.inter_light.unsafe_ptr().unsafe_bitcast[Intersection](),
+            Int64(self.n_light_paths), self.default_emit_med, p.pass_seed, Int64(si), _f32(self.c2w), self.px_scale, p.vsd,
+            grid_dim=ceildiv(max(self.n_light_paths, 1), block_size), block_dim=block_size)
+        self._build_grid(p)
+        ctx.enqueue_function[_bdpt_camera_connect_gpu](
+            film, _f32(self.accum_merge), albedo, _f32(self.visit_accum), Int64(self.n_pix), Int64(self.fw),
+            _f32(self.r2c), _f32(self.c2w), self.inter_cam.unsafe_ptr().unsafe_bitcast[Intersection](),
+            lvc, path_len, lvc_camis, p.merge_next, p.merge_heads, p.merge_inv_cell, p.merge_r2, p.merge_norm, self.px_scale,
+            p.mis_vc, p.mis_vm, Float32(self.n_light_paths), p.filt, p.base_seed, Int64(si), p.vsd,
+            grid_dim=ceildiv(self.n_pix, block_size), block_dim=block_size)
+        self._end_pass(p, film, verbose)
+
+    def run_pass_wavefront(mut self, psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin], si: Int,
+                           film: Pointer[Float32, MutUntrackedOrigin], albedo: Pointer[Float32, MutUntrackedOrigin],
+                           rt: VcmRt, ref sd: SceneView, verbose: Bool = False) raises:
+        """Pass `si` as staged kernels, one intersect and one bounce launch per depth, the intersect by `rt` when
+        active. `sd` is the host scene."""
+        comptime block_size = 256
+        ref ctx = self.handle[].ctx
+        var p = self._begin_pass(psc, si)
+        var lvc = self.lvc.unsafe_ptr().unsafe_bitcast[BDPTVertex]()
+        var path_len = self.path_len.unsafe_ptr().unsafe_bitcast[Int32]()
+        var light_states = self.light_states.unsafe_ptr().unsafe_bitcast[VCMLightPathState]()
+        var cam_states = self.cam_states.unsafe_ptr().unsafe_bitcast[VCMCameraPathState]()
+        var inter_light = self.inter_light.unsafe_ptr().unsafe_bitcast[Intersection]()
+        var inter_cam = self.inter_cam.unsafe_ptr().unsafe_bitcast[Intersection]()
+        var grid_light = ceildiv(max(self.n_light_paths, 1), block_size)
+        var grid_pix = ceildiv(self.n_pix, block_size)
+        ctx.enqueue_function[_bdpt_light_path_init_gpu](
+            light_states, lvc, path_len, p.mis_vc, Int64(self.n_light_paths), self.default_emit_med, p.pass_seed,
+            Int64(si), p.gsd, grid_dim=grid_light, block_dim=block_size)
+        for _ in range(_BDPT_MAX_DEPTH):
+            if rt.active:
+                rt.trace[False](ctx, self.light_states, self.inter_light, self.n_light_paths, sd)
+            else:
+                ctx.enqueue_function[_bdpt_light_path_intersect_gpu](
+                    p.gsd, light_states, inter_light, Int64(self.n_light_paths), grid_dim=grid_light, block_dim=block_size)
+            ctx.enqueue_function[_bdpt_light_path_bounce_gpu](
+                light_states, inter_light, lvc, path_len, p.mis_vc, p.mis_vm, Int64(self.n_light_paths), _f32(self.c2w),
+                self.px_scale, p.vsd, grid_dim=grid_light, block_dim=block_size)
+        self._build_grid(p)
+        if si == 0:
+            # Batched shadow rays only pay off when light paths fill their slots.
+            self.shadow_batch = rt.active
+            if rt.active:
+                var sum_pl = 0
+                with self.path_len.map_to_host() as host_buf:
+                    var pl = host_buf.unsafe_ptr().unsafe_bitcast[Int32]()
+                    for i in range(self.n_light_paths):
+                        sum_pl += Int(pl[unsafe_offset=i])
+                var occupancy = (Float64(sum_pl) / Float64(self.n_light_paths)) / Float64(_BDPT_MAX_VERTS)
+                self.shadow_batch = occupancy >= 0.2
+                if verbose:
+                    print("VCM (GPU wavefront): shadow-ray batching " + ("enabled" if self.shadow_batch else "disabled")
+                          + " (light-path slot occupancy " + String(occupancy * 100) + "%)")
+        ctx.enqueue_function[_bdpt_camera_path_init_gpu](
+            cam_states, _f32(self.r2c), _f32(self.c2w), Int64(self.n_pix), Int64(self.fw), self.px_scale,
+            Float32(self.n_light_paths), p.filt, p.base_seed, Int64(si),
+            psc[unsafe_offset=0].camera_lens_radius, psc[unsafe_offset=0].camera_focal_distance,
+            grid_dim=grid_pix, block_dim=block_size)
+        var shadow_rays = self.shadow_rays.unsafe_ptr().unsafe_bitcast[Float32]()
+        var shadow_pending = self.shadow_pending.unsafe_ptr().unsafe_bitcast[SpectralSample]()
+        var shadow_valid = self.shadow_valid.unsafe_ptr().unsafe_bitcast[Int8]()
+        var shadow_seg_med = self.shadow_seg_med.unsafe_ptr().unsafe_bitcast[Int32]()
+        var shadow_cap = self.n_pix * _BDPT_MAX_VERTS
+        for _ in range(_BDPT_MAX_DEPTH):
+            if rt.active:
+                rt.trace[True](ctx, self.cam_states, self.inter_cam, self.n_pix, sd)
+            else:
+                ctx.enqueue_function[_bdpt_camera_path_intersect_gpu](
+                    p.gsd, cam_states, inter_cam, Int64(self.n_pix), grid_dim=grid_pix, block_dim=block_size)
+            if self.shadow_batch:
+                ctx.enqueue_function[reset_shadow_valid_gpu](
+                    shadow_valid, Int64(self.n_pix), grid_dim=grid_pix, block_dim=block_size)
+            ctx.enqueue_function[_bdpt_camera_path_bounce_gpu](
+                cam_states, inter_cam, lvc, path_len, p.merge_next, p.merge_heads, p.merge_inv_cell, p.merge_r2,
+                p.merge_norm, p.mis_vc, p.mis_vm, Int64(self.n_pix), _f32(self.c2w), self.px_scale, p.vsd,
+                Int8(1) if self.shadow_batch else Int8(0), shadow_rays, shadow_pending, shadow_valid, shadow_seg_med,
+                grid_dim=grid_pix, block_dim=block_size)
+            if self.shadow_batch:
+                # This bounce's connect shadow rays, traced together, then summed into the path states.
+                var instance_base = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling()
+                if rt.instance_base_mesh:
+                    instance_base = rt.instance_base_mesh.value().unsafe_ptr().unsafe_bitcast[Int32]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
+                rt.trace_shadow(ctx, self.shadow_rays, self.shadow_valid, shadow_cap, sd)
+                ctx.enqueue_function[resolve_shadow_connect_gpu](
+                    rt.results.value().unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
+                    rt.mesh_material_idx.value().unsafe_ptr().unsafe_bitcast[Int64]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
+                    Int64(rt.n_meshes), cam_states, shadow_pending, shadow_valid, shadow_seg_med, shadow_rays,
+                    self.shadow_scratch.unsafe_ptr().unsafe_bitcast[Intersection](), Int64(shadow_cap), p.gsd, instance_base,
+                    grid_dim=ceildiv(shadow_cap, block_size), block_dim=block_size)
+                ctx.enqueue_function[sum_shadow_connect_gpu](
+                    cam_states, shadow_pending, shadow_valid, Int64(self.n_pix), grid_dim=grid_pix, block_dim=block_size)
+        ref spec = sd.spectral
+        ctx.enqueue_function[_bdpt_camera_path_accumulate_gpu](
+            cam_states, film, _f32(self.accum_merge), albedo, Int64(self.n_pix), spec.coeffs, Int64(spec.res),
+            spec.cie_x, spec.cie_y, spec.cie_z, spec.d65, grid_dim=grid_pix, block_dim=block_size)
+        self._end_pass(p, film, verbose)
+
+
+@fieldwise_init
+struct VcmPass(TrivialRegisterPassable):
+    """One pass's scene views, merge grid, merge radius terms, MIS factors, seeds and pixel filter."""
+    var gsd: SceneView
+    var vsd: SceneView                                   # gsd with this pass's merge state
+    var si: Int
+    var merge_heads: Pointer[Int32, MutUntrackedOrigin]
+    var merge_next: Pointer[Int32, MutUntrackedOrigin]
+    var merge_r2: Float32
+    var merge_inv_cell: Float32
+    var merge_norm: Float32
+    var mis_vm: Float32
+    var mis_vc: Float32
+    var base_seed: UInt64
+    var pass_seed: UInt64
+    var filt: FilmFilter
 
 
 def vcm_render_gpu(
@@ -305,24 +457,34 @@ def vcm_render_gpu(
     vcm_radius_cam_fraction_mult: Float32 = Float32(1.0),
     vcm_no_footprint: Bool = False,   # the "naive VCM" baseline: one fixed global radius
     vcm_radius_scale: Float32 = Float32(1.0),   # the whole merge radius: ceiling, grid cell, MIS density, footprint
+    wavefront: Bool = False,
+    rt: VcmRt = VcmRt(),
 ) -> Int32:
-    """A batch VCM render: n_spp passes of VcmGpu, then the image written as the scene asks."""
+    """A batch VCM render: n_spp passes of VcmGpu, then the image written as the scene asks. `wavefront` runs the
+    staged kernels, tracing through `rt` when it is active."""
+    comptime if _VCM_CAMIS:
+        if wavefront:   # the camera's CAMIS records would have to live in VCMCameraPathState across launches
+            print("VCM (GPU wavefront): not supported with _VCM_CAMIS; use --gpu --vcm")
+            return Int32(-1)
     var fw = Int(psc[unsafe_offset=0].film_w)
     var fh = Int(psc[unsafe_offset=0].film_h)
     var n_pix = fw * fh
-    print("VCM (GPU): " + String(fw) + "x" + String(fh) + "  " + String(n_spp) + " spp  "
+    print(("VCM (GPU wavefront): " if wavefront else "VCM (GPU): ") + String(fw) + "x" + String(fh) + "  " + String(n_spp) + " spp  "
           + String(max(n_photons_req, n_pix)) + " light paths/pass")
     var ret = Int32(0)
     comptime if has_accelerator():
         try:
             var v = VcmGpu(handlePtr, psc, sd, n_photons_req, True, vcm_budget, vcm_cap, vcm_no_keep_mis,
                            vcm_radius_from_camera, vcm_radius_cam_percentile, vcm_radius_cam_fraction_mult,
-                           vcm_no_footprint, vcm_radius_scale, verbose)
+                           vcm_no_footprint, vcm_radius_scale, verbose, wavefront)
             handlePtr[].cam_fp = camera_footprint(psc[unsafe_offset=0].raster_to_camera, psc[unsafe_offset=0].camera_to_world,
                                                   fw, fh, n_spp)
             var prog = Progress(n_spp, "spp", quiet=verbose)
             for si in range(n_spp):
-                v.run_pass(psc, si, _f32(v.accum), _f32(v.albedo_accum), verbose)
+                if wavefront:
+                    v.run_pass_wavefront(psc, si, _f32(v.accum), _f32(v.albedo_accum), rt, sd, verbose)
+                else:
+                    v.run_pass(psc, si, _f32(v.accum), _f32(v.albedo_accum), verbose)
                 if verbose:
                     print("VCM (GPU): sample " + String(si + 1) + "/" + String(n_spp))
                 handlePtr[].ctx.synchronize()   # the progress line reports finished work

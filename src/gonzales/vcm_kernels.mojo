@@ -1,4 +1,4 @@
-# VCM GPU kernels: per-stage, merge grid, shadow resolve, Vulkan-interop ray kernels.
+# VCM GPU kernels: per-stage, merge grid and shadow resolve.
 # Part of the BDPT/VCM machinery that used to be one file (bdpt_*.mojo).
 
 from std.collections import Array
@@ -8,8 +8,7 @@ from .gpu_tuning import (
     MINCTA_VCM_EMIT, MINCTA_VCM_SPLAT, MINCTA_VCM_CONNECT, MINCTA_VCM_LBOUNCE, MINCTA_VCM_CBOUNCE,
     MINCTA_VCM_RESOLVE,
 )
-from max.gpu.host import DeviceContext, DeviceBuffer
-from std.math import sqrt, min, ceildiv
+from std.math import sqrt, min
 from std.atomic import Atomic
 from .geometry import Point3f, Vec3f
 from .materials import MatKind
@@ -20,14 +19,7 @@ from .bvh import SceneView, test_spheres, _is_real_ptr, ray_sphere_hit
 from .sampling import FilmFilter, ThinLens
 from .rng import PCG32
 from .sppm import _HSIZE, _PHOTON_BUCKET_CAP
-from .gpu_wavefront import (
-    vulkaninterop_unpack_results_kernel, rtcore_trace_unpack_gpu, rtcore_spheres_from_rays_gpu,
-    rtcore_alpha_passes, rt_no_ids, rt_no_paths, rt_no_meshes,
-)
-from .rtcore import rtcore_active, rtcore_alpha_enabled, rtcore_trace_interop
-from .vulkaninterop import VulkanInteropRtSceneHandle, vulkaninterop_rt_trace
-from max.gpu.host._nvidia_cuda import CUDA
-from .spectrum import SampledWavelengths, SpectralSample, pass_wavelengths, spectral_sample_to_rgb
+from .spectrum import SpectralSample, pass_wavelengths, spectral_sample_to_rgb
 from .bdpt_vertex import _BDPT_MAX_VERTS, BDPTVertex
 from .bdpt_nee import _visible_transmittance
 from .vcm_grid import _CAMIS_CAM_RECS, _bdpt_count_merge_vertex, _bdpt_insert_merge_vertex, _vcm_reset_cell
@@ -461,245 +453,6 @@ def _bdpt_camera_path_accumulate_gpu(
     albedo_accum[unsafe_offset=pix*3]   += states[unsafe_offset=pix].first_alb.r
     albedo_accum[unsafe_offset=pix*3+1] += states[unsafe_offset=pix].first_alb.g
     albedo_accum[unsafe_offset=pix*3+2] += states[unsafe_offset=pix].first_alb.b
-
-# ── Task #163 stage 4 part 4: Vulkan RT interop intersect for VCM ───────────
-# Swaps _bdpt_light_path_intersect_gpu/_bdpt_camera_path_intersect_gpu's
-# software-BVH traverse_bvh2_core/test_spheres for the stage-1/2/3 CUDA/
-
-@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
-@__llvm_metadata(`nvvm.minctasm`=SIMDLength(1))    # NVIDIA keeps its old register budget; AMD ignores this
-def vulkaninterop_pack_light_rays_kernel(
-    states: Pointer[VCMLightPathState, MutUntrackedOrigin],
-    rays: Pointer[Float32, MutUntrackedOrigin],
-    count_dp: Int64,
-):
-    var count = Int(count_dp)
-    var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
-    if tid >= count:
-        return
-    var ro = states[unsafe_offset=tid].ro
-    var rd = states[unsafe_offset=tid].rd
-    var idx = tid * 8
-    rays[unsafe_offset=idx + 0] = ro.x
-    rays[unsafe_offset=idx + 1] = ro.y
-    rays[unsafe_offset=idx + 2] = ro.z
-    rays[unsafe_offset=idx + 3] = Float32(1e-4)
-    rays[unsafe_offset=idx + 4] = rd.x
-    rays[unsafe_offset=idx + 5] = rd.y
-    rays[unsafe_offset=idx + 6] = rd.z
-    rays[unsafe_offset=idx + 7] = Float32(1.0e8) if states[unsafe_offset=tid].active != Int8(0) else Float32(0.0)   # a finished path traces a zero-length ray
-
-@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
-@__llvm_metadata(`nvvm.minctasm`=SIMDLength(1))    # NVIDIA keeps its old register budget; AMD ignores this
-def vulkaninterop_pack_camera_rays_kernel(
-    states: Pointer[VCMCameraPathState, MutUntrackedOrigin],
-    rays: Pointer[Float32, MutUntrackedOrigin],
-    count_dp: Int64,
-):
-    var count = Int(count_dp)
-    var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
-    if tid >= count:
-        return
-    var ro = states[unsafe_offset=tid].ro
-    var rd = states[unsafe_offset=tid].rd
-    var idx = tid * 8
-    rays[unsafe_offset=idx + 0] = ro.x
-    rays[unsafe_offset=idx + 1] = ro.y
-    rays[unsafe_offset=idx + 2] = ro.z
-    rays[unsafe_offset=idx + 3] = Float32(1e-4)
-    rays[unsafe_offset=idx + 4] = rd.x
-    rays[unsafe_offset=idx + 5] = rd.y
-    rays[unsafe_offset=idx + 6] = rd.z
-    rays[unsafe_offset=idx + 7] = Float32(1.0e8) if states[unsafe_offset=tid].active != Int8(0) else Float32(0.0)   # a finished path traces a zero-length ray
-
-def vulkaninterop_rt_traverse_light_paths_gpu(
-    ctx: DeviceContext,
-    state_buf: DeviceBuffer[DType.uint8],
-    inter_buf: DeviceBuffer[DType.uint8],
-    interop_scene: VulkanInteropRtSceneHandle,
-    interop_rays_buf: DeviceBuffer[DType.float32],
-    interop_results_buf: DeviceBuffer[DType.float32],
-    mesh_material_idx_buf: DeviceBuffer[DType.uint8],
-    mesh_al_idx_buf: DeviceBuffer[DType.uint8],
-    n_meshes: Int,
-    n_total: Int,
-    # --rt-hardware (rtcore_trace_unpack_gpu): scene view, alpha scratch, instance decode.
-    sd: SceneView,
-    rt_scratch_buf: Optional[DeviceBuffer[DType.uint8]] = None,
-    instance_base_mesh_buf: Optional[DeviceBuffer[DType.uint8]] = None,
-) raises:
-    comptime block_size = 256
-    var grid = ceildiv(n_total, block_size)
-
-    ctx.enqueue_function[vulkaninterop_pack_light_rays_kernel](
-        state_buf.unsafe_ptr().unsafe_bitcast[VCMLightPathState]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
-        interop_rays_buf.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
-        Int64(n_total),
-        grid_dim=grid, block_dim=block_size,
-    )
-
-    if Int(rtcore_active()) != 0 and rt_scratch_buf:
-        rtcore_trace_unpack_gpu(ctx, inter_buf, sd, interop_rays_buf, interop_results_buf, rt_scratch_buf.value(),
-                                mesh_material_idx_buf, mesh_al_idx_buf, n_meshes, n_total, instance_base_mesh_buf)
-        if Int(sd.sphereCount) > 0:
-            ctx.enqueue_function[rtcore_spheres_from_rays_gpu](
-                interop_rays_buf.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
-                inter_buf.unsafe_ptr().unsafe_bitcast[Intersection]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
-                sd.spheres, Int64(Int(sd.sphereCount)), Int64(n_total),
-                grid_dim=grid, block_dim=block_size,
-            )
-        return
-
-    var cuda_stream = CUDA(ctx.stream())
-    _ = vulkaninterop_rt_trace(interop_scene, Int32(n_total), cuda_stream)
-
-    # GPU kernel dispatch has no default-argument fill-in (unlike ordinary
-    # Mojo calls) -- must pass instance_base_mesh explicitly. VCM's Vulkan
-    var instance_base_ptr = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling()
-    if instance_base_mesh_buf:
-        instance_base_ptr = instance_base_mesh_buf.value().unsafe_ptr().unsafe_bitcast[Int32]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
-    ctx.enqueue_function[vulkaninterop_unpack_results_kernel](
-        interop_results_buf.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
-        inter_buf.unsafe_ptr().unsafe_bitcast[Intersection]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
-        mesh_material_idx_buf.unsafe_ptr().unsafe_bitcast[Int64]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
-        mesh_al_idx_buf.unsafe_ptr().unsafe_bitcast[Int32]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
-        Int64(n_meshes),
-        Int64(n_total),
-        instance_base_ptr,
-        rt_no_ids(), rt_no_paths(), rt_no_meshes(),
-        grid_dim=grid, block_dim=block_size,
-    )
-
-def vulkaninterop_rt_traverse_camera_paths_gpu(
-    ctx: DeviceContext,
-    state_buf: DeviceBuffer[DType.uint8],
-    inter_buf: DeviceBuffer[DType.uint8],
-    interop_scene: VulkanInteropRtSceneHandle,
-    interop_rays_buf: DeviceBuffer[DType.float32],
-    interop_results_buf: DeviceBuffer[DType.float32],
-    mesh_material_idx_buf: DeviceBuffer[DType.uint8],
-    mesh_al_idx_buf: DeviceBuffer[DType.uint8],
-    n_meshes: Int,
-    n_total: Int,
-    # --rt-hardware (rtcore_trace_unpack_gpu): scene view, alpha scratch, instance decode.
-    sd: SceneView,
-    rt_scratch_buf: Optional[DeviceBuffer[DType.uint8]] = None,
-    instance_base_mesh_buf: Optional[DeviceBuffer[DType.uint8]] = None,
-) raises:
-    comptime block_size = 256
-    var grid = ceildiv(n_total, block_size)
-
-    ctx.enqueue_function[vulkaninterop_pack_camera_rays_kernel](
-        state_buf.unsafe_ptr().unsafe_bitcast[VCMCameraPathState]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
-        interop_rays_buf.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
-        Int64(n_total),
-        grid_dim=grid, block_dim=block_size,
-    )
-
-    if Int(rtcore_active()) != 0 and rt_scratch_buf:
-        rtcore_trace_unpack_gpu(ctx, inter_buf, sd, interop_rays_buf, interop_results_buf, rt_scratch_buf.value(),
-                                mesh_material_idx_buf, mesh_al_idx_buf, n_meshes, n_total, instance_base_mesh_buf)
-        if Int(sd.sphereCount) > 0:
-            ctx.enqueue_function[rtcore_spheres_from_rays_gpu](
-                interop_rays_buf.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
-                inter_buf.unsafe_ptr().unsafe_bitcast[Intersection]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
-                sd.spheres, Int64(Int(sd.sphereCount)), Int64(n_total),
-                grid_dim=grid, block_dim=block_size,
-            )
-        return
-
-    var cuda_stream = CUDA(ctx.stream())
-    _ = vulkaninterop_rt_trace(interop_scene, Int32(n_total), cuda_stream)
-
-    # GPU kernel dispatch has no default-argument fill-in (unlike ordinary
-    # Mojo calls) -- must pass instance_base_mesh explicitly. VCM's Vulkan
-    var instance_base_ptr = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling()
-    if instance_base_mesh_buf:
-        instance_base_ptr = instance_base_mesh_buf.value().unsafe_ptr().unsafe_bitcast[Int32]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
-    ctx.enqueue_function[vulkaninterop_unpack_results_kernel](
-        interop_results_buf.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
-        inter_buf.unsafe_ptr().unsafe_bitcast[Intersection]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
-        mesh_material_idx_buf.unsafe_ptr().unsafe_bitcast[Int64]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
-        mesh_al_idx_buf.unsafe_ptr().unsafe_bitcast[Int32]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
-        Int64(n_meshes),
-        Int64(n_total),
-        instance_base_ptr,
-        rt_no_ids(), rt_no_paths(), rt_no_meshes(),
-        grid_dim=grid, block_dim=block_size,
-    )
-
-@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
-@__llvm_metadata(`nvvm.minctasm`=SIMDLength(1))    # NVIDIA keeps its old register budget; AMD ignores this
-def vulkaninterop_pack_all_shadow_rays_kernel(
-    # Perf (2026-07-13, task #163 stage 5 follow-up): packs ALL
-    # n_pix*_BDPT_MAX_VERTS shadow-ray slots in ONE dispatch instead of
-    shadow_rays: Pointer[Float32, MutUntrackedOrigin],
-    shadow_valid: Pointer[Int8, MutUntrackedOrigin],
-    out_rays: Pointer[Float32, MutUntrackedOrigin],
-    count_dp: Int64,
-):
-    var count = Int(count_dp)
-    var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
-    if tid >= count:
-        return
-    var idx8 = tid * 8
-    if shadow_valid[unsafe_offset=tid] == Int8(0):
-        out_rays[unsafe_offset=idx8 + 0] = Float32(0)
-        out_rays[unsafe_offset=idx8 + 1] = Float32(0)
-        out_rays[unsafe_offset=idx8 + 2] = Float32(0)
-        out_rays[unsafe_offset=idx8 + 3] = Float32(0)
-        out_rays[unsafe_offset=idx8 + 4] = Float32(0)
-        out_rays[unsafe_offset=idx8 + 5] = Float32(0)
-        out_rays[unsafe_offset=idx8 + 6] = Float32(1)
-        out_rays[unsafe_offset=idx8 + 7] = Float32(0)
-        return
-    out_rays[unsafe_offset=idx8 + 0] = shadow_rays[unsafe_offset=idx8 + 0]
-    out_rays[unsafe_offset=idx8 + 1] = shadow_rays[unsafe_offset=idx8 + 1]
-    out_rays[unsafe_offset=idx8 + 2] = shadow_rays[unsafe_offset=idx8 + 2]
-    out_rays[unsafe_offset=idx8 + 3] = shadow_rays[unsafe_offset=idx8 + 3]
-    out_rays[unsafe_offset=idx8 + 4] = shadow_rays[unsafe_offset=idx8 + 4]
-    out_rays[unsafe_offset=idx8 + 5] = shadow_rays[unsafe_offset=idx8 + 5]
-    out_rays[unsafe_offset=idx8 + 6] = shadow_rays[unsafe_offset=idx8 + 6]
-    out_rays[unsafe_offset=idx8 + 7] = shadow_rays[unsafe_offset=idx8 + 7]
-
-def vulkaninterop_rt_traverse_shadow_gpu(
-    # Perf (2026-07-13): pack -> trace only, no unpack step -- the caller's
-    # resolve_shadow_connect_gpu reads interop_results_buf's raw float
-    ctx: DeviceContext,
-    shadow_rays_buf: DeviceBuffer[DType.uint8],
-    shadow_valid_buf: DeviceBuffer[DType.uint8],
-    interop_scene: VulkanInteropRtSceneHandle,
-    interop_rays_buf: DeviceBuffer[DType.float32],
-    count: Int,
-    # --rt-hardware: results come back in the interop layout (resolve_shadow_connect_gpu reads it either way); alpha scenes
-    # re-trace past rejected hits first.
-    interop_results_buf: Optional[DeviceBuffer[DType.float32]] = None,
-    rt_scratch_buf: Optional[DeviceBuffer[DType.uint8]] = None,
-    sd: Optional[SceneView] = None,
-    n_meshes: Int = 0,
-    instance_base_mesh_buf: Optional[DeviceBuffer[DType.uint8]] = None,
-) raises:
-    comptime block_size = 256
-    var grid = ceildiv(count, block_size)
-
-    ctx.enqueue_function[vulkaninterop_pack_all_shadow_rays_kernel](
-        shadow_rays_buf.unsafe_ptr().unsafe_bitcast[Float32]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
-        shadow_valid_buf.unsafe_ptr().unsafe_bitcast[Int8]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
-        interop_rays_buf.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
-        Int64(count),
-        grid_dim=grid, block_dim=block_size,
-    )
-
-    var cuda_stream = CUDA(ctx.stream())
-    if Int(rtcore_active()) != 0 and interop_results_buf and rt_scratch_buf and sd:
-        _ = rtcore_trace_interop(rtcore_active(), UInt64(Int(interop_rays_buf.unsafe_ptr())), UInt64(Int(interop_results_buf.value().unsafe_ptr())), Int32(count), cuda_stream)
-        if Int(rtcore_alpha_enabled()) != 0:
-            var instance_base_ptr = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling()
-            if instance_base_mesh_buf:
-                instance_base_ptr = instance_base_mesh_buf.value().unsafe_ptr().unsafe_bitcast[Int32]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
-            rtcore_alpha_passes(ctx, interop_rays_buf, interop_results_buf.value(), rt_scratch_buf.value(), sd.value().meshes, n_meshes, instance_base_ptr, count)
-    else:
-        _ = vulkaninterop_rt_trace(interop_scene, Int32(count), cuda_stream)
 
 @__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
 @__llvm_metadata(`nvvm.minctasm`=SIMDLength(1))    # NVIDIA keeps its old register budget; AMD ignores this
