@@ -4125,8 +4125,9 @@ def _mnee_owns_path(
 @always_inline
 def _mnee_live(ctx: ShadeContext) -> Bool:
     """MNEE (and the emitter-hit suppression that goes with it) runs only while the scene has smooth glass and the
-    glass probes have not shown it to be rare."""
-    if not ctx.has_glass:
+    glass probes have not shown it to be rare. Cycles' sessions leave it off: Cycles runs MNEE only between objects
+    flagged as caustic caster and receiver."""
+    if not ctx.has_glass or ctx.cycles[3] != 0:
         return False
     if _is_real_ptr(ctx.mnee_stats) and ctx.mnee_stats[unsafe_offset=2] != Int32(0):
         return False
