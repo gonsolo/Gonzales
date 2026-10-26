@@ -1,5 +1,5 @@
 // Renders a gzrecord recording: the same C API calls, then all samples at once and one resolve. Writes a PFM.
-// Usage: gzreplay RECORDING OUT.pfm [SPP]
+// Usage: gzreplay RECORDING OUT.pfm [SPP]; GZ_DENOISE=0/1, GZ_FILTER_GLOSSY and GZ_CLAMP override the recorded settings
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -77,13 +77,16 @@ int main(int argc, char **argv) {
     t_session = now();
     gz_session_set_samples(session, spp, depth);
     gz_session_set_lens(session, rad, focus);
+    if (getenv("GZ_FILTER_GLOSSY")) glossy = atof(getenv("GZ_FILTER_GLOSSY"));
     gz_session_set_filter_glossy(session, glossy);
     gz_session_set_adaptive(session, thr, min_spp);
+    if (getenv("GZ_CLAMP")) clamp = atof(getenv("GZ_CLAMP"));
     gz_session_set_clamp(session, clamp);
     if (gz_session_set_camera(session, w2c, fov, w, h) != 0) return 1;
     int done = gz_session_render(session, spp);
     double t_render = now();
     float *rgb = malloc(sizeof(float) * 3 * (size_t)w * h);
+    if (getenv("GZ_DENOISE")) denoise = atoi(getenv("GZ_DENOISE"));   // override the recorded choice
     if (done < 0 || gz_session_resolve(session, rgb, denoise) != 0) return 1;
     double t_resolve = now();
     FILE *o = fopen(argv[2], "wb");
