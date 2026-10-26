@@ -36,7 +36,7 @@
 # scale-invariant between near/far solutions).
 
 from std.collections import Array
-from std.math import sqrt, abs, min, cos, sin
+from std.math import sqrt, abs, min
 from .geometry import RGB, dot, INV_PI, Vec3f, _is_real_ptr, Point2i, restir_jitter_pixel
 from .reservoir import ReservoirState, reservoir_state_init
 from .sms import SMSVertex, MAX_SMS_VERTICES, sms_vertex_init, sms_walk, sms_refresh_solved_frames

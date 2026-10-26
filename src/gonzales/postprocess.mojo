@@ -1,7 +1,6 @@
 from std.ffi import external_call
 from std.math import exp, ceil
 from std.memory.alloc import unsafe_alloc
-from std.collections import List
 from .geometry import RGB
 
 comptime _FIREFLY_CLAMP_K = Float32(4.0)  # isolated-pixel threshold multiplier, see _clamp_fireflies

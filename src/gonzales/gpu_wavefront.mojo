@@ -6,9 +6,8 @@ from .gpu_tuning import MINCTA_TRAVERSE
 from std.sys import get_defined_int
 from .bvh import _node_box_hit, _node_hi, _node_lo, _node_oc, _bvh_has_nodes, _shadow_is_null_material, _traverse_instances, BVH2Node, any_hit_bvh2_core, ray_sphere_hit, test_spheres, traverse_bvh2_core, traverse_bvh2_core_defer_curves, SceneView
 from .curve_bvh import curve_bvh_occluded, curve_bvh_closest, curve_bvh_prim
-from .curves import CURVE_DEFER_K, Curve, curve_at, _curve_perp_axis, curve_piece_endpoints, intersect_curve, curve_hit_normal
+from .curves import CURVE_DEFER_K, Curve, curve_at, curve_piece_endpoints, intersect_curve, curve_hit_normal
 from .geometry import INV_FOUR_PI, Point3f, RGB, Vec3f, _is_real_ptr, cross, dot, store_vec3, vec3f
-from .materials import Material
 from .primitives import Instance, Intersection, PrimId, Ray, Sphere, TriangleMesh, alpha_killed, intersect_triangle, sphere_outward_normal, mesh_vi
 from .primitives import mesh_pos, mesh_point, mesh_material
 from .render_state import PathState, MIN_RAY_PDF_NONE, SssWalk, ShadowTask, SHADOW_SLOTS
@@ -23,8 +22,8 @@ from .optixcurves import oxc_active, oxc_scratch, oxc_trace_closest, oxc_trace_s
 from max.gpu import WARP_SIZE, barrier, block_dim, block_idx, lane_id, thread_idx
 from max.gpu.memory import AddressSpace
 from std.memory import stack_allocation
-from max.gpu.primitives.warp import shuffle_idx, vote
-from std.bit import count_trailing_zeros, pop_count
+from max.gpu.primitives.warp import vote
+from std.bit import pop_count
 from std.memory.alloc import unsafe_alloc
 from std.ffi import external_call
 from max.gpu.host import DeviceBuffer, DeviceContext
@@ -101,26 +100,6 @@ def reset_vol_used_gpu(
     if tid >= count:
         return
     used[unsafe_offset=tid] = Int8(0)
-
-
-def traverse_shadow_rays_gpu(
-    sd: SceneView,
-    paths: Pointer[PathState, MutUntrackedOrigin],
-    shadow_tasks: Pointer[ShadowTask, MutUntrackedOrigin],
-    count_dp: Int64,
-):
-    var n_spheres = Int(sd.sphereCount)
-    var count = Int(count_dp)
-    var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
-    if tid >= count:
-        return
-    var task = shadow_tasks[unsafe_offset=tid]
-    if task.active == 0:
-        return
-    var shadow_ray = Ray(Point3f(task.origin.x, task.origin.y, task.origin.z), Vec3f(task.direction.x, task.direction.y, task.direction.z))
-    if not any_hit_bvh2_core[True](sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, shadow_ray, task.tmax, sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances, sd.spheres, n_spheres, materials=sd.materials):
-        paths[unsafe_offset=tid].estimate += task.contrib
-
 
 
 @always_inline

@@ -34,7 +34,7 @@
 
 from std.collections import Array
 from std.math import sqrt, abs, max, min, cos, sin, acos
-from .geometry import RGB, dot, cross, Frame, Vec3f, Point3f, _atan2f, PI, TWO_PI
+from .geometry import dot, cross, Frame, Vec3f, Point3f, _atan2f, PI, TWO_PI
 from .materials import fr_dielectric
 from .render_state import NormalSlopeMap, normal_slope_map_none
 from .primitives import Ray, Intersection, PrimId, TriangleMesh, Instance, Sphere, mesh_vi, mesh_pos, mesh_normal

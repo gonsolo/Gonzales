@@ -2,12 +2,12 @@ from std.atomic import Atomic
 from .ptex_cache import PTEX_QUEUE_CAP
 from std.sys import size_of
 from std.collections import Array
-from std.math import sqrt, cos, sin, floor, acos, atan, atan2, log2, ceil, exp, log, abs, pow
+from std.math import sqrt, cos, floor, atan, atan2, log2, ceil, exp, abs, pow
 from std.ffi import external_call
 from std.memory.alloc import unsafe_alloc
-from .geometry import offset_point, RGB, Point3f, Point2f, Point2i, restir_jitter_pixel, Vec3f, dot, face_toward, cross, Frame, fast_sincos, safe_sqrt, reflect, refract, PI, TWO_PI, INV_PI, INV_FOUR_PI, _is_real_ptr, _atan2f
+from .geometry import offset_point, RGB, Point3f, Point2f, Point2i, restir_jitter_pixel, Vec3f, dot, face_toward, cross, Frame, fast_sincos, refract, PI, TWO_PI, INV_PI, INV_FOUR_PI, _is_real_ptr, _atan2f
 from .render_state import PDF_DROP_DIRECT
-from .materials import Material, MatKind, LobeKind, filter_glossy, sss_walk_weight, sss_walk_g, sss_walk_mfp, sss_walk_van_de_hulst, MeasuredBRDF, schlick_fresnel, fr_dielectric, dielectric_is_rough, is_specular_glass, dt_reflectance, dt_transmittance
+from .materials import Material, MatKind, LobeKind, filter_glossy, sss_walk_weight, sss_walk_g, sss_walk_mfp, sss_walk_van_de_hulst, MeasuredBRDF, fr_dielectric, dielectric_is_rough, is_specular_glass, dt_reflectance, dt_transmittance
 from .render_state import PathState, SssWalk, GpuTexture, NormalSlopeMap, normal_slope_map_none, ShadowTask, SuppressTask, SHADOW_SLOTS
 from .primitives import Ray, Intersection, PrimId, TriangleMesh, Sphere, Instance, mesh_uv, mesh_has_uvs, mesh_normal, mesh_vi, mesh_face
 from .primitives import mesh_pos
@@ -15,18 +15,18 @@ from .lights import AreaLight, DistantLight, PointLight, InfiniteLight, LightSam
 from .portal_light import portal_frame, portal_ray_crosses
 from .media import Medium, MediumInterface, Grid, NvdbGrid
 from .shadow_media import shadow_transmittance
-from .curves import Curve, curve_at, CURVE_N_PIECES, curve_piece_endpoints, _curve_perp_axis, curve_hit_normal
+from .curves import Curve, curve_at, curve_piece_endpoints, _curve_perp_axis, curve_hit_normal
 from .layered import layered_f, layered_sample, layered_pdf, diel_f, diel_pdf, diel_sample
-from .bxdf import CoatWalk, coat_walk_begin, coat_walk_enter, coat_walk_at_base, coat_walk_scatter, COAT_WALKING, COAT_REFLECT, COAT_EXIT, COAT_ABSORB, BxDFSample, GeomContext, SobolSamples8, BxDFFlags, bxdf_is_delta, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_sample_dielectric, bxdf_sample_thin_dielectric, bxdf_eval_diffuse, bxdf_pdf_diffuse, bxdf_sample_diffuse, bxdf_sample_diffuse_transmit, ggx_D, ggx_G1, ggx_G2, ggx_vndf_pdf, bxdf_eval_conductor_ggx, ggx_albedo, bxdf_pdf_conductor_ggx, _nee_weight_simple, _nee_weight_hair, _nee_weight_simple_spectral, _nee_weight_coated_coat_lobe, _nee_weight_coated_diffuse_base, LobeTables
-from .measured_bxdf_eval import bxdf_eval_measured, bxdf_sample_measured, bxdf_pdf_measured, _nee_weight_measured
+from .bxdf import BxDFSample, GeomContext, SobolSamples8, BxDFFlags, bxdf_is_delta, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_sample_dielectric, bxdf_sample_thin_dielectric, bxdf_eval_diffuse, bxdf_pdf_diffuse, bxdf_sample_diffuse_transmit, bxdf_eval_conductor_ggx, ggx_albedo, bxdf_pdf_conductor_ggx, _nee_weight_simple, _nee_weight_hair, _nee_weight_simple_spectral, LobeTables
+from .measured_bxdf_eval import bxdf_sample_measured, bxdf_pdf_measured, _nee_weight_measured
 from .rng import PCG32
 from .footprint import CameraFootprint, UVFootprint, TriWorld, tri_world, hit_uv_footprint
-from .bvh import BVH2Node, BVH4, SceneView, any_hit_dispatch, traverse_dispatch, ray_sphere_hit, HairLobeConstants, _hair_precompute, _hair_eval_lobes, _hair_sample_dir_u, curve_offset_eps, LightSample, _sample_distant_light_nee, _sample_point_light_nee, _sample_sphere_light_nee, _sample_infinite_light_nee, _sample_infinite_light_textured, _equal_area_square_to_sphere, _equal_area_sphere_to_square
-from .sampling import power_heuristic, sample_cosine_hemisphere, sample_cosine_hemisphere_world, sample_ggx_vndf, sobol_sample, sobol_sample_n, mix_bits_u64, sobol_dim_seed
+from .bvh import BVH2Node, BVH4, SceneView, any_hit_dispatch, traverse_dispatch, HairLobeConstants, _hair_precompute, _hair_sample_dir_u, curve_offset_eps, LightSample, _sample_distant_light_nee, _sample_point_light_nee, _sample_sphere_light_nee, _sample_infinite_light_nee, _sample_infinite_light_textured, _equal_area_sphere_to_square
+from .sampling import power_heuristic, sample_cosine_hemisphere_world, sample_ggx_vndf, sobol_sample_n, sobol_dim_seed
 from .transform import transform_normal, Mat4
 from .guide import GuideGrid, guide_pos_to_cell, guide_pdf, guide_sample, guide_cell_has_data, guide_record, null_guide, guide_is_active
 from .spectrum import spec_refl_unbounded, SpectralHandle, null_spectral_handle, SpectralSample, SampledWavelengths, rgb_to_spectral_sample, rgb_illuminant_to_spectral_sample, spectral_sample_to_rgb, rgb_bands_to_spectral_sample
-from .reservoir import ReservoirState, reservoir_update, reservoir_finalize, reservoir_combine, reservoir_cap_confidence
+from .reservoir import reservoir_update, reservoir_finalize, reservoir_combine, reservoir_cap_confidence
 from .restir_di import DIReservoir, di_reservoir_init, di_target_pdf, ReservoirIO, reservoir_io_null
 from .restir_gi import GIReservoir, gi_reservoir_init, gi_target_pdf, GIReservoirIO, gi_reservoir_io_null, gi_temporal_spatial_combine
 from .sms import (
@@ -1306,23 +1306,6 @@ def shade_diffuse_transmission[use_gpu: Bool, enqueue_shadow: Bool](
     var u_rr = pcg.next_float()
     _apply_russian_roulette(path_ptr, ctx.cycles, pcg, u_rr, BOUNCE_TRANSMIT if dot(bounce_normal, -ray_dir) <= Float32(0.0) else BOUNCE_DIFFUSE)
 
-
-# ── CoatedDiffuse (plastic) branch ───────────────────────────────────────────
-@always_inline
-def _albedo_highlight_boost(albedo: RGB, contrib: SpectralSample) -> RGB:
-    """Nudge the albedo AOV toward white in proportion to a highlight-strength
-    NEE contribution. Saturates via 1-exp(-k*luma) rather than linearly
-    (min(1,luma)) so even a modest per-sample hit — rare across an spp
-    average, since a sharp/sparse specular contribution looks identical to
-    its dark neighbours in a single sample — visibly elevates the denoiser's
-    guide buffer instead of needing many such hits to add up. Without a
-    strong-enough boost here, the coat's specular highlights (and, since
-    2026-07-08, the multi-tap base-recycling energy) carry correct energy in
-    beauty but get smoothed away by the denoiser anyway because albedo never
-    discriminates the highlight pixels from their neighbours strongly enough.
-    """
-    var boost = Float32(1.0) - exp(-contrib.luma() * Float32(4.0))
-    return albedo + (RGB(Float32(1.0)) - albedo) * boost
 
 @always_inline
 def _shade_principled[enqueue_shadow: Bool, defer_only: Bool](

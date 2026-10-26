@@ -1,6 +1,4 @@
 from std.collections import Array
-from std.ffi import external_call
-from std.memory.alloc import unsafe_alloc
 from .geometry import Vec3f, Point3f
 
 # Matrix math. 4x4 matrices are 16 Float32 in column-major order:

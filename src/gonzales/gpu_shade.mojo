@@ -1,24 +1,17 @@
 from max.gpu import MAX_THREADS_PER_BLOCK_METADATA
 from std.utils import StaticTuple
-from .gpu_tuning import MINCTA_NEE, MINCTA_DIFFUSE, MINCTA_COATED, MINCTA_CONDUCTOR, MINCTA_MEASURED, MINCTA_DIELECTRIC, MINCTA_TRAVERSE
-from .bvh import BVH2Node, BVH4, SceneView
-from .curves import Curve
+from .gpu_tuning import MINCTA_NEE, MINCTA_DIFFUSE, MINCTA_COATED, MINCTA_CONDUCTOR, MINCTA_MEASURED, MINCTA_DIELECTRIC
+from .bvh import SceneView
 from .geometry import _is_real_ptr, Vec3f, dot
 from std.math import sqrt
-from .guide import null_guide
-from .lights import AreaLight, DistantLight, InfiniteLight, LightSampler, PointLight
-from .materials import MatKind, Material, MeasuredBRDF, filter_glossy
-from .media import Medium, MediumInterface, Grid, NvdbGrid
-from .primitives import Instance, Intersection, PrimId, Sphere, TriangleMesh
-from .render_state import GpuTexture, NormalSlopeMap, PathState, ShadowTask, SuppressTask
+from .materials import MatKind, filter_glossy
+from .media import Medium
+from .primitives import Intersection
+from .render_state import PathState, ShadowTask, SuppressTask
 from .restir_di import DIReservoir, ReservoirIO, reservoir_io_null
-from .restir_gi import gi_reservoir_io_null
 from .rng import PCG32
-from .footprint import CameraFootprint
-from .shading import GIPendingX1, LightContext, ShadeContext, _shade_context, _shade_sss_exit, shade_coated_conductor, shade_coated_diffuse, shade_conductor, shade_core, shade_dielectric, shade_diffuse, shade_diffuse_transmission, shade_hair, shade_interface, shade_measured, shade_nee_core, shade_thin_dielectric, _mnee_first_probe, _mnee_bsdf_weight
-from .spectrum import SpectralHandle
+from .shading import ShadeContext, _shade_context, _shade_sss_exit, shade_coated_conductor, shade_coated_diffuse, shade_conductor, shade_dielectric, shade_diffuse, shade_diffuse_transmission, shade_hair, shade_interface, shade_measured, shade_nee_core, shade_thin_dielectric, _mnee_first_probe, _mnee_bsdf_weight
 from max.gpu import block_dim, block_idx, thread_idx
-from .gpu_scene import GpuSceneHandle
 
 
 def shared_shade_context(
@@ -34,22 +27,6 @@ def shared_shade_context(
     ctx.paths_base = paths_base
     ctx.mnee_stats = mnee_stats
     return ctx^
-
-
-def shade_gpu(
-    paths: Pointer[PathState, MutUntrackedOrigin],
-    intersections: Pointer[Intersection, MutUntrackedOrigin],
-    meshes: Pointer[TriangleMesh, MutUntrackedOrigin],
-    materials: Pointer[Material, MutUntrackedOrigin],
-    spectral: SpectralHandle,
-    count_dp: Int64,
-):
-    var count = Int(count_dp)
-    var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
-    if tid >= count:
-        return
-    shade_core(paths, intersections, meshes, materials, spectral, tid)
-
 
 
 @__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
@@ -482,67 +459,6 @@ def shade_hair_gpu(
     mat = filter_glossy(mat, path_ptr[].min_ray_pdf, sd.filterGlossy)
     var ctx = _shade_context(sd, sobol_matrices, path_idx=tid, shadow_tasks=shadow_tasks)
     shade_hair[True, True](path_ptr, inter, ctx, mat)
-
-
-def shade_enqueue_shadow_gpu(
-    paths: Pointer[PathState, MutUntrackedOrigin],
-    intersections: Pointer[Intersection, MutUntrackedOrigin],
-    bvh2Nodes: Pointer[BVH2Node, MutUntrackedOrigin],
-    primIds: Pointer[PrimId, MutUntrackedOrigin],
-    meshes: Pointer[TriangleMesh, MutUntrackedOrigin],
-    curves: Pointer[Curve, MutUntrackedOrigin],
-    blasNodesArr: Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin],
-    blasPrimIdsArr: Pointer[Pointer[PrimId, MutUntrackedOrigin], MutUntrackedOrigin],
-    instances: Pointer[Instance, MutUntrackedOrigin],
-    materials: Pointer[Material, MutUntrackedOrigin],
-    areaLights: Pointer[AreaLight, MutUntrackedOrigin],
-    areaLightCount: Int,
-    textures: Pointer[GpuTexture, MutUntrackedOrigin],
-    n_textures: Int,
-    infiniteLights: Pointer[InfiniteLight, MutUntrackedOrigin],
-    n_infinite_lights: Int,
-    spheres: Pointer[Sphere, MutUntrackedOrigin],
-    n_spheres: Int,
-    shadow_tasks: Pointer[ShadowTask, MutUntrackedOrigin],
-    count: Int,
-    spectral_coeffs: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    spectral_res: Int = 0,
-    spectral_cie_x: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    spectral_cie_y: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    spectral_cie_z: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    spectral_d65: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-):
-    var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
-    if tid >= count:
-        return
-    shadow_tasks[unsafe_offset=tid].active = Int32(0)
-    var path_ptr = paths.unsafe_offset(tid)
-    if path_ptr[].active == 0:
-        return
-    var inter = intersections[unsafe_offset=tid]
-    # Do NOT early-exit on miss — shade_nee_core adds env-light contribution there.
-    var ls_shadow = LightSampler(Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(), Int32(0), Int32(0))
-    var ctx_shadow = ShadeContext(
-        paths_base=Pointer[PathState, MutUntrackedOrigin].unsafe_dangling(), has_glass=True, mnee_stats=Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(), bvh4=BVH4.none(), suppress_tasks=Pointer[SuppressTask, MutUntrackedOrigin].unsafe_dangling(),
-        n_mediums=0, mediums=Pointer[Medium, MutUntrackedOrigin].unsafe_dangling(), medium_ifaces=Pointer[MediumInterface, MutUntrackedOrigin].unsafe_dangling(),
-        grids=Pointer[Grid, MutUntrackedOrigin].unsafe_dangling(), nvdb_grids=Pointer[NvdbGrid, MutUntrackedOrigin].unsafe_dangling(),
-        path_idx=tid, bvh2Nodes=bvh2Nodes, primIds=primIds, meshes=meshes, curves=curves, materials=materials,
-        tex_filenames=Pointer[Pointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin](),
-        textures=textures, n_textures=n_textures,
-        nmaps=Pointer[NormalSlopeMap, MutUntrackedOrigin].unsafe_dangling(),
-        shadow_tasks=shadow_tasks,
-        cam_fp=CameraFootprint.none(), sobol_matrices=Pointer[UInt32, MutUntrackedOrigin].unsafe_dangling(), guide=null_guide(), guide_write=null_guide(), use_restir=False,
-        blasNodesArr=blasNodesArr, blasPrimIdsArr=blasPrimIdsArr, instances=instances,
-        spectral=SpectralHandle(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65),
-        measured_brdfs=Pointer[MeasuredBRDF, MutUntrackedOrigin].unsafe_dangling(),
-        gi_pending=Pointer[GIPendingX1, MutUntrackedOrigin].unsafe_dangling(), gi_io=gi_reservoir_io_null(),
-        lights=LightContext(
-            area_lights=areaLights, area_light_count=areaLightCount,
-            distant_lights=Pointer[DistantLight, MutUntrackedOrigin](), distant_count=0,
-            point_lights=Pointer[PointLight, MutUntrackedOrigin](), point_count=0,
-            infinite_lights=infiniteLights, infinite_count=n_infinite_lights,
-            spheres=spheres, sphere_count=n_spheres, light_sampler=ls_shadow), filter_glossy=Float32(0), clamp=SIMD[DType.float32, 2](0), cycles=SIMD[DType.int32, 4](0))
-    shade_nee_core[True, True](path_ptr, inter, ctx_shadow)
 
 
 # Phase 0.4 (docs/A2_restir_migration_plan.md): a task deferred by one

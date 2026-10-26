@@ -1,8 +1,6 @@
-from std.collections import Array
-from std.math import sqrt, log, exp, cos, sin, atan2, acos
+from std.math import sqrt, log, exp, cos, sin
 from std.bit import count_trailing_zeros
-from std.memory.alloc import unsafe_alloc
-from .geometry import Vec3f, Point3f, dot, cross, Frame, PI, TWO_PI, INV_PI, _is_real_ptr, fast_sincos
+from .geometry import Vec3f, Point3f, dot, cross, Frame, PI, TWO_PI, _is_real_ptr, fast_sincos
 from .primitives import Ray
 from .spectrum import SampledWavelengths, sample_wavelengths
 

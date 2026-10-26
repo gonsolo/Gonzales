@@ -1,6 +1,6 @@
 from std.memory.alloc import unsafe_alloc
 from std.ffi import external_call
-from std.math import sqrt, exp, max, abs
+from std.math import sqrt, max, abs
 from .diagnostics import warn_unsupported
 from .lexer import (PbrtScanner, scanner_parse_quoted_string, _psc_collect_params, ParameterDictionary)
 from .parse_types import NamedMaterial, SceneParseState, PSC_NAME_MAX, scene_path

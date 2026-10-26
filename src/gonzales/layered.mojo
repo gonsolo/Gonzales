@@ -32,7 +32,6 @@ from .materials import fr_dielectric, ALPHA_EFFECTIVELY_SMOOTH
 from .spectrum import SpectralSample
 from .rng import PCG32
 
-comptime LAYERED_THICKNESS = Float32(0.01)   # pbrt coateddiffuse default "thickness"
 comptime LAYERED_MAX_DEPTH = 10              # pbrt coateddiffuse default
 comptime _ONE_MINUS_EPS = Float32(0.99999994)
 

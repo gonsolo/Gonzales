@@ -1,24 +1,20 @@
-from std.math import ceildiv, sqrt, log, exp, cos, sin, max
+from std.math import ceildiv, max
 from std.memory.alloc import unsafe_alloc
 from max.algorithm import parallelize
 from std.atomic import Atomic
 from std.sys import prefetch
 from std.sys.info import num_performance_cores
-from std.time import perf_counter_ns
-from .geometry import RGB, Point3f, Vec3f, point3f, vec3f, dot, cross, INV_FOUR_PI
+from .geometry import RGB, Vec3f, dot, INV_FOUR_PI
 from .render_state import PathState, MIN_RAY_PDF_NONE, SssWalk, TileResult
 from .progress import Progress
-from .primitives import sphere_outward_normal, Ray, Intersection, PrimId, Sphere, TriangleMesh, mesh_vi
+from .primitives import sphere_outward_normal, Intersection, TriangleMesh, mesh_vi
 from .primitives import mesh_point
-from .media import Medium, MediumInterface, Grid, grid_sample_density, SSS_WALK_ROUNDS
-from .lights import AreaLight, LightSampler, light_sampler_sample
-from .curves import curve_piece_endpoints, _curve_perp_axis
+from .media import SSS_WALK_ROUNDS
 from .bvh import SceneView, traverse_dispatch, test_spheres
 from .shading import cpu_shade_context, shade_core_cpu_nee_ctx, GIPendingX1, gi_pending_x1_init
-from .rng import PCG32
-from .sampling import TileSamplerParams, encode_morton2, sobol_get_sample_index, sobol_index_pixel_part, sobol_sample, derive_pcg_seeds, gaussian_norm, mix_bits_u64, gen_primary_ray_state
+from .sampling import TileSamplerParams, encode_morton2, sobol_index_pixel_part, mix_bits_u64, gen_primary_ray_state
 from .guide import GuideGrid, guide_merge, null_guide
-from .spectrum import SampledWavelengths, SpectralSample, spectral_sample_to_rgb
+from .spectrum import SpectralSample, spectral_sample_to_rgb
 from .gpu_media import _sample_medium_core
 from .restir_di import ReservoirIO, reservoir_io_null
 from .restir_gi import GIReservoirIO, gi_reservoir_io_null

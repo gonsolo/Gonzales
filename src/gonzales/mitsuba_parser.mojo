@@ -9,7 +9,7 @@ from .geometry import RGB, PI, Vec3f, Point3f
 from .materials import MatKind
 from .transform import matrix_invert, transform_normals, Mat4
 from .scene_builder import store_mesh
-from .mitsuba_serialized import load_mitsuba_serialized, MitsubaMesh
+from .mitsuba_serialized import load_mitsuba_serialized
 from .pbrt_parser import ParsedScene_Mojo, finalize_scene
 
 # ── Mitsuba 0.5/0.6/2/3 XML scene parser ────────────────────────────────────

@@ -33,11 +33,10 @@
 # inlined) calls carries none of the by-value TrivialRegisterPassable-struct
 # corruption risk documented elsewhere (modular/modular#6759, later
 # retracted by its own author as unreproducible, but avoided defensively).
-from std.math import sqrt, sin, cos, acos, abs, min, max, floor
+from std.math import sqrt, sin, cos, acos, abs, max, floor
 from .geometry import RGB, safe_sqrt, PI, dot, Vec3f
 from .materials import MeasuredBRDF
 from .spectrum import SampledWavelengths, SpectralSample, spectral_sample_to_rgb, rgb_illuminant_to_spectral_sample
-from .rgb2spec import cie_d65_runtime
 from .bvh import LightSample
 from .geometry import _atan2f
 from .vcm_mis import MisPolicy, mis_policy_power, nee_mis_weight

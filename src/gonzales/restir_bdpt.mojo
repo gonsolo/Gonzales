@@ -18,7 +18,6 @@
 # renderer-side implementation would be Float32, matching bdpt_*.mojo's
 # existing dVCM/dVC carries.
 
-from std.math import abs
 
 
 # ── Path model ──────────────────────────────────────────────────────────────

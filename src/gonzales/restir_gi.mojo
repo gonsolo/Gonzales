@@ -30,7 +30,7 @@
 # BSDF toward a fixed light point while reusing the light's own Le verbatim.
 
 from std.collections import Array
-from std.math import sqrt, cos, sin, abs
+from std.math import sqrt, cos, abs
 from .geometry import RGB, dot, INV_PI, _is_real_ptr, Vec3f, Point2i, restir_jitter_pixel
 from .reservoir import ReservoirState, reservoir_state_init, reservoir_combine, reservoir_finalize, reservoir_cap_confidence
 from .rng import PCG32

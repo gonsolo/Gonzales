@@ -10,12 +10,12 @@ from std.testing import assert_true, assert_false, TestSuite
 from gonzales.geometry import RGB, Point3f, Vec3f, dot, cross, reflect, PI
 from gonzales.materials import fr_dielectric
 from gonzales.primitives import PrimId, Intersection, TriangleMesh, encode_normal
-from gonzales.media import Medium
+from gonzales.media import Medium, FreeFlight, sample_homogeneous_free_flight
 from gonzales.lights import AreaLight
 from gonzales.sppm import (
-    _hash_cell, _cosine_hemisphere_sample, sample_homogeneous_free_flight,
+    _hash_cell, _cosine_hemisphere_sample,
     sample_area_light_uniform, _geom_normal, _shading_normal_at, _dielectric_bounce,
-    FreeFlight, AreaLightSample, _HSIZE,
+    AreaLightSample, _HSIZE,
 )
 from gonzales.rng import PCG32
 

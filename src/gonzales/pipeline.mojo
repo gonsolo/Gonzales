@@ -2,7 +2,7 @@ from .os_thread import OsThread, ThreadArg
 from std.memory.alloc import unsafe_alloc
 from std.memory import OwnedPointer, unsafe_memcpy
 from std.collections import List, Array
-from std.math import sqrt, tan, ceil, pow
+from std.math import sqrt, ceil, pow
 from std.sys.info import size_of
 from max.gpu.host import DeviceBuffer, DeviceContext
 from .footprint import camera_footprint
@@ -12,36 +12,36 @@ from .rendering import render_all_tiles, normalize_film, apply_film_sensor
 from .progress import Progress, fmt_time
 from .outputs import write_render_outputs
 from std.time import perf_counter_ns
-from .geometry import RGB, Point3f, Vec3f, Bounds3f, dot, _is_real_ptr
-from .render_state import TileResult, PathState, FilmDims
+from .geometry import RGB, Point3f, Vec3f, Bounds3f, _is_real_ptr
+from .render_state import TileResult, FilmDims
 from .primitives import Ray, PrimId, TriangleMesh, Instance, mesh_vi, mesh_pos
-from .curves import Curve, CurveBvh, curve_piece_bounds
-from .postprocess import denoise, write_image, write_image_cropped, write_image_cropwindow
+from .curves import CurveBvh, curve_piece_bounds
+from .postprocess import denoise, write_image, write_image_cropped
 from .transform import Mat4, matrix_invert
-from .sampling import TileSamplerParams, ThinLens, mix_bits_u64, encode_morton2, sobol_get_sample_index, sobol_sample, derive_pcg_seeds, camera_ray_from_film_xy
-from .bvh import BVH2Node, SceneView, render_aux_buffers, _scene_bounding_sphere
+from .sampling import TileSamplerParams, ThinLens, mix_bits_u64, camera_ray_from_film_xy
+from .bvh import SceneView, render_aux_buffers, _scene_bounding_sphere
 from .sppm import sppm_render
 from .sppm_gpu import sppm_render_gpu
 from .bdpt_render import vcm_render
 from .vcm_gpu import vcm_render_gpu, VcmGpu
 from .vcm_wavefront import vcm_render_gpu_wavefront
 from .bdpt_vertex import _BDPT_MAX_VERTS
-from .guide import GuideGrid, GuidedRenderer, guide_create, guide_free, guide_clone_empty, guide_refine, null_guide, guide_merge, guide_cell_has_data, train_guided
+from .guide import GuideGrid, GuidedRenderer, null_guide, train_guided
 from .gpu_guide import gpu_guide_begin, gpu_guide_end
 from .restir_di import DIReservoir, di_reservoir_init, ReservoirIO, reservoir_io_null
 from .restir_gi import GIReservoir, gi_reservoir_init, GIReservoirIO, gi_reservoir_io_null
 from .restir_sms import SMSReservoir, sms_reservoir_init, SMSReservoirIO, sms_reservoir_io_null
-from .restir_vol import VolReservoir, vol_reservoir_init, VolReservoirIO, vol_reservoir_io_null
-from .gpu import gpu_render_sample, gpu_render_wavefront, gpu_adaptive_update, gpu_mnee_adapt, gpu_download_film, gpu_download_albedo, gpu_clear_film, gpu_clear_restir, gpu_clear_restir_vol
+from .restir_vol import VolReservoir, vol_reservoir_init, vol_reservoir_io_null
+from .gpu import gpu_render_sample, gpu_render_wavefront, gpu_adaptive_update, gpu_mnee_adapt, gpu_download_albedo, gpu_clear_film, gpu_clear_restir, gpu_clear_restir_vol
 from .gpu_scene import GpuSceneHandle, WAVEFRONT_BATCH, gpu_available, gpu_upload_scene, gpu_alloc_pixel_buffers, gpu_free_scene, gpu_ptex_begin, gpu_ptex_finish, gpu_ptex_withhold, gpu_ptex_withheld, gpu_ptex_redo_upload, gpu_ptex_stream_start, gpu_ptex_poll, gpu_ptex_stream_finish, gpu_ptex_make_room, gpu_set_curve_bvh_dev, typed_ptr
 from .gpu_denoise import gpu_atrous_denoise
 from .gpu_wavefront import gpu_gen_aux_buffers
-from .viewer import CameraState, ViewerHandle, viewer_create, viewer_update_framebuffer, viewer_should_close, viewer_poll_events, viewer_get_camera_state, viewer_set_camera_state, viewer_destroy, viewer_denoise_enabled, viewer_monitor_size, build_camera_to_world
+from .viewer import CameraState, viewer_create, viewer_update_framebuffer, viewer_should_close, viewer_poll_events, viewer_get_camera_state, viewer_set_camera_state, viewer_destroy, viewer_denoise_enabled, viewer_monitor_size, build_camera_to_world
 from .spectrum import SpectralHandle, null_spectral_handle
-from .vulkanrt import VulkanRtSceneHandle, vulkanrt_build_scene, vulkanrt_destroy_scene, vulkanrt_debug_read_as
+from .vulkanrt import vulkanrt_build_scene, vulkanrt_destroy_scene
 from .curve_bvh import CurveBvhDev, gpu_build_curve_bvh, _leaf_range
 from .optixcurves import gpu_build_optix_curves, oxc_active, oxc_bytes, oxc_destroy, oxc_set_active
-from .rt_build import rt_build_blas, rt_build_tlas, rt_patch_ids, RtBlas, RtTlas, _fbits
+from .rt_build import rt_build_blas, rt_build_tlas, rt_patch_ids, RtTlas, _fbits
 from .rt_cache import rt_cache_load, rt_cache_save, RtCacheTlas
 from .scene_cache import scene_cache_variant
 from max.algorithm import parallelize
@@ -1176,8 +1176,7 @@ def debug_trace_pixel(
     envmap lookup). For comparing against `pbrt --pixelmaterial`."""
     from .bvh import traverse_bvh2_core, test_spheres, any_hit_bvh2_core, _equal_area_sphere_to_square
     from .geometry import cross
-    from .materials import Material, fr_dielectric
-    from .primitives import Intersection, sphere_outward_normal
+    from .primitives import Intersection
     from .bxdf import dielectric_interface
     from .sppm import _geom_normal
 

@@ -9,16 +9,16 @@ from std.atomic import Atomic
 from std.sys.info import num_performance_cores
 from std.bit import count_trailing_zeros
 from .transform import Mat4
-from .geometry import dot, cross, Point3f, Point2f, Vec3f, Frame, RGB, PI, TWO_PI, INV_PI, INV_FOUR_PI, safe_sqrt, _is_real_ptr, store_vec3, _atan2f, point3f, fast_sincos
+from .geometry import dot, cross, Point3f, Point2f, Vec3f, Frame, RGB, PI, TWO_PI, INV_PI, safe_sqrt, _is_real_ptr, store_vec3, _atan2f, point3f, fast_sincos
 from .sampling import ThinLens
 from .materials import Material, MatKind, fr_dielectric, MeasuredBRDF
-from .render_state import PathState, TileResult, GpuTexture, NormalSlopeMap
+from .render_state import GpuTexture, NormalSlopeMap
 from .primitives import Ray, Intersection, PrimId, TriangleMesh, Sphere, intersect_triangle, intersect_triangle_edges, alpha_killed, Instance, sphere_outward_normal, mesh_vi, mesh_material
 from .primitives import mesh_pos, mesh_point
 from .media import Medium, MediumInterface, Grid, NvdbGrid
 from .lights import AreaLight, DistantLight, PointLight, InfiniteLight, LightSampler, il_rgb
 from .portal_light import portal_frame, portal_ray_crosses
-from .curves import Curve, curve_at, CurveBvh, intersect_curve, CURVE_DEFER_K, CURVE_N_PIECES, curve_piece_endpoints, _curve_perp_axis, curve_view_frame, curve_hit_normal
+from .curves import Curve, curve_at, CurveBvh, intersect_curve, CURVE_DEFER_K, curve_piece_endpoints, curve_view_frame, curve_hit_normal
 from .rng import PCG32
 from .footprint import CameraFootprint
 from .spectrum import SpectralHandle
@@ -2301,20 +2301,6 @@ def any_hit_bvh2_core[wide_on: Bool = True](
 
 
 # ── CPU entry point ─────────────────────────────────────────────────────────
-
-def traverse_bvh2(scenePtr: Pointer[SceneView, MutUntrackedOrigin], rayPtr: Pointer[Ray, MutUntrackedOrigin], tMax: Float32, resultPtr: Pointer[Intersection, MutUntrackedOrigin]):
-    var scene = scenePtr[unsafe_offset=0]
-    var ray = rayPtr[unsafe_offset=0]
-    # spheres/sphereCount are passed explicitly: omitting them defaults
-    # n_spheres=0, which silently makes every analytic sphere invisible to the
-    # traversal. That omission is a recurring bug class in this codebase (see
-    # traverse_bvh2_core's own note); this wrapper has no live caller today,
-    # so it is fixed pre-emptively rather than left as a trap for the first one.
-    traverse_bvh2_core(scene.bvh2Nodes, scene.primIds, scene.meshes, scene.curves, ray, tMax, resultPtr,
-                       scene.blasNodesArr, scene.blasPrimIdsArr, scene.instances,
-                       scene.spheres, Int(scene.sphereCount))
-
-
 
 # ── BVH4 (CPU only) ───────────────────────────────────────────────────────────
 # The BVH2 is collapsed (build_bvh4) into 4-wide nodes (128 bytes) whose child

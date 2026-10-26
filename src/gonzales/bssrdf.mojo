@@ -31,7 +31,7 @@ means replacing `dipole_rd` alone -- every caller only wants R_d(r).
 """
 
 from std.math import exp, sqrt, max, min, log, cos, sin
-from gonzales.geometry import RGB, Vec3f, PI
+from gonzales.geometry import RGB, Vec3f
 from gonzales.materials import fr_dielectric
 
 

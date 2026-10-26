@@ -1,6 +1,5 @@
 from std.collections import List, Array
 from std.ffi import external_call
-from .geometry import RGB, Point3f, Vec3f
 from .sampling import ThinLens
 from .materials import Material
 from .primitives import TriangleMesh, PrimId, Sphere

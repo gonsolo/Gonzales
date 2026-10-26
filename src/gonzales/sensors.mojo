@@ -60,13 +60,7 @@
 # that check reproduced the same wrong premise, not the actual pbrt pipeline.
 
 from std.math import exp
-from gonzales.rgb2spec import (
-    _CIE_X, _CIE_Y, _CIE_Z, _CIE_D65_RAW, _cie_interp, _cie_d65,
-    CIE_LAMBDA_MIN, CIE_LAMBDA_MAX, CIE_SAMPLES,
-    _XYZ_TO_SRGB00, _XYZ_TO_SRGB01, _XYZ_TO_SRGB02,
-    _XYZ_TO_SRGB10, _XYZ_TO_SRGB11, _XYZ_TO_SRGB12,
-    _XYZ_TO_SRGB20, _XYZ_TO_SRGB21, _XYZ_TO_SRGB22,
-)
+from gonzales.rgb2spec import _CIE_X, _CIE_Y, _CIE_Z, _cie_interp, _cie_d65, CIE_LAMBDA_MIN, CIE_LAMBDA_MAX, CIE_SAMPLES, _XYZ_TO_SRGB00, _XYZ_TO_SRGB01, _XYZ_TO_SRGB02, _XYZ_TO_SRGB10, _XYZ_TO_SRGB11, _XYZ_TO_SRGB12, _XYZ_TO_SRGB20, _XYZ_TO_SRGB21, _XYZ_TO_SRGB22
 
 # AUTO-EXTRACTED from pbrt-v4 src/pbrt/util/spectrum.cpp and film.cpp.
 # Do not hand-edit; regenerate via scratchpad/sensor_port/extract.py.

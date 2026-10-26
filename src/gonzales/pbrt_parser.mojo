@@ -4,7 +4,7 @@ from std.os import getenv
 from std.time import perf_counter_ns
 from std.memory.alloc import unsafe_alloc
 from std.memory import unsafe_memcpy
-from std.math import tan, atan, sqrt, min, max, abs, floor, fma
+from std.math import tan, atan, sqrt, min, max, abs
 from std.atomic import Atomic
 from std.sys.info import num_performance_cores
 from max.algorithm import parallelize
@@ -13,12 +13,7 @@ from std.os.path import exists
 from .footprint import camera_footprint
 from .sensors import named_sensor_is_supported, named_sensor_srgb_matrix
 from .diagnostics import warn_unsupported, warn_unsupported_in
-from .lexer import (PbrtScanner, scanner_open, scanner_free, scanner_is_at_end,
-                    scanner_scan_token, scanner_parse_quoted_string,
-                    scanner_scan_char, scanner_scan_float,
-                    _psc_streq,
-                    _psc_scan_spectrum_scalar, _psc_collect_params, ParameterDictionary,
-                    _psc_skip_params, _psc_skip_line)
+from .lexer import PbrtScanner, scanner_open, scanner_free, scanner_is_at_end, scanner_scan_token, scanner_parse_quoted_string, scanner_scan_char, scanner_scan_float, _psc_streq, _psc_collect_params, ParameterDictionary, _psc_skip_params, _psc_skip_line
 from .parse_types import (SceneParseState, MeshAccum, NamedMaterial, scene_path,
                            ctm_push, ctm_pop, PSC_NAME_MAX, PSC_FILE_MAX)
 from .geometry import RGB, Point3f, Vec3f, dot, cross, PI, _is_real_ptr
@@ -183,11 +178,6 @@ def _psc_identity(m: Pointer[Float32, MutUntrackedOrigin]):
     m[unsafe_offset=10] = Float32(1)
     m[unsafe_offset=15] = Float32(1)
 
-def _psc_matcopy(dst: Pointer[Float32, MutUntrackedOrigin],
-                src: Pointer[Float32, MutUntrackedOrigin]):
-    for i in range(16):
-        dst[unsafe_offset=i] = src[unsafe_offset=i]
-
 def _psc_ctm_concat(s: Pointer[SceneParseState, MutUntrackedOrigin],
                    t: Pointer[Float32, MutUntrackedOrigin]):
     """Compute s.ctm = s.ctm × t and store back."""
@@ -196,12 +186,6 @@ def _psc_ctm_concat(s: Pointer[SceneParseState, MutUntrackedOrigin],
     for i in range(16):
         s[unsafe_offset=0].ctm[i] = result[unsafe_offset=i]
     result.unsafe_free()
-
-def _psc_row_to_col(col_out: Pointer[Float32, MutUntrackedOrigin],
-                   row_in:  Pointer[Float32, MutUntrackedOrigin]):
-    for row in range(4):
-        for col in range(4):
-            col_out[unsafe_offset=col * 4 + row] = row_in[unsafe_offset=row * 4 + col]
 
 # ── Transform keyword handlers ────────────────────────────────────────────────
 

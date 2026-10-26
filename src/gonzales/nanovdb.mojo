@@ -76,13 +76,6 @@ def nvdb_free(handle: Pointer[UInt8, MutUntrackedOrigin]):
 
 # ── Test oracle (C bridge, host only -- NOT for rendering) ───────────────
 
-def nvdb_get_value_ref(handle: Pointer[UInt8, MutUntrackedOrigin], i: Int32, j: Int32, k: Int32) -> Float32:
-    """NanoVDB's own C++ accessor. Exists ONLY so `nvdb_sample_index` can be
-    diffed against it -- offset/bitmask errors in a tree traversal are
-    silent (wrong densities, not crashes). Never call this from rendering
-    code: it cannot run on the GPU."""
-    return external_call["nvdb_get_value", Float32](handle, i, j, k)
-
 def nvdb_active_count(handle: Pointer[UInt8, MutUntrackedOrigin]) -> Int64:
     """Count of LEAF-RESIDENT active voxels -- deliberately not the grid's
     activeVoxelCount(), which also counts voxels covered by active upper
@@ -135,8 +128,6 @@ def nvdb_map_vecf(handle: Pointer[UInt8, MutUntrackedOrigin],
 # ── The accessor (Mojo, CPU+GPU) ─────────────────────────────────────────
 
 comptime NVDB_GRID_SIZE = 672
-comptime NVDB_TREE_SIZE = 64
-comptime NVDB_GRID_TYPE_FLOAT = 1
 
 # Tree header field offset (bytes from tree base).
 comptime NVDB_TREE_OFF_NODE_OFFSET_ROOT = 24
@@ -180,7 +171,6 @@ comptime NVDB_LEAF_DIM = 8
 comptime NVDB_LOWER_DIM = 128
 comptime NVDB_UPPER_DIM = 4096
 
-comptime NVDB_LEAF_OFF_VALUE_MASK = 16
 comptime NVDB_LEAF_OFF_TABLE = 96
 
 @always_inline

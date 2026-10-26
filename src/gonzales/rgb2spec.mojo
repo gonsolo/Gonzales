@@ -29,10 +29,9 @@
 # not-yet-done follow-up work.
 
 from std.collections import Array
-from std.math import sqrt, exp, sin, asin
+from std.math import sqrt, sin, asin
 from std.sys import is_nvidia_gpu
 from std.memory import unsafe_memcpy
-from std.memory.alloc import unsafe_alloc
 
 comptime CIE_LAMBDA_MIN = Float64(360.0)
 comptime CIE_LAMBDA_MAX = Float64(830.0)

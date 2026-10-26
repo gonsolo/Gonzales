@@ -1,8 +1,7 @@
 from .bvh import SceneView
 from .geometry import TERMINAL_SEGMENT_GRACE_ROUNDS
-from .materials import Material, MeasuredBRDF, MatKind
-from .media import Grid, MediumInterface, Medium, NvdbGrid
-from .primitives import Instance, Intersection, Sphere
+from .materials import MatKind
+from .primitives import Intersection, Sphere
 from .render_state import PathState, ShadowTask, SuppressTask, SHADOW_SLOTS
 from .rtcore import rtcore_active, rtcore_shadow_enabled
 from .restir_di import DIReservoir
@@ -21,7 +20,7 @@ from .gpu_media import sample_medium_gpu, update_medium_gpu
 from .gpu_scene import GpuSceneHandle
 from .gpu_shade import shared_shade_context, resolve_suppress_gpu, shade_coated_conductor_gpu, shade_coated_diffuse_gpu, shade_conductor_gpu, shade_dielectric_gpu, shade_diffuse_gpu, shade_diffuse_transmit_gpu, shade_hair_gpu, shade_interface_gpu, shade_measured_gpu, shade_mix_gpu, shade_nee_preamble_gpu, shade_thin_dielectric_gpu
 from .guide import guide_is_active
-from .gpu_wavefront import sw_pack_shadow_tasks_gpu, sw_add_shadow_gpu, sw_resolve_shadow_gpu, compact_active_paths_gpu, compact_by_kind_gpu, accumulate_cone_gpu, accumulate_film_gpu, accumulate_film_wavefront_gpu, clear_film_gpu, clear_scalar_film_gpu, compact_curve_paths_gpu, compact_walking_gpu, adaptive_converge_gpu, adaptive_dilate_gpu, sss_walk_gpu, deactivate_paths_past_maxdepth_gpu, gen_primary_rays_gpu, gen_primary_rays_wavefront_gpu, reset_curve_counter_gpu, reset_restir_reservoirs_gpu, reset_restir_vol_reservoirs_gpu, reset_shadow_tasks_gpu, read_counter, reset_vol_used_gpu, resolve_curve_candidates_gpu, traverse_paths_gpu, traverse_shadow_rays_gpu, rtcore_closest_hit_gpu, rtcore_shadow_rays_compact_gpu, rtcore_sss_walk_gpu, vulkaninterop_rt_traverse_paths_gpu
+from .gpu_wavefront import sw_pack_shadow_tasks_gpu, sw_add_shadow_gpu, sw_resolve_shadow_gpu, compact_active_paths_gpu, compact_by_kind_gpu, accumulate_cone_gpu, accumulate_film_gpu, accumulate_film_wavefront_gpu, clear_film_gpu, clear_scalar_film_gpu, compact_curve_paths_gpu, compact_walking_gpu, adaptive_converge_gpu, adaptive_dilate_gpu, sss_walk_gpu, deactivate_paths_past_maxdepth_gpu, gen_primary_rays_gpu, gen_primary_rays_wavefront_gpu, reset_curve_counter_gpu, reset_restir_reservoirs_gpu, reset_restir_vol_reservoirs_gpu, reset_shadow_tasks_gpu, read_counter, reset_vol_used_gpu, resolve_curve_candidates_gpu, traverse_paths_gpu, rtcore_closest_hit_gpu, rtcore_shadow_rays_compact_gpu, rtcore_sss_walk_gpu, vulkaninterop_rt_traverse_paths_gpu
 
 
 def _enqueue_traverse[rare_on: Bool, alpha_on: Bool](
@@ -355,7 +354,7 @@ def _gpu_bounce_kernels(
             block_dim=block_size,
         )
     # Phase 0.4 (docs/A2_restir_migration_plan.md): reset_shadow_tasks_gpu
-    # and the traverse_shadow_rays_gpu resolve call below are real, verified
+    # and the shadow resolve call below are real, verified
     # machinery -- built, buffer-sized correctly (shadow_buf now matches
     # path_buf/inter_buf's n_pixels × WAVEFRONT_BATCH sizing), and confirmed
     # via render comparison against inline NEE for a single deferred shadow
@@ -688,8 +687,7 @@ def _gpu_bounce_kernels(
     # zeroed every slot and nothing here ever finds task.active != 0. Kept
     # enqueued (not removed) because Phase 2 (ReSTIR DI) is expected to be
     # this resolve kernel's first real, single-candidate-per-pixel consumer.
-    # Software BVH only (matches traverse_shadow_rays_gpu's own
-    # implementation) even when use_vulkan_rt is set -- this machinery isn't
+    # Software BVH only, even when use_vulkan_rt is set -- this machinery isn't
     # wired to Vulkan RT yet.
     if hw_shadow:
         var shadow_instance_base = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling()
@@ -1018,26 +1016,6 @@ def gpu_render_wavefront(
             _stop_if_out_of_memory(String(e))
 
 
-def gpu_download_film(
-    handlePtr: Pointer[GpuSceneHandle, MutUntrackedOrigin],
-    film: Pointer[Float32, MutUntrackedOrigin],
-    n: Int64,
-):
-    var n_int = Int(n)
-    if n_int == 0:
-        return
-    comptime if has_accelerator():
-        try:
-            var handle = handlePtr
-            # Straight device-to-host copy: map_to_host would pin a ~1.3 GiB host
-            # pool on first use (~1 s of page faults). film holds n_int*3 floats,
-            # the size of film_buf.
-            handle[].ctx.enqueue_copy(film.unsafe_bitcast[UInt8](), handle[].film_buf)
-            handle[].ctx.synchronize()
-        except e:
-            print("GPU download film failed: " + String(e))
-
-
 def gpu_download_albedo[Of: Origin[mut=True]](
     handlePtr: Pointer[GpuSceneHandle, MutUntrackedOrigin],
     film: Pointer[Float32, Of],
@@ -1049,7 +1027,6 @@ def gpu_download_albedo[Of: Origin[mut=True]](
     comptime if has_accelerator():
         try:
             var handle = handlePtr
-            # See gpu_download_film.
             handle[].ctx.enqueue_copy(film.unsafe_bitcast[UInt8](), handle[].albedo_film_buf)
             handle[].ctx.synchronize()
         except e:

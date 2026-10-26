@@ -1,12 +1,11 @@
 from max.gpu import MAX_THREADS_PER_BLOCK_METADATA
 from std.utils import StaticTuple
-from .bvh import BVH2Node, LightSample, _sample_distant_light_nee, _sample_infinite_light_nee, _sample_point_light_nee, _sample_sphere_light_nee, any_hit_bvh2_core, test_spheres, traverse_bvh2_core, traverse_bvh2_core_defer_curves, SceneView
-from .curves import Curve
+from .bvh import LightSample, _sample_distant_light_nee, _sample_infinite_light_nee, _sample_point_light_nee, _sample_sphere_light_nee, any_hit_bvh2_core, test_spheres, traverse_bvh2_core, traverse_bvh2_core_defer_curves, SceneView
 from .geometry import Frame, Point2f, Point3f, RGB, Vec3f, _is_real_ptr, cross, dot, point3f, vec3f
-from .lights import AreaLight, DistantLight, InfiniteLight, LightSampler, PointLight, area_light_pick_triangle, light_sampler_sample
-from .materials import MatKind, Material
+from .lights import area_light_pick_triangle, light_sampler_sample
+from .materials import MatKind
 from .media import Grid, MEDIUM_TRACK_MAX_ITERS, MediumInterface, Medium, NvdbGrid, grid_ray_range, grid_sample_density, hg_phase, hg_sample, medium_emission_spectral, medium_grid_for, medium_nvdb_for, medium_sigma_s_spectral, medium_sigma_t_spectral, medium_transmittance_ratio_spectral, nvdb_index_ray, nvdb_majorant_at_world, nvdb_node_exit_t, nvdb_ray_range, nvdb_sample_density, sample_free_flight
-from .primitives import Instance, Intersection, PrimId, Ray, Sphere, TriangleMesh, sphere_outward_normal, mesh_vi
+from .primitives import Intersection, PrimId, Ray, sphere_outward_normal, mesh_vi
 from .primitives import mesh_pos
 from .render_state import PathState
 from .reservoir import reservoir_finalize, reservoir_update
@@ -17,7 +16,6 @@ from .spectrum import SpectralSample
 from max.gpu import block_dim, block_idx, thread_idx
 from std.collections import Array
 from std.math import abs, cos, exp, log, pow, sin, sqrt
-from .gpu_scene import GpuSceneHandle
 
 
 @__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))

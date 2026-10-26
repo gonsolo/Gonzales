@@ -37,8 +37,7 @@
 # alone) at 256 spp -- see _sample_infinite_light_nee's docstring in
 # bvh.mojo for the measurements this design choice rests on.
 
-from std.math import sqrt
-from .geometry import Point3f, Vec3f, RGB, dot, cross, vec3f, point3f
+from .geometry import Point3f, Vec3f, dot, cross
 
 
 @always_inline

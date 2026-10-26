@@ -1,6 +1,6 @@
 # Transmittance of a surface-NEE shadow segment through interface-bounded media.
 from std.collections import Array
-from std.math import exp, log, max, abs
+from std.math import exp, log, max
 from .geometry import Point3f, Vec3f, dot
 from .materials import Material, MatKind
 from .primitives import Ray, Intersection, PrimId, TriangleMesh, Sphere, Instance

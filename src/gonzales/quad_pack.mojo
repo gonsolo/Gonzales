@@ -1,4 +1,3 @@
-from std.memory.alloc import unsafe_alloc
 from std.math import floor, fma
 from .geometry import Point3f
 from .primitives import mesh_points_floats

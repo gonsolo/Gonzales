@@ -13,15 +13,9 @@
 # was three floats only misled. RGB is now named RGB wherever a quantity
 # genuinely has three authored channels.
 
-from std.math import exp, log, min, max
+from std.math import exp, log, max
 from gonzales.sampling import mix_bits_u64
-from gonzales.rgb2spec import (
-    SpectrumTable, CieXyzTables, RGBSigmoidCoeffs,
-    rgb_to_coeffs_table_lookup_ptr, eval_sigmoid_spectrum,
-    rgb_illuminant_to_coeffs_ptr, eval_illuminant_spectrum,
-    build_cie_xyz_tables, cie_xyz_at_ptr, xyz_to_srgb,
-    load_default_spectrum_table, CIE_Y_INTEGRAL,
-)
+from gonzales.rgb2spec import SpectrumTable, CieXyzTables, rgb_to_coeffs_table_lookup_ptr, eval_sigmoid_spectrum, rgb_illuminant_to_coeffs_ptr, eval_illuminant_spectrum, build_cie_xyz_tables, cie_xyz_at_ptr, xyz_to_srgb, load_default_spectrum_table, CIE_Y_INTEGRAL
 from gonzales.sensors import named_sensor_srgb_matrix
 
 comptime N_SPECTRAL_SAMPLES = 4
@@ -73,16 +67,6 @@ def visible_wavelength_pdf(lam: Float32) -> Float32:
     return Float32(0.0039398042) / (c * c)
 
 @always_inline
-def _sample_visible_wavelength(u: Float32) -> Float32:
-    """pbrt-v4's SampleVisibleWavelengths, the inverse CDF of the pdf above:
-    538 - 138.888889 * atanh(0.85691062 - 1.82750197 u)."""
-    var t = Float32(0.85691062) - Float32(1.82750197) * u
-    var lam = Float32(538) - Float32(138.888889) * (Float32(0.5) * log((Float32(1) + t) / (Float32(1) - t)))
-    # u = 1 exactly (a lane at u + 3/4 with u = 1/4) lands a hair past 830 in
-    # Float32, where the pdf is 0; keep it inside the range.
-    return min(max(lam, LAMBDA_MIN), LAMBDA_MAX)
-
-@always_inline
 def sample_wavelengths(u: Float32) -> SampledWavelengths:
     """pbrt-v4's SampledWavelengths::SampleVisible: stratified hero sampling
     (Wilkie et al. 2014) in the CDF's u, lanes at u + i/4 wrapped, each
@@ -96,8 +80,7 @@ def sample_wavelengths(u: Float32) -> SampledWavelengths:
     L = (5, 150, 10) lamp at limit 50 read G = 60 against pbrt's 68.8, and
     even a white L = 30 lamp, whose mean is well inside the limit, lost 5-13%
     of blue."""
-    # The four lanes go through the inverse CDF together (one vector log), same arithmetic per lane as
-    # _sample_visible_wavelength.
+    # pbrt's SampleVisibleWavelengths inverse CDF, 538 - 138.888889 atanh(0.85691062 - 1.82750197 u), per lane.
     var up = SIMD[DType.float32, 4](u, u + Float32(0.25), u + Float32(0.5), u + Float32(0.75))
     up = up.gt(Float32(1)).select(up - Float32(1), up)
     var t = Float32(0.85691062) - Float32(1.82750197) * up

@@ -10,8 +10,6 @@ comptime RtCoreHandle = Pointer[UInt8, MutUntrackedOrigin]
 
 # 32 bytes per ray: ox oy oz t_min dx dy dz t_max (floats). Results, 32 bytes per ray: t u v (floats), hit word
 # (uint32: 0xffffffff = miss, else the triangle index is `word & 0x1fffffff`), 16 unused bytes.
-comptime RTCORE_RAY_FLOATS = 8
-comptime RTCORE_RESULT_FLOATS = 8
 comptime RTCORE_MISS = UInt32(0xFFFFFFFF)
 comptime RTCORE_PRIM_MASK = UInt32(0x1FFFFFFF)
 
