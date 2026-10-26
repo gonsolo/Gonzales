@@ -590,7 +590,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
 
         _resolve_mix(sd, pcg, mat, mat_idx)
 
-        if mat.type == MatKind.area_light:
+        if mat.type == MatKind.area_light or mat.type == MatKind.lamp:
             # Direct hit on a triangle/curve area light — same MIS-against-
             # last_bsdf_pdf treatment as the sphere case above. id1 is the
             var is_curve = inter.primId.type == Int8(5)
@@ -661,6 +661,11 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                     else:
                         mis_w_al_hit = Float32(0)
                 total += beta * spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, al_emission.r, al_emission.g, al_emission.b, wavelengths) * mis_w_al_hit
+            if mat.type == MatKind.lamp:   # Cycles' lamps let rays through, as a null interface (shade_light.h)
+                ro = hit + rd*Float32(0.0002)
+                dvcm_carry /= max(d_seg * d_seg, Float32(1e-20))
+                mis_null_dist += t_hit + Float32(0.0002)
+                return True
             return False   # direct hit on an area-light triangle/curve -- terminates the path
 
         # Every arm of the dispatch below except a null interface is a real

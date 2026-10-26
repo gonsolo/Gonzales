@@ -712,7 +712,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
                 dvc_carry *= cos_theta_out_d
                 dvm_carry *= cos_theta_out_d
 
-        elif mat.type == MatKind.interface:
+        elif mat.type == MatKind.interface or mat.type == MatKind.lamp:   # lamps let light through too
             if has_med:
                 var new_idx = medium_after_crossing(ray_dir, inter, sd.meshes, mat, sd, hit)
                 if mat.medium_interface_idx >= Int32(0): cur_med_idx = new_idx
