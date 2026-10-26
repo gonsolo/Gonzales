@@ -668,6 +668,13 @@ def camera_ray_from_film_xy[Oc2w: Origin[mut=True] = MutUntrackedOrigin](
     return (Vec3f(dx, dy, dz), org, camLenPre)
 
 
+@always_inline
+def sobol_dim_seed(seed: UInt32, dim: Int) -> UInt32:
+    """The Owen scramble of a Sobol dimension: one per render and dimension, as pbrt's ZSobolSampler. A seed per sample
+    made each pixel's points no better spread than PCG's (a 4% reflection read as a sparkle at 128 spp)."""
+    return mix_bits_u64((UInt64(seed) << 32) ^ (UInt64(dim) * UInt64(0x9E3779B97F4A7C15)))
+
+
 def gen_primary_ray_state[Oc2w: Origin[mut=True] = MutUntrackedOrigin](
     px: Int32, py: Int32, si: Int32,
     log2spp: Int, n_base4: Int,
@@ -682,9 +689,9 @@ def gen_primary_ray_state[Oc2w: Origin[mut=True] = MutUntrackedOrigin](
     filter_lut: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
     sobol_pixel_part: Int64 = Int64(-1),   # sobol_index_pixel_part for this pixel, when the caller loops samples; -1 = compute
     lens: ThinLens = ThinLens.pinhole(),
-) -> Tuple[Ray, UInt64, UInt64, UInt64, SampledWavelengths]:
+) -> Tuple[Ray, UInt64, UInt64, UInt64, SampledWavelengths, UInt32]:
     """Shared Sobol + filter + camera-transform primary ray generator.
-    Returns (ray, pcg_state, pcg_inc, sobol_idx, wavelengths).
+    Returns (ray, pcg_state, pcg_inc, sobol_idx, wavelengths, sobol_seed).
     """
     var morton_base = encode_morton2(UInt32(px), UInt32(py)) << UInt64(log2spp)
     var morton_idx  = morton_base | UInt64(si)
@@ -695,8 +702,9 @@ def gen_primary_ray_state[Oc2w: Origin[mut=True] = MutUntrackedOrigin](
         sobol_idx = sobol_get_sample_index(morton_idx, 0, log2spp, n_base4)
     var (pcg_state, pcg_inc) = derive_pcg_seeds(px, py, si, rng_seed)
     # Dimensions 0 and 1 place the sample on the film, dimension 2 picks the hero wavelength (scrambled like the
-    # per-bounce dimensions, mix_bits_u64(pcgInc ^ dim)); dimension 3 is only there to make the width a power of two.
-    var u3 = sobol_sample_n[4](Int(sobol_idx), 0, SIMD[DType.uint32, 4](seed_dim0, seed_dim1, mix_bits_u64(pcg_inc ^ UInt64(2)), UInt32(0)), sobol_matrices)
+    # per-bounce dimensions, sobol_dim_seed); dimension 3 is only there to make the width a power of two.
+    var sobol_seed = mix_bits_u64((UInt64(seed_dim0) << 32) | UInt64(seed_dim1))
+    var u3 = sobol_sample_n[4](Int(sobol_idx), 0, SIMD[DType.uint32, 4](seed_dim0, seed_dim1, sobol_dim_seed(sobol_seed, 2), UInt32(0)), sobol_matrices)
     var u0 = u3[0]
     var u1 = u3[1]
     # filter_norm_x/_y are no longer read: they normalised the old truncated
@@ -710,19 +718,15 @@ def gen_primary_ray_state[Oc2w: Origin[mut=True] = MutUntrackedOrigin](
 
     var ul = SIMD[DType.float32, 2](Float32(0.5))
     if lens.radius > Float32(0):
-        ul = sobol_sample_n[2](Int(sobol_idx), 3, SIMD[DType.uint32, 2](mix_bits_u64(pcg_inc ^ UInt64(3)), mix_bits_u64(pcg_inc ^ UInt64(4))), sobol_matrices)
+        ul = sobol_sample_n[2](Int(sobol_idx), 3, SIMD[DType.uint32, 2](sobol_dim_seed(sobol_seed, 3), sobol_dim_seed(sobol_seed, 4)), sobol_matrices)
     var (dir, org, _camLen) = camera_ray_from_film_xy(filmX, filmY, r2c, c2w, lens, ul[0], ul[1])
     var dx = dir.x; var dy = dir.y; var dz = dir.z
     var orgX = org.x; var orgY = org.y; var orgZ = org.z
 
     # Hero-wavelength sample — its own Sobol dimension (2), reserved once per
     # path at primary-ray generation (never resampled per bounce, so hero-
-    # wavelength coherence holds across the whole path). Scrambling seed
-    # mirrors the per-bounce-dimension convention (shading.mojo's
-    # _draw_sobol_8: mix_bits_u64(pcgInc ^ dim)), not an externally threaded
-    # seed_dim2, since this dimension has no film-position-style external
-    # jitter parameters to interact with.
+    # wavelength coherence holds across the whole path).
     var u_wave = u3[2]
     var wavelengths = sample_wavelengths(u_wave)
 
-    return (Ray(Point3f(orgX, orgY, orgZ), Vec3f(dx, dy, dz)), pcg_state, pcg_inc, sobol_idx, wavelengths)
+    return (Ray(Point3f(orgX, orgY, orgZ), Vec3f(dx, dy, dz)), pcg_state, pcg_inc, sobol_idx, wavelengths, sobol_seed)

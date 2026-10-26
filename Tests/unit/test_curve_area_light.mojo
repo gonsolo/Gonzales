@@ -34,6 +34,7 @@ def _dummy_path(ray: Ray, throughput: SpectralSample) -> PathState:
         Int8(0),   # ptex_missed
         MIN_RAY_PDF_NONE,   # min_ray_pdf
         SIMD[DType.uint8, 4](0),   # kind_bounces
+        UInt32(0),   # sobol_seed
         SssWalk.none(),
     )
 
@@ -183,6 +184,7 @@ def test_emissive_curve_bounce_hit_mis_weights_against_its_own_light_pdf() raise
         Int8(0),   # ptex_missed
         MIN_RAY_PDF_NONE,   # min_ray_pdf
         SIMD[DType.uint8, 4](0),   # kind_bounces
+        UInt32(0),   # sobol_seed
         SssWalk.none(),
     )
     intersections[unsafe_offset=0] = inter

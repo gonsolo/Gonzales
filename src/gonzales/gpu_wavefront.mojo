@@ -310,7 +310,7 @@ def gen_primary_rays_wavefront_gpu(
     if _is_real_ptr(px_active) and px_active[unsafe_offset=px_flat] == UInt8(0):
         skip = True
     var rng_seed = UInt64(rng_seed_hi) << UInt64(32) | UInt64(rng_seed_lo)
-    var (ray, pcg_state, pcg_inc, sobol_idx, wavelengths) = gen_primary_ray_state(
+    var (ray, pcg_state, pcg_inc, sobol_idx, wavelengths, sobol_seed) = gen_primary_ray_state(
         px, py, si, Int(log2spp), Int(n_base4),
         seed_dim0, seed_dim1, rng_seed, sobol_matrices, r2c, c2w,
         filter_norm_x, filter_sigma, filter_support_x,
@@ -338,6 +338,7 @@ def gen_primary_rays_wavefront_gpu(
         Int8(2) if skip else Int8(0),   # ptex_missed
         MIN_RAY_PDF_NONE,   # min_ray_pdf
         SIMD[DType.uint8, 4](0),   # kind_bounces
+        sobol_seed,
         SssWalk.none(),
     )
 
@@ -1991,7 +1992,7 @@ def gen_primary_rays_gpu(
     var px = Int32(tid % fw)
     var py = Int32(tid // fw)
     var rng_seed = UInt64(rng_seed_hi) << UInt64(32) | UInt64(rng_seed_lo)
-    var (ray, pcg_state, pcg_inc, sobol_idx, wavelengths) = gen_primary_ray_state(
+    var (ray, pcg_state, pcg_inc, sobol_idx, wavelengths, sobol_seed) = gen_primary_ray_state(
         px, py, si, Int(log2spp), Int(n_base4),
         seed_dim0, seed_dim1, rng_seed, sobol_matrices, r2c, c2w,
         filter_norm_x, filter_sigma, filter_support_x,
@@ -2019,6 +2020,7 @@ def gen_primary_rays_gpu(
         Int8(0),   # ptex_missed
         MIN_RAY_PDF_NONE,   # min_ray_pdf
         SIMD[DType.uint8, 4](0),   # kind_bounces
+        sobol_seed,
         SssWalk.none(),
     )
 

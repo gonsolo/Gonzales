@@ -201,7 +201,7 @@ def render_tile[Osp: Origin[mut=True], Oc2w: Origin[mut=True]](
             var this_pixel_idx = Int(py * frame_w + px) if frame_w > Int32(0) else -1
             var pixel_sobol = Int64(sobol_index_pixel_part(encode_morton2(UInt32(px), UInt32(py)) << UInt64(log2spp), 0, log2spp, n_base4))
             for si in range(spp):
-                var (ray, pcg_state, pcg_inc, sobol_idx, wavelengths) = gen_primary_ray_state(
+                var (ray, pcg_state, pcg_inc, sobol_idx, wavelengths, sobol_seed) = gen_primary_ray_state(
                     px, py, Int32(si) + sp.sampleIndexOffset,
                     log2spp, n_base4,
                     seed_dim0, seed_dim1, rng_seed, matrices,
@@ -232,6 +232,7 @@ def render_tile[Osp: Origin[mut=True], Oc2w: Origin[mut=True]](
                     Int8(0),   # ptex_missed
                     MIN_RAY_PDF_NONE,   # min_ray_pdf
                     SIMD[DType.uint8, 4](0),   # kind_bounces
+                    sobol_seed,
                     SssWalk.none(),
                 )
                 pixel_idx_buf[unsafe_offset=idx] = this_pixel_idx

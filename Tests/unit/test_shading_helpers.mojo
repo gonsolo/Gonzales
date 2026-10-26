@@ -129,6 +129,7 @@ def _make_path(org: Vec3f, dir: Vec3f) -> PathState:
         Int8(0),   # ptex_missed
         MIN_RAY_PDF_NONE,   # min_ray_pdf
         SIMD[DType.uint8, 4](0),   # kind_bounces
+        UInt32(0),   # sobol_seed
         SssWalk.none(),
     )
 
