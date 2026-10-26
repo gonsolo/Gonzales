@@ -250,6 +250,7 @@ def _make_path() -> PathState:
         MIN_RAY_PDF_NONE,   # min_ray_pdf
         SIMD[DType.uint8, 4](0),   # kind_bounces
         UInt32(0),   # sobol_seed
+        Int8(0),   # ns_spec
         SssWalk.none(),
     )
 

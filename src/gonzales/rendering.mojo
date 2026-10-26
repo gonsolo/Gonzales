@@ -233,6 +233,7 @@ def render_tile[Osp: Origin[mut=True], Oc2w: Origin[mut=True]](
                     MIN_RAY_PDF_NONE,   # min_ray_pdf
                     SIMD[DType.uint8, 4](0),   # kind_bounces
                     sobol_seed,
+                    Int8(0),   # ns_spec
                     SssWalk.none(),
                 )
                 pixel_idx_buf[unsafe_offset=idx] = this_pixel_idx

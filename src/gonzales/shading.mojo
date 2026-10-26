@@ -31,9 +31,9 @@ from .restir_di import DIReservoir, di_reservoir_init, di_target_pdf, ReservoirI
 from .restir_gi import GIReservoir, gi_reservoir_init, gi_target_pdf, GIReservoirIO, gi_reservoir_io_null, gi_temporal_spatial_combine
 from .sms import (
     MAX_SMS_VERTICES, SMSVertex, sms_vertex_init, sms_vertex_flat, sms_vertex_sphere, sms_vertex_mats,
-    mat22_mul, mat22_mul_v, mat22_inv, sms_solve_bernoulli, sms_walk, SMS_SOLVER_THRESHOLD,
+    mat22_mul, mat22_mul_v, mat22_inv, sms_walk, SMS_SOLVER_THRESHOLD,
     mnee_orthonormal_basis,
-    sms_refresh_solved_frames,
+    sms_refresh_solved_frames, sms_refresh_mesh_frames, sms_vertex_mesh, sms_curved,
 )
 from .restir_sms import SMSReservoir, sms_reservoir_init, sms_target_pdf, SMSReservoirIO, sms_reservoir_io_null, sms_spatial_combine
 
@@ -1759,6 +1759,7 @@ def _finish_delta_bounce(
     path_ptr[].throughput *= f_spec
     path_ptr[].specularBounce = Int8(1)
     path_ptr[].lastBsdfPdf = Float32(0.0)
+    path_ptr[].ns_spec = min(path_ptr[].ns_spec + Int8(1), Int8(100))
     # `charge_depth` is False only at the boundary of a subsurface interior
     # (Material.sss_boundary). Entry, exit and total internal reflection
     # there are all parts of ONE BSSRDF scattering event, so charging them to
@@ -3643,6 +3644,11 @@ def _sms_vertex_from_hit(
         return (sms_vertex_sphere(hit_pt, center, sph.radius, eta, nmap, ior), True)
     elif inter.primId.type == Int8(0):
         var (mesh, v0, v1, v2, _) = _get_tri_verts(inter, ctx.meshes)
+        if Int(mesh.normals) > 4 and inter.primId.instanceIdx < Int32(0):
+            # A smooth mesh: curved, walked on its interpolated normal (sms.mojo's sms_mesh_frame).
+            var ns = _interp_vertex_normal(mesh, v0, v1, v2, inter.u, inter.v)
+            var eta_m = ior if dot(ns, shadow_dir) <= Float32(0.0) else (Float32(1.0) / ior)
+            return sms_vertex_mesh(ctx.meshes, Int(inter.primId.id1), Int(inter.primId.id2), inter.u, inter.v, eta_m, ior)
         var p0 = mesh_pos(mesh, v0)
         var p1 = mesh_pos(mesh, v1)
         var p2 = mesh_pos(mesh, v2)
@@ -3806,9 +3812,7 @@ def _sms_solve_from_probe(
     triangle's own fixed properties, valid even when `solve_ok=False`
     (a caller doing manifold-shift reuse needs the probed vertex 0's
     geometry regardless of whether the direct-probe seed itself
-    converged). `trials` is always 1.0 for the 1-/2-vertex MNEE fast path
-    (Phase 5.4, no Bernoulli-trial estimator there) and
-    sms_solve_bernoulli's own trial count for N>=3 chains (Phase 5.3)."""
+    converged). `trials` is always 1.0: every chain is one deterministic solve from the probe seed."""
     var zero_verts = Array[SMSVertex, MAX_SMS_VERTICES](fill=sms_vertex_init())
     # MNEE: probe for up to 2 glass surfaces between hit_point and light.
     # For each probe hit we detect entering/exiting from dot(n_raw, probe_dir).
@@ -3823,42 +3827,20 @@ def _sms_solve_from_probe(
         # straight shadow ray is blocked regardless) but no usable manifold
         # geometry.
         return (True, False, 0, zero_verts.copy(), Float32(0.0), Float32(0.0), Float32(0.0))
-    var is_sphere1 = v1.is_sphere != Int8(0)
+    var is_sphere1 = sms_curved(v1)
     var pgeo_n = v1.normal
     var pdp_du = v1.dp_du
     var pdp_dv = v1.dp_dv
     var eta1 = v1.eta
     var x1_init = v1.pos
     # --- Probe for second glass surface beyond x1 ---
-    # Deliberately SKIPPED for a sphere caster: read directly from the real
-    # SMS reference renderer's own source (manifold_ss.cpp,
-    # SpecularManifoldSingleScatter::newton_solver/sample_path) to root-
-    # cause why gonzales's own real-scene render of sphere_sms.xml wasn't
-    # converging -- their "single scatter" integrator solves for exactly
-    # ONE specular vertex per caustic-caster shape (one refraction event),
-    # full stop; it never chains an entry+exit pair through a solid
-    # object. Building that harder 2-vertex problem (this file did, before
-    # this fix) is solving something genuinely harder than what the
-    # reference scene's own reference image was ever generated from: on
-    # real (non-toy) sphere geometry the coupled entry+exit Newton solve
-    # kept converging to a root literally behind the sphere, embedded
-    # under the scene's own floor -- physically correct rejection once an
-    # occlusion-aware reprojection was added (see sms.mojo's
-    # `_sms_reproject_onto_sphere_anchored`), but then unable to re-
-    # converge to a valid PAIR at all, because "entry connects to exit
-    # without crossing the floor" isn't a constraint the per-vertex
-    # tangential Newton solve is even solving for. Matching the reference's
-    # own scope avoids the problem instead of fighting it: treat a sphere
-    # caustic caster as a single idealized refraction (like a thin shell),
-    # routing it through the 1-vertex `sms_walk` path below -- already
-    # validated correct and convergent (project_sms_restir_phase6 memory).
-    # A flat 2-surface pane (an actual window, unrelated to this) is
-    # untouched -- `is_sphere1` only ever true for `Sphere`.
+    # A solid curved caster is two refractions, entry and exit, solved together below.
+    # Modelling it as one idealized refraction (the SMS reference's single scatter) leaves pbrt's answer.
     var probe2_t0 = probe_inter.tHit
     var probe2_rem = (dist - probe2_t0) * Float32(0.9995)
     var probe2_org = x1_init + shadow_dir * Float32(0.0005)
     var probe2_inter = dummy_inter
-    if probe2_rem > Float32(0.001) and not is_sphere1:
+    if probe2_rem > Float32(0.001):
         var probe2_ray = Ray(
             Point3f(probe2_org[0], probe2_org[1], probe2_org[2]),
             Vec3f(shadow_dir[0], shadow_dir[1], shadow_dir[2]))
@@ -3876,38 +3858,19 @@ def _sms_solve_from_probe(
         var verts1 = Array[SMSVertex, MAX_SMS_VERTICES](fill=sms_vertex_init())
         verts1[0] = v1
         if is_sphere1:
-            # A curved caster needs sms_walk's general (curvature-aware)
-            # Newton solve -- _mnee_walk assumes a flat tangent plane IS the
-            # surface, which only holds for a triangle -- and it needs the
-            # FULL SMS estimator around that solve rather than one
-            # deterministic probe-seeded shot.
-            #
-            # MNEE's single-seed shortcut is justified by uniqueness: for a
-            # flat refractor the solution given a probe is essentially the
-            # only one, so finding it once is finding all of it. A sphere
-            # already strains that, and a NORMAL-MAPPED sphere breaks it
-            # outright -- the perturbed surface has many specular solutions
-            # per shading point, and they are exactly what the caustic's
-            # filament structure is made of. One deterministic seed reports
-            # a single root with weight 1 and drops the rest, which renders
-            # as the right pattern at a fraction of the right brightness.
-            # sms_solve_bernoulli draws its seeds at random over the sphere
-            # instead and weights by the reciprocal probability of
-            # rediscovering the root it found (Zeltner et al. 2020), which
-            # is an unbiased estimate of the sum over all of them. The
-            # reflection/validity rejection the reference applies after each
-            # solve now lives inside sms_walk itself, so it covers every
-            # trial rather than just this call site's own.
-            var _bern1 = sms_solve_bernoulli(
-                hit_point, light_point, verts1, 1, ldp_du_v, ldp_dv_v,
-                Float32(0.0), pcg,
+            # A curved caster needs sms_walk's curvature-aware Newton solve. One deterministic seed finds one root;
+            # the BSDF keeps the paths of the others (see _mnee_owns_path), so a caster with many roots stays unbiased.
+            var w1 = sms_walk(hit_point, light_point, verts1, 1, ldp_du_v, ldp_dv_v,
                 ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves, ctx.blasNodesArr, ctx.blasPrimIdsArr, ctx.instances,
                 ctx.lights.spheres, ctx.lights.sphere_count)
-            if not _bern1[0]:
+            if not w1[0]:
                 return (True, False, 1, verts1.copy(), Float32(0.0), Float32(0.0), Float32(0.0))
-            verts1[0].pos = _bern1[1][0]
+            verts1[0].pos = w1[1][0]
             sms_refresh_solved_frames(verts1, 1)
-            return (True, True, 1, verts1.copy(), _bern1[2], _bern1[3], _bern1[4])
+            if not sms_refresh_mesh_frames(hit_point, verts1, 1, ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves,
+                                           ctx.blasNodesArr, ctx.blasPrimIdsArr, ctx.instances):
+                return (True, False, 1, verts1.copy(), Float32(0.0), Float32(0.0), Float32(0.0))
+            return (True, True, 1, verts1.copy(), w1[2], w1[3], Float32(1.0))
         # --- 1-vertex MNEE fast path (flat triangle only, unchanged) ---
         var (mnee_ok, x1_f, det_b, eta_f) = _mnee_walk(
             hit_point, light_point, x1_init, pgeo_n, pdp_du, pdp_dv, eta1)
@@ -3963,7 +3926,7 @@ def _sms_solve_from_probe(
     var (v2, v2_ok) = _sms_vertex_from_hit(ctx, probe2_inter, probe2_org, shadow_dir)
     if not v2_ok:
         return (True, False, 0, zero_verts.copy(), Float32(0.0), Float32(0.0), Float32(0.0))
-    var is_sphere2 = v2.is_sphere != Int8(0)
+    var is_sphere2 = sms_curved(v2)
     var pgeo_n2 = v2.normal
     var pdp_du2 = v2.dp_du
     var pdp_dv2 = v2.dp_dv
@@ -3997,64 +3960,6 @@ def _sms_solve_from_probe(
         verts2[1].pos = x2_f2
         return (True, True, 2, verts2.copy(), bsdf_prod, dx1_dxl2, Float32(1.0))
 
-    if extra_count == 0:
-        # --- 2-vertex chain with at least one curved (sphere) caster:
-        # route through sms_walk's general, curvature-aware solve instead
-        # of the flat-only _mnee_walk2 fast path. ---
-        var verts2c = Array[SMSVertex, MAX_SMS_VERTICES](fill=sms_vertex_init())
-        verts2c[0] = v1
-        verts2c[1] = v2
-        var _walk2c = sms_walk(hit_point, light_point, verts2c.copy(), 2, ldp_du_v, ldp_dv_v,
-            ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves, ctx.blasNodesArr, ctx.blasPrimIdsArr, ctx.instances,
-            ctx.lights.spheres, ctx.lights.sphere_count)
-        var ok2c = _walk2c[0]
-        var pos2c = _walk2c[1].copy()
-        var bsdf2c = _walk2c[2]
-        var jac2c = _walk2c[3]
-        # A sphere (unlike a flat pane, where the fast path's single Newton
-        # solve is provably the unique stationary point) can have more than
-        # one mathematically valid specular chain -- the straight-line probe
-        # seed sits in the basin of attraction of whichever root is nearest,
-        # but on real (non-toy) geometry that solve can wander all the way
-        # to the FAR hemisphere of the sphere: a root that satisfies the
-        # local Snell's-law constraint just as well, but is physically
-        # unreachable (behind the sphere from the shading point's own
-        # perspective, often literally embedded in another surface like
-        # this scene's floor). Found via real-scene diagnostics on
-        # sphere_sms.xml: `_sms_probe_and_solve` reported solve_ok=True with
-        # plausible-looking bsdf_product/jacobian values on ~100% of its
-        # candidates, yet `sms_target_pdf`'s cos_s_x0 gate rejected every
-        # single one -- the solved entry vertex had landed on the sphere's
-        # underside (y around -5.5 on a radius-6.5 sphere resting on a
-        # y=0 floor), nowhere near the seed. Reject here instead of relying
-        # solely on the caller's downstream visibility gate: cheaply checks
-        # that each curved vertex didn't cross to the opposite hemisphere
-        # from where the probe originally hit it (`cos_s_x0`'s check only
-        # covers x0's own normal, not whether the SPHERE root itself is the
-        # near one) -- generous 60-degree threshold, well past any
-        # legitimate MNEE deflection for a realistic IOR, tight enough to
-        # catch a same-scene wrong-hemisphere jump (which measured over 90
-        # degrees).
-        if ok2c and verts2c[0].is_sphere != Int8(0):
-            var seed0 = verts2c[0].pos - verts2c[0].sphere_center
-            var sol0 = pos2c[0] - verts2c[0].sphere_center
-            var denom0 = sqrt(dot(seed0, seed0)) * sqrt(dot(sol0, sol0))
-            if denom0 <= Float32(1e-12) or dot(seed0, sol0) / denom0 < Float32(0.5):
-                ok2c = False
-        if ok2c and verts2c[1].is_sphere != Int8(0):
-            var seed1 = verts2c[1].pos - verts2c[1].sphere_center
-            var sol1 = pos2c[1] - verts2c[1].sphere_center
-            var denom1 = sqrt(dot(seed1, seed1)) * sqrt(dot(sol1, sol1))
-            if denom1 <= Float32(1e-12) or dot(seed1, sol1) / denom1 < Float32(0.5):
-                ok2c = False
-        if not ok2c:
-            return (True, False, 2, verts2c.copy(), Float32(0.0), Float32(0.0), Float32(0.0))
-        verts2c[0].pos = pos2c[0]
-        verts2c[1].pos = pos2c[1]
-        sms_refresh_solved_frames(verts2c, 2)
-        return (True, True, 2, verts2c.copy(), bsdf2c, jac2c, Float32(1.0))
-
-    # --- N-vertex SMS (Phase 5.1/5.2/5.3, sms.mojo) ---
     var n_total = 2 + extra_count
     var verts = Array[SMSVertex, MAX_SMS_VERTICES](fill=sms_vertex_init())
     verts[0] = v1
@@ -4071,23 +3976,22 @@ def _sms_solve_from_probe(
     # adjacent probed vertices -- keeps the re-seed within the flat-
     # triangle validity radius each vertex's own straight-line probe
     # already established.
-    var span = light_point - hit_point
-    var span_len = sqrt(dot(span, span))
-    var jitter_scale = Float32(0.05) * (span_len / Float32(max(n_total, 1)))
-    var _bern_res = sms_solve_bernoulli(
-        hit_point, light_point, verts, n_total, ldp_du_v, ldp_dv_v, jitter_scale, pcg,
+    var _walk_res = sms_walk(hit_point, light_point, verts, n_total, ldp_du_v, ldp_dv_v,
         ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves, ctx.blasNodesArr, ctx.blasPrimIdsArr, ctx.instances,
         ctx.lights.spheres, ctx.lights.sphere_count)
-    var sms_ok = _bern_res[0]
-    var sms_pos = _bern_res[1].copy()
-    var sms_bsdf = _bern_res[2]
-    var sms_jac = _bern_res[3]
-    var sms_trials = _bern_res[4]
+    var sms_ok = _walk_res[0]
+    var sms_pos = _walk_res[1].copy()
+    var sms_bsdf = _walk_res[2]
+    var sms_jac = _walk_res[3]
+    var sms_trials = Float32(1.0)
     if not sms_ok:
         return (True, False, n_total, verts.copy(), Float32(0.0), Float32(0.0), Float32(0.0))
     for i in range(n_total):
         verts[i].pos = sms_pos[i]
     sms_refresh_solved_frames(verts, n_total)
+    if not sms_refresh_mesh_frames(hit_point, verts, n_total, ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves,
+                                   ctx.blasNodesArr, ctx.blasPrimIdsArr, ctx.instances):
+        return (True, False, n_total, verts.copy(), Float32(0.0), Float32(0.0), Float32(0.0))
     return (True, True, n_total, verts.copy(), sms_bsdf, sms_jac, sms_trials)
 
 @no_inline
@@ -4099,8 +4003,8 @@ def _mnee_owns_path(
 
     The straight-line probe seeds the same manifold solve that last_ns_p's NEE ran for this light point. Dropping every
     BSDF path whose first surface is glass loses the ones MNEE cannot solve for (another chain topology, no root); so
-    drop only when the solve succeeds AND ends at the vertex this ray left from. Chains of three or more vertices go
-    through SMS's Bernoulli estimator, which covers its whole family: those keep the plain rule."""
+    drop only when the solve succeeds AND ends at the vertex this ray left from, through as many specular vertices.
+    The solve is deterministic, so this is exactly the set NEE's MNEE contributes, whatever the number of roots."""
     var (lmesh, lv0, lv1, lv2, _) = _get_tri_verts(inter, ctx.meshes)
     var lp0 = mesh_pos(lmesh, lv0)
     var lp1 = mesh_pos(lmesh, lv1)
@@ -4110,16 +4014,15 @@ def _mnee_owns_path(
     var res = _sms_solve_from_probe(ctx, path_ptr[].last_ns_p, seg_dir, seg_len, light_hit, l_du, l_dv, pcg, probe_inter)
     if not res[0]:
         return True
-    if not res[1]:
-        return False
     var n = res[2]
-    if n >= 3:
-        return True
+    if Int(path_ptr[].ns_spec) != n or not res[1]:
+        return False
     var verts = res[3].copy()
     var o = path_ptr[].ray.origin
     var d = verts[n-1].pos - Vec3f(o.x, o.y, o.z)
-    var tol = Float32(1e-3) * (Float32(1.0) + seg_len)
-    return dot(d, d) <= tol * tol
+    var r = Vec3f(o.x, o.y, o.z) - path_ptr[].last_ns_p
+    var tol2 = Float32(1e-4) * dot(r, r)   # 1% of the distance: another root of the same chain is further away
+    return dot(d, d) <= tol2
 
 
 @always_inline
@@ -4159,8 +4062,7 @@ def _mnee_area_light_contribute(
     Probes for up to MAX_SMS_VERTICES glass surfaces between `hit_point` and
     `light_point`; on a hit, runs the 1-/2-vertex MNEE fast path (Phase
     5.4) or, for a genuinely longer chain, sms.mojo's general N-vertex
-    manifold walk with random seeding and the Bernoulli-trial reciprocal
-    estimator (Phase 5.1-5.3), adds the refracted contribution directly to
+    manifold walk (Phase 5.1), adds the refracted contribution directly to
     `path_ptr[].estimate`, and returns True. The caller MUST then skip its
     own straight shadow ray -- MNEE/SMS REPLACES it
     (that ray is occluded by the glass by construction, so tracing it would
@@ -4245,6 +4147,12 @@ def _mnee_area_light_contribute(
         var gnl = sqrt(dot(gnv, gnv))
         if gnl > Float32(1e-8):
             first_normal = gnv * (Float32(1.0) / gnl)
+    elif verts[0].mesh_idx >= Int32(0):
+        # dx1_dxlight measures area in the triangle's own tangents
+        var tn = cross(verts[0].dp_du, verts[0].dp_dv)
+        var tnl = sqrt(dot(tn, tn))
+        if tnl > Float32(1e-8):
+            first_normal = tn * (Float32(1.0) / tnl)
     var last_vertex = verts[n-1].pos
     var wi_f = hit_point - first_vertex
     var wi_len = sqrt(dot(wi_f, wi_f))
@@ -4279,9 +4187,7 @@ def _mnee_area_light_contribute(
         return True
     # Phase 5.5: no MIS weight -- the refracted path is a specular chain
     # that BSDF sampling effectively never reproduces, so there is no
-    # competing strategy to balance against. `trials` is exactly 1.0 for
-    # the 1-/2-vertex fast path (no Bernoulli-trial estimator there) so
-    # this reduces to the original formula unchanged in that case.
+    # competing strategy to balance against. `trials` is always 1.0.
     var mnee_wt = _to_spec_diffuse_lit(ctx, alb, al.emission, path_ptr[].wavelengths) * (cos_s_x0 * g * bsdf_product * lobe_w * inv_pdf_area * trials)
     path_ptr[].estimate += _clamped(ctx, path_ptr[].throughput * mnee_wt, Int(path_ptr[].bounce))
     return True
@@ -4296,7 +4202,7 @@ def _mnee_area_light_contribute(
 # Unlike ReSTIR DI's di_generate_reservoir (M=16 cheap light-sampler
 # draws streamed via RIS), SMS has effectively M=1 per pixel per frame --
 # generating even ONE admissible chain is the expensive part (a full
-# Newton solve, possibly Bernoulli trials for N>=3). ReSTIR's value here
+# Newton solve). ReSTIR's value here
 # is almost entirely about reusing that one expensive solve across frames
 # (temporal) and pixels (spatial) via sms_shift, not about resampling
 # among many cheap candidates. Unlike ReSTIR GI's candidate generation
@@ -4320,8 +4226,7 @@ def sms_generate_reservoir(
     reservoir with RIS weight p̂/q where p̂ is sms_target_pdf and q folds
     in the light's own area-measure generation density (`inv_pdf_area`
     is 1/q, matching _mnee_area_light_contribute's own parameter of the
-    same name) and the Bernoulli-trial reciprocal estimator (`trials`,
-    1.0 for the 1-/2-vertex fast path).
+    same name) and `trials` (always 1.0).
 
     Returns (dielectric_found, reservoir) -- mirrors
     _sms_probe_and_solve's own split: `dielectric_found` alone tells the
@@ -4534,6 +4439,7 @@ def _nee_area_lights[enqueue_shadow: Bool, mnee: Bool = True, defer_only: Bool =
     if not (pixel_idx >= 0 and _is_real_ptr(sms_io.read)):
         path_ptr[].last_ns_n = normal
         path_ptr[].last_ns_p = hit_point
+        path_ptr[].ns_spec = Int8(0)
     # The importance pick at this vertex; the emitter-hit site repeats it from last_ns_p, which this vertex marked.
     var at_point = not (pixel_idx >= 0 and _is_real_ptr(sms_io.read))
     var ls_result_nee = light_sampler_sample_at(ctx.lights.light_sampler, hit_point, u_light) if at_point else light_sampler_sample(ctx.lights.light_sampler, u_light)

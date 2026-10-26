@@ -37,7 +37,7 @@ from std.math import sqrt, abs, max, min, cos, sin, acos
 from .geometry import RGB, dot, cross, Frame, Vec3f, Point3f, _atan2f, PI, TWO_PI
 from .materials import fr_dielectric
 from .render_state import NormalSlopeMap, normal_slope_map_none
-from .primitives import Ray, Intersection, PrimId, TriangleMesh, Instance, Sphere
+from .primitives import Ray, Intersection, PrimId, TriangleMesh, Instance, Sphere, mesh_vi, mesh_pos, mesh_normal
 from .curves import Curve
 from .rng import PCG32
 from .bvh import ray_sphere_hit, traverse_bvh2_core, BVH2Node
@@ -240,11 +240,19 @@ struct SMSVertex(TrivialRegisterPassable):
     # less error-prone to carry both. Equal to `eta` for a flat vertex,
     # which never reaches the angle-difference path.
     var eta_raw: Float32
+    # A smooth (vertex-normal) mesh caster: the walk reprojects onto this mesh and re-reads its interpolated normal
+    # and that normal's derivatives at every step, as for a sphere. -1: not a mesh vertex.
+    var mesh_idx: Int32
+    var mesh_tri: Int32  # index base of the triangle it lies on
+
+@always_inline
+def sms_curved(v: SMSVertex) -> Bool:
+    return v.is_sphere != Int8(0) or v.mesh_idx >= Int32(0)
 
 @always_inline
 def sms_vertex_init() -> SMSVertex:
     var z = Vec3f(Float32(0.0))
-    return SMSVertex(z, z, z, z, Float32(1.0), Int8(0), z, Float32(0.0), z, z, normal_slope_map_none(), Float32(1.0))
+    return SMSVertex(z, z, z, z, Float32(1.0), Int8(0), z, Float32(0.0), z, z, normal_slope_map_none(), Float32(1.0), Int32(-1), Int32(-1))
 
 @always_inline
 def sms_vertex_flat(
@@ -259,7 +267,7 @@ def sms_vertex_flat(
     named constructor so call sites don't each spell out the dummy
     sphere_center/sphere_radius padding a flat vertex never uses."""
     var z = Vec3f(Float32(0.0))
-    return SMSVertex(pos, normal, dp_du, dp_dv, eta, Int8(0), z, Float32(0.0), z, z, normal_slope_map_none(), eta)
+    return SMSVertex(pos, normal, dp_du, dp_dv, eta, Int8(0), z, Float32(0.0), z, z, normal_slope_map_none(), eta, Int32(-1), Int32(-1))
 
 @always_inline
 def sms_vertex_sphere(
@@ -278,7 +286,7 @@ def sms_vertex_sphere(
     perturbs the shading normal and its derivatives on top of that (see
     `_sms_apply_sphere_frame`)."""
     var z = Vec3f(Float32(0.0))
-    var vtx = SMSVertex(pos, z, z, z, eta, Int8(1), center, radius, z, z, nmap, eta_raw)
+    var vtx = SMSVertex(pos, z, z, z, eta, Int8(1), center, radius, z, z, nmap, eta_raw, Int32(-1), Int32(-1))
     _sms_apply_sphere_frame(vtx, _sms_reproject_onto_sphere(pos, center, radius))
     return vtx
 
@@ -594,6 +602,111 @@ def _sms_reproject_onto_sphere_anchored(
     var r = _sms_sphere_frame_at(pos, normal)
     return (r[0], r[1], r[2], r[3], True)
 
+# ── Smooth mesh casters ──────────────────────────────────────────────────────
+# A mesh with vertex normals is a curved surface too: the specular constraint is stated in its interpolated normal,
+# which turns as the vertex slides across a triangle and from one triangle to the next. So a mesh vertex is walked like
+# a sphere vertex: reprojected onto the mesh by a ray from its anchor after every step, its frame re-read there.
+
+comptime MeshFrame = Tuple[Vec3f, Vec3f, Vec3f, Vec3f, Vec3f, Vec3f, Bool, Int32]
+
+@always_inline
+def sms_mesh_frame(
+    meshes: Pointer[TriangleMesh, MutUntrackedOrigin], mi: Int, tri_base: Int, bu: Float32, bv: Float32,
+) -> MeshFrame:
+    """(point, interpolated normal N, orthonormal triangle tangents, dN/ds along each, ok, triangle) at (bu, bv)."""
+    var m = meshes[unsafe_offset=mi]
+    var z = Vec3f(Float32(0.0))
+    if Int(m.normals) <= 4:
+        return (z, z, z, z, z, z, False, Int32(-1))
+    var v0 = Int(mesh_vi(m, tri_base)); var v1 = Int(mesh_vi(m, tri_base + 1)); var v2 = Int(mesh_vi(m, tri_base + 2))
+    var p0 = mesh_pos(m, v0)
+    var e1 = mesh_pos(m, v1) - p0
+    var e2 = mesh_pos(m, v2) - p0
+    var n0 = mesh_normal(m, v0)
+    var dn1 = mesh_normal(m, v1) - n0
+    var dn2 = mesh_normal(m, v2) - n0
+    var big_n = n0 + dn1 * bu + dn2 * bv
+    var nl = sqrt(dot(big_n, big_n))
+    var g11 = dot(e1, e1); var g12 = dot(e1, e2); var g22 = dot(e2, e2)
+    var det = g11 * g22 - g12 * g12
+    if nl <= Float32(1e-8) or det <= Float32(1e-20):
+        return (z, z, z, z, z, z, False, Int32(-1))
+    var n = big_n * (Float32(1.0) / nl)
+    var (du, dv) = mnee_orthonormal_basis(e1, e2)
+    var inv_det = Float32(1.0) / det
+    @always_inline
+    def dn_along(t: Vec3f) {imm} -> Vec3f:
+        var r1 = dot(e1, t); var r2 = dot(e2, t)
+        var d_big = dn1 * ((g22 * r1 - g12 * r2) * inv_det) + dn2 * ((g11 * r2 - g12 * r1) * inv_det)
+        return (d_big - n * dot(n, d_big)) * (Float32(1.0) / nl)
+    return (p0 + e1 * bu + e2 * bv, n, du, dv, dn_along(du), dn_along(dv), True, Int32(tri_base))
+
+@always_inline
+def tri_barycentrics(p0: Vec3f, e1: Vec3f, e2: Vec3f, pos: Vec3f) -> Tuple[Float32, Float32, Bool]:
+    """(bu, bv, inside) of `pos` projected onto the triangle's plane."""
+    var d = pos - p0
+    var g11 = dot(e1, e1); var g12 = dot(e1, e2); var g22 = dot(e2, e2)
+    var det = g11 * g22 - g12 * g12
+    if det <= Float32(1e-20):
+        return (Float32(0.0), Float32(0.0), False)
+    var r1 = dot(d, e1); var r2 = dot(d, e2)
+    var bu = (g22 * r1 - g12 * r2) / det
+    var bv = (g11 * r2 - g12 * r1) / det
+    var eps = Float32(-1e-4)
+    return (bu, bv, bu >= eps and bv >= eps and Float32(1.0) - bu - bv >= eps)
+
+@always_inline
+def sms_mesh_frame_in_tri(meshes: Pointer[TriangleMesh, MutUntrackedOrigin], mi: Int, tri_base: Int, pos: Vec3f) -> MeshFrame:
+    """The frame at `pos` if it lies on triangle `tri_base`: a step along that triangle's tangents needs no ray."""
+    var m = meshes[unsafe_offset=mi]
+    var p0 = mesh_pos(m, Int(mesh_vi(m, tri_base)))
+    var b = tri_barycentrics(p0, mesh_pos(m, Int(mesh_vi(m, tri_base + 1))) - p0, mesh_pos(m, Int(mesh_vi(m, tri_base + 2))) - p0, pos)
+    if not b[2]:
+        var z = Vec3f(Float32(0.0))
+        return (z, z, z, z, z, z, False, Int32(-1))
+    return sms_mesh_frame(meshes, mi, tri_base, b[0], b[1])
+
+@always_inline
+def _sms_apply_mesh_frame(mut vtx: SMSVertex, f: MeshFrame):
+    vtx.pos = f[0]; vtx.normal = f[1]; vtx.dp_du = f[2]; vtx.dp_dv = f[3]; vtx.dn_du = f[4]; vtx.dn_dv = f[5]
+    vtx.mesh_tri = f[7]
+
+@always_inline
+def sms_vertex_mesh(
+    meshes: Pointer[TriangleMesh, MutUntrackedOrigin], mi: Int, tri_base: Int, bu: Float32, bv: Float32,
+    eta: Float32, eta_raw: Float32,
+) -> Tuple[SMSVertex, Bool]:
+    var z = Vec3f(Float32(0.0))
+    var vtx = SMSVertex(z, z, z, z, eta, Int8(0), z, Float32(0.0), z, z, normal_slope_map_none(), eta_raw, Int32(mi), Int32(tri_base))
+    var f = sms_mesh_frame(meshes, mi, tri_base, bu, bv)
+    _sms_apply_mesh_frame(vtx, f)
+    return (vtx, f[6])
+
+def sms_mesh_hit_from(
+    anchor: Vec3f, dir: Vec3f, mesh_idx: Int32, skip_own_surface: Bool,
+    bvh2Nodes: Pointer[BVH2Node, MutUntrackedOrigin],
+    primIds: Pointer[PrimId, MutUntrackedOrigin],
+    meshes: Pointer[TriangleMesh, MutUntrackedOrigin],
+    curves: Pointer[Curve, MutUntrackedOrigin],
+    blasNodesArr: Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin],
+    blasPrimIdsArr: Pointer[Pointer[PrimId, MutUntrackedOrigin], MutUntrackedOrigin],
+    instances: Pointer[Instance, MutUntrackedOrigin],
+) -> MeshFrame:
+    """The frame where a ray from `anchor` first meets the scene, if that is mesh `mesh_idx` (anything else in the
+    way makes it unreachable). A vertex already on the mesh skips its own surface, which gives the far side of a
+    solid caster, as the sphere's anchored reprojection does."""
+    var z = Vec3f(Float32(0.0))
+    var org = anchor + dir * (Float32(2e-4) if skip_own_surface else Float32(1e-5))
+    var ray = Ray(Point3f(org[0], org[1], org[2]), Vec3f(dir[0], dir[1], dir[2]))
+    var dummy_prim = PrimId(Int64(-1), Int64(-1), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
+    var store = Array[Intersection, 1](fill=Intersection(dummy_prim, Float32(1e30), Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0)))
+    traverse_bvh2_core(bvh2Nodes, primIds, meshes, curves, ray, Float32(1e30), store.unsafe_ptr(),
+                       blasNodesArr, blasPrimIdsArr, instances)
+    var h = store[0]
+    if h.hit == Int8(0) or h.primId.type != Int8(0) or h.primId.instanceIdx >= Int32(0) or Int32(h.primId.id1) != mesh_idx:
+        return (z, z, z, z, z, z, False, Int32(-1))
+    return sms_mesh_frame(meshes, Int(h.primId.id1), Int(h.primId.id2), h.u, h.v)
+
 # ── Angle-difference constraint (manifold_ss.cpp) ────────────────────────────
 # The OTHER of the reference's two constraint formulations, and the one its
 # own scenes select by default (`caustics_halfvector_constraints = false`).
@@ -827,7 +940,7 @@ def _sms_eval_vertex(
     var dpv_next = verts[i+1].dp_dv if has_next else z3
     var (ai, bi, ci, cvi) = sms_vertex_mats(wi, wo, H, s, t, verts[i].dp_du, verts[i].dp_dv, ili, ilo,
         dpu_prev, dpv_prev, dpu_next, dpv_next, has_prev, has_next)
-    if verts[i].is_sphere != Int8(0):
+    if sms_curved(verts[i]):
         # Curvature correction to the SELF ("b") Jacobian, missing from
         # sms_vertex_mats because that formula was derived assuming a FLAT
         # vertex, where the local frame (normal, s, t) never changes as the
@@ -902,6 +1015,8 @@ def sms_walk(
     # on before the first iteration reads normal/dp_du/dp_dv from it.
     var has_curved = False
     for i0 in range(n):
+        if verts[i0].mesh_idx >= Int32(0):
+            has_curved = True
         if verts[i0].is_sphere != Int8(0):
             has_curved = True
             _sms_apply_sphere_frame(verts[i0],
@@ -911,7 +1026,7 @@ def sms_walk(
     # a longer chain has no angle-difference form at all. Reflective (eta==1)
     # vertices are excluded because _sms_step_anglediff only implements the
     # refractive branch -- SMS in gonzales is reached from dielectrics only.
-    var use_anglediff = (n == 1 and verts[0].is_sphere != Int8(0)
+    var use_anglediff = (n == 1 and sms_curved(verts[0])
                          and verts[0].eta_raw != Float32(1.0))
     var converged = False
     for _iter in range(20):
@@ -1028,7 +1143,24 @@ def sms_walk(
                     if step_len > max_step and step_len > Float32(1e-12):
                         dxi = dxi * (max_step/step_len)
                     trial[i].pos = trial[i].pos - (trial[i].dp_du*dxi[0] + trial[i].dp_dv*dxi[1])
-                    if trial[i].is_sphere != Int8(0):
+                    var local = MeshFrame(Vec3f(Float32(0.0)), Vec3f(Float32(0.0)), Vec3f(Float32(0.0)), Vec3f(Float32(0.0)),
+                                          Vec3f(Float32(0.0)), Vec3f(Float32(0.0)), False, Int32(-1))
+                    if trial[i].mesh_idx >= Int32(0) and trial[i].mesh_tri >= Int32(0):
+                        local = sms_mesh_frame_in_tri(meshes, Int(trial[i].mesh_idx), Int(trial[i].mesh_tri), trial[i].pos)
+                    if local[6]:
+                        _sms_apply_mesh_frame(trial[i], local)
+                    elif trial[i].mesh_idx >= Int32(0):
+                        var m_anchor = x0 if i == 0 else trial[i-1].pos
+                        var m_dir = trial[i].pos - m_anchor
+                        var m_len = sqrt(dot(m_dir, m_dir))
+                        var mf = sms_mesh_hit_from(m_anchor, m_dir * (Float32(1.0) / max(m_len, Float32(1e-12))), trial[i].mesh_idx,
+                            i > 0 and trial[i-1].mesh_idx == trial[i].mesh_idx,
+                            bvh2Nodes, primIds, meshes, curves, blasNodesArr, blasPrimIdsArr, instances)
+                        if mf[6] and m_len > Float32(1e-12):
+                            _sms_apply_mesh_frame(trial[i], mf)
+                        else:
+                            reproj_failed = True
+                    elif trial[i].is_sphere != Int8(0):
                         # Anchor: x0 for the first vertex, else the PREVIOUS
                         # vertex's own (already reprojected, this same trial)
                         # position -- see _sms_reproject_onto_sphere_anchored's
@@ -1220,6 +1352,32 @@ def sms_refresh_solved_frames(mut verts: Array[SMSVertex, MAX_SMS_VERTICES], n: 
         if verts[i].is_sphere != Int8(0):
             _sms_apply_sphere_frame(verts[i], _sms_reproject_onto_sphere(
                 verts[i].pos, verts[i].sphere_center, verts[i].sphere_radius))
+
+def sms_refresh_mesh_frames(
+    x0: Vec3f, mut verts: Array[SMSVertex, MAX_SMS_VERTICES], n: Int,
+    bvh2Nodes: Pointer[BVH2Node, MutUntrackedOrigin],
+    primIds: Pointer[PrimId, MutUntrackedOrigin],
+    meshes: Pointer[TriangleMesh, MutUntrackedOrigin],
+    curves: Pointer[Curve, MutUntrackedOrigin],
+    blasNodesArr: Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin],
+    blasPrimIdsArr: Pointer[Pointer[PrimId, MutUntrackedOrigin], MutUntrackedOrigin],
+    instances: Pointer[Instance, MutUntrackedOrigin],
+) -> Bool:
+    """sms_refresh_solved_frames for mesh vertices: the frame at each solved point, found again by its anchor ray."""
+    for i in range(n):
+        if verts[i].mesh_idx < Int32(0):
+            continue
+        var anchor = x0 if i == 0 else verts[i-1].pos
+        var d = verts[i].pos - anchor
+        var dl = sqrt(dot(d, d))
+        if dl <= Float32(1e-12):
+            return False
+        var mf = sms_mesh_hit_from(anchor, d * (Float32(1.0) / dl), verts[i].mesh_idx, i > 0 and verts[i-1].mesh_idx == verts[i].mesh_idx,
+            bvh2Nodes, primIds, meshes, curves, blasNodesArr, blasPrimIdsArr, instances)
+        if not mf[6]:
+            return False
+        _sms_apply_mesh_frame(verts[i], mf)
+    return True
 
 @always_inline
 def sms_seed_randomize(x0: Vec3f, mut verts: Array[SMSVertex, MAX_SMS_VERTICES], n: Int, mut pcg: PCG32, jitter_scale: Float32):
