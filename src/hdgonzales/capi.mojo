@@ -117,14 +117,16 @@ def gz_scene_add_mesh(s: ScenePtr, xform: F32Ptr, points: F32Ptr, n_verts: Int32
 @export
 def gz_scene_add_area_light(s: ScenePtr, xform: F32Ptr, points: F32Ptr, n_verts: Int32,
                             indices: I32Ptr, n_tris: Int32, r: Float32, g: Float32, b: Float32) abi("C"):
-    """A one-sided emitter of radiance (r, g, b)."""
+    """A one-sided emitter of radiance (r, g, b), transparent like a Cycles lamp."""
     for i in range(16):
         s[unsafe_offset=0].ctm[i] = xform[unsafe_offset=i]
     s[unsafe_offset=0].cur_attr.mat_idx = Int32(-1)
     s[unsafe_offset=0].cur_attr.is_alight = True
+    s[unsafe_offset=0].cur_attr.al_transparent = True
     s[unsafe_offset=0].cur_attr.al_rgb = RGB(r, g, b)
     store_mesh(s, points, indices, n_verts, n_tris)
     s[unsafe_offset=0].cur_attr.is_alight = False
+    s[unsafe_offset=0].cur_attr.al_transparent = False
 
 def _add_infinite(s: ScenePtr, tex_idx: Int32, r: Float32, g: Float32, b: Float32):
     s[unsafe_offset=0].inf_tex_idx.append(tex_idx)

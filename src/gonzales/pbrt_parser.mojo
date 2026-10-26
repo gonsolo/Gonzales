@@ -2771,7 +2771,7 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
             al_list[unsafe_offset=al_idx].total_area = t_area
             al_list[unsafe_offset=al_idx].kind       = Int8(0)
             al_list[unsafe_offset=al_idx]._pad0      = Int8(1) if ma.al_two_sided else Int8(0)
-            mats[unsafe_offset=al_mat_base + al_idx].type     = Int8(2)
+            mats[unsafe_offset=al_mat_base + al_idx].type     = MatKind.lamp if ma.al_transparent else Int8(2)
             mats[unsafe_offset=al_mat_base + al_idx].albedo   = RGB(Float32(0))
             mats[unsafe_offset=al_mat_base + al_idx].emission = em
             mats[unsafe_offset=al_mat_base + al_idx].tex_idx  = Int32(-1)

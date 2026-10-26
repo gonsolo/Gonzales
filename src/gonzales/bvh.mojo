@@ -2140,7 +2140,8 @@ def _shadow_is_null_material(
         return False
     if mat_idx < Int64(0):
         return False
-    return materials[unsafe_offset=Int(mat_idx)].type == MatKind.interface
+    var t = materials[unsafe_offset=Int(mat_idx)].type
+    return t == MatKind.interface or t == MatKind.lamp
 
 def any_hit_bvh2_core[wide_on: Bool = True](
     bvh2Nodes: Pointer[BVH2Node, MutUntrackedOrigin],

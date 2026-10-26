@@ -5726,12 +5726,21 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
                                     if area_light_hit_cos(inter, ctx.meshes, ctx.instances, edir_d) > Float32(0.0):
                                         park = path_ptr[].throughput * _to_spec_illum(ctx, emission, path_ptr[].wavelengths)
                                     ctx.suppress_tasks[unsafe_offset=ctx.path_idx] = SuppressTask(park, Int32(1), Int32(0), Int32(0), Int32(0))
+                                    if mat.type == MatKind.lamp:   # the ray goes on (Cycles' shade_light.h)
+                                        shade_interface(path_ptr, inter)
+                                        return
                                     path_ptr[].active = 0
+                                    return
+                                if mat.type == MatKind.lamp:   # the ray goes on (Cycles' shade_light.h)
+                                    shade_interface(path_ptr, inter)
                                     return
                                 path_ptr[].active = 0
                                 return
                             else:
                                 if _mnee_owns_path(ctx, path_ptr, inter, pr, seg_dir, seg_len, hp):
+                                    if mat.type == MatKind.lamp:   # the ray goes on (Cycles' shade_light.h)
+                                        shade_interface(path_ptr, inter)
+                                        return
                                     path_ptr[].active = 0
                                     return
         # A pbrt area light emits from its FRONT face only
@@ -5785,6 +5794,9 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
                     var pdf_light = dist2 * max(al_sel_pdf, Float32(1e-6)) / (cos_l * al.total_area)
                     var w = power_heuristic(pdf_bsdf, pdf_light)
                     path_ptr[].estimate += _clamped(ctx, path_ptr[].throughput * _to_spec_illum(ctx, emission, path_ptr[].wavelengths) * w, Int(path_ptr[].bounce) - 1)
+        if mat.type == MatKind.lamp:   # the ray goes on (Cycles' shade_light.h)
+            shade_interface(path_ptr, inter)
+            return
         path_ptr[].active = 0
         return
 

@@ -23,6 +23,7 @@ struct MatKind:
     comptime interface         = Int8(10)
     comptime hair              = Int8(11)
     comptime measured          = Int8(12)
+    comptime lamp              = Int8(13)   # Cycles' lamp: an area light rays pass after taking its light; no shadows
 
 struct LobeKind:
     """The BSDF a STORED vertex is re-evaluated with when something connects
