@@ -1,13 +1,5 @@
-"""Materials, split out of geometry.mojo (the per-cluster module split; see
-project_geometry_module_split memory). MatKind/LobeKind/PhotonKind/
-Material/MeasuredBRDF, and schlick_fresnel/fr_dielectric/
-DEFAULT_COAT_THICKNESS/coat_beer_lambert_tr/cos_theta_t_dielectric, were two
-separate ranges in geometry.mojo; both depend only on the core
-(RGB/safe_sqrt), confirmed by a symbol-reference scan of each block with
-comments and docstrings stripped before moving it. This is the last of the
-six clusters -- geometry.mojo itself keeps only the core (constants,
-Point3f/Vec3f/RGB/Frame, and the shared geometry/SIMD helpers)."""
-from std.math import min, max, abs, exp, sqrt
+"""Material kinds, lobe kinds, the Material record and dielectric Fresnel."""
+from std.math import min, max, sqrt
 from .geometry import RGB, safe_sqrt, fast_div, fast_recip
 
 struct MatKind:
@@ -36,18 +28,8 @@ struct LobeKind:
     comptime ggx         = Int32(1)
     comptime hair        = Int32(2)
     comptime measured    = Int32(3)
-    comptime coated_walk = Int32(4)   # coateddiffuse walk EXIT: base seen through the coat
     comptime bssrdf      = Int32(5)   # subsurface: exit lobe Ft(cos)/pi (VCM), diffusion gather (SPPM)
     comptime diffuse_transmit = Int32(6)   # two cosine lobes, one per side
-    # The coat's OWN glossy reflection off the top interface -- a different
-    # physical event from coated_walk, which is the base seen THROUGH the
-    # coat. Both outcomes of the same walk, so both were stored as
-    # coated_walk until this existed, and lobe_eval then evaluated the
-    # glossy bounce with coat_eval_smooth -- the base-transmission model,
-    # complete with the base's albedo, for a reflection that never reaches
-    # the base at all. Splitting them is what lets each have its own
-    # evaluator; see lobe_eval's two branches.
-    comptime coated_reflect = Int32(7)
     comptime layered = Int32(8)   # coateddiffuse as pbrt's LayeredBxDF (layered.mojo): f, pdf_fwd, pdf_rev all real
     comptime rough_dielectric = Int32(9)   # pbrt DielectricBxDF over Trowbridge-Reitz (layered.mojo diel_*); param = alpha, IOR from the material
 
@@ -260,43 +242,6 @@ def fr_dielectric(cos_theta_i_in: Float32, eta_in: Float32) -> Float32:
     var r_parl = fast_div(eta * cos_theta_i - cos_theta_t, eta * cos_theta_i + cos_theta_t)
     var r_perp = fast_div(cos_theta_i - eta * cos_theta_t, cos_theta_i + eta * cos_theta_t)
     return (r_parl * r_parl + r_perp * r_perp) * Float32(0.5)
-
-# pbrt's coateddiffuse/coatedconductor default when a scene doesn't set
-# "float thickness" explicitly (LayeredBxDF's own default). gonzales has no
-# per-material storage for this (Material has no thickness field -- adding
-# one touches the GPU upload path/struct size, out of scope here), so every
-# coat uses this single default. Only 2 of the pbrt-v4 corpus's ~180
-# coateddiffuse/coatedconductor materials (both bistro_cafe coatedconductor
-# props, not a dominant surface) set it explicitly; this default covers the
-# rest exactly.
-comptime DEFAULT_COAT_THICKNESS: Float32 = 0.01
-
-@always_inline
-def coat_beer_lambert_tr(cos_theta_internal: Float32, thickness: Float32) -> Float32:
-    """Beer-Lambert transmittance for one crossing of a coat layer of the
-    given thickness, given the INTERNAL (refracted) cosine of the ray's angle
-    to the interface normal. Mirrors pbrt's LayeredBxDF::Tr(dz, w) =
-    exp(-|dz / w.z|) -- see bxdfs.h. `cos_theta_internal` is w.z in that
-    formula; callers crossing from outside the coat must refract the external
-    cosine first via cos_theta_t_dielectric below (pbrt tracks z in the
-    medium's own frame, not the external ray's)."""
-    var c = max(cos_theta_internal, Float32(1e-4))
-    return exp(-thickness / c)
-
-@always_inline
-def cos_theta_t_dielectric(cos_theta_i_in: Float32, eta: Float32) -> Float32:
-    """Cosine of the refracted angle inside a medium of relative IOR eta
-    (eta_t/eta_i), given the EXTERNAL cosine of incidence. Same geometry as
-    fr_dielectric, factored out so coat-thickness attenuation (which needs
-    the internal ray angle, not the external one) can share it. Returns 0 on
-    total internal reflection (grazing limit, matching fr_dielectric's own
-    TIR branch)."""
-    var cos_theta_i = max(Float32(0.0), min(Float32(1.0), abs(cos_theta_i_in)))
-    var sin2_theta_i = max(Float32(0.0), Float32(1.0) - cos_theta_i * cos_theta_i)
-    var sin2_theta_t = sin2_theta_i / max(eta * eta, Float32(1e-6))
-    if sin2_theta_t >= Float32(1.0):
-        return Float32(0.0)
-    return safe_sqrt(Float32(1.0) - sin2_theta_t)
 
 # The two lobe colours of a diffusetransmission material. `tex_rgb` is the tex_idx texture's colour at
 # the hit (callers without a lookup, e.g. on a sphere, pass mat.albedo).
