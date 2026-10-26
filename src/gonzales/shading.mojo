@@ -1317,13 +1317,14 @@ def _shade_principled[enqueue_shadow: Bool, defer_only: Bool](
     var spec_e = Float32(1) - transmit
     var ps = min(max(spec_e / max(spec_e + kd * alb.luma(), Float32(1e-6)), Float32(0.1)), Float32(0.9))
 
-    var ls_area = _sample_area_light_nee(ctx, hit_point, pcg)
+    var ss = _draw_sobol_8(path_ptr, ctx.sobol_matrices)
+    var ls_area = _sample_area_light_nee_u(ctx, hit_point, ss.light, ss.bary1, ss.bary2, pcg)
     _principled_nee[enqueue_shadow, defer_only](path_ptr, ctx, hit_point, ls_area, ls_area.dist * Float32(0.9999), normal, wo, Rd, f0, a, ps)
     for li in range(_nee_simple_light_count(ctx)):
         var res = _nee_sample_simple_light(ctx, li, hit_point, pcg)
         _principled_nee[enqueue_shadow, defer_only](path_ptr, ctx, hit_point, res[0].copy(), res[1], normal, wo, Rd, f0, a, ps)
     for inf_i in range(ctx.lights.infinite_count):
-        var ls_inf = _sample_infinite_light_nee(ctx.lights.infinite_lights[unsafe_offset=inf_i], Point2f(pcg.next_float(), pcg.next_float()))
+        var ls_inf = _sample_infinite_light_nee(ctx.lights.infinite_lights[unsafe_offset=inf_i], Point2f(ss.env1, ss.env2) if inf_i == 0 else Point2f(pcg.next_float(), pcg.next_float()))
         _principled_nee[enqueue_shadow, defer_only](path_ptr, ctx, hit_point, ls_inf, ls_inf.dist, normal, wo, Rd, f0, a, ps)
 
     if walk_w > Float32(0):
@@ -1336,16 +1337,16 @@ def _shade_principled[enqueue_shadow: Bool, defer_only: Bool](
         path_ptr[].throughput *= Float32(1) / (Float32(1) - q)
 
     var wi: Vec3f
-    var spec = pcg.next_float() < ps
+    var spec = ss.rr < ps
     if spec:
         var frame = Frame.from_z(normal)
         var tx = Vec3f(frame.x.x, frame.x.y, frame.x.z)
         var ty = Vec3f(frame.y.x, frame.y.y, frame.y.z)
-        var hl = sample_ggx_vndf(Vec3f(dot(wo, tx), dot(wo, ty), mu_o), a, a, pcg.next_float(), pcg.next_float())
+        var hl = sample_ggx_vndf(Vec3f(dot(wo, tx), dot(wo, ty), mu_o), a, a, ss.scat1, ss.scat2)
         var h = tx * hl.x + ty * hl.y + normal * hl.z
         wi = h * (Float32(2) * dot(wo, h)) - wo
     else:
-        var cs = sample_cosine_hemisphere_world(pcg.next_float(), pcg.next_float(), normal)
+        var cs = sample_cosine_hemisphere_world(ss.scat1, ss.scat2, normal)
         wi = cs[0]
     var cos_i = dot(normal, wi)
     if cos_i <= Float32(0):
@@ -1889,7 +1890,7 @@ def shade_dielectric[use_gpu: Bool, enqueue_shadow: Bool](
 
     var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
     var (bs, normal, new_dielectric_ior, new_previous_dielectric_ior) = bxdf_sample_dielectric(
-        geom_normal, ray_dir, ior, force_entering, pcg.next_float(),
+        geom_normal, ray_dir, ior, force_entering, _draw_sobol_8(path_ptr, ctx.sobol_matrices).scat1,
         path_ptr[].current_dielectric_ior, path_ptr[].previous_dielectric_ior)
     var is_reflect = (Int(bs.flags) & Int(BxDFFlags.reflect)) != 0
     if not is_reflect:
@@ -1990,17 +1991,18 @@ def _shade_rough_dielectric[enqueue_shadow: Bool](
     # NEE to every light type, in reflection AND transmission (a shadow ray
     # leaving through the surface is offset to that side; like pbrt, the
     # glass it then has to cross blocks it).
-    var ls_area = _sample_area_light_nee(ctx, hit_raw, pcg)
+    var ss = _draw_sobol_8(path_ptr, ctx.sobol_matrices)
+    var ls_area = _sample_area_light_nee_u(ctx, hit_raw, ss.light, ss.bary1, ss.bary2, pcg)
     _rough_dielectric_nee[enqueue_shadow](path_ptr, ctx, hit_raw, n, ls_area, ls_area.dist * Float32(0.9999), wo_l, tx, ty, ior, alpha)
     for li in range(_nee_simple_light_count(ctx)):
         var res = _nee_sample_simple_light(ctx, li, hit_raw, pcg)
         var ls = res[0].copy()
         _rough_dielectric_nee[enqueue_shadow](path_ptr, ctx, hit_raw, n, ls, res[1], wo_l, tx, ty, ior, alpha)
     for inf_i in range(ctx.lights.infinite_count):
-        var ls_inf = _sample_infinite_light_nee(ctx.lights.infinite_lights[unsafe_offset=inf_i], Point2f(pcg.next_float(), pcg.next_float()))
+        var ls_inf = _sample_infinite_light_nee(ctx.lights.infinite_lights[unsafe_offset=inf_i], Point2f(ss.env1, ss.env2) if inf_i == 0 else Point2f(pcg.next_float(), pcg.next_float()))
         _rough_dielectric_nee[enqueue_shadow](path_ptr, ctx, hit_raw, n, ls_inf, ls_inf.dist, wo_l, tx, ty, ior, alpha)
 
-    var bs = diel_sample(wo_l, pcg.next_float(), pcg.next_float(), pcg.next_float(), ior, alpha, True, True, True)
+    var bs = diel_sample(wo_l, ss.rr, ss.scat1, ss.scat2, ior, alpha, True, True, True)
     if not bs.valid or bs.pdf <= Float32(0.0):
         path_ptr[].active = 0
         path_ptr[].pcgState = pcg.state
@@ -3070,7 +3072,7 @@ def _build_geom_context_full[use_gpu: Bool](
     var bitangent = Vec3f(frame.y.x, frame.y.y, frame.y.z)
     return (GeomContext(normal, ng_ff, hit_point, wo, tangent, bitangent, alb, fp.width), True)
 
-# Extract 8 consecutive Sobol dimensions for one non-delta bounce and advance
+# Extract 8 consecutive Sobol dimensions for one scattering event and advance
 # the path's sampler_dim counter.
 @always_inline
 def _draw_sobol_8(
@@ -3151,13 +3153,14 @@ def shade_hair[use_gpu: Bool, enqueue_shadow: Bool](
     # here rather than in the shared weight function. Sphere-light NEE is
     # new (this material previously had none).
     # Mesh/curve area lights: without this sample, a bounce that hits one keeps only its tiny MIS weight.
-    var ls_area = _sample_area_light_nee(ctx, hit_base, pcg)
+    var ss = _draw_sobol_8(path_ptr, ctx.sobol_matrices)
+    var ls_area = _sample_area_light_nee_u(ctx, hit_base, ss.light, ss.bary1, ss.bary2, pcg)
     var w_area = _nee_weight_hair_unlit(ls_area, hc)
     if not w_area.is_black():
         var contrib_area = path_ptr[].throughput * _to_spec_hair_lit(ctx, w_area, ls_area.Li, path_ptr[].wavelengths)
         _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_base, ls_area.wi, ls_area.dist * Float32(0.9999), contrib_area)
     for inf_i in range(ctx.lights.infinite_count):
-        var ls_e = _sample_infinite_light_nee(ctx.lights.infinite_lights[unsafe_offset=inf_i], Point2f(pcg.next_float(), pcg.next_float()))
+        var ls_e = _sample_infinite_light_nee(ctx.lights.infinite_lights[unsafe_offset=inf_i], Point2f(ss.env1, ss.env2) if inf_i == 0 else Point2f(pcg.next_float(), pcg.next_float()))
         var w_e = _nee_weight_hair_unlit(ls_e, hc)
         if not w_e.is_black():
             var contrib_e = path_ptr[].throughput * _to_spec_hair_lit(ctx, w_e, ls_e.Li, path_ptr[].wavelengths)
@@ -3181,9 +3184,9 @@ def shade_hair[use_gpu: Bool, enqueue_shadow: Bool](
     # Delegated to bvh.mojo's _hair_sample_dir (same lobe-pick + vMF/logistic
     # sampling as before this was extracted, identical RNG draw order) —
     # shared with bdpt_*.mojo/sppm.mojo's own hair-vertex bounce continuation.
-    var u_lobe = pcg.next_float()
-    var u_th = pcg.next_float()
-    var u_phi_v = pcg.next_float()
+    var u_lobe = ss.rr
+    var u_th = ss.scat1
+    var u_phi_v = ss.scat2
     var u3 = pcg.next_float()
     var r_lobe = u_lobe * hc.total_lum < hc.lum0   # Cycles counts the R lobe as glossy, the rest as transmission
     var (wi_s, f_s, pdf, cos_ti_s2) = _hair_sample_dir_u(hc, u_lobe, u_th, u_phi_v, u3)
@@ -3561,12 +3564,22 @@ def _sample_area_light_nee(
     if ctx.lights.area_light_count == 0:
         return invalid.copy()
     var u_light = pcg.next_float()
+    var r1 = pcg.next_float()
+    var r2 = pcg.next_float()
+    return _sample_area_light_nee_u(ctx, hit_point, u_light, r1, r2, pcg)
+
+
+def _sample_area_light_nee_u(ctx: ShadeContext, hit_point: Vec3f, u_light: Float32, r1: Float32, r2: Float32,
+                             mut pcg: PCG32) -> LightSample:
+    """_sample_area_light_nee with the light pick and the point on it given (Sobol dimensions)."""
+    var invalid = LightSample(Vec3f(Float32(0.0), Float32(0.0), Float32(0.0)),
+                               RGB(Float32(0.0)), Float32(0.0), Float32(0.0), False, False)
+    if ctx.lights.area_light_count == 0:
+        return invalid.copy()
     var ls_result = light_sampler_sample(ctx.lights.light_sampler, u_light)
     var light_idx = ls_result[0]
     var light_sel_pdf = ls_result[1]
     var al = ctx.lights.area_lights[unsafe_offset=light_idx]
-    var r1 = pcg.next_float()
-    var r2 = pcg.next_float()
     var (light_point, light_normal, _, _) = _sample_light_point_and_normal(ctx, al, r1, r2, pcg, hit_point)
     var to_light = light_point - hit_point
     var dist_sq = dot(to_light, to_light)
