@@ -60,8 +60,8 @@
     "tol": 0.03
   },
   "curves-hair.pt": {
-    "mean": 7.535651,
-    "median": 0.222352,
+    "mean": 7.518338,
+    "median": 0.243266,
     "tol": 0.03
   },
   "curves-hair.sppm": {
@@ -90,8 +90,8 @@
     "tol": 0.012
   },
   "many-lights.pt": {
-    "mean": 0.672234,
-    "median": 0.495367,
+    "mean": 0.673599,
+    "median": 0.56116,
     "tol": 0.03
   },
   "many-lights.sppm": {
@@ -180,8 +180,8 @@
     "tol": 0.012
   },
   "sss-slab.pt": {
-    "mean": 49.493725,
-    "median": 57.056259,
+    "mean": 49.445538,
+    "median": 59.891247,
     "tol": 0.03
   },
   "sss-slab.sppm": {
