@@ -7,7 +7,7 @@ from .curve_bvh import CurveBvhDev
 from .geometry import Point3f, _is_real_ptr
 from .guide import GuideGrid, null_guide
 from .lights import AreaLight, DistantLight, InfiniteLight, PointLight, LightSampler, LIGHT_BOUNDS_STRIDE, env_build_cdf, env_downsample
-from .materials import MatKind, Material, MeasuredBRDF, is_specular_glass
+from .materials import MatKind, Material, MeasuredBRDF
 from .footprint import CameraFootprint
 from .media import Grid, MediumInterface, Medium, NvdbGrid
 from .primitives import Instance, Intersection, PrimId, Sphere, TriangleMesh, mesh_points_floats, mesh_pos, mesh_vi
@@ -1199,7 +1199,7 @@ def gpu_upload_scene(
                     kind_mask |= Int32(1) << Int32(MatKind.diffuse)
                 if s.materials[unsafe_offset=mi].type == MatKind.interface:
                     has_iface_mat = True
-                if is_specular_glass(s.materials[unsafe_offset=mi]) and getenv("GONZALES_NO_MNEE") == "":
+                if s.materials[unsafe_offset=mi].is_specular_glass() and getenv("GONZALES_NO_MNEE") == "":
                     has_glass_mat = True
             var lights = LightBuffers.upload(ctx, s, host_plan[1], host_plan[2])
             ctx.synchronize()

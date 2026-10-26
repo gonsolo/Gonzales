@@ -1,7 +1,7 @@
 from std.math import sqrt
 from .layered import diel_f, diel_pdf, diel_sample, layered_f, layered_pdf, layered_sample
 from .geometry import RGB, Vec3f, dot, INV_PI, PI, Frame, INV_FOUR_PI
-from .materials import MatKind, LobeKind, Material, fr_dielectric, MeasuredBRDF, dt_reflectance, dt_transmittance
+from .materials import LobeKind, Material, fr_dielectric, MeasuredBRDF
 from .curves import Curve
 from .bssrdf import bssrdf_exit_ft
 from .sampling import sample_ggx_vndf, sample_cosine_hemisphere_world
@@ -1114,53 +1114,6 @@ def lobe_eval[want_pdfs: Bool = True](
 
 
 @always_inline
-def lobe_kind_of(mat_type: Int8) -> Int32:
-    """THE material -> lobe map for the kinds whose whole scattering goes
-    through lobe_eval/lobe_sample. An integrator stores this on its vertex
-    and never branches on the material again."""
-    if mat_type == MatKind.diffuse_transmit:
-        return LobeKind.diffuse_transmit
-    if mat_type == MatKind.coated_diffuse:
-        return LobeKind.layered
-    if mat_type == MatKind.conductor:
-        return LobeKind.ggx
-    if mat_type == MatKind.measured:
-        return LobeKind.measured
-    if mat_type == MatKind.hair:
-        return LobeKind.hair
-    if mat_type == MatKind.dielectric:
-        # Only a ROUGH dielectric is routed through the lobe interface (see
-        # dielectric_is_rough); smooth glass stays a delta chain.
-        return LobeKind.rough_dielectric
-    return LobeKind.lambertian
-
-
-@always_inline
-def lobe_is_available_of(mat: Material) -> Bool:
-    """False when lobe_kind_of(mat.type) has no data to evaluate: a measured
-    material whose .bsdf table did not load (measured_idx -1, which lobe_eval
-    would otherwise index)."""
-    return not (mat.type == MatKind.measured and mat.measured_idx < Int32(0))
-
-
-@always_inline
-def lobe_param_of(mat: Material) -> Float32:
-    """LobeCtx.param for lobe_kind_of(mat.type): the GGX alpha of a conductor
-    (isotropic, as lobe_eval evaluates it), 0 for kinds that take none."""
-    if mat.type == MatKind.conductor or mat.type == MatKind.dielectric:
-        return max(mat.roughU, mat.roughV)
-    return Float32(0)
-
-
-@always_inline
-def lobe_is_delta_of(mat: Material) -> Bool:
-    """A smooth conductor is a mirror: lobe_sample returns a delta event and
-    no vertex may be stored for it (the same threshold as
-    bxdf_sample_conductor)."""
-    return mat.type == MatKind.conductor and max(mat.roughU, mat.roughV) <= Float32(0.001)
-
-
-@always_inline
 def _dt_transmittance(c: LobeCtx, tab: LobeTables) -> RGB:
     """A diffusetransmission lobe's transmittance. It lives in the MATERIAL
     (Material.emission, see shade_diffuse_transmission), so it needs a real
@@ -1170,14 +1123,14 @@ def _dt_transmittance(c: LobeCtx, tab: LobeTables) -> RGB:
     already the resolved one. Shared by lobe_eval and lobe_sample so the
     density one reports is the split the other draws from."""
     if Int(c.mat_idx) >= 0:
-        return dt_transmittance(tab.materials[unsafe_offset=Int(c.mat_idx)], c.alb)
+        return tab.materials[unsafe_offset=Int(c.mat_idx)].dt_transmittance(c.alb)
     return c.alb
 
 @always_inline
 def _dt_reflectance(c: LobeCtx, tab: LobeTables) -> RGB:
     """The reflect lobe's colour: c.alb, unless the material's texture drives the transmittance only."""
     if Int(c.mat_idx) >= 0:
-        return dt_reflectance(tab.materials[unsafe_offset=Int(c.mat_idx)], c.alb)
+        return tab.materials[unsafe_offset=Int(c.mat_idx)].dt_reflectance(c.alb)
     return c.alb
 
 

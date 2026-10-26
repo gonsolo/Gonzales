@@ -11,7 +11,7 @@ from gonzales.materials import Material, MatKind, LobeKind, MeasuredBRDF
 from gonzales.curves import Curve
 from gonzales.bxdf import LobeCtx, LobeTables, lobe_eval, lobe_sample, lobe_scoped
 from gonzales.rng import PCG32
-from gonzales.spectrum import SampledWavelengths, sample_wavelengths, SpectralContext, spectral_handle
+from gonzales.spectrum import sample_wavelengths, SpectralContext, spectral_handle
 from gonzales.rgb2spec import build_spectrum_table, build_cie_xyz_tables, SpectrumTable
 
 comptime _curves = Pointer[Curve, MutUntrackedOrigin].unsafe_dangling()

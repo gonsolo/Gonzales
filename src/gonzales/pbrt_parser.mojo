@@ -17,7 +17,7 @@ from .lexer import PbrtScanner, scanner_open, scanner_free, scanner_is_at_end, s
 from .parse_types import (SceneParseState, MeshAccum, NamedMaterial, scene_path,
                            ctm_push, ctm_pop, PSC_NAME_MAX, PSC_FILE_MAX)
 from .geometry import RGB, Point3f, Vec3f, dot, cross, PI, _is_real_ptr
-from .materials import Material, MatKind, MeasuredBRDF, is_specular_glass
+from .materials import Material, MatKind, MeasuredBRDF
 from .render_state import GpuTexture, NormalSlopeMap, normal_slope_map_none
 from .host_textures import HostTextures, TexPrefetch, decode_host_textures, host_texture_table
 from .primitives import Sphere, TriangleMesh, PrimId, Instance, encode_normal, mesh_points_floats
@@ -4555,7 +4555,7 @@ def mojo_parsed_scene_descriptor(
     sd[unsafe_offset=0].vcmBucketCap    = Int32(0)
     var any_glass = False
     for mi in range(Int(psc[unsafe_offset=0].material_count)):
-        if is_specular_glass(psc[unsafe_offset=0].materials[unsafe_offset=mi]):
+        if psc[unsafe_offset=0].materials[unsafe_offset=mi].is_specular_glass():
             any_glass = True
     sd[unsafe_offset=0].hasGlass        = Int32(1) if any_glass else Int32(0)
     sd[unsafe_offset=0].lens            = ThinLens(psc[unsafe_offset=0].camera_lens_radius, psc[unsafe_offset=0].camera_focal_distance)

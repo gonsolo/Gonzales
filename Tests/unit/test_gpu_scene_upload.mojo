@@ -6,8 +6,8 @@ from std.testing import assert_true, TestSuite
 from gonzales.lexer import PbrtScanner
 from gonzales.parse_types import SceneParseState
 from gonzales.pbrt_parser import parse_scene_file, finalize_scene, mojo_parsed_free, ParsedScene_Mojo
-from gonzales.gpu_scene import GpuSceneHandle, gpu_upload_scene
-from gonzales.materials import Material, MatKind
+from gonzales.gpu_scene import gpu_upload_scene
+from gonzales.materials import Material
 from gonzales.bvh import BVH2Node
 
 # ── Full SceneView + GPU scene-upload fixture (task #58) ──────────

@@ -5,7 +5,7 @@ from std.collections import Array
 from std.math import sqrt, cos, sin, log, exp, max, abs
 from .geometry import offset_eps, face_toward, RGB, Point3f, Point2f, Vec3f, vec3f, point3f, Frame, dot, cross, PI, INV_FOUR_PI, INV_PI
 from .render_state import PDF_DELTA_FULL, PDF_DROP_DIRECT
-from .materials import Material, MatKind, LobeKind, dielectric_is_rough
+from .materials import Material, MatKind, LobeKind
 from .primitives import Ray, Intersection, mesh_pos
 from .media import sample_free_flight, spectral_free_flight_weight
 from .bssrdf import bssrdf_exit_ft
@@ -30,10 +30,7 @@ from .shading import (
     uv_footprint_at_hit, _tex_lookup, _get_tri_verts, apply_surface_maps_at_hit, area_light_hit_cos,
     curve_light_hit,
 )
-from .bxdf import (
-    LobeCtx, lobe_sample, LobeSample, lobe_kind_of, lobe_param_of, lobe_is_delta_of, lobe_is_available_of,
-    GeomContext, BxDFSample, bxdf_sample_coated_conductor, bxdf_is_delta, bxdf_pdf_conductor_ggx, LobeTables,
-)
+from .bxdf import LobeCtx, lobe_sample, LobeSample, GeomContext, BxDFSample, bxdf_sample_coated_conductor, bxdf_is_delta, bxdf_pdf_conductor_ggx, LobeTables
 from .spectrum import (
     SampledWavelengths, SpectralSample, spec_refl, spec_refl_unbounded, spec_illum,
     rgb_bands_to_spectral_sample,
@@ -460,11 +457,11 @@ def _vcm_lobe_vertex[use_gpu: Bool](
     v.alb = eff_alb
     v.is_surface = Int32(1)
     # One lobe per material: everything after evaluates and samples the vertex through lobe_eval and lobe_sample.
-    v.mat_kind = lobe_kind_of(mat.type)
+    v.mat_kind = mat.lobe()
     v.mat_idx = Int32(mat_idx)
-    v.pdf_bwd = lobe_param_of(mat)   # LobeCtx.param: a conductor's GGX alpha
+    v.pdf_bwd = mat.lobe_param()   # LobeCtx.param: a conductor's GGX alpha
     # A smooth conductor is a mirror: it scatters, but stores no vertex and starts no strategy.
-    v.is_delta = Int32(1) if lobe_is_delta_of(mat) else Int32(0)
+    v.is_delta = Int32(1) if mat.is_mirror() else Int32(0)
     if on_curve:
         v.hair_curve_idx = Int32(inter.primId.id1)
         v.hair_h = inter.u
@@ -779,8 +776,8 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
         if mat.type != MatKind.interface:
             st.mis_null_dist = Float32(0)
 
-        if mat.type == MatKind.diffuse or mat.type == MatKind.diffuse_transmit or mat.type == MatKind.coated_diffuse or mat.type == MatKind.conductor or mat.type == MatKind.measured or mat.type == MatKind.hair or (dielectric_is_rough(mat) and mat.sss_boundary == Int8(0)):
-            if not lobe_is_available_of(mat):
+        if mat.type == MatKind.diffuse or mat.type == MatKind.diffuse_transmit or mat.type == MatKind.coated_diffuse or mat.type == MatKind.conductor or mat.type == MatKind.measured or mat.type == MatKind.hair or (mat.is_rough_dielectric() and mat.sss_boundary == Int8(0)):
+            if not mat.has_lobe():
                 return False   # e.g. a measured table that failed to load
             var lh = _vcm_lobe_vertex[use_gpu](sd, inter, mat, mat_idx, hit, ray_dir, vcm_cone_w, st.beta, st.cur_med_idx,
                                                st.wl, st.dvcm, st.dvc, st.dvm)

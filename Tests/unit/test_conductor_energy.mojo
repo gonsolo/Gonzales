@@ -25,9 +25,9 @@ isolating the strategy on the furnace scene (NEE off, MIS forced to 1) to
 catch a strategy reading P(wi above the horizon) instead of the directional
 albedo -- 1.6x too bright at alpha=1. A unit test belongs on the weight.
 """
-from std.math import abs, sqrt, cos, sin, acos
+from std.math import abs, sqrt, cos, sin
 from std.testing import assert_true, TestSuite
-from gonzales.geometry import RGB, Vec3f, dot, PI, INV_PI
+from gonzales.geometry import RGB, Vec3f, dot, PI
 from gonzales.rng import PCG32
 from gonzales.bxdf import (
     GeomContext, Material,

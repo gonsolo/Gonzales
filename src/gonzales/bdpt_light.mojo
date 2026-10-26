@@ -3,7 +3,7 @@
 
 from std.math import sqrt, cos, sin, log, exp, max, abs
 from .geometry import Point3f, Point2f, Vec3f, vec3f, point3f, dot, PI, INV_FOUR_PI
-from .materials import MatKind, LobeKind, dielectric_is_rough
+from .materials import MatKind, LobeKind
 from .primitives import Ray, Intersection
 from .media import sample_free_flight, spectral_free_flight_weight
 from .vcm_mis import vcm_scatter_carries
@@ -15,7 +15,7 @@ from .bvh import traverse_dispatch
 from .bvh import SceneView, test_spheres, _scene_bounding_sphere, _sample_disk_perpendicular, _sample_infinite_light_dir, sphere_light_cone_pdf, light_path_pick
 from .rng import PCG32
 from .sppm import medium_after_crossing, _cosine_hemisphere_sample, sample_area_light_point, sample_sphere_light_emission, area_light_emit_normal, area_light_side_pdf
-from .bxdf import lobe_is_available_of, bxdf_is_delta, bxdf_pdf_conductor_ggx
+from .bxdf import bxdf_is_delta, bxdf_pdf_conductor_ggx
 from .spectrum import SampledWavelengths, SpectralSample, spec_refl, spec_refl_unbounded, spec_illum
 from .bdpt_vertex import _BDPT_MAX_DEPTH, _BDPT_MAX_VERTS, BDPTVertex, _null_vertex
 from .bdpt_eval import _bdpt_vertex_mis_scoped, _vcm_mnee_light_dvcm
@@ -412,8 +412,8 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
         if mat.type != MatKind.interface:
             st.mis_null_dist = Float32(0)
 
-        if mat.type == MatKind.diffuse or mat.type == MatKind.diffuse_transmit or mat.type == MatKind.coated_diffuse or mat.type == MatKind.conductor or mat.type == MatKind.measured or mat.type == MatKind.hair or (dielectric_is_rough(mat) and mat.sss_boundary == Int8(0)):
-            if not lobe_is_available_of(mat):
+        if mat.type == MatKind.diffuse or mat.type == MatKind.diffuse_transmit or mat.type == MatKind.coated_diffuse or mat.type == MatKind.conductor or mat.type == MatKind.measured or mat.type == MatKind.hair or (mat.is_rough_dielectric() and mat.sss_boundary == Int8(0)):
+            if not mat.has_lobe():
                 return False   # e.g. a measured table that failed to load
             var lh = _vcm_lobe_vertex[use_gpu](sd, inter, mat, mat_idx, hit, ray_dir, Float32(-1.0), st.flux, st.cur_med_idx,
                                                st.wl, st.dvcm, st.dvc, st.dvm)
@@ -550,7 +550,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
                 _ = _vcm_dielectric_cross[use_gpu, False](sd, inter, mat, hit, ray_dir, Float32(-1.0), has_med, pcg,
                     st.ro, st.rd, st.current_dielectric_ior, st.previous_dielectric_ior, st.cur_med_idx, st.dvcm, st.dvc, st.dvm)
 
-        elif mat.type == MatKind.interface or mat.type == MatKind.lamp:   # lamps let light through too
+        elif mat.passes_rays():
             if has_med:
                 var new_idx = medium_after_crossing(ray_dir, inter, sd.meshes, mat, sd, hit)
                 if mat.medium_interface_idx >= Int32(0): st.cur_med_idx = new_idx

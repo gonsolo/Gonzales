@@ -1,8 +1,7 @@
 from std.math import abs
-from std.testing import assert_true, assert_false, TestSuite
+from std.testing import assert_true, TestSuite
 from gonzales.geometry import RGB, INV_PI, Vec3f
-from gonzales.reservoir import ReservoirState
-from gonzales.restir_di import DIReservoir, di_reservoir_init, di_target_pdf
+from gonzales.restir_di import di_reservoir_init, di_target_pdf
 
 comptime EPS: Float32 = 1e-4
 

@@ -4,7 +4,7 @@ from .gpu_tuning import MINCTA_NEE, MINCTA_DIFFUSE, MINCTA_COATED, MINCTA_CONDUC
 from .bvh import SceneView
 from .geometry import _is_real_ptr, Vec3f, dot
 from std.math import sqrt
-from .materials import MatKind, filter_glossy
+from .materials import MatKind
 from .media import Medium
 from .primitives import Intersection
 from .render_state import PathState, ShadowTask, SuppressTask
@@ -183,7 +183,7 @@ def shade_coated_diffuse_gpu[defer_only: Bool = False](
     path_ptr[].pending_mat = Int8(0)
     var inter = intersections[unsafe_offset=tid]
     var mat = sd.materials[unsafe_offset=Int(inter.primId.materialIndex)]
-    mat = filter_glossy(mat, path_ptr[].min_ray_pdf, sd.filterGlossy)
+    mat = mat.glossy_filtered(path_ptr[].min_ray_pdf, sd.filterGlossy)
     shade_coated_diffuse[True, True, defer_only](path_ptr, inter, ctx_ptr[], mat)
 
 
@@ -298,7 +298,7 @@ def shade_conductor_gpu(
     path_ptr[].pending_mat = Int8(0)
     var inter = intersections[unsafe_offset=tid]
     var mat = sd.materials[unsafe_offset=Int(inter.primId.materialIndex)]
-    mat = filter_glossy(mat, path_ptr[].min_ray_pdf, sd.filterGlossy)
+    mat = mat.glossy_filtered(path_ptr[].min_ray_pdf, sd.filterGlossy)
     var ctx = _shade_context(sd, sobol_matrices, path_idx=tid, shadow_tasks=shadow_tasks)
     shade_conductor[True, True](path_ptr, inter, ctx, mat)
 
@@ -351,7 +351,7 @@ def shade_dielectric_gpu(
     path_ptr[].pending_mat = Int8(0)
     var inter = intersections[unsafe_offset=tid]
     var mat = sd.materials[unsafe_offset=Int(inter.primId.materialIndex)]
-    mat = filter_glossy(mat, path_ptr[].min_ray_pdf, sd.filterGlossy)
+    mat = mat.glossy_filtered(path_ptr[].min_ray_pdf, sd.filterGlossy)
     # sd.gpuTextures/camFp are here only so a dielectric carrying "texture
     # displacement"/"normalmap" gets it applied (barcelona-pavilion's water).
     # tex_filenames is CPU-only (GPU samples the uploaded texture table), so
@@ -405,7 +405,7 @@ def shade_coated_conductor_gpu(
     path_ptr[].pending_mat = Int8(0)
     var inter = intersections[unsafe_offset=tid]
     var mat = sd.materials[unsafe_offset=Int(inter.primId.materialIndex)]
-    mat = filter_glossy(mat, path_ptr[].min_ray_pdf, sd.filterGlossy)
+    mat = mat.glossy_filtered(path_ptr[].min_ray_pdf, sd.filterGlossy)
     var ctx = _shade_context(sd, sobol_matrices, path_idx=tid, shadow_tasks=shadow_tasks)
     shade_coated_conductor[True, True](path_ptr, inter, ctx, mat)
 
@@ -456,7 +456,7 @@ def shade_hair_gpu(
     path_ptr[].pending_mat = Int8(0)
     var inter = intersections[unsafe_offset=tid]
     var mat = sd.materials[unsafe_offset=Int(inter.primId.materialIndex)]
-    mat = filter_glossy(mat, path_ptr[].min_ray_pdf, sd.filterGlossy)
+    mat = mat.glossy_filtered(path_ptr[].min_ray_pdf, sd.filterGlossy)
     var ctx = _shade_context(sd, sobol_matrices, path_idx=tid, shadow_tasks=shadow_tasks)
     shade_hair[True, True](path_ptr, inter, ctx, mat)
 

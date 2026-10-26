@@ -5,7 +5,7 @@ from std.sys.info import size_of
 from max.algorithm import parallelize
 from std.math import tan, max, abs
 from std.memory.alloc import unsafe_alloc
-from .geometry import RGB, Vec3f, PI
+from .geometry import RGB, PI
 from .primitives import Intersection
 from .vcm_camis import CamisLightRecord
 from .bvh import SceneView, _scene_bounding_sphere

@@ -1,4 +1,3 @@
-from std.memory.alloc import unsafe_alloc
 from std.sys import has_accelerator
 from max.gpu.host import DeviceContext, DeviceBuffer
 from max.gpu.host._nvidia_cuda import CUDA

@@ -1,5 +1,5 @@
 from std.memory.alloc import unsafe_alloc
-from gonzales.geometry import Point3f, Vec3f, RGB
+from gonzales.geometry import Point3f, RGB
 from gonzales.materials import Material, MatKind
 from gonzales.primitives import Ray, Intersection, PrimId, TriangleMesh
 from gonzales.curves import Curve

@@ -1,6 +1,6 @@
 from std.math import abs
 from std.memory.alloc import unsafe_alloc
-from std.testing import assert_true, assert_false, assert_equal, TestSuite
+from std.testing import assert_true, assert_false, TestSuite
 from gonzales.lexer import (
     scan_int, scan_float, scan_floats, scan_ints, count_floats, count_ints,
     scan_char, scan_token, parse_quoted_string,

@@ -1,6 +1,6 @@
 from std.math import abs
 from std.memory.alloc import unsafe_alloc
-from std.testing import assert_true, assert_false, TestSuite
+from std.testing import assert_true, TestSuite
 from gonzales.transform import matrix_multiply, matrix_invert, transform_points, transform_normals, transform_normal, Mat4
 from gonzales.geometry import Vec3f
 

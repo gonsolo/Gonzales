@@ -34,7 +34,7 @@ from std.testing import assert_true, TestSuite
 from gonzales.curves import CurveBvh
 from gonzales.sampling import ThinLens
 from gonzales.footprint import CameraFootprint
-from gonzales.geometry import RGB, Point3f, Vec3f
+from gonzales.geometry import RGB, Point3f
 from gonzales.materials import MeasuredBRDF, Material, MatKind
 from gonzales.render_state import GpuTexture, NormalSlopeMap
 from gonzales.primitives import Ray, Intersection, PrimId, Sphere, Instance, TriangleMesh
@@ -44,10 +44,10 @@ from gonzales.curves import Curve
 from gonzales.bvh import BVH4, SceneView, BVH2Node, build_bvh2, traverse_bvh2_core, test_spheres
 from gonzales.rng import PCG32
 from gonzales.sampling import film_filter_of
-from gonzales.spectrum import sample_wavelengths, null_spectral_handle, SampledWavelengths
+from gonzales.spectrum import sample_wavelengths, null_spectral_handle
 from std.collections import Array
 from gonzales.vcm_camis import CamisCamRecord, camis_cam_carry_init
-from gonzales.bdpt_vertex import BDPTVertex, _BDPT_MAX_VERTS, _BDPT_MAX_DEPTH
+from gonzales.bdpt_vertex import BDPTVertex, _BDPT_MAX_DEPTH
 from gonzales.bdpt_camera import _bdpt_trace_camera_and_connect, _bdpt_camera_path_init, _bdpt_camera_path_bounce
 from gonzales.vcm_grid import _CAMIS_CAM_RECS
 

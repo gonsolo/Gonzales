@@ -110,6 +110,107 @@ struct Material(TrivialRegisterPassable):
     # -1, or a texture of emitted radiance (Blender's Principled emission), added on every hit; not a light to sample.
     var emit_tex_idx: Int32
 
+    # ── What integrators may ask a material; none of them compares `type` itself ──
+
+    @always_inline
+    def lobe(self) -> Int32:
+        """The LobeKind the BSDF interface evaluates and samples for this material. Smooth glass is a delta chain,
+        not a lobe (is_specular_glass)."""
+        if self.type == MatKind.diffuse_transmit:
+            return LobeKind.diffuse_transmit
+        if self.type == MatKind.coated_diffuse:
+            return LobeKind.layered
+        if self.type == MatKind.conductor:
+            return LobeKind.ggx
+        if self.type == MatKind.measured:
+            return LobeKind.measured
+        if self.type == MatKind.hair:
+            return LobeKind.hair
+        if self.type == MatKind.dielectric:
+            return LobeKind.rough_dielectric
+        return LobeKind.lambertian
+
+    @always_inline
+    def has_lobe(self) -> Bool:
+        """False when the lobe has no data: a measured material whose table did not load."""
+        return not (self.type == MatKind.measured and self.measured_idx < Int32(0))
+
+    @always_inline
+    def lobe_param(self) -> Float32:
+        """The lobe's scalar: the isotropic GGX alpha of a conductor or rough dielectric, else 0."""
+        if self.type == MatKind.conductor or self.type == MatKind.dielectric:
+            return max(self.roughU, self.roughV)
+        return Float32(0)
+
+    @always_inline
+    def is_mirror(self) -> Bool:
+        """A smooth conductor: its lobe samples a delta event and stores no vertex."""
+        return self.type == MatKind.conductor and max(self.roughU, self.roughV) <= Float32(0.001)
+
+    @always_inline
+    def is_rough_dielectric(self) -> Bool:
+        """pbrt's DielectricBxDF over a Trowbridge-Reitz microsurface: an ordinary glossy vertex, left to sampling,
+        NEE and MIS, which MNEE, SMS and the specular-chain logic must not treat as glass."""
+        return self.type == MatKind.dielectric and max(self.roughU, self.roughV) >= ALPHA_EFFECTIVELY_SMOOTH
+
+    @always_inline
+    def is_specular_glass(self) -> Bool:
+        """Glass a specular chain passes through: a smooth or a thin dielectric. What MNEE and SMS walk."""
+        return (self.type == MatKind.dielectric and not self.is_rough_dielectric()) or self.type == MatKind.thin_dielectric
+
+    @always_inline
+    def passes_rays(self) -> Bool:
+        """A null interface or a Cycles lamp: rays continue through it unchanged."""
+        return self.type == MatKind.interface or self.type == MatKind.lamp
+
+    @always_inline
+    def dt_reflectance(self, tex_rgb: RGB) -> RGB:
+        """A diffusetransmission material's reflected colour; `tex_rgb` is its texture at the hit."""
+        if Int(self.tex_idx) == -1 or self.dt_tex_lobes == Int8(2):
+            return self.albedo
+        return tex_rgb
+
+    @always_inline
+    def dt_transmittance(self, tex_rgb: RGB) -> RGB:
+        """... and its transmitted colour."""
+        if Int(self.tex_idx) == -1 or self.dt_tex_lobes == Int8(1):
+            return self.emission
+        return tex_rgb
+
+    def glossy_filtered(self, min_ray_pdf: Float32, filter: Float32) -> Material:
+        """Cycles' Filter Glossy: after a scatter of pdf p, glossy lobes widen to roughness sqrt(1 - p / filter) / 2.
+        Hair takes it in emission.b (see _hair_precompute), microfacet materials as a floor on their alpha."""
+        if filter <= Float32(0) or min_ray_pdf >= filter:
+            return self
+        var r = sqrt(Float32(1) - min_ray_pdf / filter) * Float32(0.5)
+        var m = self
+        if m.type == MatKind.hair:
+            m.emission.b = r
+        elif m.type == MatKind.conductor or m.type == MatKind.coated_diffuse or m.type == MatKind.coated_conductor or \
+             (m.type == MatKind.dielectric and m.sss_boundary == Int8(0)):
+            m.roughU = max(m.roughU, r)
+            m.roughV = max(m.roughV, r)
+        return m
+
+    # A coated diffuse with sss_walk keeps the walk's parameters in the checker fields, which only a procedural
+    # checkerboard uses: checker_tex1 = mean free path, checker_tex2 = (anisotropy, the walk's share of the base,
+    # 1 for Cycles' van de Hulst albedo mapping or 0 for its Legacy fit).
+    @always_inline
+    def sss_walk_mfp(self) -> RGB:
+        return self.checker_tex1
+
+    @always_inline
+    def sss_walk_g(self) -> Float32:
+        return self.checker_tex2.r
+
+    @always_inline
+    def sss_walk_weight(self) -> Float32:
+        return self.checker_tex2.g if self.sss_walk != Int8(0) else Float32(0)
+
+    @always_inline
+    def sss_walk_van_de_hulst(self) -> Bool:
+        return self.checker_tex2.b != Float32(0)
+
 # ── Measured (tabulated) BRDF ────────────────────────────────────────────────
 # One instance per distinct ".bsdf" tensor file (deduped by path — a scene may
 # reference the same file from many materials, e.g. sportscar's car-paint
@@ -204,24 +305,6 @@ comptime ALPHA_EFFECTIVELY_SMOOTH = Float32(1e-3)
 
 
 @always_inline
-def dielectric_is_rough(mat: Material) -> Bool:
-    """A `dielectric` whose roughness makes it a real (non-delta) BSDF --
-    pbrt's DielectricBxDF with a Trowbridge-Reitz microsurface. Everything
-    that treats glass as a SPECULAR chain -- MNEE/SMS probes, the path
-    tracer's MNEE ownership test, the mark reset -- must ask this and leave
-    rough glass to ordinary sampling, NEE and MIS."""
-    return mat.type == MatKind.dielectric and max(mat.roughU, mat.roughV) >= ALPHA_EFFECTIVELY_SMOOTH
-
-
-@always_inline
-def is_specular_glass(mat: Material) -> Bool:
-    """Glass a specular chain passes through: a SMOOTH dielectric, or a thin
-    one. What MNEE/SMS walk and what owns an emitter reached through glass;
-    a rough dielectric is an ordinary glossy vertex instead."""
-    return (mat.type == MatKind.dielectric and not dielectric_is_rough(mat)) or mat.type == MatKind.thin_dielectric
-
-
-@always_inline
 def fr_dielectric(cos_theta_i_in: Float32, eta_in: Float32) -> Float32:
     """Exact unpolarized Fresnel reflectance for a dielectric interface.
     eta = η_t / η_i (relative IOR). Returns 1.0 on total internal reflection.
@@ -243,52 +326,3 @@ def fr_dielectric(cos_theta_i_in: Float32, eta_in: Float32) -> Float32:
     var r_perp = fast_div(cos_theta_i - eta * cos_theta_t, cos_theta_i + eta * cos_theta_t)
     return (r_parl * r_parl + r_perp * r_perp) * Float32(0.5)
 
-# The two lobe colours of a diffusetransmission material. `tex_rgb` is the tex_idx texture's colour at
-# the hit (callers without a lookup, e.g. on a sphere, pass mat.albedo).
-@always_inline
-def dt_reflectance(mat: Material, tex_rgb: RGB) -> RGB:
-    if Int(mat.tex_idx) == -1 or mat.dt_tex_lobes == Int8(2):
-        return mat.albedo
-    return tex_rgb
-
-@always_inline
-def dt_transmittance(mat: Material, tex_rgb: RGB) -> RGB:
-    if Int(mat.tex_idx) == -1 or mat.dt_tex_lobes == Int8(1):
-        return mat.emission
-    return tex_rgb
-
-
-def filter_glossy(mat: Material, min_ray_pdf: Float32, filter: Float32) -> Material:
-    """Cycles' Filter Glossy: after a scatter of pdf p, glossy lobes widen to roughness sqrt(1 - p / filter) / 2.
-    Hair takes it in emission.b (see _hair_precompute), microfacet materials as a floor on their alpha."""
-    if filter <= Float32(0) or min_ray_pdf >= filter:
-        return mat
-    var r = sqrt(Float32(1) - min_ray_pdf / filter) * Float32(0.5)
-    var m = mat
-    if m.type == MatKind.hair:
-        m.emission.b = r
-    elif m.type == MatKind.conductor or m.type == MatKind.coated_diffuse or m.type == MatKind.coated_conductor or \
-         (m.type == MatKind.dielectric and m.sss_boundary == Int8(0)):
-        m.roughU = max(m.roughU, r)
-        m.roughV = max(m.roughV, r)
-    return m
-
-
-# A coated diffuse with sss_walk == 1 keeps the walk's parameters in the checker fields, which only a procedural
-# checkerboard (tex_idx == -2) uses: checker_tex1 = mean free path per channel, checker_tex2 = (anisotropy, the walk's
-# share of the base, 1 for Cycles' van de Hulst albedo mapping or 0 for its Legacy fit).
-@always_inline
-def sss_walk_mfp(mat: Material) -> RGB:
-    return mat.checker_tex1
-
-@always_inline
-def sss_walk_g(mat: Material) -> Float32:
-    return mat.checker_tex2.r
-
-@always_inline
-def sss_walk_weight(mat: Material) -> Float32:
-    return mat.checker_tex2.g if mat.sss_walk != Int8(0) else Float32(0)
-
-@always_inline
-def sss_walk_van_de_hulst(mat: Material) -> Bool:
-    return mat.checker_tex2.b != Float32(0)

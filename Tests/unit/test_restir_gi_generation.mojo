@@ -8,7 +8,7 @@
 
 from std.math import abs
 from std.memory.alloc import unsafe_alloc
-from std.testing import assert_true, assert_false, TestSuite
+from std.testing import assert_true, TestSuite
 from gonzales.footprint import CameraFootprint
 from gonzales.geometry import RGB, Point3f, Vec3f
 from gonzales.materials import Material, MeasuredBRDF

@@ -3,7 +3,7 @@ from std.sys import has_accelerator
 from std.os.path import exists
 from std.testing import assert_true, TestSuite
 from std.math import abs, sin, cos
-from max.gpu.host import DeviceContext, DeviceBuffer
+from max.gpu.host import DeviceContext
 from max.gpu.host._nvidia_cuda import CUDA
 from gonzales.primitives import TriangleMesh
 from gonzales.vulkanrt import (

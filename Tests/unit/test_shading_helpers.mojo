@@ -12,15 +12,15 @@ from std.math import abs, sqrt
 from std.memory.alloc import unsafe_alloc
 from std.testing import assert_true, assert_false, TestSuite
 from gonzales.footprint import CameraFootprint
-from gonzales.geometry import RGB, Point3f, Vec3f, dot, cross
-from gonzales.materials import Material, MatKind, MeasuredBRDF
+from gonzales.geometry import RGB, Point3f, Vec3f
+from gonzales.materials import Material, MeasuredBRDF
 from gonzales.render_state import GpuTexture, NormalSlopeMap, ShadowTask, SuppressTask, PathState, MIN_RAY_PDF_NONE, SssWalk
 from gonzales.primitives import Ray, PrimId, Intersection, TriangleMesh, Instance, Sphere
 from gonzales.lights import LightSampler, AreaLight, DistantLight, PointLight, InfiniteLight
 from gonzales.curves import Curve
 from gonzales.spectrum import SpectralSample, SampledWavelengths, null_spectral_handle
 from gonzales.bvh import BVH4, BVH2Node
-from gonzales.guide import GuideGrid, null_guide
+from gonzales.guide import null_guide
 from gonzales.media import Medium, MediumInterface, Grid, NvdbGrid
 from gonzales.shading import (
     ShadeContext, LightContext, _get_tri_verts, _apply_normal_map,

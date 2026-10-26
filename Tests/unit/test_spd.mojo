@@ -1,10 +1,7 @@
 from std.math import abs
 from std.os.path import exists
 from std.testing import assert_true, assert_false, TestSuite
-from gonzales.spd import (
-    load_spd_rgb, load_spd_rgb_at, named_metal_rgb, named_glass_ior,
-    SPD_LAMBDA_R, SPD_LAMBDA_G, SPD_LAMBDA_B,
-)
+from gonzales.spd import load_spd_rgb, load_spd_rgb_at, named_metal_rgb, named_glass_ior
 
 comptime EPS: Float32 = 1e-4
 

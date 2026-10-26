@@ -1,4 +1,3 @@
-from std.collections import Array
 from std.math import abs
 from std.memory.alloc import unsafe_alloc
 from std.testing import assert_equal, assert_true, TestSuite

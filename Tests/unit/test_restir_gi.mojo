@@ -1,7 +1,7 @@
 from std.math import abs
-from std.testing import assert_true, assert_false, TestSuite
+from std.testing import assert_true, TestSuite
 from gonzales.geometry import RGB, INV_PI, Vec3f
-from gonzales.reservoir import ReservoirState, reservoir_update
+from gonzales.reservoir import reservoir_update
 from gonzales.restir_gi import (
     GIReservoir, gi_reservoir_init, gi_target_pdf,
     GIReservoirIO, gi_reservoir_io_null, gi_temporal_spatial_combine,

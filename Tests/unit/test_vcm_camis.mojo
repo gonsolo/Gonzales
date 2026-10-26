@@ -18,7 +18,7 @@ measured a worst-case partition error of 1.6e-7 for the Horner form these
 functions use, on top of which this comparison also crosses double (the
 harness) vs. Float32 (here) rounding -- both comfortably inside 1e-4.
 """
-from std.testing import assert_true, TestSuite
+from std.testing import TestSuite
 from std.collections import Array
 from gonzales.vcm_camis import (
     CamisCamCarry, CamisCamRecord, CamisLightRecord, CAMIS_IN_CLASS,

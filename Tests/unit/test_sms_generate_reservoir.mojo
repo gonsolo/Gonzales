@@ -22,7 +22,7 @@ from gonzales.media import Medium, MediumInterface, Grid, NvdbGrid
 from gonzales.shading import ShadeContext, LightContext, GIPendingX1, sms_generate_reservoir, sms_resolve, sms_temporal_step, _shade_diffuse_nee
 from gonzales.restir_gi import gi_reservoir_io_null
 from gonzales.restir_di import reservoir_io_null
-from gonzales.restir_sms import SMSReservoir, SMSReservoirIO, sms_reservoir_io_null
+from gonzales.restir_sms import SMSReservoir, SMSReservoirIO
 from gonzales.rng import PCG32
 
 comptime EPS: Float32 = 1e-4

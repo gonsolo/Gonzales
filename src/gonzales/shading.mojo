@@ -7,7 +7,7 @@ from std.ffi import external_call
 from std.memory.alloc import unsafe_alloc
 from .geometry import offset_point, RGB, Point3f, Point2f, Point2i, restir_jitter_pixel, Vec3f, dot, face_toward, cross, Frame, fast_sincos, refract, PI, TWO_PI, INV_PI, INV_FOUR_PI, _is_real_ptr, _atan2f
 from .render_state import PDF_DROP_DIRECT
-from .materials import Material, MatKind, LobeKind, filter_glossy, sss_walk_weight, sss_walk_g, sss_walk_mfp, sss_walk_van_de_hulst, MeasuredBRDF, fr_dielectric, dielectric_is_rough, is_specular_glass, dt_reflectance, dt_transmittance
+from .materials import Material, MatKind, LobeKind, MeasuredBRDF, fr_dielectric
 from .render_state import PathState, SssWalk, GpuTexture, NormalSlopeMap, normal_slope_map_none, ShadowTask, SuppressTask, SHADOW_SLOTS
 from .primitives import Ray, Intersection, PrimId, TriangleMesh, Sphere, Instance, mesh_uv, mesh_has_uvs, mesh_normal, mesh_vi, mesh_face
 from .primitives import mesh_pos
@@ -1232,8 +1232,8 @@ def shade_diffuse_transmission[use_gpu: Bool, enqueue_shadow: Bool](
     var trans = mat.emission
     if not is_sphere and Int(mat.tex_idx) != -1:
         var tex_rgb = _tex_lookup[use_gpu](mat, inter, v0, v1, v2, mesh, ctx.tex_filenames, ctx.textures, ctx.n_textures, dt_fp_width)
-        refl = dt_reflectance(mat, tex_rgb)
-        trans = dt_transmittance(mat, tex_rgb)
+        refl = mat.dt_reflectance(tex_rgb)
+        trans = mat.dt_transmittance(tex_rgb)
 
     var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
     var (bs, bounce_normal, lobe_alb, lobe_w, _) = bxdf_sample_diffuse_transmit(
@@ -1326,7 +1326,7 @@ def _shade_principled[enqueue_shadow: Bool, defer_only: Bool](
     var schlick = (Float32(1) - mu_o) * (Float32(1) - mu_o)
     schlick = schlick * schlick * (Float32(1) - mu_o)
     var transmit = Float32(1) - ggx_albedo(mu_o, a) * (f0 + (Float32(1) - f0) * schlick)
-    var walk_w = sss_walk_weight(mat)
+    var walk_w = mat.sss_walk_weight()
     var kd = transmit * (Float32(1) - walk_w)
     var Rd = _to_spec_refl(ctx, alb, path_ptr[].wavelengths) * (kd * INV_PI)
     var spec_e = Float32(1) - transmit
@@ -1423,9 +1423,9 @@ def _sss_walk_enter(
     """Start a random walk under the surface as Cycles does (subsurface_bounce, subsurface_random_walk_coefficients):
     refract through a GGX microfacet of the surface's roughness, with its single-scattering albedo fitted to the
     textured base colour."""
-    var vdh = sss_walk_van_de_hulst(mat)
-    var g = min(max(sss_walk_g(mat), Float32(-0.99)), Float32(0.99) if vdh else Float32(0.9))
-    var mfp = sss_walk_mfp(mat)
+    var vdh = mat.sss_walk_van_de_hulst()
+    var g = min(max(mat.sss_walk_g(), Float32(-0.99)), Float32(0.99) if vdh else Float32(0.9))
+    var mfp = mat.sss_walk_mfp()
     var wl = path_ptr[].wavelengths
     # Each wavelength's albedo comes from the base colour's reflectance spectrum there, so the walk reflects that
     # spectrum; the radius, a length per RGB channel, is band-picked.
@@ -1896,7 +1896,7 @@ def shade_dielectric[use_gpu: Bool, enqueue_shadow: Bool](
             geom_normal = _apply_normal_map_sphere[use_gpu](mat, center, hit_point_raw, geom_normal, ctx.tex_filenames, ctx.textures, ctx.n_textures)
 
     var ior = mat.albedo.r
-    if dielectric_is_rough(mat) and mat.sss_boundary == Int8(0):
+    if mat.is_rough_dielectric() and mat.sss_boundary == Int8(0):
         # A real BSDF, not a delta: pbrt's rough DielectricBxDF, with NEE.
         _shade_rough_dielectric[enqueue_shadow](path_ptr, ctx, mat, geom_normal, ray_dir, ray_org, inter.tHit, ior)
         return
@@ -3742,7 +3742,7 @@ def _sms_probe_glass_chain(
         if pk_inter.hit == Int8(0) or (pk_inter.primId.type != Int8(0) and pk_inter.primId.type != Int8(4)):
             break
         var pk_mat = ctx.materials[unsafe_offset=Int(pk_inter.primId.materialIndex)]
-        if not is_specular_glass(pk_mat):
+        if not pk_mat.is_specular_glass():
             break
         hits[count] = pk_inter
         origins[count] = pk_org
@@ -3783,7 +3783,7 @@ def _mnee_first_probe(
     if probe_inter.hit == Int8(0) or probe_inter.primId.type != Int8(0):
         return (False, probe_inter)
     var probe_mat = ctx.materials[unsafe_offset=Int(probe_inter.primId.materialIndex)]
-    return (is_specular_glass(probe_mat), probe_inter)
+    return (probe_mat.is_specular_glass(), probe_inter)
 
 
 @always_inline
@@ -3874,7 +3874,7 @@ def _sms_solve_from_probe(
     var has_second_glass = False
     if probe2_inter.hit != Int8(0) and (probe2_inter.primId.type == Int8(0) or probe2_inter.primId.type == Int8(4)):
         var probe2_mat_c = ctx.materials[unsafe_offset=Int(probe2_inter.primId.materialIndex)]
-        has_second_glass = is_specular_glass(probe2_mat_c)
+        has_second_glass = probe2_mat_c.is_specular_glass()
 
     if not has_second_glass:
         var verts1 = Array[SMSVertex, MAX_SMS_VERTICES](fill=sms_vertex_init())
@@ -5701,7 +5701,7 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
                     var pr = pr_store[0]
                     if pr.hit != Int8(0) and pr.primId.type == Int8(0):
                         var pr_mat = ctx.materials[unsafe_offset=Int(pr.primId.materialIndex)]
-                        if is_specular_glass(pr_mat):
+                        if pr_mat.is_specular_glass():
                             comptime if use_gpu:
                                 # The solve is far too big for this kernel: park the hit for resolve_suppress_gpu.
                                 if _is_real_ptr(ctx.suppress_tasks):
@@ -5867,7 +5867,7 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
         # A specular chain now starts HERE, not at an earlier MNEE vertex:
         # forget that vertex unless this one re-marks itself (only the
         # diffuse family's _nee_area_lights does). Glass continues a chain.
-        if not is_specular_glass(mat):
+        if not mat.is_specular_glass():
             path_ptr[].last_ns_n = Vec3f(Float32(0.0))
 
     if path_ptr[].sss.exiting != Int32(0):
@@ -5880,7 +5880,7 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
         # GPU: mark material for its dedicated per-material kernel
         path_ptr[].pending_mat = mat.type
     else:
-        _shade_dispatch[False, enqueue_shadow](filter_glossy(mat, path_ptr[].min_ray_pdf, ctx.filter_glossy), path_ptr, inter, ctx, guide_write, restir_io, pixel_idx, sms_io)
+        _shade_dispatch[False, enqueue_shadow](mat.glossy_filtered(path_ptr[].min_ray_pdf, ctx.filter_glossy), path_ptr, inter, ctx, guide_write, restir_io, pixel_idx, sms_io)
 
 
 @always_inline

@@ -3,9 +3,7 @@ from std.math import abs, sqrt
 from std.testing import assert_true, TestSuite
 from gonzales.geometry import RGB, dot, cross, Vec3f
 from gonzales.sms import sms_walk, SMSVertex, MAX_SMS_VERTICES, sms_vertex_flat, sms_vertex_init
-from gonzales.restir_sms import (
-    SMSReservoir, sms_reservoir_init, sms_target_pdf, sms_shift,
-)
+from gonzales.restir_sms import sms_reservoir_init, sms_target_pdf, sms_shift
 
 comptime EPS: Float32 = 1e-4
 

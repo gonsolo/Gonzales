@@ -11,7 +11,7 @@ from std.memory.alloc import unsafe_alloc
 from std.atomic import Atomic
 from std.memory import bitcast
 from .geometry import offset_eps, face_toward, TERMINAL_SEGMENT_GRACE_ROUNDS, RGB, Point3f, Point2f, Vec3f, vec3f, point3f, dot, cross, PI, INV_FOUR_PI, Frame, _is_real_ptr
-from .materials import Material, MatKind, LobeKind, PhotonKind, fr_dielectric, dielectric_is_rough, dt_reflectance, dt_transmittance
+from .materials import Material, MatKind, LobeKind, PhotonKind, fr_dielectric
 from .render_state import GpuTexture
 from .primitives import Ray, Intersection, PrimId, TriangleMesh, Sphere, Instance, sphere_outward_normal, mesh_normal, mesh_vi
 from .primitives import mesh_pos
@@ -23,7 +23,7 @@ from .bvh import traverse_dispatch, any_hit_dispatch
 from .bvh import SceneView, _scene_bounding_sphere, _sample_disk_perpendicular, _sample_infinite_light_dir, _eval_infinite_light_and_pdf, _hair_precompute, _hair_eval_lobes, _hair_sample_dir, curve_offset_eps, LightSample, _sample_distant_light_nee, _sample_point_light_nee, _sample_sphere_light_nee, _sample_infinite_light_nee, light_path_pick, render_aux_buffers
 from .vcm_mis import mis_policy_sole
 from .layered import layered_sample
-from .bxdf import ggx_lambda, dielectric_interface, bxdf_sample_dielectric, bxdf_sample_thin_dielectric, BxDFFlags, GeomContext, BxDFSample, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_is_delta, bxdf_eval_conductor_ggx, _nee_weight_simple, _nee_weight_hair, LobeCtx, lobe_eval, lobe_sample, LobeTables, lobe_kind_of, lobe_param_of, lobe_is_delta_of, lobe_is_available_of, nee_weight_lobe
+from .bxdf import ggx_lambda, dielectric_interface, bxdf_sample_dielectric, bxdf_sample_thin_dielectric, BxDFFlags, GeomContext, BxDFSample, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_is_delta, bxdf_eval_conductor_ggx, _nee_weight_simple, _nee_weight_hair, LobeCtx, lobe_eval, lobe_sample, LobeTables, nee_weight_lobe
 from .measured_bxdf_eval import bxdf_eval_measured, bxdf_sample_measured
 from .shading import _tex_lookup, _get_tri_verts, apply_surface_maps_at_hit, uv_footprint_at_hit, area_light_hit_cos
 from .geom_normal import _geom_normal
@@ -944,8 +944,8 @@ def _sppm_trace_visible_point[use_gpu: Bool](
         if bounce > max_charged:
             break
 
-        if mat.type == MatKind.diffuse or mat.type == MatKind.diffuse_transmit or mat.type == MatKind.coated_diffuse or mat.type == MatKind.conductor or mat.type == MatKind.measured or mat.type == MatKind.hair or (dielectric_is_rough(mat) and mat.sss_boundary == Int8(0)):
-            if not lobe_is_available_of(mat):
+        if mat.type == MatKind.diffuse or mat.type == MatKind.diffuse_transmit or mat.type == MatKind.coated_diffuse or mat.type == MatKind.conductor or mat.type == MatKind.measured or mat.type == MatKind.hair or (mat.is_rough_dielectric() and mat.sss_boundary == Int8(0)):
+            if not mat.has_lobe():
                 break   # e.g. a measured table that failed to load
             # A rough dielectric keeps its OUTWARD normal (lobe_eval's
             # rough_dielectric reads inside vs outside off it).
@@ -977,10 +977,10 @@ def _sppm_trace_visible_point[use_gpu: Bool](
                     gn = face_toward(gn, -ray_dir)   # pbrt two-sided reflection, see face_toward
             # A smooth conductor is the one kind here that is genuinely
             # delta: it scatters but stores no visible point, exactly like
-            # bdpt_*.mojo's own lobe_is_delta_of gate.
+            # VCM's Material.is_mirror gate.
             var near_mirror = mat.type == MatKind.conductor and max(mat.roughU, mat.roughV) <= Float32(0.02)
             var coat_as_mirror = False
-            if not lobe_is_delta_of(mat) and not near_mirror:   # near-mirror chrome: the photon map can't resolve its lobe
+            if not mat.is_mirror() and not near_mirror:   # near-mirror chrome: the photon map can't resolve its lobe
                 var coat_alpha = max(mat.roughU, mat.roughV)
                 if mat.type == MatKind.coated_diffuse and coat_alpha <= Float32(0.3):
                     # The coat's glossy lobe is too narrow for the gather: sample a microfacet,
@@ -1016,14 +1016,14 @@ def _sppm_trace_visible_point[use_gpu: Bool](
                 vp.normal = vec3f(gn)
                 vp.geo_normal = vec3f(gn_geo)
                 vp.alb = eff_alb
-                # One lobe per material, from bxdf.mojo's lobe_kind_of --
+                # One lobe per material, from Material.lobe --
                 # gather and NEE evaluate this VP through lobe_eval, so this
                 # branch never asks which material it is again.
-                vp.mat_kind = lobe_kind_of(mat.type)
+                vp.mat_kind = mat.lobe()
                 vp.mat_idx = Int32(mat_idx)
                 vp.wo = vec3f((-rd).to_simd())
                 # smooth top: the gather skips the glossy coat lobe; a negative alpha keeps the real one for delta lights
-                vp.alpha = (Float32(1e-4) if coat_alpha <= Float32(0.05) else -coat_alpha) if coat_as_mirror else lobe_param_of(mat)
+                vp.alpha = (Float32(1e-4) if coat_alpha <= Float32(0.05) else -coat_alpha) if coat_as_mirror else mat.lobe_param()
                 if on_curve:
                     vp.hair_curve_idx = Int32(inter.primId.id1)
                     vp.hair_h = inter.u
@@ -1581,8 +1581,8 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
             var bounce_side = Float32(1.0)   # flips to -1 for the transmit lobe
             var lobe_alb = eff_alb
             if mat.type == MatKind.diffuse_transmit:
-                var trans_dt = dt_transmittance(mat, eff_alb)
-                var refl_dt = dt_reflectance(mat, eff_alb)
+                var trans_dt = mat.dt_transmittance(eff_alb)
+                var refl_dt = mat.dt_reflectance(eff_alb)
                 var pr_dt = refl_dt.luma()
                 var pt_dt = trans_dt.luma()
                 # Nothing to scatter -- see bdpt_*.mojo's matching comment
@@ -1618,7 +1618,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
             ro = hit + rd * Float32(0.0002)   # along rd: gn may face into the surface (face_toward)
             continue
 
-        elif dielectric_is_rough(mat) and mat.sss_boundary == Int8(0):
+        elif mat.is_rough_dielectric() and mat.sss_boundary == Int8(0):
             # Rough dielectric: a real BSDF, so a photon deposits here like
             # on any glossy surface, then scatters through THE lobe sampler
             # in importance mode (LobeCtx.adjoint: no 1/eta^2), reflecting or
@@ -1632,7 +1632,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
                 gn_rd, gn_rd, hit.to_simd(), ray_dir, Float32(-1.0), sd.camFp,
                 sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
             var ctx_rd = LobeCtx(LobeKind.rough_dielectric, True, False, gn_rd, (-rd).to_simd(), mat.albedo,
-                                 Int32(mat_idx), lobe_param_of(mat), Float32(1),
+                                 Int32(mat_idx), mat.lobe_param(), Float32(1),
                                  Int32(-1), Float32(0), Float32(0), True, True)
             var s_rd = lobe_sample(ctx_rd, pcg.next_float(), pcg.next_float(), pcg.next_float(), pcg.next_float(),
                 LobeTables(sd.materials, sd.curves, sd.measuredBrdfs),

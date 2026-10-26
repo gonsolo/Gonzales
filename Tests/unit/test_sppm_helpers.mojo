@@ -7,16 +7,11 @@
 from std.math import abs, sqrt, log, exp
 from std.memory.alloc import unsafe_alloc
 from std.testing import assert_true, assert_false, TestSuite
-from gonzales.geometry import RGB, Point3f, Vec3f, dot, cross, reflect, PI
-from gonzales.materials import fr_dielectric
+from gonzales.geometry import RGB, Vec3f, dot, cross, reflect
 from gonzales.primitives import PrimId, Intersection, TriangleMesh, encode_normal
-from gonzales.media import Medium, FreeFlight, sample_homogeneous_free_flight
+from gonzales.media import Medium, sample_homogeneous_free_flight
 from gonzales.lights import AreaLight
-from gonzales.sppm import (
-    _hash_cell, _cosine_hemisphere_sample,
-    sample_area_light_uniform, _geom_normal, _shading_normal_at, _dielectric_bounce,
-    AreaLightSample, _HSIZE,
-)
+from gonzales.sppm import _hash_cell, _cosine_hemisphere_sample, sample_area_light_uniform, _geom_normal, _shading_normal_at, _dielectric_bounce, _HSIZE
 from gonzales.rng import PCG32
 
 comptime EPS: Float32 = 1e-3

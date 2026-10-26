@@ -1,5 +1,5 @@
 from std.math import abs, sqrt, sin, cos
-from std.testing import assert_true, assert_false, TestSuite
+from std.testing import assert_true, TestSuite
 from gonzales.sampling import (
     power_heuristic, sample_cosine_hemisphere,
     reverse_bits32, mix_bits_u64, encode_morton2, fast_owen_scramble,
