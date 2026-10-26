@@ -10,7 +10,7 @@ from .vcm_mis import MisPolicy, mis_policy_power, mis_policy_sole, nee_mis_weigh
 from .rng import PCG32
 from .measured_bxdf_eval import bxdf_eval_measured, bxdf_pdf_measured, bxdf_sample_measured
 from .bvh import LightSample, HairLobeConstants, _hair_eval_lobes, SceneView, _hair_precompute, _hair_sample_dir_u
-from .spectrum import SampledWavelengths, SpectralSample, rgb_to_spectral_sample, rgb_illuminant_to_spectral_sample, spectral_sample_to_rgb, rgb_bands_to_spectral_sample
+from .spectrum import SampledWavelengths, SpectralSample, rgb_to_spectral_sample, spec_refl_unbounded, rgb_illuminant_to_spectral_sample, spectral_sample_to_rgb, rgb_bands_to_spectral_sample
 
 # ── Isotropic GGX (Trowbridge-Reitz) evaluation ───────────────────────────────
 # Companion to sample_ggx_vndf: that function only *samples* a half-vector: NEE
@@ -1255,7 +1255,8 @@ def lobe_eval[want_pdfs: Bool = True](
             hc.cos_theta_o, hc.sin_theta_o, hc.inv_vm0, hc.inv_vm1, hc.inv_vm2, hc.mp_c0, hc.mp_c1, hc.mp_c2, hc.s,
             hc.A0, hc.A1, hc.A2, hc.A3, hc.lum0, hc.lum1, hc.lum2, hc.lum3, hc.total_lum,
         )
-        var hair_spec = rgb_to_spectral_sample(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, f_val.r, f_val.g, f_val.b, wavelengths)
+        # f, not a reflectance: a narrow R or TT lobe peaks far above 1, and the [0,1] reflectance upsampler cut it there.
+        var hair_spec = spec_refl_unbounded(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, f_val.r, f_val.g, f_val.b, wavelengths)
         var rev_h = Float32(0)
         comptime if want_pdfs:
             var hc_rev = _hair_precompute(mat_h, tab.curves, Int(c.hair_curve_idx), c.hair_v, c.hair_h, dir_to_other)
