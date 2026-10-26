@@ -1,5 +1,5 @@
 // Renders a gzrecord recording: the same C API calls, then all samples at once and one resolve. Writes a PFM.
-// Usage: gzreplay RECORDING OUT.pfm [SPP]; GZ_DENOISE=0/1, GZ_FILTER_GLOSSY, GZ_CLAMP, GZ_BOUNCES=d,g,t and GZ_INTEGRATOR=0/1/2
+// Usage: gzreplay RECORDING OUT.pfm [SPP]; GZ_DENOISE=0/1, GZ_FILTER_GLOSSY, GZ_CLAMP, GZ_BOUNCES=d,g,t, GZ_DEPTH and GZ_INTEGRATOR=0/1/2
 // (path, BDPT, VCM) override the recorded settings
 #include <stdint.h>
 #include <stdio.h>
@@ -77,6 +77,7 @@ int main(int argc, char **argv) {
         }
     }
     if (argc > 3) spp = atoi(argv[3]);
+    if (getenv("GZ_DEPTH")) depth = atoi(getenv("GZ_DEPTH"));
     double t_scene = now();
     session = gz_session_new(renderer, scene, spp, depth);
     if (!session) { fprintf(stderr, "gzreplay: no session\n"); return 1; }
