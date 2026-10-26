@@ -61,44 +61,35 @@ struct VCMLightPathState(TrivialRegisterPassable):
     var dvcm: Float32
     var dvc: Float32
     var dvm: Float32
-    var is_finite_origin: Int8
+    var is_finite_origin: Bool
     # Index into sd.spheres of the sphere light this path left, until its
     # first hit applies the origin's 1/Omega (see the init's sphere branch);
     # -2 once applied; -1 for every other light.
     var origin_sphere: Int32
     var cur_med_idx: Int32
-    var n_lbounces: Int32
-    var n_verts: Int32
+    var n_verts: Int
     var active: Int8
     var pcg_state: UInt64
     var pcg_inc: UInt64
-    var wl0: Float32
-    var wl1: Float32
-    var wl2: Float32
-    var wl3: Float32
+    var wl: SampledWavelengths
     # Touching-dielectric IOR depth-2 stack for _dielectric_bounce (see that
     # function's docstring, sppm.mojo) -- same role and convention as
     # VCMCameraPathState's matching fields. Both start at vacuum (1.0).
     var current_dielectric_ior: Float32
     var previous_dielectric_ior: Float32
-    var n_delta: Int32
+    var n_delta: Int
     # Null-interface distance since the last real vertex: the d^2 of a crossing is applied once, over the whole edge.
     var mis_null_dist: Float32
+    var prev_was_volume: Bool   # the previous vertex was a volume scatter: a medium arrival's dVC ratio depends on it
     var mnee: VCMMneeLightTrack
 
 def _null_light_path_state() -> VCMLightPathState:
+    var z = Float32(0)
     return VCMLightPathState(
-        Point3f(Float32(0), Float32(0), Float32(0)),
-        Vec3f(Float32(0), Float32(0), Float32(0)),
-        SpectralSample(Float32(0)),
-        Float32(0), Float32(0), Float32(0), Int8(0), Int32(-1),
-        Int32(-1), Int32(0), Int32(0), Int8(0),
-        UInt64(0), UInt64(0),
-        Float32(0), Float32(0), Float32(0), Float32(0),
-        Float32(1.0), Float32(1.0),   # current_dielectric_ior, previous_dielectric_ior (vacuum)
-        Int32(0),                     # n_delta
-        Float32(0),                   # mis_null_dist
-        vcm_mnee_light_track_none(),
+        ro=Point3f(z, z, z), rd=Vec3f(z, z, z), flux=SpectralSample(z), dvcm=z, dvc=z, dvm=z, is_finite_origin=False,
+        origin_sphere=Int32(-1), cur_med_idx=Int32(-1), n_verts=0, active=Int8(0), pcg_state=UInt64(0), pcg_inc=UInt64(0),
+        wl=SampledWavelengths(z, z, z, z), current_dielectric_ior=Float32(1.0), previous_dielectric_ior=Float32(1.0),
+        n_delta=0, mis_null_dist=z, prev_was_volume=False, mnee=vcm_mnee_light_track_none(),
     )
 
 def _bdpt_light_path_init[use_gpu: Bool](
@@ -286,18 +277,13 @@ def _bdpt_light_path_init[use_gpu: Bool](
         dvm_carry = Float32(0)
 
     var cur_med_idx = default_emit_med
-    var n_lbounces = 1  # counts all surface hits (1 = not-the-primary-ray, matches area-light convention — see _dielectric_bounce's bounce==0 special case)
 
     return VCMLightPathState(
-        ro, rd, flux, dvcm_carry, dvc_carry, dvm_carry,
-        Int8(1) if is_finite_origin else Int8(0), origin_sphere,
-        cur_med_idx, Int32(n_lbounces), Int32(n_verts), Int8(1),
-        pcg.state, pcg.inc,
-        wavelengths.lambda0, wavelengths.lambda1, wavelengths.lambda2, wavelengths.lambda3,
-        Float32(1.0), Float32(1.0),   # current_dielectric_ior, previous_dielectric_ior (vacuum)
-        Int32(0),                     # n_delta
-        Float32(0),                   # mis_null_dist
-        mnee_l,
+        ro=ro, rd=rd, flux=flux, dvcm=dvcm_carry, dvc=dvc_carry, dvm=dvm_carry, is_finite_origin=is_finite_origin,
+        origin_sphere=origin_sphere, cur_med_idx=cur_med_idx, n_verts=n_verts, active=Int8(1),
+        pcg_state=pcg.state, pcg_inc=pcg.inc, wl=wavelengths,
+        current_dielectric_ior=Float32(1.0), previous_dielectric_ior=Float32(1.0),   # vacuum
+        n_delta=0, mis_null_dist=Float32(0), prev_was_volume=False, mnee=mnee_l,
     )
 
 def _bdpt_light_path_bounce[use_gpu: Bool](
@@ -309,150 +295,131 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
     lp_idx:   Int,
     mis_vc_weight_factor: Float32,
     mis_vm_weight_factor: Float32,
-    mut ro: Point3f,
-    mut rd: Vec3f,
-    mut flux: SpectralSample,
-    mut n_verts: Int,
-    mut n_delta: Int,   # delta bounces so far; they count toward maxdepth (see _vcm_depth)
-    mut dvcm_carry: Float32,
-    mut dvc_carry: Float32,
-    mut dvm_carry: Float32,
-    # Kind of the PREVIOUS vertex on this subpath (True = volume), needed at
-    # a medium arrival to pick the right dVC free-flight ratio
-    mut prev_was_volume: Bool,
-    is_finite_origin: Bool,
-    mut origin_sphere: Int32,
-    mut cur_med_idx: Int32,
-    mut n_lbounces: Int,
-    mut current_dielectric_ior: Float32,
-    mut previous_dielectric_ior: Float32,
-    mut mis_null_dist: Float32,
-    wavelengths: SampledWavelengths,
+    mut st: VCMLightPathState,
     # _VCM_CAMIS light state (vcm_camis.CamisLightCarry) and THIS path's
     # slice of the record buffer (lvc_camis + lp_idx * _BDPT_MAX_VERTS, the
     # same slots as `lvc`). Untouched when the hybrid is compiled out.
     mut camis_l: CamisLightCarry,
     camis_recs: Pointer[CamisLightRecord, MutUntrackedOrigin],
-    mut mnee_l: VCMMneeLightTrack,
 ) -> Bool:
     """One bounce of a light subpath, shared by the per-path loop and the wavefront kernels; False ends the path."""
-        if n_verts >= _BDPT_MAX_VERTS:
+        if st.n_verts >= _BDPT_MAX_VERTS:
             return False   # mirrors the original loop's top-of-iteration guard
         # The next vertex stored would be interior vertex n_verts (after an area
         # light's origin slot) or n_verts + 1 (no origin slot): past d it starts
         # no strategy (see _vcm_depth).
-        var next_count = n_verts
-        if n_verts == 0 or lvc[unsafe_offset=lp_idx * _BDPT_MAX_VERTS].is_light != Int32(1):
-            next_count = n_verts + 1
-        if next_count + n_delta > _vcm_depth(sd):
+        var next_count = st.n_verts
+        if st.n_verts == 0 or lvc[unsafe_offset=lp_idx * _BDPT_MAX_VERTS].is_light != Int32(1):
+            next_count = st.n_verts + 1
+        if next_count + st.n_delta > _vcm_depth(sd):
             return False
         if inter.hit == Int8(0):
             return False   # nothing hit -- path escapes the scene
         var t_hit = inter.tHit
-        var ray_dir = rd.to_simd()
+        var ray_dir = st.rd.to_simd()
         var d_seg = Float32(0)   # the d^2 applied to dVCM at this hit, 0 if none
 
         # VCM Stage 2b: distance-squared portion of the per-bounce MIS
         # correction (project_vcm_stage2_mis_derivation memory) -- shared
-        if origin_sphere >= Int32(0):
+        if st.origin_sphere >= Int32(0):
             # First hit of a sphere light's path: the origin's direct density
             # is the camera NEE's cone pdf seen from HERE, and its area
-            dvcm_carry *= sphere_light_cone_pdf(sd.spheres[unsafe_offset=Int(origin_sphere)],
-                                                ro.to_simd() + ray_dir * t_hit)
-            origin_sphere = Int32(-2)   # applied; still a sphere light's path
-        elif n_verts >= 1 or is_finite_origin:
-            d_seg = t_hit + mis_null_dist
-            dvcm_carry *= d_seg * d_seg
+            st.dvcm *= sphere_light_cone_pdf(sd.spheres[unsafe_offset=Int(st.origin_sphere)],
+                                                st.ro.to_simd() + ray_dir * t_hit)
+            st.origin_sphere = Int32(-2)   # applied; still a sphere light's path
+        elif st.n_verts >= 1 or st.is_finite_origin:
+            d_seg = t_hit + st.mis_null_dist
+            st.dvcm *= d_seg * d_seg
 
         # Volume free-flight
-        if has_med and Int(cur_med_idx) >= 0:
+        if has_med and Int(st.cur_med_idx) >= 0:
             comptime if _VCM_CAMIS:
                 camis_l.in_class = False   # a medium segment: see the camera side
-            var med = sd.mediums[unsafe_offset=Int(cur_med_idx)]
+            var med = sd.mediums[unsafe_offset=Int(st.cur_med_idx)]
             # ONE shared sampler for both medium kinds (geometry.mojo):
             # homogeneous closed form, or delta tracking against the real
             var ff = sample_free_flight(
-                med, sd.grids, sd.nvdbGrids, Vec3f(ro.x, ro.y, ro.z), rd, t_hit, pcg)
-            if ff.collided and origin_sphere != Int32(-1):
+                med, sd.grids, sd.nvdbGrids, Vec3f(st.ro.x, st.ro.y, st.ro.z), st.rd, t_hit, pcg)
+            if ff.collided and st.origin_sphere != Int32(-1):
                 # A sphere light's path ends at its first medium collision.
                 # Medium vertices are outside per-vertex MIS: the camera's
                 return False
             if ff.collided:
                 # Chromatic collision weight; see the camera-side comment.
-                flux *= spectral_free_flight_weight(med, ff, t_hit, wavelengths, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65)
-                var sp = ro + rd*ff.t_free
+                st.flux *= spectral_free_flight_weight(med, ff, t_hit, st.wl, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65)
+                var sp = st.ro + st.rd*ff.t_free
                 # dVCM's Jacobian above was applied with t_hit (the distance
                 # to the SURFACE the ray was cast toward), computed before we
-                dvcm_carry *= ((ff.t_free + mis_null_dist) * (ff.t_free + mis_null_dist)) / max(d_seg * d_seg, Float32(1e-20))
+                st.dvcm *= ((ff.t_free + st.mis_null_dist) * (ff.t_free + st.mis_null_dist)) / max(d_seg * d_seg, Float32(1e-20))
                 # Free-flight at this VOLUME arrival: ff_b = the collision
                 # density actually sampled = ff.pdf. No cos_fix -- a volume
                 # vertex has no surface normal to divide by.
-                dvcm_carry *= Float32(1.0) / max(ff.pdf, Float32(1e-30))
+                st.dvcm *= Float32(1.0) / max(ff.pdf, Float32(1e-30))
                 # dVC's ff_a/ff_b ratio is 1/sigma_t only when the PREVIOUS
                 # vertex was a surface (kind-changing edge); a volume->volume
-                if not prev_was_volume:
-                    dvc_carry *= Float32(1.0) / max(ff.sig_t, Float32(1e-20))
+                if not st.prev_was_volume:
+                    st.dvc *= Float32(1.0) / max(ff.sig_t, Float32(1e-20))
                 var v = _null_vertex()
                 v.pos = sp
                 # `flux`, NOT flux*albedo -- see the matching camera-side
                 # comment in _bdpt_camera_path_bounce: a stored vertex's
-                v.beta = flux
+                v.beta = st.flux
                 v.alb = ff.albedo
                 v.is_surface = Int32(0); v.is_delta = Int32(0)
                 v.pdf_fwd = ff.pdf   # the density actually sampled from; under hero-wavelength MIS this is a lane MIXTURE, not sig_t's lone exponential
-                v.med_idx = cur_med_idx
-                v.wavelengths = wavelengths
+                v.med_idx = st.cur_med_idx
+                v.wavelengths = st.wl
                 # ARRIVAL carries, before the outgoing scatter step below
                 # overwrites them -- the same v.dVCM/dVC/dVM = ... pattern
-                v.dVCM = dvcm_carry; v.dVC = dvc_carry; v.dVM = dvm_carry
-                n_verts += 1
-                v.n_delta = Int32(n_delta)
-                _bdpt_store_lvc_vertex(v, lvc, lp_idx, n_verts - 1)
+                v.dVCM = st.dvcm; v.dVC = st.dvc; v.dVM = st.dvm
+                st.n_verts += 1
+                v.n_delta = Int32(st.n_delta)
+                _bdpt_store_lvc_vertex(v, lvc, lp_idx, st.n_verts - 1)
                 comptime if _VCM_CAMIS:
                     # Every stored slot gets a record, out-of-Class ones too:
                     # the buffer outlives the pass, and S3 reads the class bit.
-                    camis_light_arrive(camis_l, camis_recs, n_verts - 1, Float32(0), t_hit, Float32(0), False)
+                    camis_light_arrive(camis_l, camis_recs, st.n_verts - 1, Float32(0), t_hit, Float32(0), False)
                 # Distant/infinite/point lights store NO lv0 (n_verts starts at
                 # 0 for them -- this function's own docstring: they have no
                 var eta_v = _vcm_eta_at(sd, v, mis_vm_weight_factor)
-                (dvcm_carry, dvc_carry, dvm_carry) = vcm_scatter_carries[dvc0=_VCM_CAMIS](
-                    dvcm_carry, dvc_carry, dvm_carry,
+                (st.dvcm, st.dvc, st.dvm) = vcm_scatter_carries[dvc0=_VCM_CAMIS](
+                    st.dvcm, st.dvc, st.dvm,
                     Float32(4.0) * PI, INV_FOUR_PI, INV_FOUR_PI,
                     mis_vc_weight_factor, eta_v)
-                prev_was_volume = True
-                mnee_l.side = Float32(0)
+                st.prev_was_volume = True
+                st.mnee.side = Float32(0)
                 # Continuation: flux = prev × alb_s (same as stored vertex beta)
-                flux *= spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (ff.albedo).r, (ff.albedo).g, (ff.albedo).b, wavelengths)
+                st.flux *= spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (ff.albedo).r, (ff.albedo).g, (ff.albedo).b, st.wl)
                 var u1 = pcg.next_float(); var u2 = pcg.next_float()
                 var cosT = Float32(2)*u1 - Float32(1)
                 var sinT = sqrt(max(Float32(0), Float32(1)-cosT*cosT))
                 var phi  = Float32(2)*PI*u2
-                rd = Vec3f(sinT*cos(phi), sinT*sin(phi), cosT)
-                ro = sp + rd*Float32(0.0002)
-                mis_null_dist = Float32(0)
+                st.rd = Vec3f(sinT*cos(phi), sinT*sin(phi), cosT)
+                st.ro = sp + st.rd*Float32(0.0002)
+                st.mis_null_dist = Float32(0)
                 return True   # volume free-flight scatter: no vertex stored this bounce, path continues
             else:
-                flux *= spectral_free_flight_weight(med, ff, t_hit, wavelengths, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65)
+                st.flux *= spectral_free_flight_weight(med, ff, t_hit, st.wl, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65)
                 # Same missing free-flight factor on dVCM as the camera path --
                 # see _bdpt_camera_path_bounce's matching comment for the
                 # derivation and the measured error growth with optical depth.
                 var ff_exp_l = -log(max(ff.pdf, Float32(1e-30)))   # optical depth of the density actually sampled from (see FreeFlight.pdf)
                 if ff_exp_l > Float32(60.0): ff_exp_l = Float32(60.0)
-                dvcm_carry *= exp(ff_exp_l)
+                st.dvcm *= exp(ff_exp_l)
                 # dVC's ff_a/ff_b ratio is sigma_t only when the PREVIOUS
                 # vertex was a volume scatter (kind-changing edge, exiting
-                if prev_was_volume:
-                    dvc_carry *= ff.sig_t
-                prev_was_volume = False
+                if st.prev_was_volume:
+                    st.dvc *= ff.sig_t
+                st.prev_was_volume = False
 
         var mat_idx = Int(inter.primId.materialIndex)
         var mat = sd.materials[unsafe_offset=mat_idx]
-        var hit = ro + rd*t_hit
+        var hit = st.ro + st.rd*t_hit
         var eta_x = mis_vm_weight_factor * _vcm_eta_scale(sd, hit)   # merging's MIS density HERE
 
         _resolve_mix(sd, pcg, mat, mat_idx)
         if mat.type != MatKind.interface:
-            mis_null_dist = Float32(0)
+            st.mis_null_dist = Float32(0)
 
         if mat.type == MatKind.diffuse or mat.type == MatKind.diffuse_transmit or mat.type == MatKind.coated_diffuse or mat.type == MatKind.conductor or mat.type == MatKind.measured or mat.type == MatKind.hair or (dielectric_is_rough(mat) and mat.sss_boundary == Int8(0)):
             if not lobe_is_available_of(mat):
@@ -477,8 +444,8 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
             # VCM Stage 2b: finish the per-bounce MIS correction (the
             # dist² portion was already applied above, shared across
             var cos_fix = abs(dot(-ray_dir, gn))
-            (dvcm_carry, dvc_carry, dvm_carry) = vcm_arrival_carries(
-                dvcm_carry, dvc_carry, dvm_carry, cos_fix)
+            (st.dvcm, st.dvc, st.dvm) = vcm_arrival_carries(
+                st.dvcm, st.dvc, st.dvm, cos_fix)
             # Real image-texture reflectance -- see the matching comment in
             # _bdpt_trace_camera_and_connect's diffuse branch. Also feeds
             var eff_alb = mat.albedo
@@ -499,7 +466,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
             v.pos = hit
             v.normal = vec3f(gn_geo)
             v.shading_normal = vec3f(gn)
-            v.beta = flux
+            v.beta = st.flux
             v.alb = eff_alb
             v.is_surface = Int32(1)
             v.mat_kind = lobe_kind_of(mat.type)   # see the camera subpath
@@ -512,46 +479,46 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
                 v.hair_curve_idx = Int32(inter.primId.id1)
                 v.hair_h = inter.u
                 v.hair_v = inter.v
-            v.pdf_fwd = Float32(1); v.med_idx = cur_med_idx
+            v.pdf_fwd = Float32(1); v.med_idx = st.cur_med_idx
             v.wo = vec3f(-ray_dir)  # VCM Stage 2b: needed for _connect's reverse-pdf eval
-            v.wavelengths = wavelengths
-            if mnee_l.side > Float32(0) and mnee_l.n_glass > Int32(0) and v.is_delta == Int32(0) \
+            v.wavelengths = st.wl
+            if st.mnee.side > Float32(0) and st.mnee.n_glass > Int32(0) and v.is_delta == Int32(0) \
                and (v.mat_kind == LobeKind.lambertian or v.mat_kind == LobeKind.diffuse_transmit):
                 # Reached through glass only: MNEE from here samples this path too (_vcm_mnee_light_dvcm).
-                var d_m = _vcm_mnee_light_dvcm(sd, hit.to_simd(), gn_geo, mnee_l.y, mnee_l.ny, mnee_l.side,
-                                               Int(mnee_l.n_glass), mnee_l.first_glass, pcg)
+                var d_m = _vcm_mnee_light_dvcm(sd, hit.to_simd(), gn_geo, st.mnee.y, st.mnee.ny, st.mnee.side,
+                                               Int(st.mnee.n_glass), st.mnee.first_glass, pcg)
                 if d_m > Float32(0):
-                    dvcm_carry = d_m
-            v.dVCM = dvcm_carry; v.dVC = dvc_carry; v.dVM = dvm_carry
+                    st.dvcm = d_m
+            v.dVCM = st.dvcm; v.dVC = st.dvc; v.dVM = st.dvm
             if v.is_delta != Int32(0):
-                n_delta += 1
+                st.n_delta += 1
             if v.is_delta == Int32(0):
-                n_verts += 1
-                v.n_delta = Int32(n_delta)
-                _bdpt_store_lvc_vertex(v, lvc, lp_idx, n_verts - 1)
+                st.n_verts += 1
+                v.n_delta = Int32(st.n_delta)
+                _bdpt_store_lvc_vertex(v, lvc, lp_idx, st.n_verts - 1)
                 comptime if _VCM_CAMIS:
-                    camis_light_arrive(camis_l, camis_recs, n_verts - 1, cos_fix, t_hit,
+                    camis_light_arrive(camis_l, camis_recs, st.n_verts - 1, cos_fix, t_hit,
                                        log(_vcm_keep(sd, hit)), _bdpt_vertex_mis_scoped(v))
-            var sc = _vcm_scatter(v, True, pcg, sd, wavelengths, dvcm_carry, dvc_carry, dvm_carry, mis_vc_weight_factor, eta_x)
-            mnee_l.side = Float32(0)
+            var sc = _vcm_scatter(v, True, pcg, sd, st.wl, st.dvcm, st.dvc, st.dvm, mis_vc_weight_factor, eta_x)
+            st.mnee.side = Float32(0)
             if not sc.valid:
                 return False
             comptime if _VCM_CAMIS:
                 if v.is_delta != Int32(0) or sc.is_delta:
                     camis_l.in_class = False
                 else:
-                    camis_light_scatter(camis_l, n_verts - 1, eta_x, sc.cos_out / sc.pdf_fwd,
+                    camis_light_scatter(camis_l, st.n_verts - 1, eta_x, sc.cos_out / sc.pdf_fwd,
                                         sc.cos_out, sc.pdf_fwd, sc.pdf_rev)
-            rd = vec3f(sc.wi)
+            st.rd = vec3f(sc.wi)
             if on_curve:
-                ro = hit + vec3f(gn_geo) * (spawn_eps if dot(sc.wi, gn_geo) >= Float32(0) else -spawn_eps)
+                st.ro = hit + vec3f(gn_geo) * (spawn_eps if dot(sc.wi, gn_geo) >= Float32(0) else -spawn_eps)
             else:
-                ro = hit + rd*Float32(0.0002)
-            flux *= sc.weight
+                st.ro = hit + st.rd*Float32(0.0002)
+            st.flux *= sc.weight
 
         elif mat.type == MatKind.coated_conductor:
-            mnee_l.side = Float32(0)
-            var wo_c = (-rd).to_simd()
+            st.mnee.side = Float32(0)
+            var wo_c = (-st.rd).to_simd()
             var (bs_c, gn_c, gn_c_geo) = _coated_conductor_scatter[use_gpu](
                 sd, pcg, mat, inter, hit.to_simd(), ray_dir, wo_c, Float32(-1.0))
             if bs_c.is_valid == Int8(0):
@@ -561,38 +528,38 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
             var alpha_c = max(mat.roughU, mat.roughV)
             var cos_fix_c = abs(dot(-ray_dir, gn_c))
             if cos_fix_c > Float32(1e-6):
-                dvc_carry /= cos_fix_c
-                dvm_carry /= cos_fix_c
+                st.dvc /= cos_fix_c
+                st.dvm /= cos_fix_c
             if not bxdf_is_delta(bs_c.flags):
                 var v = _null_vertex()
                 v.pos = hit
                 v.normal = vec3f(gn_c_geo)
                 v.shading_normal = vec3f(gn_c)
-                v.beta = flux
+                v.beta = st.flux
                 v.alb = mat.albedo
                 v.is_surface = Int32(1); v.is_delta = Int32(0); v.mat_kind = LobeKind.ggx
                 v.pdf_bwd = alpha_c
                 v.wo = vec3f(wo_c)
                 v.pdf_fwd = Float32(1)
-                v.med_idx = cur_med_idx
-                v.wavelengths = wavelengths
-                v.dVCM = dvcm_carry; v.dVC = dvc_carry; v.dVM = dvm_carry
-                n_verts += 1
-                v.n_delta = Int32(n_delta)
-                _bdpt_store_lvc_vertex(v, lvc, lp_idx, n_verts - 1)
+                v.med_idx = st.cur_med_idx
+                v.wavelengths = st.wl
+                v.dVCM = st.dvcm; v.dVC = st.dvc; v.dVM = st.dvm
+                st.n_verts += 1
+                v.n_delta = Int32(st.n_delta)
+                _bdpt_store_lvc_vertex(v, lvc, lp_idx, st.n_verts - 1)
                 comptime if _VCM_CAMIS:
-                    camis_light_arrive(camis_l, camis_recs, n_verts - 1, cos_fix_c, t_hit,
+                    camis_light_arrive(camis_l, camis_recs, st.n_verts - 1, cos_fix_c, t_hit,
                                        log(_vcm_keep(sd, hit)), _bdpt_vertex_mis_scoped(v))
-            flux *= spec_refl_unbounded(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (bs_c.f).r, (bs_c.f).g, (bs_c.f).b, wavelengths)
-            rd = vec3f(bs_c.wi)
-            ro = hit + rd*Float32(0.0002)
+            st.flux *= spec_refl_unbounded(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (bs_c.f).r, (bs_c.f).g, (bs_c.f).b, st.wl)
+            st.rd = vec3f(bs_c.wi)
+            st.ro = hit + st.rd*Float32(0.0002)
             var cos_theta_out_c = abs(dot(bs_c.wi, gn_c))
             if bxdf_is_delta(bs_c.flags):
                 # VCM: specular bounce -- same reset SmallVCM's own delta-
                 # bounce case uses, matches the camera-side conductor branch.
-                dvcm_carry = Float32(0)
-                dvc_carry *= cos_theta_out_c
-                dvm_carry *= cos_theta_out_c
+                st.dvcm = Float32(0)
+                st.dvc *= cos_theta_out_c
+                st.dvm *= cos_theta_out_c
                 comptime if _VCM_CAMIS:
                     camis_l.in_class = False
             else:
@@ -600,16 +567,16 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
                 if bsdf_dir_pdf_w_c > Float32(1e-8):
                     var bsdf_rev_pdf_w_c = bxdf_pdf_conductor_ggx(gn_c, bs_c.wi, wo_c, alpha_c)
                     var inv_pdf_c = cos_theta_out_c / bsdf_dir_pdf_w_c
-                    (dvcm_carry, dvc_carry, dvm_carry) = vcm_scatter_carries[dvc0=_VCM_CAMIS](
-                        dvcm_carry, dvc_carry, dvm_carry, inv_pdf_c, bsdf_dir_pdf_w_c, bsdf_rev_pdf_w_c,
+                    (st.dvcm, st.dvc, st.dvm) = vcm_scatter_carries[dvc0=_VCM_CAMIS](
+                        st.dvcm, st.dvc, st.dvm, inv_pdf_c, bsdf_dir_pdf_w_c, bsdf_rev_pdf_w_c,
                         mis_vc_weight_factor, eta_x)
                     comptime if _VCM_CAMIS:
-                        camis_light_scatter(camis_l, n_verts - 1, eta_x, inv_pdf_c,
+                        camis_light_scatter(camis_l, st.n_verts - 1, eta_x, inv_pdf_c,
                                             cos_theta_out_c, bsdf_dir_pdf_w_c, bsdf_rev_pdf_w_c)
                 else:
-                    dvcm_carry = Float32(0)
-                    dvc_carry = Float32(0)
-                    dvm_carry = Float32(0)
+                    st.dvcm = Float32(0)
+                    st.dvc = Float32(0)
+                    st.dvm = Float32(0)
                     comptime if _VCM_CAMIS:
                         camis_l.in_class = False
 
@@ -620,66 +587,65 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
             # Mirror of the camera side: the light enters at x_i, the exit x_o
             # is drawn by the SAME sampler (the MIS weights require identical
             var did_bssrdf_hop = False
-            if mat.sss_boundary != Int8(0) and Int(cur_med_idx) < 0 and has_med:
+            if mat.sss_boundary != Int8(0) and Int(st.cur_med_idx) < 0 and has_med:
                 var med_in = medium_after_crossing(ray_dir, inter, sd.meshes, mat, sd, hit)
                 if med_in >= Int32(0) and Int(med_in) < Int(sd.mediumCount):
                     var gn_e = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
                     if dot(gn_e, ray_dir) > Float32(0): gn_e = gn_e * Float32(-1)
                     var cos_e = abs(dot(-ray_dir, gn_e))
-                    (dvcm_carry, dvc_carry, dvm_carry) = vcm_arrival_carries(
-                        dvcm_carry, dvc_carry, dvm_carry, cos_e)
+                    (st.dvcm, st.dvc, st.dvm) = vcm_arrival_carries(
+                        st.dvcm, st.dvc, st.dvm, cos_e)
                     var eta_e = mat.albedo.r
                     var ex = _bdpt_sample_bssrdf_exit(sd, Int(med_in), hit, gn_e, cos_e, eta_e, pcg)
                     if not ex.ok:
                         return False
-                    flux *= spec_refl_unbounded(
+                    st.flux *= spec_refl_unbounded(
                         sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x,
                         sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65,
-                        ex.weight.r, ex.weight.g, ex.weight.b, wavelengths)
+                        ex.weight.r, ex.weight.g, ex.weight.b, st.wl)
                     var (h0, h1, h2) = bssrdf_hop_carries[dvc0=_VCM_CAMIS](
-                        dvcm_carry, dvc_carry, dvm_carry, ex.p_area, cos_e * INV_PI, mis_vc_weight_factor)
-                    dvcm_carry = h0
-                    dvc_carry = h1
-                    dvm_carry = h2
+                        st.dvcm, st.dvc, st.dvm, ex.p_area, cos_e * INV_PI, mis_vc_weight_factor)
+                    st.dvcm = h0
+                    st.dvc = h1
+                    st.dvm = h2
                     var n_o = ex.n_o
                     var v = _null_vertex()
                     v.pos = ex.x_o
                     v.normal = vec3f(n_o)
                     v.shading_normal = vec3f(n_o)
-                    v.beta = flux
+                    v.beta = st.flux
                     v.alb = RGB(Float32(1))
                     v.is_surface = Int32(1)
                     v.mat_kind = LobeKind.bssrdf
                     v.pdf_fwd = ex.p_area
                     v.pdf_bwd = eta_e
                     v.wo = vec3f(n_o)
-                    v.med_idx = cur_med_idx
-                    v.wavelengths = wavelengths
-                    v.dVCM = dvcm_carry; v.dVC = dvc_carry; v.dVM = dvm_carry
-                    n_verts += 1
-                    v.n_delta = Int32(n_delta)
-                    _bdpt_store_lvc_vertex(v, lvc, lp_idx, n_verts - 1)
+                    v.med_idx = st.cur_med_idx
+                    v.wavelengths = st.wl
+                    v.dVCM = st.dvcm; v.dVC = st.dvc; v.dVM = st.dvm
+                    st.n_verts += 1
+                    v.n_delta = Int32(st.n_delta)
+                    _bdpt_store_lvc_vertex(v, lvc, lp_idx, st.n_verts - 1)
                     comptime if _VCM_CAMIS:
-                        camis_light_arrive(camis_l, camis_recs, n_verts - 1, Float32(0), t_hit, Float32(0), False)
+                        camis_light_arrive(camis_l, camis_recs, st.n_verts - 1, Float32(0), t_hit, Float32(0), False)
                     var ux1 = pcg.next_float(); var ux2 = pcg.next_float()
-                    rd = vec3f(_cosine_hemisphere_sample(n_o, ux1, ux2))
-                    ro = ex.x_o + rd * Float32(0.0002)
-                    var cos_out_x = abs(dot(rd.to_simd(), n_o))
-                    flux *= SpectralSample(bssrdf_exit_ft(cos_out_x, eta_e))
+                    st.rd = vec3f(_cosine_hemisphere_sample(n_o, ux1, ux2))
+                    st.ro = ex.x_o + st.rd * Float32(0.0002)
+                    var cos_out_x = abs(dot(st.rd.to_simd(), n_o))
+                    st.flux *= SpectralSample(bssrdf_exit_ft(cos_out_x, eta_e))
                     var (c0, c1, c2) = bssrdf_exit_scatter_carries[dvc0=_VCM_CAMIS](
-                        dvcm_carry, dvc_carry, dvm_carry, ex.p_area, cos_out_x,
+                        st.dvcm, st.dvc, st.dvm, ex.p_area, cos_out_x,
                         mis_vc_weight_factor, mis_vm_weight_factor * _vcm_eta_scale(sd, ex.x_o))
-                    dvcm_carry = c0
-                    dvc_carry = c1
-                    dvm_carry = c2
-                    n_lbounces += 1
+                    st.dvcm = c0
+                    st.dvc = c1
+                    st.dvm = c2
                     did_bssrdf_hop = True
-                    mnee_l.side = Float32(0)
+                    st.mnee.side = Float32(0)
             if not did_bssrdf_hop:
-                n_delta += 1
-                if mnee_l.n_glass == Int32(0):
-                    mnee_l.first_glass = hit.to_simd()
-                mnee_l.n_glass += 1
+                st.n_delta += 1
+                if st.mnee.n_glass == Int32(0):
+                    st.mnee.first_glass = hit.to_simd()
+                st.mnee.n_glass += 1
                 # pbrt's outward normal: interpolated N when the mesh has it
                 # (_shading_normal_at), which pbrt also refracts through.
                 var gn = _shading_normal_at(inter, sd.meshes, sd.instances, sd.spheres, hit)
@@ -689,37 +655,36 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
                     gn, gn, hit.to_simd(), ray_dir, Float32(-1.0), sd.camFp,
                     sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
                 var (new_dir, new_org, _, new_cur_ior, new_prev_ior) = _dielectric_bounce(
-                    ray_dir, hit.to_simd(), gn, mat.albedo.r, False, pcg, current_dielectric_ior, previous_dielectric_ior, mat.type == MatKind.thin_dielectric, radiance_mode=False)
-                var n_in_out = current_dielectric_ior / new_cur_ior   # refraction compresses solid angle by (n_in/n_out)^2
-                current_dielectric_ior = new_cur_ior
-                previous_dielectric_ior = new_prev_ior
-                n_lbounces += 1
+                    ray_dir, hit.to_simd(), gn, mat.albedo.r, False, pcg, st.current_dielectric_ior, st.previous_dielectric_ior, mat.type == MatKind.thin_dielectric, radiance_mode=False)
+                var n_in_out = st.current_dielectric_ior / new_cur_ior   # refraction compresses solid angle by (n_in/n_out)^2
+                st.current_dielectric_ior = new_cur_ior
+                st.previous_dielectric_ior = new_prev_ior
                 # Light path (TransportMode::Importance): do NOT apply the
                 # radiance_scale non-symmetric-scattering correction — it's only
                 if has_med:
                     var new_idx = medium_after_crossing(ray_dir, inter, sd.meshes, mat, sd, hit)
-                    if mat.medium_interface_idx >= Int32(0): cur_med_idx = new_idx
-                rd = vec3f(new_dir)
-                ro = point3f(new_org)
+                    if mat.medium_interface_idx >= Int32(0): st.cur_med_idx = new_idx
+                st.rd = vec3f(new_dir)
+                st.ro = point3f(new_org)
                 # VCM Stage 2b: dielectric is genuinely delta/specular (true
                 # reflect-or-refract, not an approximation like conductor's
                 var cos_fix_d = abs(dot(-ray_dir, gn))
                 if cos_fix_d > Float32(1e-6):
-                    dvc_carry /= cos_fix_d
-                    dvm_carry /= cos_fix_d
+                    st.dvc /= cos_fix_d
+                    st.dvm /= cos_fix_d
                 var cos_theta_out_d = abs(dot(new_dir, gn)) * n_in_out * n_in_out
-                dvcm_carry = Float32(0)
-                dvc_carry *= cos_theta_out_d
-                dvm_carry *= cos_theta_out_d
+                st.dvcm = Float32(0)
+                st.dvc *= cos_theta_out_d
+                st.dvm *= cos_theta_out_d
 
         elif mat.type == MatKind.interface or mat.type == MatKind.lamp:   # lamps let light through too
             if has_med:
                 var new_idx = medium_after_crossing(ray_dir, inter, sd.meshes, mat, sd, hit)
-                if mat.medium_interface_idx >= Int32(0): cur_med_idx = new_idx
-            ro = hit + rd*Float32(0.0002)
+                if mat.medium_interface_idx >= Int32(0): st.cur_med_idx = new_idx
+            st.ro = hit + st.rd*Float32(0.0002)
             if d_seg > Float32(0):
-                dvcm_carry /= max(d_seg * d_seg, Float32(1e-20))
-                mis_null_dist += t_hit + Float32(0.0002)
+                st.dvcm /= max(d_seg * d_seg, Float32(1e-20))
+                st.mis_null_dist += t_hit + Float32(0.0002)
             # VCM Stage 2b: pure medium-boundary pass-through, no direction
             # change/BSDF event -- carry state passes through as already
             comptime if _VCM_CAMIS:
@@ -756,24 +721,6 @@ def _bdpt_trace_light_path[use_gpu: Bool](
         sd, pcg, default_emit_med, lp_idx, lvc, lvc_path_len, mis_vc_weight_factor, pass_wl)
     if st.active == Int8(0):
         return
-    var ro = st.ro
-    var rd = st.rd
-    var flux = st.flux
-    var n_verts = Int(st.n_verts)
-    var n_delta = Int(st.n_delta)
-    var dvcm_carry = st.dvcm
-    var dvc_carry = st.dvc
-    var dvm_carry = st.dvm
-    var is_finite_origin = st.is_finite_origin == Int8(1)
-    var origin_sphere = st.origin_sphere
-    var cur_med_idx = st.cur_med_idx
-    var n_lbounces = Int(st.n_lbounces)
-    var current_dielectric_ior = st.current_dielectric_ior
-    var previous_dielectric_ior = st.previous_dielectric_ior
-    var wavelengths = SampledWavelengths(st.wl0, st.wl1, st.wl2, st.wl3)
-    var prev_was_volume = False
-    var mis_null_dist = Float32(0)
-    var mnee_l = st.mnee
     # CAMIS light state. Only an AREA light stores an origin vertex (n_verts
     # starts at 1), and only an area light starts a path inside the Class;
     # every other light's first stored vertex writes an out-of-Class record.
@@ -782,11 +729,11 @@ def _bdpt_trace_light_path[use_gpu: Bool](
     comptime if _VCM_CAMIS:
         camis_recs = lvc_camis.unsafe_offset(lp_idx * _BDPT_MAX_VERTS)
         var lv0 = lvc[unsafe_offset=lp_idx * _BDPT_MAX_VERTS]
-        if n_verts == 1 and lv0.is_light == Int32(1):
+        if st.n_verts == 1 and lv0.is_light == Int32(1):
             # lv0.pdf_fwd is the origin's position density P_A (init, area
             # branch), and the emission cosine is clamped as init clamps it.
             camis_l = camis_light_origin(camis_recs, 0, log(lv0.pdf_fwd),
-                                         max(dot(rd.to_simd(), lv0.normal.to_simd()), Float32(0.0001)))
+                                         max(dot(st.rd.to_simd(), lv0.normal.to_simd()), Float32(0.0001)))
     else:
         camis_recs = lvc_camis   # never dereferenced
 
@@ -794,22 +741,16 @@ def _bdpt_trace_light_path[use_gpu: Bool](
         # The same intersect step _bdpt_light_path_intersect_gpu performs --
         # kept here rather than inside the bounce because this one step is
         # the eventual Vulkan RT swap point on the wavefront side.
-        var ray = Ray(ro, rd)
+        var ray = Ray(st.ro, st.rd)
         scratch[unsafe_offset=0].hit = Int8(0)
         traverse_dispatch(sd.bvh4, sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, Float32(1e38), scratch,
                            sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances)
         test_spheres(sd.spheres, Int(sd.sphereCount), ray, scratch)
-        # A miss is handled inside the step (returns False), so the old
-        # top-of-loop `if scratch[0].hit == 0: break` is no longer needed.
+        # A miss is handled inside the step (returns False).
         if not _bdpt_light_path_bounce[use_gpu](
             sd, pcg, has_med, scratch[unsafe_offset=0], lvc, lp_idx,
-            mis_vc_weight_factor, mis_vm_weight_factor,
-            ro, rd, flux, n_verts, n_delta, dvcm_carry, dvc_carry, dvm_carry,
-            prev_was_volume,
-            is_finite_origin, origin_sphere, cur_med_idx, n_lbounces,
-            current_dielectric_ior, previous_dielectric_ior, mis_null_dist, wavelengths,
-            camis_l, camis_recs, mnee_l):
+            mis_vc_weight_factor, mis_vm_weight_factor, st, camis_l, camis_recs):
             break
 
-    lvc_path_len[unsafe_offset=lp_idx] = Int32(n_verts)
+    lvc_path_len[unsafe_offset=lp_idx] = Int32(st.n_verts)
     return

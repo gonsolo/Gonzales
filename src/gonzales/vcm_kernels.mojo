@@ -290,59 +290,21 @@ def _bdpt_light_path_bounce_gpu(
     if states[unsafe_offset=k].active == Int8(0):
         return
     var has_med = mediumCount > Int64(0)
+    var st = states[unsafe_offset=k]
     var pcg = PCG32(UInt64(0), UInt64(0))
-    pcg.state = states[unsafe_offset=k].pcg_state
-    pcg.inc = states[unsafe_offset=k].pcg_inc
-    var ro = states[unsafe_offset=k].ro
-    var rd = states[unsafe_offset=k].rd
-    var flux = states[unsafe_offset=k].flux
-    var n_verts = Int(states[unsafe_offset=k].n_verts)
-    var n_delta = Int(states[unsafe_offset=k].n_delta)
-    var dvcm_carry = states[unsafe_offset=k].dvcm
-    var dvc_carry = states[unsafe_offset=k].dvc
-    var dvm_carry = states[unsafe_offset=k].dvm
-    var is_finite_origin = states[unsafe_offset=k].is_finite_origin == Int8(1)
-    var origin_sphere = states[unsafe_offset=k].origin_sphere
-    var cur_med_idx = states[unsafe_offset=k].cur_med_idx
-    var n_lbounces = Int(states[unsafe_offset=k].n_lbounces)
-    var current_dielectric_ior = states[unsafe_offset=k].current_dielectric_ior
-    var previous_dielectric_ior = states[unsafe_offset=k].previous_dielectric_ior
-    var mis_null_dist = states[unsafe_offset=k].mis_null_dist
-    var mnee_l = states[unsafe_offset=k].mnee
-    var wavelengths = SampledWavelengths(states[unsafe_offset=k].wl0, states[unsafe_offset=k].wl1, states[unsafe_offset=k].wl2, states[unsafe_offset=k].wl3)
-    # Placeholder: no _VCM_CAMIS on the wavefront driver (see its camera twin).
+    pcg.state = st.pcg_state
+    pcg.inc = st.pcg_inc
+    # No _VCM_CAMIS on the wavefront driver (see its camera twin).
     var camis_l = camis_light_carry_off()
-    # Placeholder, like camis_l above: the wavefront driver does not persist
-    # prev_was_volume across its separate kernel launches (would need a new
-    var _pwv_l = False
-
     var cont = _bdpt_light_path_bounce[True](
         sd, pcg, has_med, results[unsafe_offset=k], lvc, k, mis_vc_weight_factor, mis_vm_weight_factor,
-        ro, rd, flux, n_verts, n_delta, dvcm_carry, dvc_carry, dvm_carry,
-        _pwv_l,
-        is_finite_origin, origin_sphere, cur_med_idx, n_lbounces,
-        current_dielectric_ior, previous_dielectric_ior, mis_null_dist, wavelengths,
-        camis_l, Pointer[CamisLightRecord, MutUntrackedOrigin].unsafe_dangling(), mnee_l,
+        st, camis_l, Pointer[CamisLightRecord, MutUntrackedOrigin].unsafe_dangling(),
     )
-    lvc_path_len[unsafe_offset=k] = Int32(n_verts)
-    states[unsafe_offset=k].active = Int8(1) if cont else Int8(0)
-    states[unsafe_offset=k].ro = ro
-    states[unsafe_offset=k].rd = rd
-    states[unsafe_offset=k].flux = flux
-    states[unsafe_offset=k].n_verts = Int32(n_verts)
-    states[unsafe_offset=k].n_delta = Int32(n_delta)
-    states[unsafe_offset=k].dvcm = dvcm_carry
-    states[unsafe_offset=k].dvc = dvc_carry
-    states[unsafe_offset=k].dvm = dvm_carry
-    states[unsafe_offset=k].origin_sphere = origin_sphere
-    states[unsafe_offset=k].cur_med_idx = cur_med_idx
-    states[unsafe_offset=k].n_lbounces = Int32(n_lbounces)
-    states[unsafe_offset=k].current_dielectric_ior = current_dielectric_ior
-    states[unsafe_offset=k].previous_dielectric_ior = previous_dielectric_ior
-    states[unsafe_offset=k].mis_null_dist = mis_null_dist
-    states[unsafe_offset=k].mnee = mnee_l
-    states[unsafe_offset=k].pcg_state = pcg.state
-    states[unsafe_offset=k].pcg_inc = pcg.inc
+    lvc_path_len[unsafe_offset=k] = Int32(st.n_verts)
+    st.active = Int8(1) if cont else Int8(0)
+    st.pcg_state = pcg.state
+    st.pcg_inc = pcg.inc
+    states[unsafe_offset=k] = st
 
 @__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
 @__llvm_metadata(`nvvm.minctasm`=SIMDLength(1))    # NVIDIA keeps its old register budget; AMD ignores this
@@ -436,76 +398,28 @@ def _bdpt_camera_path_bounce_gpu(
     if states[unsafe_offset=pix].active == Int8(0):
         return
     var has_med = mediumCount > Int64(0)
+    var st = states[unsafe_offset=pix]
     var pcg = PCG32(UInt64(0), UInt64(0))
-    pcg.state = states[unsafe_offset=pix].pcg_state
-    pcg.inc = states[unsafe_offset=pix].pcg_inc
-    var ro = states[unsafe_offset=pix].ro
-    var rd = states[unsafe_offset=pix].rd
-    var beta = states[unsafe_offset=pix].beta
-    var total = states[unsafe_offset=pix].total
-    var total_merge = states[unsafe_offset=pix].total_merge
-    var first_alb = states[unsafe_offset=pix].first_alb
-    var n_verts = Int(states[unsafe_offset=pix].n_verts)
-    var n_delta = Int(states[unsafe_offset=pix].n_delta)
-    var n_bounces = Int(states[unsafe_offset=pix].n_bounces)
-    var cur_med_idx = states[unsafe_offset=pix].cur_med_idx
-    var dvcm_carry = states[unsafe_offset=pix].dvcm
-    var dvc_carry = states[unsafe_offset=pix].dvc
-    var dvm_carry = states[unsafe_offset=pix].dvm
-    var last_bsdf_pdf = states[unsafe_offset=pix].last_bsdf_pdf
-    var mis_null_dist = states[unsafe_offset=pix].mis_null_dist
-    var current_dielectric_ior = states[unsafe_offset=pix].current_dielectric_ior
-    var previous_dielectric_ior = states[unsafe_offset=pix].previous_dielectric_ior
-    var cone_len = states[unsafe_offset=pix].cone_len
-    var mnee = states[unsafe_offset=pix].mnee
-    var wavelengths = SampledWavelengths(states[unsafe_offset=pix].wl0, states[unsafe_offset=pix].wl1, states[unsafe_offset=pix].wl2, states[unsafe_offset=pix].wl3)
-    # Placeholders: the wavefront driver does not support _VCM_CAMIS (it would
-    # need the camera records persisted in VCMCameraPathState across launches;
+    pcg.state = st.pcg_state
+    pcg.inc = st.pcg_inc
     var camis = CamisCamCarry(False, Int32(0), Float32(0), Float32(0), Float32(0), Float32(0), Float32(0))
     var camis_recs = Array[CamisCamRecord, _CAMIS_CAM_RECS](
         fill=CamisCamRecord(Float32(0), Float32(0), Float32(0), Float32(0), Float32(0)))
-    # Benchmark instrumentation only -- see
-    # _bdpt_merge_from_cache's docstring paragraph. The wavefront driver
     var visit_naive = Int32(0)
     var visit_footprint = Int32(0)
     var visit_thin = Int32(0)
-    # Placeholder, same shape as camis above: not persisted across the
-    # wavefront driver's separate launches (would need a new
-    var prev_was_volume = False
 
     var cont = _bdpt_camera_path_bounce[True](
         sd, pcg, has_med, results[unsafe_offset=pix], results.unsafe_offset(pix), lvc, pix, Int(lvc_path_len[unsafe_offset=pix]),
         merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm,
         mis_vc_weight_factor, mis_vm_weight_factor,
-        ro, rd, beta, total, total_merge, visit_naive, visit_footprint, visit_thin,
-        first_alb, n_verts, n_delta, n_bounces, cur_med_idx,
-        dvcm_carry, dvc_carry, dvm_carry, prev_was_volume, last_bsdf_pdf, mis_null_dist,
-        current_dielectric_ior, previous_dielectric_ior, wavelengths, cone_len,
-        camis, camis_recs, mnee,
+        st, visit_naive, visit_footprint, visit_thin, camis, camis_recs,
         defer_shadow_rays != Int8(0), shadow_rays, shadow_pending, shadow_valid, shadow_seg_med,
     )
-    states[unsafe_offset=pix].active = Int8(1) if cont else Int8(0)
-    states[unsafe_offset=pix].ro = ro
-    states[unsafe_offset=pix].rd = rd
-    states[unsafe_offset=pix].beta = beta
-    states[unsafe_offset=pix].total = total
-    states[unsafe_offset=pix].total_merge = total_merge
-    states[unsafe_offset=pix].first_alb = first_alb
-    states[unsafe_offset=pix].n_verts = Int32(n_verts)
-    states[unsafe_offset=pix].n_delta = Int32(n_delta)
-    states[unsafe_offset=pix].n_bounces = Int32(n_bounces)
-    states[unsafe_offset=pix].cur_med_idx = cur_med_idx
-    states[unsafe_offset=pix].dvcm = dvcm_carry
-    states[unsafe_offset=pix].dvc = dvc_carry
-    states[unsafe_offset=pix].dvm = dvm_carry
-    states[unsafe_offset=pix].last_bsdf_pdf = last_bsdf_pdf
-    states[unsafe_offset=pix].mis_null_dist = mis_null_dist
-    states[unsafe_offset=pix].current_dielectric_ior = current_dielectric_ior
-    states[unsafe_offset=pix].previous_dielectric_ior = previous_dielectric_ior
-    states[unsafe_offset=pix].cone_len = cone_len
-    states[unsafe_offset=pix].mnee = mnee
-    states[unsafe_offset=pix].pcg_state = pcg.state
-    states[unsafe_offset=pix].pcg_inc = pcg.inc
+    st.active = Int8(1) if cont else Int8(0)
+    st.pcg_state = pcg.state
+    st.pcg_inc = pcg.inc
+    states[unsafe_offset=pix] = st
 
 @__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
 @__llvm_metadata(`nvvm.minctasm`=SIMDLength(1))    # NVIDIA keeps its old register budget; AMD ignores this
@@ -529,8 +443,7 @@ def _bdpt_camera_path_accumulate_gpu(
     if pix >= n_pix:
         return
     # ── Output boundary: spectral transport -> RGB film ──────────────────
-    var wl_acc = SampledWavelengths(states[unsafe_offset=pix].wl0, states[unsafe_offset=pix].wl1,
-                                    states[unsafe_offset=pix].wl2, states[unsafe_offset=pix].wl3)
+    var wl_acc = states[unsafe_offset=pix].wl
     var (tr, tg, tb) = spectral_sample_to_rgb(
         spectral_coeffs, Int(spectral_res_dp), spectral_cie_x, spectral_cie_y,
         spectral_cie_z, spectral_d65, states[unsafe_offset=pix].total, wl_acc)
@@ -944,7 +857,7 @@ def resolve_shadow_connect_gpu(
         # established convention elsewhere in this file (e.g.
         var dst = org + dir * dist
         var cst = cam_states[unsafe_offset=idx // _BDPT_MAX_VERTS]
-        var wl_sp = SampledWavelengths(cst.wl0, cst.wl1, cst.wl2, cst.wl3)
+        var wl_sp = cst.wl
         var Tr = _visible_transmittance(org, dst, seg_med, sd, scratch.unsafe_offset(tid), wl_sp)
         var p = shadow_pending[unsafe_offset=idx]
         shadow_pending[unsafe_offset=idx] = p * Tr

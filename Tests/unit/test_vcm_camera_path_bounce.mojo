@@ -200,26 +200,6 @@ def test_wavefront_split_matches_original_camera_path_closely() raises:
     pcg_bounce.state = state.pcg_state
     pcg_bounce.inc = state.pcg_inc
 
-    var ro = state.ro
-    var rd = state.rd
-    var beta = state.beta
-    var total = state.total
-    var total_merge = state.total_merge
-    var first_alb = state.first_alb
-    var n_verts = Int(state.n_verts)
-    var n_delta = Int(state.n_delta)
-    var n_bounces = Int(state.n_bounces)
-    var cur_med_idx = state.cur_med_idx
-    var dvcm = state.dvcm
-    var dvc = state.dvc
-    var dvm = state.dvm
-    var last_bsdf_pdf = state.last_bsdf_pdf
-    var mis_null_dist = state.mis_null_dist
-    var current_dielectric_ior = state.current_dielectric_ior
-    var previous_dielectric_ior = state.previous_dielectric_ior
-    var cone_len = state.cone_len
-    var mnee = state.mnee
-    var wavelengths = SampledWavelengths(state.wl0, state.wl1, state.wl2, state.wl3)
 
     # CAMIS state (inert unless _VCM_CAMIS), threaded like the carries.
     var camis = camis_cam_carry_init()
@@ -232,13 +212,11 @@ def test_wavefront_split_matches_original_camera_path_closely() raises:
     var visit_footprint = Int32(0)
     var visit_thin = Int32(0)
 
-    var prev_was_volume = False
-
     var n_iters = 0
     var active = state.active
     while active == Int8(1) and n_iters < Int(_BDPT_MAX_DEPTH):
         n_iters += 1
-        var ray_o = ro; var ray_d = rd
+        var ray_o = state.ro; var ray_d = state.rd
         scratch_new[unsafe_offset=0].hit = Int8(0)
         var ray = Ray(ray_o, ray_d)
         traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, Float32(1e38), scratch_new)
@@ -251,31 +229,27 @@ def test_wavefront_split_matches_original_camera_path_closely() raises:
             Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
             Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
             Float32(0), Float32(0), Float32(0), Float32(0), Float32(0),
-            ro, rd, beta, total, total_merge, visit_naive, visit_footprint, visit_thin,
-            first_alb, n_verts, n_delta, n_bounces, cur_med_idx,
-            dvcm, dvc, dvm, prev_was_volume, last_bsdf_pdf, mis_null_dist,
-            current_dielectric_ior, previous_dielectric_ior, wavelengths, cone_len,
-            camis, camis_recs, mnee,
+            state, visit_naive, visit_footprint, visit_thin, camis, camis_recs,
         )
         active = Int8(1) if cont else Int8(0)
 
     # `total` is spectral (BDPT/VCM transport carries hero wavelengths); the
     # two halves must agree lane for lane, which is the real invariant here.
-    assert_true(_close(total.v0, total_old.v0))
-    assert_true(_close(total.v1, total_old.v1))
-    assert_true(_close(total.v2, total_old.v2))
-    assert_true(_close(total.v3, total_old.v3))
+    assert_true(_close(state.total.v0, total_old.v0))
+    assert_true(_close(state.total.v1, total_old.v1))
+    assert_true(_close(state.total.v2, total_old.v2))
+    assert_true(_close(state.total.v3, total_old.v3))
     # path_len=0 means no LVC/merge grid, so both sides' merge contribution
     # is trivially zero -- still asserted for symmetry with `total` above.
-    assert_true(_close(total_merge.v0, total_merge_old.v0))
-    assert_true(_close(total_merge.v1, total_merge_old.v1))
-    assert_true(_close(total_merge.v2, total_merge_old.v2))
-    assert_true(_close(total_merge.v3, total_merge_old.v3))
-    assert_true(_close(first_alb.r, alb_old.r))
-    assert_true(_close(first_alb.g, alb_old.g))
-    assert_true(_close(first_alb.b, alb_old.b))
-    assert_true(n_verts >= 1)  # sanity: the floor is huge enough to guarantee a hit + a stored vertex
-    assert_true(_close(first_alb.r, Float32(0.8)))  # sanity: the stored vertex's albedo is the real material, not a stale zero
+    assert_true(_close(state.total_merge.v0, total_merge_old.v0))
+    assert_true(_close(state.total_merge.v1, total_merge_old.v1))
+    assert_true(_close(state.total_merge.v2, total_merge_old.v2))
+    assert_true(_close(state.total_merge.v3, total_merge_old.v3))
+    assert_true(_close(state.first_alb.r, alb_old.r))
+    assert_true(_close(state.first_alb.g, alb_old.g))
+    assert_true(_close(state.first_alb.b, alb_old.b))
+    assert_true(state.n_verts >= 1)  # sanity: the floor is huge enough to guarantee a hit + a stored vertex
+    assert_true(_close(state.first_alb.r, Float32(0.8)))  # sanity: the stored vertex's albedo is the real material, not a stale zero
 
     scratch_old.unsafe_free(); scratch_new.unsafe_free()
     r2c.unsafe_free(); c2w.unsafe_free()

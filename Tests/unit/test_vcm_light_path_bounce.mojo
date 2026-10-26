@@ -179,40 +179,19 @@ def test_wavefront_split_matches_original_light_path_exactly() raises:
     var lvc_new = unsafe_alloc[BDPTVertex](_BDPT_MAX_VERTS)
     var lvc_path_len_new = unsafe_alloc[Int32](1)
     var state = _bdpt_light_path_init[False](sd, pcg_new, Int32(-1), 0, lvc_new, lvc_path_len_new, Float32(0), _TEST_PASS_WL)
-    lvc_path_len_new[unsafe_offset=0] = state.n_verts
+    lvc_path_len_new[unsafe_offset=0] = Int32(state.n_verts)
 
     var pcg_bounce = PCG32(UInt64(0), UInt64(0))
     pcg_bounce.state = state.pcg_state
     pcg_bounce.inc = state.pcg_inc
 
-    # Unpack the state struct into plain locals -- exactly what a real GPU
-    # kernel wrapper would do at the top of each bounce launch.
-    var ro = state.ro
-    var rd = state.rd
-    var flux = state.flux
-    var n_verts = Int(state.n_verts)
-    var n_delta = Int(state.n_delta)
-    var dvcm = state.dvcm
-    var dvc = state.dvc
-    var dvm = state.dvm
-    var is_finite_origin = state.is_finite_origin == Int8(1)
-    var origin_sphere = state.origin_sphere
-    var cur_med_idx = state.cur_med_idx
-    var n_lbounces = Int(state.n_lbounces)
-    var current_dielectric_ior = state.current_dielectric_ior
-    var previous_dielectric_ior = state.previous_dielectric_ior
-    var mis_null_dist = state.mis_null_dist
-    var mnee_l = state.mnee
-    var wavelengths = SampledWavelengths(state.wl0, state.wl1, state.wl2, state.wl3)
-
     var camis_l = camis_light_carry_off()   # CAMIS state; inert unless _VCM_CAMIS
-    var prev_was_volume = False
 
     var n_iters = 0
     var active = state.active
     while active == Int8(1) and n_iters < Int(_BDPT_MAX_DEPTH):
         n_iters += 1
-        var ray = Ray(ro, rd)
+        var ray = Ray(state.ro, state.rd)
         var scratch_new = unsafe_alloc[Intersection](1)
         scratch_new[unsafe_offset=0].hit = Int8(0)
         traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, Float32(1e38), scratch_new)
@@ -220,15 +199,9 @@ def test_wavefront_split_matches_original_light_path_exactly() raises:
         scratch_new.unsafe_free()
 
         var cont = _bdpt_light_path_bounce[False](
-            sd, pcg_bounce, False, inter, lvc_new, 0, Float32(0), Float32(0),
-            ro, rd, flux, n_verts, n_delta, dvcm, dvc, dvm,
-            prev_was_volume,
-            is_finite_origin, origin_sphere, cur_med_idx, n_lbounces,
-            current_dielectric_ior, previous_dielectric_ior, mis_null_dist, wavelengths,
-            camis_l, camis_new, mnee_l,
-        )
+            sd, pcg_bounce, False, inter, lvc_new, 0, Float32(0), Float32(0), state, camis_l, camis_new)
         active = Int8(1) if cont else Int8(0)
-        lvc_path_len_new[unsafe_offset=0] = Int32(n_verts)
+        lvc_path_len_new[unsafe_offset=0] = Int32(state.n_verts)
 
     assert_true(lvc_path_len_old[unsafe_offset=0] == lvc_path_len_new[unsafe_offset=0])
     var n = Int(lvc_path_len_old[unsafe_offset=0])
