@@ -2931,13 +2931,15 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
                     if dist > max_dev: max_dev = dist
             var maxw = max(s[unsafe_offset=0].curves_w0[i], s[unsafe_offset=0].curves_w1[i])
             curve_n_pieces[unsafe_offset=i] = Int32(1) if max_dev < maxw * Float32(0.5) else Int32(CURVE_N_PIECES)
-            var curve_i = Curve(
-                Point3f(s[unsafe_offset=0].curves_cp[cb+0], s[unsafe_offset=0].curves_cp[cb+1], s[unsafe_offset=0].curves_cp[cb+2]),
-                Point3f(s[unsafe_offset=0].curves_cp[cb+3], s[unsafe_offset=0].curves_cp[cb+4], s[unsafe_offset=0].curves_cp[cb+5]),
-                Point3f(s[unsafe_offset=0].curves_cp[cb+6], s[unsafe_offset=0].curves_cp[cb+7], s[unsafe_offset=0].curves_cp[cb+8]),
-                Point3f(s[unsafe_offset=0].curves_cp[cb+9], s[unsafe_offset=0].curves_cp[cb+10], s[unsafe_offset=0].curves_cp[cb+11]),
-                s[unsafe_offset=0].curves_w0[i], s[unsafe_offset=0].curves_w1[i], s[unsafe_offset=0].curves_mat[i], curve_n_pieces[unsafe_offset=i], s[unsafe_offset=0].curves_flat[i])
-            var ngroups = _curve_greedy_groups(curve_i, Int(curve_n_pieces[unsafe_offset=i]), count_pass_scratch, count_pass_scratch, False)
+            var ngroups = 1                          # one piece is one group
+            if curve_n_pieces[unsafe_offset=i] != Int32(1):
+                var curve_i = Curve(
+                    Point3f(s[unsafe_offset=0].curves_cp[cb+0], s[unsafe_offset=0].curves_cp[cb+1], s[unsafe_offset=0].curves_cp[cb+2]),
+                    Point3f(s[unsafe_offset=0].curves_cp[cb+3], s[unsafe_offset=0].curves_cp[cb+4], s[unsafe_offset=0].curves_cp[cb+5]),
+                    Point3f(s[unsafe_offset=0].curves_cp[cb+6], s[unsafe_offset=0].curves_cp[cb+7], s[unsafe_offset=0].curves_cp[cb+8]),
+                    Point3f(s[unsafe_offset=0].curves_cp[cb+9], s[unsafe_offset=0].curves_cp[cb+10], s[unsafe_offset=0].curves_cp[cb+11]),
+                    s[unsafe_offset=0].curves_w0[i], s[unsafe_offset=0].curves_w1[i], s[unsafe_offset=0].curves_mat[i], curve_n_pieces[unsafe_offset=i], s[unsafe_offset=0].curves_flat[i])
+                ngroups = _curve_greedy_groups(curve_i, Int(curve_n_pieces[unsafe_offset=i]), count_pass_scratch, count_pass_scratch, False)
             curve_group_base[unsafe_offset=i] = Int32(0) if curve_tmpl[unsafe_offset=i] >= Int32(0) else Int32(ngroups)   # a template's curves are in its own BVH
 
     parallelize(count_chunk, n_curve_chunks)
@@ -3022,7 +3024,11 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
                 Point3f(s[unsafe_offset=0].curves_cp[base+6], s[unsafe_offset=0].curves_cp[base+7], s[unsafe_offset=0].curves_cp[base+8]),
                 Point3f(s[unsafe_offset=0].curves_cp[base+9], s[unsafe_offset=0].curves_cp[base+10], s[unsafe_offset=0].curves_cp[base+11]),
                 s[unsafe_offset=0].curves_w0[ci], s[unsafe_offset=0].curves_w1[ci], s[unsafe_offset=0].curves_mat[ci], curve_n_pieces[unsafe_offset=ci], s[unsafe_offset=0].curves_flat[ci])
-            var ngroups = _curve_greedy_groups(curve_i, Int(curve_n_pieces[unsafe_offset=ci]), group_first_scratch, group_count_scratch, True)
+            var ngroups = 1
+            if curve_n_pieces[unsafe_offset=ci] == Int32(1):
+                group_first_scratch[unsafe_offset=0] = Int32(0); group_count_scratch[unsafe_offset=0] = Int32(1)
+            else:
+                ngroups = _curve_greedy_groups(curve_i, Int(curve_n_pieces[unsafe_offset=ci]), group_first_scratch, group_count_scratch, True)
             for g in range(ngroups):
                 var global_group = Int(curve_group_base[unsafe_offset=ci]) + g
                 var first_piece = Int(group_first_scratch[unsafe_offset=g])
@@ -3490,33 +3496,37 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
     # GPU-safe PrimId assignment — tris + curves only (no instance branch;
     # `orig` here is always < total_tris + total_curve_groups). Same
     # tri/curve logic as the CPU-inclusive loop below.
-    for k in range(Int(n_gpu)):
-        var orig = Int(bvh_order_gpu[unsafe_offset=k])
-        if orig < Int(total_tris):
-            var mi = Int(tri_mesh[unsafe_offset=orig])
-            var ti = Int(tri_local[unsafe_offset=orig])
-            if s[unsafe_offset=0].meshes[mi].is_area_light:
-                var al_idx = Int(mesh_al_idx[unsafe_offset=mi])
-                prim_ids_gpu[unsafe_offset=k].type          = Int8(3)
-                prim_ids_gpu[unsafe_offset=k].id1           = Int64(al_idx)
-                prim_ids_gpu[unsafe_offset=k].id2           = (Int64(mi) << 32) | Int64(ti)
-                prim_ids_gpu[unsafe_offset=k].materialIndex = Int64(al_mat_base + al_idx)
+    comptime PRIM_CHUNK = 65536                      # PrimIds a parallel task fills
+    def fill_chunk(chunk: Int) {imm}:
+        for k in range(chunk * PRIM_CHUNK, min(chunk * PRIM_CHUNK + PRIM_CHUNK, Int(n_gpu))):
+            var orig = Int(bvh_order_gpu[unsafe_offset=k])
+            if orig < Int(total_tris):
+                var mi = Int(tri_mesh[unsafe_offset=orig])
+                var ti = Int(tri_local[unsafe_offset=orig])
+                if s[unsafe_offset=0].meshes[mi].is_area_light:
+                    var al_idx = Int(mesh_al_idx[unsafe_offset=mi])
+                    prim_ids_gpu[unsafe_offset=k].type          = Int8(3)
+                    prim_ids_gpu[unsafe_offset=k].id1           = Int64(al_idx)
+                    prim_ids_gpu[unsafe_offset=k].id2           = (Int64(mi) << 32) | Int64(ti)
+                    prim_ids_gpu[unsafe_offset=k].materialIndex = Int64(al_mat_base + al_idx)
+                else:
+                    var mat_idx = Int(s[unsafe_offset=0].meshes[mi].mat_idx)
+                    prim_ids_gpu[unsafe_offset=k].type          = Int8(0)
+                    prim_ids_gpu[unsafe_offset=k].id1           = Int64(mi)
+                    prim_ids_gpu[unsafe_offset=k].id2           = Int64(ti * 3)
+                    prim_ids_gpu[unsafe_offset=k].materialIndex = Int64(mat_idx) if mat_idx >= 0 else Int64(default_mat_idx)
             else:
-                var mat_idx = Int(s[unsafe_offset=0].meshes[mi].mat_idx)
-                prim_ids_gpu[unsafe_offset=k].type          = Int8(0)
-                prim_ids_gpu[unsafe_offset=k].id1           = Int64(mi)
-                prim_ids_gpu[unsafe_offset=k].id2           = Int64(ti * 3)
-                prim_ids_gpu[unsafe_offset=k].materialIndex = Int64(mat_idx) if mat_idx >= 0 else Int64(default_mat_idx)
-        else:
-            var gidx = orig - Int(total_tris)
-            var ci = Int(group_curve_idx[unsafe_offset=gidx])
-            var curve_mat_idx = Int(s[unsafe_offset=0].curves_mat[ci])
-            prim_ids_gpu[unsafe_offset=k].type          = Int8(5)
-            prim_ids_gpu[unsafe_offset=k].id1           = Int64(ci)
-            prim_ids_gpu[unsafe_offset=k].id2           = Int64(group_id2[unsafe_offset=gidx])
-            prim_ids_gpu[unsafe_offset=k].materialIndex = Int64(curve_al_mat_idx[unsafe_offset=ci]) if s[unsafe_offset=0].curves_al[ci] else (Int64(curve_mat_idx) if curve_mat_idx >= 0 else Int64(default_mat_idx))
-        prim_ids_gpu[unsafe_offset=k].instanceIdx = Int32(-1)
-        prim_ids_gpu[unsafe_offset=k]._pad0 = Int8(0); prim_ids_gpu[unsafe_offset=k]._pad1 = Int8(0); prim_ids_gpu[unsafe_offset=k]._pad2 = Int8(0)
+                var gidx = orig - Int(total_tris)
+                var ci = Int(group_curve_idx[unsafe_offset=gidx])
+                var curve_mat_idx = Int(s[unsafe_offset=0].curves_mat[ci])
+                prim_ids_gpu[unsafe_offset=k].type          = Int8(5)
+                prim_ids_gpu[unsafe_offset=k].id1           = Int64(ci)
+                prim_ids_gpu[unsafe_offset=k].id2           = Int64(group_id2[unsafe_offset=gidx])
+                prim_ids_gpu[unsafe_offset=k].materialIndex = Int64(curve_al_mat_idx[unsafe_offset=ci]) if s[unsafe_offset=0].curves_al[ci] else (Int64(curve_mat_idx) if curve_mat_idx >= 0 else Int64(default_mat_idx))
+            prim_ids_gpu[unsafe_offset=k].instanceIdx = Int32(-1)
+            prim_ids_gpu[unsafe_offset=k]._pad0 = Int8(0); prim_ids_gpu[unsafe_offset=k]._pad1 = Int8(0); prim_ids_gpu[unsafe_offset=k]._pad2 = Int8(0)
+
+    parallelize(fill_chunk, (Int(n_gpu) + PRIM_CHUNK - 1) // PRIM_CHUNK)
 
     for k in range(0 if shared_tlas else Int(tl_prims)):   # shared: filled above
         var orig = Int(bvh_order[unsafe_offset=k]) + tl_first
