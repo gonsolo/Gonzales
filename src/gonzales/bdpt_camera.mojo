@@ -47,7 +47,7 @@ from .bdpt_eval import (
 from .vcm_grid import _vcm_depth, _vcm_keep, _VCM_CAMIS, _CAMIS_CAM_RECS, _CAMIS_FORCE_C1, _vcm_eta_scale, _vcm_eta_at
 from .bdpt_connect import _bdpt_connect_to_cache, _bdpt_connect_to_cache_deferred
 from .vcm_merge import _bdpt_merge_from_cache
-from .bdpt_bssrdf import _bdpt_sample_bssrdf_exit
+from .bdpt_bssrdf import _bdpt_sample_bssrdf_exit, BssrdfExitSample
 
 def _bdpt_trace_camera_and_connect[use_gpu: Bool](
     r2c:     Pointer[Float32, MutUntrackedOrigin],
@@ -308,6 +308,172 @@ def _coated_conductor_scatter[use_gpu: Bool](
     var ior = mat.emission.r if mat.emission.r > Float32(1) else Float32(1.5)
     var usplit = pcg.next_float()
     return (bxdf_sample_coated_conductor(gc, mat, ior, usplit, uc1, uc2), gn, gn_geo)
+
+
+@always_inline
+def _vcm_bssrdf_hop(
+    ref sd: SceneView, inter: Intersection, mat: Material, hit: Point3f, ray_dir: Vec3f, med_in: Int, mis_vc: Float32,
+    mut pcg: PCG32, wl: SampledWavelengths, mut beta: SpectralSample, mut dvcm: Float32, mut dvc: Float32, mut dvm: Float32,
+) -> BssrdfExitSample:
+    """A subsurface hop from the entry at `hit` to an exit both subpaths sample alike: arrival, the hop's weight in
+    `beta` and its MIS carries."""
+    var gn_e = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
+    if dot(gn_e, ray_dir) > Float32(0): gn_e = gn_e * Float32(-1)
+    var cos_e = abs(dot(-ray_dir, gn_e))
+    (dvcm, dvc, dvm) = vcm_arrival_carries(dvcm, dvc, dvm, cos_e)
+    var ex = _bdpt_sample_bssrdf_exit(sd, med_in, hit, gn_e, cos_e, mat.albedo.r, pcg)
+    if not ex.ok:
+        return ex
+    ref s = sd.spectral
+    beta *= spec_refl_unbounded(s.coeffs, s.res, s.cie_x, s.cie_y, s.cie_z, s.d65, ex.weight.r, ex.weight.g, ex.weight.b, wl)
+    (dvcm, dvc, dvm) = bssrdf_hop_carries[dvc0=_VCM_CAMIS](dvcm, dvc, dvm, ex.p_area, cos_e * INV_PI, mis_vc)
+    return ex
+
+
+@always_inline
+def _vcm_bssrdf_vertex(ex: BssrdfExitSample, eta: Float32, beta: SpectralSample, med_idx: Int32, wl: SampledWavelengths,
+                       dvcm: Float32, dvc: Float32, dvm: Float32) -> BDPTVertex:
+    """The subpath vertex at a hop's exit: a diffuse lobe weighted by the exit Fresnel."""
+    var v = _null_vertex()
+    v.pos = ex.x_o
+    v.normal = vec3f(ex.n_o)
+    v.shading_normal = vec3f(ex.n_o)
+    v.beta = beta
+    v.alb = RGB(Float32(1))
+    v.is_surface = Int32(1)
+    v.mat_kind = LobeKind.bssrdf
+    v.pdf_fwd = ex.p_area   # reverse density toward x_i: the hop is symmetric
+    v.pdf_bwd = eta
+    v.wo = vec3f(ex.n_o)    # unused by LobeKind.bssrdf
+    v.med_idx = med_idx
+    v.wavelengths = wl
+    v.dVCM = dvcm; v.dVC = dvc; v.dVM = dvm
+    return v
+
+
+@always_inline
+def _vcm_bssrdf_exit_scatter(
+    ref sd: SceneView, ex: BssrdfExitSample, eta: Float32, mis_vc: Float32, mis_vm: Float32, mut pcg: PCG32,
+    mut ro: Point3f, mut rd: Vec3f, mut beta: SpectralSample, mut dvcm: Float32, mut dvc: Float32, mut dvm: Float32,
+) -> Float32:
+    """Leaves a hop's exit along the cosine-sampled exit lobe, weight Ft(cos_out); returns cos_out."""
+    var ux1 = pcg.next_float(); var ux2 = pcg.next_float()
+    rd = vec3f(_cosine_hemisphere_sample(ex.n_o, ux1, ux2))
+    ro = ex.x_o + rd * Float32(0.0002)
+    var cos_out = abs(dot(rd.to_simd(), ex.n_o))
+    beta *= SpectralSample(bssrdf_exit_ft(cos_out, eta))
+    (dvcm, dvc, dvm) = bssrdf_exit_scatter_carries[dvc0=_VCM_CAMIS](
+        dvcm, dvc, dvm, ex.p_area, cos_out, mis_vc, mis_vm * _vcm_eta_scale(sd, ex.x_o))
+    return cos_out
+
+
+@always_inline
+def _vcm_dielectric_cross[use_gpu: Bool, radiance: Bool](
+    ref sd: SceneView, inter: Intersection, mat: Material, hit: Point3f, ray_dir: Vec3f, cone_w: Float32, has_med: Bool,
+    mut pcg: PCG32, mut ro: Point3f, mut rd: Vec3f, mut cur_ior: Float32, mut prev_ior: Float32, mut med_idx: Int32,
+    mut dvcm: Float32, mut dvc: Float32, mut dvm: Float32,
+) -> Float32:
+    """A smooth dielectric's reflect-or-refract, the delta MIS update and the medium change; returns the camera path's
+    radiance scale (1 for light paths, `radiance` False)."""
+    # pbrt's outward normal: interpolated N when the mesh has it, which pbrt also refracts through. Maps apply too:
+    # barcelona's water is a dielectric with a displacement texture.
+    var gn = _shading_normal_at(inter, sd.meshes, sd.instances, sd.spheres, hit)
+    gn = apply_surface_maps_at_hit[use_gpu](mat, inter, sd.meshes, sd.instances, gn, gn, hit.to_simd(), ray_dir, cone_w,
+                                            sd.camFp, sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
+    var (new_dir, new_org, radiance_scale, new_cur_ior, new_prev_ior) = _dielectric_bounce(
+        ray_dir, hit.to_simd(), gn, mat.albedo.r, False, pcg, cur_ior, prev_ior, mat.type == MatKind.thin_dielectric,
+        radiance_mode=radiance)
+    var n_in_out = cur_ior / new_cur_ior   # refraction compresses solid angle by (n_in/n_out)^2
+    cur_ior = new_cur_ior
+    prev_ior = new_prev_ior
+    if has_med:
+        var new_idx = medium_after_crossing(ray_dir, inter, sd.meshes, mat, sd, hit)
+        if mat.medium_interface_idx >= Int32(0): med_idx = new_idx
+    rd = vec3f(new_dir)
+    ro = point3f(new_org)
+    # Delta vertex, as in SmallVCM: dVCM restarts, dVC and dVM trade the arrival cosine for the departure one.
+    var cos_in = abs(dot(-ray_dir, gn))
+    if cos_in > Float32(1e-6):
+        dvc /= cos_in
+        dvm /= cos_in
+    var cos_out = abs(dot(new_dir, gn)) * n_in_out * n_in_out
+    dvcm = Float32(0)
+    dvc *= cos_out
+    dvm *= cos_out
+    return radiance_scale if radiance else Float32(1)
+
+
+@fieldwise_init
+struct VcmLobeHit(TrivialRegisterPassable):
+    """A lobe material's subpath vertex and the hit's normals, arrival cosine, spawn offset and texture albedo."""
+    var v: BDPTVertex
+    var gn: Vec3f        # shading normal, maps applied
+    var gn_geo: Vec3f
+    var cos_fix: Float32
+    var spawn_eps: Float32
+    var on_curve: Bool
+    var eff_alb: RGB
+
+
+@always_inline
+def _vcm_lobe_vertex[use_gpu: Bool](
+    ref sd: SceneView, inter: Intersection, mat: Material, mat_idx: Int, hit: Point3f, ray_dir: Vec3f, cone_w: Float32,
+    beta: SpectralSample, med_idx: Int32, wl: SampledWavelengths, mut dvcm: Float32, mut dvc: Float32, mut dvm: Float32,
+) -> VcmLobeHit:
+    """The vertex either subpath stores at a lobe material, with the arrival applied to the MIS carries; its dVCM, dVC
+    and dVM are the caller's to set. `cone_w` is the camera ray's footprint width for texture filtering, -1 for none."""
+    # Geometry, not material: a curve hit has its own normal and spawn offset, and no texture or bump map.
+    var on_curve = inter.primId.type == Int8(5)
+    var spawn_eps = offset_eps(hit.x, hit.y, hit.z)
+    var gn: Vec3f
+    if on_curve:
+        var hc_g = _hair_precompute(mat, sd.curves, Int(inter.primId.id1), inter.v, inter.u, (-ray_dir).to_simd())
+        gn = hc_g.geo_normal
+        spawn_eps = curve_offset_eps(hc_g.radius)
+    elif mat.type == MatKind.dielectric:
+        gn = _shading_normal_at(inter, sd.meshes, sd.instances, sd.spheres, hit)
+    else:
+        gn = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
+    # A rough dielectric needs the outward normal: inside vs outside is which side of it wo lies on.
+    var outward = mat.type == MatKind.dielectric
+    if dot(gn, ray_dir) > Float32(0) and not outward: gn = gn * Float32(-1)
+    var cos_fix = abs(dot(-ray_dir, gn))
+    (dvcm, dvc, dvm) = vcm_arrival_carries(dvcm, dvc, dvm, cos_fix)
+    var eff_alb = mat.albedo
+    var (tex_mesh, tv0, tv1, tv2, tex_ok) = _get_tri_verts(inter, sd.meshes)
+    if tex_ok and not on_curve:
+        eff_alb = _tex_lookup[use_gpu](mat, inter, tv0, tv1, tv2, tex_mesh, sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount),
+            uv_footprint_at_hit(inter, sd.meshes, sd.instances, hit.to_simd(), ray_dir, cone_w, sd.camFp).width)
+    # The stored vertex keeps the unperturbed normal as its geometric one.
+    var gn_geo = gn
+    if not on_curve:
+        gn = apply_surface_maps_at_hit[use_gpu](mat, inter, sd.meshes, sd.instances,
+            gn, gn, hit.to_simd(), ray_dir, cone_w, sd.camFp,
+            sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
+    if not outward:
+        gn = face_toward(gn, -ray_dir)   # pbrt two-sided reflection
+    var v = _null_vertex()
+    v.pos = hit
+    v.normal = vec3f(gn_geo)
+    v.shading_normal = vec3f(gn)
+    v.beta = beta
+    v.alb = eff_alb
+    v.is_surface = Int32(1)
+    # One lobe per material: everything after evaluates and samples the vertex through lobe_eval and lobe_sample.
+    v.mat_kind = lobe_kind_of(mat.type)
+    v.mat_idx = Int32(mat_idx)
+    v.pdf_bwd = lobe_param_of(mat)   # LobeCtx.param: a conductor's GGX alpha
+    # A smooth conductor is a mirror: it scatters, but stores no vertex and starts no strategy.
+    v.is_delta = Int32(1) if lobe_is_delta_of(mat) else Int32(0)
+    if on_curve:
+        v.hair_curve_idx = Int32(inter.primId.id1)
+        v.hair_h = inter.u
+        v.hair_v = inter.v
+    v.pdf_fwd = Float32(1)   # unused by the uniform-subsample estimator
+    v.wo = vec3f(-ray_dir)
+    v.med_idx = med_idx
+    v.wavelengths = wl
+    return VcmLobeHit(v, gn, gn_geo, cos_fix, spawn_eps, on_curve, eff_alb)
 
 
 def _bdpt_camera_path_bounce[use_gpu: Bool](
@@ -616,69 +782,11 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
         if mat.type == MatKind.diffuse or mat.type == MatKind.diffuse_transmit or mat.type == MatKind.coated_diffuse or mat.type == MatKind.conductor or mat.type == MatKind.measured or mat.type == MatKind.hair or (dielectric_is_rough(mat) and mat.sss_boundary == Int8(0)):
             if not lobe_is_available_of(mat):
                 return False   # e.g. a measured table that failed to load
-            # GEOMETRY, not material: a curve hit has its own normal and spawn
-            # offset (curve_offset_eps), and no texture or bump map.
-            var on_curve = inter.primId.type == Int8(5)
-            var spawn_eps = offset_eps(hit.x, hit.y, hit.z)
-            var gn: Vec3f
-            if on_curve:
-                var hc_g = _hair_precompute(mat, sd.curves, Int(inter.primId.id1), inter.v, inter.u, (-ray_dir).to_simd())
-                gn = hc_g.geo_normal
-                spawn_eps = curve_offset_eps(hc_g.radius)
-            elif mat.type == MatKind.dielectric:
-                gn = _shading_normal_at(inter, sd.meshes, sd.instances, sd.spheres, hit)
-            else:
-                gn = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
-            # A rough dielectric needs the OUTWARD normal: inside vs outside
-            # is which side of it wo lies on (lobe_eval's rough_dielectric).
-            var outward = mat.type == MatKind.dielectric
-            if dot(gn, ray_dir) > Float32(0) and not outward: gn = gn * Float32(-1)
-            # VCM Stage 2b: finish the per-bounce MIS correction (dist²
-            # portion already applied above) -- see
-            # _bdpt_trace_light_path's matching comment.
-            var cos_fix = abs(dot(-ray_dir, gn))
-            (st.dvcm, st.dvc, st.dvm) = vcm_arrival_carries(
-                st.dvcm, st.dvc, st.dvm, cos_fix)
-            # Real image-texture reflectance (e.g. "texture reflectance" on
-            # coateddiffuse) — before this, bdpt_*.mojo always used the flat
-            var eff_alb = mat.albedo
-            var (tex_mesh, tv0, tv1, tv2, tex_ok) = _get_tri_verts(inter, sd.meshes)
-            if tex_ok and not on_curve:
-                eff_alb = _tex_lookup[use_gpu](mat, inter, tv0, tv1, tv2, tex_mesh, sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount),
-                    uv_footprint_at_hit(inter, sd.meshes, sd.instances, hit.to_simd(), ray_dir, vcm_cone_w, sd.camFp).width)
-            # Bump/normal maps. bdpt_*.mojo applied NONE of them, on either
-            # subpath, while the path tracer has since 2026-09 -- a textbook
-            var gn_geo = gn
-            if not on_curve:
-                gn = apply_surface_maps_at_hit[use_gpu](mat, inter, sd.meshes, sd.instances,
-                    gn, gn, hit.to_simd(), ray_dir, vcm_cone_w, sd.camFp,
-                    sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
-            if not outward:
-                gn = face_toward(gn, -ray_dir)   # pbrt two-sided reflection, see face_toward
-            var v = _null_vertex()
-            v.pos = hit
-            v.normal = vec3f(gn_geo)
-            v.shading_normal = vec3f(gn)
-            v.beta = st.beta
-            v.alb = eff_alb
-            v.is_surface = Int32(1)
-            # One lobe per material, from bxdf.mojo's lobe_kind_of: everything
-            # below evaluates and samples the vertex through lobe_eval and
-            # lobe_sample, so this branch never asks which material it is.
-            v.mat_kind = lobe_kind_of(mat.type)
-            v.mat_idx = Int32(mat_idx)
-            v.pdf_bwd = lobe_param_of(mat)   # LobeCtx.param: a conductor's GGX alpha
-            # A smooth conductor is a mirror: it scatters, but stores no
-            # vertex and starts no strategy.
-            v.is_delta = Int32(1) if lobe_is_delta_of(mat) else Int32(0)
-            if on_curve:
-                v.hair_curve_idx = Int32(inter.primId.id1)
-                v.hair_h = inter.u
-                v.hair_v = inter.v
-            v.pdf_fwd = Float32(1)  # unused by the uniform-subsample estimator
-            v.wo = vec3f(-ray_dir)  # VCM Stage 2b: needed for _connect's reverse-pdf eval
-            v.med_idx = st.cur_med_idx
-            v.wavelengths = st.wl
+            var lh = _vcm_lobe_vertex[use_gpu](sd, inter, mat, mat_idx, hit, ray_dir, vcm_cone_w, st.beta, st.cur_med_idx,
+                                               st.wl, st.dvcm, st.dvc, st.dvm)
+            var v = lh.v
+            var gn = lh.gn; var gn_geo = lh.gn_geo
+            var spawn_eps = lh.spawn_eps; var on_curve = lh.on_curve; var eff_alb = lh.eff_alb
             v.dVCM = st.dvcm; v.dVC = st.dvc; v.dVM = st.dvm
             if v.is_delta != Int32(0):
                 if st.n_verts + st.n_delta >= _vcm_depth(sd):
@@ -692,7 +800,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 comptime if _VCM_CAMIS:
                     # Before merge/connect: S3's weights at this vertex read
                     # its log P(y) and the finalised records below it.
-                    camis_cam_arrive(camis, camis_recs, st.n_verts - 1, st.dvcm, cos_fix, t_hit,
+                    camis_cam_arrive(camis, camis_recs, st.n_verts - 1, st.dvcm, lh.cos_fix, t_hit,
                                      _bdpt_vertex_mis_scoped(v))
                 # Merging queries the GLOBAL photon grid and does not use this
                 # pixel's own paired light path, so unlike the connect below it
@@ -832,41 +940,14 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             if mat.sss_boundary != Int8(0) and Int(st.cur_med_idx) < 0 and has_med:
                 var med_in = medium_after_crossing(ray_dir, inter, sd.meshes, mat, sd, hit)
                 if med_in >= Int32(0) and Int(med_in) < Int(sd.mediumCount):
-                    var gn_e = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
-                    if dot(gn_e, ray_dir) > Float32(0): gn_e = gn_e * Float32(-1)
-                    var cos_e = abs(dot(-ray_dir, gn_e))
-                    # Arrival at the entry, as at any surface vertex.
-                    (st.dvcm, st.dvc, st.dvm) = vcm_arrival_carries(
-                        st.dvcm, st.dvc, st.dvm, cos_e)
-                    var eta_e = mat.albedo.r
-                    var ex = _bdpt_sample_bssrdf_exit(sd, Int(med_in), hit, gn_e, cos_e, eta_e, pcg)
+                    var ex = _vcm_bssrdf_hop(sd, inter, mat, hit, ray_dir, Int(med_in), mis_vc_weight_factor, pcg, st.wl,
+                                             st.beta, st.dvcm, st.dvc, st.dvm)
                     if not ex.ok:
                         return False
-                    st.beta *= spec_refl_unbounded(
-                        sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x,
-                        sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65,
-                        ex.weight.r, ex.weight.g, ex.weight.b, st.wl)
-                    var (h0, h1, h2) = bssrdf_hop_carries[dvc0=_VCM_CAMIS](
-                        st.dvcm, st.dvc, st.dvm, ex.p_area, cos_e * INV_PI, mis_vc_weight_factor)
-                    st.dvcm = h0
-                    st.dvc = h1
-                    st.dvm = h2
+                    var eta_e = mat.albedo.r
                     var x_o = ex.x_o
                     var n_o = ex.n_o
-                    var v = _null_vertex()
-                    v.pos = x_o
-                    v.normal = vec3f(n_o)
-                    v.shading_normal = vec3f(n_o)
-                    v.beta = st.beta
-                    v.alb = RGB(Float32(1))
-                    v.is_surface = Int32(1)
-                    v.mat_kind = LobeKind.bssrdf
-                    v.pdf_fwd = ex.p_area      # reverse density toward x_i (hop is symmetric)
-                    v.pdf_bwd = eta_e
-                    v.wo = vec3f(n_o)          # unused by LobeKind.bssrdf
-                    v.med_idx = st.cur_med_idx
-                    v.wavelengths = st.wl
-                    v.dVCM = st.dvcm; v.dVC = st.dvc; v.dVM = st.dvm
+                    var v = _vcm_bssrdf_vertex(ex, eta_e, st.beta, st.cur_med_idx, st.wl, st.dvcm, st.dvc, st.dvm)
                     if st.n_verts == 0: st.first_alb = mat.sss_mean_refl
                     if st.n_verts + st.n_delta >= _vcm_depth(sd):
                         return False   # a vertex past d starts no strategy (see _vcm_depth)
@@ -887,18 +968,9 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                                               v.dVCM, v.dVC, st.cur_med_idx, scratch, st.wl, pcg,
                                               offset_eps(x_o.x, x_o.y, x_o.z), False, eta_e)
                     # Continue with the exit lobe: cosine-sampled, weight Ft(cos_out).
-                    var ux1 = pcg.next_float(); var ux2 = pcg.next_float()
-                    st.rd = vec3f(_cosine_hemisphere_sample(n_o, ux1, ux2))
-                    st.ro = x_o + st.rd * Float32(0.0002)
-                    var cos_out_x = abs(dot(st.rd.to_simd(), n_o))
+                    var cos_out_x = _vcm_bssrdf_exit_scatter(sd, ex, eta_e, mis_vc_weight_factor, mis_vm_weight_factor, pcg,
+                                                             st.ro, st.rd, st.beta, st.dvcm, st.dvc, st.dvm)
                     st.last_bsdf_pdf = cos_out_x * INV_PI
-                    st.beta *= SpectralSample(bssrdf_exit_ft(cos_out_x, eta_e))
-                    var (c0, c1, c2) = bssrdf_exit_scatter_carries[dvc0=_VCM_CAMIS](
-                        st.dvcm, st.dvc, st.dvm, ex.p_area, cos_out_x,
-                        mis_vc_weight_factor, mis_vm_weight_factor * _vcm_eta_scale(sd, x_o))
-                    st.dvcm = c0
-                    st.dvc = c1
-                    st.dvm = c2
                     did_bssrdf_hop = True
                     st.mnee.pdf0 = Float32(0)
             # Ordinary specular boundary, only when no hop was taken.
@@ -907,39 +979,9 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                     return False   # a delta vertex past d starts no strategy either
                 st.n_delta += 1
                 st.mnee.n_glass += 1
-                # pbrt's outward normal: interpolated N when the mesh has it
-                # (_shading_normal_at), which pbrt also refracts through.
-                var gn = _shading_normal_at(inter, sd.meshes, sd.instances, sd.spheres, hit)
-                # Bump/normal maps. barcelona's water is a `dielectric` with a
-                # "texture displacement", so this is THE branch the corpus
-                gn = apply_surface_maps_at_hit[use_gpu](mat, inter, sd.meshes, sd.instances,
-                    gn, gn, hit.to_simd(), ray_dir, vcm_cone_w, sd.camFp,
-                    sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
-                var (new_dir, new_org, radiance_scale, new_cur_ior, new_prev_ior) = _dielectric_bounce(
-                    ray_dir, hit.to_simd(), gn, mat.albedo.r, False, pcg, st.current_dielectric_ior, st.previous_dielectric_ior, mat.type == MatKind.thin_dielectric)
-                var n_in_out = st.current_dielectric_ior / new_cur_ior   # refraction compresses solid angle by (n_in/n_out)^2
-                st.current_dielectric_ior = new_cur_ior
-                st.previous_dielectric_ior = new_prev_ior
+                st.beta *= _vcm_dielectric_cross[use_gpu, True](sd, inter, mat, hit, ray_dir, vcm_cone_w, has_med, pcg,
+                    st.ro, st.rd, st.current_dielectric_ior, st.previous_dielectric_ior, st.cur_med_idx, st.dvcm, st.dvc, st.dvm)
                 st.last_bsdf_pdf = Float32(-1)  # delta bounce: no infinite-light NEE done here
-                # Specular vertex: no BSDF record needed, just track throughput.
-                # Camera path (Radiance mode): apply the non-symmetric-scattering
-                # correction (see _dielectric_bounce's docstring).
-                st.beta *= radiance_scale
-                if has_med:
-                    var new_idx = medium_after_crossing(ray_dir, inter, sd.meshes, mat, sd, hit)
-                    if mat.medium_interface_idx >= Int32(0): st.cur_med_idx = new_idx
-                st.rd = vec3f(new_dir)
-                st.ro = point3f(new_org)
-                # VCM Stage 2b: genuinely delta/specular, matches SmallVCM's own
-                # specular-bounce handling directly.
-                var cos_fix_d = abs(dot(-ray_dir, gn))
-                if cos_fix_d > Float32(1e-6):
-                    st.dvc /= cos_fix_d
-                    st.dvm /= cos_fix_d
-                var cos_theta_out_d = abs(dot(new_dir, gn)) * n_in_out * n_in_out
-                st.dvcm = Float32(0)
-                st.dvc *= cos_theta_out_d
-                st.dvm *= cos_theta_out_d
 
         elif mat.type == MatKind.interface:
             if has_med:
