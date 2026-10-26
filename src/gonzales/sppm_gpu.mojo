@@ -4,7 +4,6 @@
 from std.sys import has_accelerator
 from std.sys.info import size_of
 from max.gpu import block_dim
-from max.gpu.host import DeviceContext, DeviceBuffer
 from std.math import max, min, ceildiv
 from std.memory.alloc import unsafe_alloc
 from .materials import LobeKind
@@ -15,9 +14,8 @@ from .bvh import SceneView
 from .sampling import film_filter_of
 from .footprint import camera_footprint
 from .pbrt_parser import ParsedScene_Mojo
-from .sppm import _HSIZE, SPPMPixel, SPPMPhoton, _vp_samples_for, _VP_SAMPLES, _MAX_B, _photon_depth_cap
+from .sppm import _HSIZE, SPPMPixel, SPPMPhoton, _vp_samples_for, _VP_SAMPLES, _photon_depth_cap
 from .gpu_scene import GpuSceneHandle
-from max.gpu.host._nvidia_cuda import CUDA
 from .progress import Progress
 from .outputs import finish_render
 from .sppm_kernels import (
@@ -58,16 +56,14 @@ def sppm_render_gpu(
                 default_emit_med = iface.outside_medium_idx
                 break
 
-    # A BSSRDF visible point gathers out to the material's DIFFUSION reach,
-    # which for skin is several times the SPPM radius this scene would
+    # A BSSRDF visible point gathers out to the material's diffusion reach, often far past the SPPM radius.
     var eff_radius = initial_radius
     for _mi in range(Int(sd.mediumCount)):
         if sd.mediums[unsafe_offset=_mi].is_sss != Int32(0):
             var _rq = dipole_max_radius(sd.mediums[unsafe_offset=_mi].sigma_s, sd.mediums[unsafe_offset=_mi].sigma_a, sd.mediums[unsafe_offset=_mi].g)
             if _rq > eff_radius:
                 eff_radius = _rq
-    # init_r2 stays on the SCENE's radius -- widening it would blur every
-    # ordinary surface visible point in the scene. Only the grid CELLS grow,
+    # init_r2 stays on the scene's radius, or every surface visible point would blur; only the grid cells grow.
     var init_r2 = initial_radius * initial_radius
     var inv_cell = Float32(1.0) / eff_radius
     if verbose:
@@ -85,18 +81,14 @@ def sppm_render_gpu(
             var vp_samples = 1 if retrace else _vp_samples_for(n_pix, True)
             var n_vps = n_pix * vp_samples
             print("SPPM (GPU): " + ("one retraced visible point per pixel per pass" if retrace else String(vp_samples) + " visible points per pixel"))
-            # Sized for the worst case, mirroring sppm.mojo's CPU driver
-            # (_sppm_render_core) exactly -- see its comment for why
+            # Sized for the worst case, as the CPU driver (_sppm_render_core) does.
             var max_bounces_per_photon = min(Int(psc[unsafe_offset=0].max_depth), _photon_depth_cap(sd))
-            # A subsurface interior blows this budget wide open: its random-walk
-            # steps are deliberately NOT charged to maxdepth (see
+            # Subsurface random-walk steps are not charged to maxdepth, so they need their own budget.
             var has_sss_medium = False
             for mi in range(Int(sd.mediumCount)):
                 if sd.mediums[unsafe_offset=mi].is_sss != Int32(0):
                     has_sss_medium = True
                     break
-            # (The "--sppm + subsurface is unsupported" warning that stood here
-            # was WRONG and has been removed. It rested on one experiment --
             if has_sss_medium:
                 max_bounces_per_photon += SSS_WALK_ROUNDS
             var max_photons = n_photons_per_pass * max(max_bounces_per_photon, 1)
@@ -149,8 +141,7 @@ def sppm_render_gpu(
             var grid_vps = ceildiv(n_vps, block_size)
             var grid_hsize = ceildiv(_HSIZE, block_size)
 
-            # Camera/visible-point samples are traced ONCE for the whole
-            # render, not per SPPM pass — see _sppm_trace_visible_point's
+            # Visible points are traced once per render, not per pass, unless retraced.
             var cam_seed = psc[unsafe_offset=0].rng_seed ^ UInt64(0x9E3779B97F4A7C15 + 7)
             if not retrace:
                 handle[].ctx.enqueue_function[sppm_gen_vp_gpu](
@@ -207,8 +198,7 @@ def sppm_render_gpu(
                 with counter_buf.map_to_host() as host_buf:
                     var src = host_buf.unsafe_ptr().unsafe_bitcast[Int32]()
                     n_stored_raw = src[unsafe_offset=0]
-                # A silent clamp is how dropped deposits stay invisible: the
-                # estimator still divides by the FULL emitted count, so the
+                # Dropped deposits still count in the emitted total, so the image darkens: say so.
                 if Int(n_stored_raw) > max_photons:
                     print("Warning: SPPM photon buffer saturated ("
                           + String(n_stored_raw) + " deposits into "
@@ -269,8 +259,7 @@ def sppm_render_gpu(
                 spectral_coeffs, Int64(spectral_res), spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
                 grid_dim=grid_pix, block_dim=block_size)
             handle[].ctx.synchronize()
-            # --- why-is-this-pixel-black diagnostic -------------------------
-            # Four hypotheses about SPPM's remaining black pixels were refuted
+            # Verbose: count pixels without visible points, photons or light.
             if verbose:
                 var n_novp = 0; var n_nophot = 0; var n_dark = 0; var n_tot = 0; var n_envonly = 0; var n_bssrdf = 0; var n_bssrdf_lit = 0; var n_bssrdf_nan = 0
                 with vps_buf.map_to_host() as vh:
@@ -295,8 +284,7 @@ def sppm_render_gpu(
                                 if ts > Float32(0): n_bssrdf_lit += 1
                                 elif ts != ts: n_bssrdf_nan += 1
                         if not any_valid:
-                            # Split the no-VP case: a camera ray that MISSES all
-                            # geometry legitimately has no visible point and
+                            # A ray that misses everything has no visible point but may see the env.
                             if not any_light: n_novp += 1
                             else: n_envonly += 1
                         elif not any_phot and not any_light: n_dark += 1
@@ -318,36 +306,17 @@ def sppm_render_gpu(
                       + " | VP but zero photons AND no light: " + String(n_dark)
                       + " | VP with light but zero photons: " + String(n_nophot)
                       + " || BSSRDF VPs: " + String(n_bssrdf) + " of which tau>0: " + String(n_bssrdf_lit) + " NaN: " + String(n_bssrdf_nan))
-            # Keep these device buffers alive (Mojo's ASAP destruction would
-            # otherwise free them right after their own last syntactic
+            # Keep the device buffers alive until the kernels that use them are done.
             _ = vps_buf^; _ = photons_buf^; _ = heads_buf^
             _ = inter_cam_buf^; _ = inter_ph_buf^; _ = r2c_buf^; _ = c2w_buf^
 
             var out_pixels = unsafe_alloc[Float32](n_pix * 3)
-            with out_buf.map_to_host() as host_buf:
-                var src = host_buf.unsafe_ptr()
-                var dst = out_pixels.unsafe_bitcast[UInt8]()
-                for i in range(n_pix * 3 * size_of[Float32]()):
-                    dst[unsafe_offset=i] = src[unsafe_offset=i]
-
-            # Global/caustic split -- see _sppm_finalize_one_pixel's
-            # docstring and project_water_caustic_sppm_gap memory. Only
             var caustic_pixels = unsafe_alloc[Float32](n_pix * 3)
-            with caustic_buf.map_to_host() as host_buf:
-                var src = host_buf.unsafe_ptr()
-                var dst = caustic_pixels.unsafe_bitcast[UInt8]()
-                for i in range(n_pix * 3 * size_of[Float32]()):
-                    dst[unsafe_offset=i] = src[unsafe_offset=i]
-
-            # Denoise (never wired up before -- no_denoise was a dead
-            # parameter): read back the albedo AOV finalized above, run a
             var albedo_pixels = unsafe_alloc[Float32](n_pix * 3)
-            with albedo_out_buf.map_to_host() as host_buf:
-                var src = host_buf.unsafe_ptr()
-                var dst = albedo_pixels.unsafe_bitcast[UInt8]()
-                for i in range(n_pix * 3 * size_of[Float32]()):
-                    dst[unsafe_offset=i] = src[unsafe_offset=i]
-
+            handle[].ctx.enqueue_copy(out_pixels.unsafe_bitcast[UInt8](), out_buf)
+            handle[].ctx.enqueue_copy(caustic_pixels.unsafe_bitcast[UInt8](), caustic_buf)
+            handle[].ctx.enqueue_copy(albedo_pixels.unsafe_bitcast[UInt8](), albedo_out_buf)
+            handle[].ctx.synchronize()
             _ = finish_render(psc, sd, out_pixels, albedo_pixels, no_denoise, caustic_pixels)
             out_pixels.unsafe_free(); caustic_pixels.unsafe_free(); albedo_pixels.unsafe_free()
         except e:
