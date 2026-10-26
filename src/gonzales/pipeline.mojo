@@ -3430,9 +3430,10 @@ def session_set_lens(s: SessionPtr, radius: Float32, focal_distance: Float32):
 def session_set_clamp(s: SessionPtr, clamp: Float32):
     """Cycles' Clamp Indirect: a limit on each indirect light contribution (shading._clamped); 0 is off."""
     ref h = s[].renderer.handle[]
-    if clamp == h.clamp[1]:
+    var limit = clamp * Float32(3)   # Cycles' kernel limit on the channel sum is three times the setting (integrator.cpp)
+    if limit == h.clamp[1]:
         return
-    h.clamp[1] = clamp
+    h.clamp[1] = limit
     session_clear(s)
 
 def session_set_adaptive(s: SessionPtr, threshold: Float32, min_samples: Int32):
