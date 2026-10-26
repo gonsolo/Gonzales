@@ -135,8 +135,8 @@
     "tol": 0.03
   },
   "normal-map.pt": {
-    "mean": 0.076281,
-    "median": 0.02269,
+    "mean": 0.074518,
+    "median": 0.021876,
     "tol": 0.03
   },
   "normal-map.sppm": {
