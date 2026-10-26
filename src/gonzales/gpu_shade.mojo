@@ -15,7 +15,7 @@ from .restir_di import DIReservoir, ReservoirIO, reservoir_io_null
 from .restir_gi import gi_reservoir_io_null
 from .rng import PCG32
 from .footprint import CameraFootprint
-from .shading import GIPendingX1, LightContext, ShadeContext, _shade_sss_exit, shade_coated_conductor, shade_coated_diffuse, shade_conductor, shade_core, shade_dielectric, shade_diffuse, shade_diffuse_transmission, shade_hair, shade_interface, shade_measured, shade_nee_core, shade_thin_dielectric, _mnee_first_probe, _mnee_owns_path
+from .shading import GIPendingX1, LightContext, ShadeContext, _shade_sss_exit, shade_coated_conductor, shade_coated_diffuse, shade_conductor, shade_core, shade_dielectric, shade_diffuse, shade_diffuse_transmission, shade_hair, shade_interface, shade_measured, shade_nee_core, shade_thin_dielectric, _mnee_first_probe, _mnee_bsdf_weight
 from .spectrum import SpectralHandle
 from max.gpu import block_dim, block_idx, thread_idx
 from .gpu_scene import GpuSceneHandle
@@ -135,14 +135,14 @@ def resolve_suppress_gpu(
              + Vec3f(path_ptr[].ray.direction.x, path_ptr[].ray.direction.y, path_ptr[].ray.direction.z) * inter.tHit
     var seg = hp - x0
     var seg_len = sqrt(dot(seg, seg))
-    var owned = False
+    var w = Float32(1.0)
     if seg_len > Float32(0.0001):
         var seg_dir = seg * (Float32(1.0) / seg_len)
         var (glass, pr) = _mnee_first_probe(ctx, x0, seg_dir, seg_len)
         if glass:
-            owned = _mnee_owns_path(ctx, path_ptr, inter, pr, seg_dir, seg_len, hp)
-    if not owned:
-        path_ptr[].estimate += tasks[unsafe_offset=tid].contrib
+            w = _mnee_bsdf_weight(ctx, path_ptr, inter, pr, seg_dir, seg_len, hp)
+    if w > Float32(0.0):
+        path_ptr[].estimate += tasks[unsafe_offset=tid].contrib * w
 
 
 # ── Per-material GPU kernels (G1) ─────────────────────────────────────────────

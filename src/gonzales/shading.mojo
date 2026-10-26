@@ -3866,7 +3866,7 @@ def _sms_solve_from_probe(
         verts1[0] = v1
         if is_sphere1:
             # A curved caster needs sms_walk's curvature-aware Newton solve. One deterministic seed finds one root;
-            # the BSDF keeps the paths of the others (see _mnee_owns_path), so a caster with many roots stays unbiased.
+            # the BSDF keeps the paths of the others (see _mnee_bsdf_weight), so a caster with many roots stays unbiased.
             var w1 = sms_walk(hit_point, light_point, verts1, 1, ldp_du_v, ldp_dv_v,
                 ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves, ctx.blasNodesArr, ctx.blasPrimIdsArr, ctx.instances,
                 ctx.lights.spheres, ctx.lights.sphere_count)
@@ -4001,35 +4001,80 @@ def _sms_solve_from_probe(
         return (True, False, n_total, verts.copy(), Float32(0.0), Float32(0.0), Float32(0.0))
     return (True, True, n_total, verts.copy(), sms_bsdf, sms_jac, sms_trials)
 
+@always_inline
+def _mnee_chain_g(x0: Vec3f, verts: Array[SMSVertex, MAX_SMS_VERTICES], dx1_dxlight: Float32) -> Float32:
+    """dw0/dA_light of a solved chain: solid angle at x0 per light area."""
+    # GEOMETRIC normal, as in the reference's geometric term: a normal map changes the BSDF, not the surface's area.
+    var first_normal = verts[0].normal
+    if verts[0].is_sphere != Int8(0):
+        var gnv = verts[0].pos - verts[0].sphere_center
+        var gnl = sqrt(dot(gnv, gnv))
+        if gnl > Float32(1e-8):
+            first_normal = gnv * (Float32(1.0) / gnl)
+    elif verts[0].mesh_idx >= Int32(0):
+        # dx1_dxlight measures area in the triangle's own tangents
+        var tn = cross(verts[0].dp_du, verts[0].dp_dv)
+        var tnl = sqrt(dot(tn, tn))
+        if tnl > Float32(1e-8):
+            first_normal = tn * (Float32(1.0) / tnl)
+    var wi = x0 - verts[0].pos
+    var wi_len2 = dot(wi, wi)
+    if wi_len2 <= Float32(1e-16):
+        return Float32(0.0)
+    return abs(dot(wi, first_normal)) / (wi_len2 * sqrt(wi_len2)) * dx1_dxlight
+
+@always_inline
+def _mnee_mis_weight(
+    normal: Vec3f, x0: Vec3f, verts: Array[SMSVertex, MAX_SMS_VERTICES], n: Int, g: Float32, pdf_area: Float32,
+) -> Float32:
+    """Power-heuristic weight of MNEE against BSDF sampling for one solved chain; the BSDF path gets one minus it.
+    The solve is deterministic, so MNEE's density is the light's area density over g, and both sides evaluate this on
+    the same chain: the weights sum to one. BSDF sampling: diffuse at x0, then refraction picked with 1 - F."""
+    if g <= Float32(0.0) or pdf_area <= Float32(0.0):
+        return Float32(1.0)
+    var d = verts[0].pos - x0
+    var p_bsdf = bxdf_pdf_diffuse(dot(normal, d) / sqrt(max(dot(d, d), Float32(1e-30))))
+    for i in range(n):
+        var prev = x0 if i == 0 else verts[i-1].pos
+        var wi = prev - verts[i].pos
+        var cos_i = abs(dot(verts[i].normal, wi)) / sqrt(max(dot(wi, wi), Float32(1e-30)))
+        p_bsdf *= Float32(1.0) - fr_dielectric(cos_i, verts[i].eta)
+    return power_heuristic(pdf_area / g, p_bsdf)
+
 @no_inline
-def _mnee_owns_path(
+def _mnee_bsdf_weight(
     ctx: ShadeContext, path_ptr: Pointer[PathState, MutUntrackedOrigin], inter: Intersection, probe_inter: Intersection,
     seg_dir: Vec3f, seg_len: Float32, light_hit: Vec3f,
-) -> Bool:
-    """Whether MNEE samples the very path this BSDF ray took to the emitter (so the BSDF contribution must be dropped).
+) -> Float32:
+    """The weight of this BSDF path to the emitter against MNEE, which may sample the very same path.
 
-    The straight-line probe seeds the same manifold solve that last_ns_p's NEE ran for this light point. Dropping every
-    BSDF path whose first surface is glass loses the ones MNEE cannot solve for (another chain topology, no root); so
-    drop only when the solve succeeds AND ends at the vertex this ray left from, through as many specular vertices.
-    The solve is deterministic, so this is exactly the set NEE's MNEE contributes, whatever the number of roots."""
+    The straight-line probe seeds the same manifold solve that last_ns_p's NEE ran for this light point. If it ends at
+    the vertex this ray left from, through as many specular vertices, MNEE samples this path too and the two share it
+    by MIS (_mnee_mis_weight); any other path (another topology, another root, no root) is the BSDF's alone."""
     var (lmesh, lv0, lv1, lv2, _) = _get_tri_verts(inter, ctx.meshes)
     var lp0 = mesh_pos(lmesh, lv0)
     var lp1 = mesh_pos(lmesh, lv1)
     var lp2 = mesh_pos(lmesh, lv2)
     var (l_du, l_dv) = mnee_orthonormal_basis(lp1 - lp0, lp2 - lp0)
     var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
-    var res = _sms_solve_from_probe(ctx, path_ptr[].last_ns_p, seg_dir, seg_len, light_hit, l_du, l_dv, pcg, probe_inter)
+    var x0 = path_ptr[].last_ns_p
+    var res = _sms_solve_from_probe(ctx, x0, seg_dir, seg_len, light_hit, l_du, l_dv, pcg, probe_inter)
     if not res[0]:
-        return True
+        return Float32(0.0)
     var n = res[2]
     if Int(path_ptr[].ns_spec) != n or not res[1]:
-        return False
+        return Float32(1.0)
     var verts = res[3].copy()
     var o = path_ptr[].ray.origin
     var d = verts[n-1].pos - Vec3f(o.x, o.y, o.z)
-    var r = Vec3f(o.x, o.y, o.z) - path_ptr[].last_ns_p
-    var tol2 = Float32(1e-4) * dot(r, r)   # 1% of the distance: another root of the same chain is further away
-    return dot(d, d) <= tol2
+    var r = Vec3f(o.x, o.y, o.z) - x0
+    if dot(d, d) > Float32(1e-4) * dot(r, r):   # 1% of the distance: another root of the same chain is further away
+        return Float32(1.0)
+    var al_idx = Int(inter.primId.id1)
+    var al = ctx.lights.area_lights[unsafe_offset=al_idx]
+    var pdf_area = light_sampler_pdf_at(ctx.lights.light_sampler, Int32(al_idx), x0) / max(al.total_area, Float32(1e-30))
+    var g = _mnee_chain_g(x0, verts, res[5])
+    return Float32(1.0) - _mnee_mis_weight(path_ptr[].last_ns_n, x0, verts, n, g, pdf_area)
 
 
 @always_inline
@@ -4143,23 +4188,6 @@ def _mnee_area_light_contribute(
     # general N-vertex walk (Phase 5.1's own module docstring explains why
     # the two are physically the same quantity, just chain-length-general).
     var first_vertex = verts[0].pos
-    # GEOMETRIC normal, matching the reference's own geometric term
-    # (`dw0_dx1 = abs_dot(d, v1.gn) * inv_r2` -- v1.gn, not the shading
-    # normal). They differ on a normal-mapped caster, where `normal` carries
-    # the map's perturbation; a solid-angle-to-area conversion is a property
-    # of the SURFACE, not of the normal the BSDF is shaded with.
-    var first_normal = verts[0].normal
-    if verts[0].is_sphere != Int8(0):
-        var gnv = verts[0].pos - verts[0].sphere_center
-        var gnl = sqrt(dot(gnv, gnv))
-        if gnl > Float32(1e-8):
-            first_normal = gnv * (Float32(1.0) / gnl)
-    elif verts[0].mesh_idx >= Int32(0):
-        # dx1_dxlight measures area in the triangle's own tangents
-        var tn = cross(verts[0].dp_du, verts[0].dp_dv)
-        var tnl = sqrt(dot(tn, tn))
-        if tnl > Float32(1e-8):
-            first_normal = tn * (Float32(1.0) / tnl)
     var last_vertex = verts[n-1].pos
     var wi_f = hit_point - first_vertex
     var wi_len = sqrt(dot(wi_f, wi_f))
@@ -4169,8 +4197,7 @@ def _mnee_area_light_contribute(
     var cos_s_x0 = dot(normal, -wi_fn)
     if cos_s_x0 <= Float32(0.0):
         return True
-    var dw0_dx1 = abs(dot(wi_fn, first_normal)) / (wi_len * wi_len)
-    var g = dw0_dx1 * dx1_dxlight
+    var g = _mnee_chain_g(hit_point, verts, dx1_dxlight)
     var wo_f = light_point - last_vertex
     var wo_len = sqrt(dot(wo_f, wo_f))
     if wo_len <= Float32(1e-8):
@@ -4192,10 +4219,9 @@ def _mnee_area_light_contribute(
                           ctx.lights.spheres, ctx.lights.sphere_count,
                           ign_center, ign_radius, materials=ctx.materials):
         return True
-    # Phase 5.5: no MIS weight -- the refracted path is a specular chain
-    # that BSDF sampling effectively never reproduces, so there is no
-    # competing strategy to balance against. `trials` is always 1.0.
-    var mnee_wt = _to_spec_diffuse_lit(ctx, alb, al.emission, path_ptr[].wavelengths) * (cos_s_x0 * g * bsdf_product * lobe_w * inv_pdf_area * trials)
+    # MIS against the BSDF path through the same chain (_mnee_bsdf_weight gives it the rest). `trials` is always 1.0.
+    var w_mnee = _mnee_mis_weight(normal, hit_point, verts, n, g, Float32(1.0) / inv_pdf_area)
+    var mnee_wt = _to_spec_diffuse_lit(ctx, alb, al.emission, path_ptr[].wavelengths) * (cos_s_x0 * g * bsdf_product * lobe_w * inv_pdf_area * trials * w_mnee)
     path_ptr[].estimate += _clamped(ctx, path_ptr[].throughput * mnee_wt, Int(path_ptr[].bounce))
     return True
 
@@ -5598,6 +5624,7 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
         var al = ctx.lights.area_lights[unsafe_offset=al_idx]
         var emission = al.emission
         var ns_n = path_ptr[].last_ns_n
+        var mnee_w_b = Float32(1.0)   # this path's share against MNEE through the same glass chain
         if _mnee_live(ctx) and path_ptr[].specularBounce == Int8(1) and dot(ns_n, ns_n) > Float32(0.0) and al.kind == Int8(0):
             # This arrived through a specular chain from a vertex that
             # delegates such paths to MNEE/SMS. Drop it exactly when MNEE
@@ -5650,12 +5677,7 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
                                 path_ptr[].active = 0
                                 return
                             else:
-                                if _mnee_owns_path(ctx, path_ptr, inter, pr, seg_dir, seg_len, hp):
-                                    if mat.type == MatKind.lamp:   # the ray goes on (Cycles' shade_light.h)
-                                        shade_interface(path_ptr, inter)
-                                        return
-                                    path_ptr[].active = 0
-                                    return
+                                mnee_w_b = _mnee_bsdf_weight(ctx, path_ptr, inter, pr, seg_dir, seg_len, hp)
         # A pbrt area light emits from its FRONT face only
         # (DiffuseAreaLight::L: `if (!twoSided && Dot(n, w) < 0) return 0`).
         # The MIS branch below has always enforced that via its own
@@ -5672,8 +5694,8 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
             var edir = Vec3f(path_ptr[].ray.direction.x, path_ptr[].ray.direction.y, path_ptr[].ray.direction.z)
             e_front = area_light_hit_cos(inter, ctx.meshes, ctx.instances, edir) > Float32(0.0)
         if path_ptr[].bounce == 0 or path_ptr[].specularBounce == Int8(1):
-            if e_front:
-                path_ptr[].estimate += _clamped(ctx, path_ptr[].throughput * _to_spec_illum(ctx, emission, path_ptr[].wavelengths), Int(path_ptr[].bounce) - 1)
+            if e_front and mnee_w_b > Float32(0.0):
+                path_ptr[].estimate += _clamped(ctx, path_ptr[].throughput * _to_spec_illum(ctx, emission, path_ptr[].wavelengths) * mnee_w_b, Int(path_ptr[].bounce) - 1)
         else:
             var pdf_bsdf = path_ptr[].lastBsdfPdf
             if pdf_bsdf > Float32(0.0):
