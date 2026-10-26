@@ -954,6 +954,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                     sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
                 var (new_dir, new_org, radiance_scale, new_cur_ior, new_prev_ior) = _dielectric_bounce(
                     ray_dir, hit.to_simd(), gn, mat.albedo.r, False, pcg, current_dielectric_ior, previous_dielectric_ior, mat.type == MatKind.thin_dielectric)
+                var n_in_out = current_dielectric_ior / new_cur_ior   # refraction compresses solid angle by (n_in/n_out)^2
                 current_dielectric_ior = new_cur_ior
                 previous_dielectric_ior = new_prev_ior
                 n_bounces += 1
@@ -973,7 +974,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 if cos_fix_d > Float32(1e-6):
                     dvc_carry /= cos_fix_d
                     dvm_carry /= cos_fix_d
-                var cos_theta_out_d = abs(dot(new_dir, gn))
+                var cos_theta_out_d = abs(dot(new_dir, gn)) * n_in_out * n_in_out
                 dvcm_carry = Float32(0)
                 dvc_carry *= cos_theta_out_d
                 dvm_carry *= cos_theta_out_d
