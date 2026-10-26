@@ -95,13 +95,13 @@
     "tol": 0.03
   },
   "many-lights.sppm": {
-    "mean": 0.699478,
-    "median": 0.488488,
+    "mean": 0.699479,
+    "median": 0.488489,
     "tol": 0.03
   },
   "many-lights.vcm": {
-    "mean": 0.684151,
-    "median": 0.533248,
+    "mean": 0.688278,
+    "median": 0.550136,
     "tol": 0.03
   },
   "medium-sphere-light.pt": {
@@ -111,7 +111,7 @@
   },
   "medium-sphere-light.sppm": {
     "mean": 0.023252,
-    "median": 0.007960,
+    "median": 0.00796,
     "tol": 0.03
   },
   "medium-sphere-light.vcm": {

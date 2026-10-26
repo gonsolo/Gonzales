@@ -218,6 +218,7 @@ def test_wavefront_split_matches_original_camera_path_closely() raises:
     var current_dielectric_ior = state.current_dielectric_ior
     var previous_dielectric_ior = state.previous_dielectric_ior
     var cone_len = state.cone_len
+    var mnee = state.mnee
     var wavelengths = SampledWavelengths(state.wl0, state.wl1, state.wl2, state.wl3)
 
     # CAMIS state (inert unless _VCM_CAMIS), threaded like the carries.
@@ -254,7 +255,7 @@ def test_wavefront_split_matches_original_camera_path_closely() raises:
             first_alb, n_verts, n_delta, n_bounces, cur_med_idx,
             dvcm, dvc, dvm, prev_was_volume, last_bsdf_pdf, mis_null_dist,
             current_dielectric_ior, previous_dielectric_ior, wavelengths, cone_len,
-            camis, camis_recs,
+            camis, camis_recs, mnee,
         )
         active = Int8(1) if cont else Int8(0)
 

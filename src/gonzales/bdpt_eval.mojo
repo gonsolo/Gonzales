@@ -1,19 +1,26 @@
 # BDPT/VCM per-vertex lobe evaluation, MIS scoping and the light-slot policy.
 # Part of the BDPT/VCM machinery that used to be one file (bdpt_*.mojo).
 
-from std.math import max, abs
-from .geometry import Point3f, Point2f, Vec3f, dot, PI
+from std.collections import Array
+from std.math import max, abs, sqrt, cos, sin
+from .geometry import Point3f, Point2f, Vec3f, RGB, dot, cross, PI
 from .materials import LobeKind
-from .primitives import Intersection
+from .primitives import Intersection, mesh_vi, mesh_pos
+from .lights import area_light_pick_triangle
+from .sppm import area_light_side_pdf
+from .shading import (
+    _shade_context, _mnee_first_probe, _mnee_chain, _mnee_chain_t_eta, _mnee_reproduce, _emitter_face_normal,
+)
+from .sms import SMSVertex, MAX_SMS_VERTICES
 from .bssrdf import bssrdf_exit_ft
 from .vcm_mis import MisPolicy
 from .bvh import (
     SceneView, _scene_bounding_sphere, LightSample, _sample_infinite_light_nee, light_path_count,
-    light_path_pick_pdf,
+    light_path_pick, light_path_pick_pdf,
 )
 from .rng import PCG32
 from .bxdf import LobeCtx, LobeEval, lobe_eval, lobe_scoped, nee_weight_lobe, LobeTables
-from .spectrum import SampledWavelengths, SpectralSample
+from .spectrum import SampledWavelengths, SpectralSample, spec_illum
 from .bdpt_vertex import BDPTVertex
 from .bdpt_nee import _bdpt_simple_light_count, _bdpt_sample_simple_light, _bdpt_nee_contribute
 
@@ -197,3 +204,163 @@ def _bdpt_connect_pair_weighted(cv: BDPTVertex, lv: BDPTVertex) -> Bool:
     return _bdpt_vertex_mis_scoped(cv) and (lv.is_light == Int32(1) or _bdpt_vertex_mis_scoped(lv))
 
 # ── Connect one camera vertex to one light vertex ─────────────────────────────
+
+
+# ── MNEE as one more VCM strategy ───────────────────────────────────────────
+# Scenes/vcm_mnee_mis_derivation.py derives every term below. MNEE draws its light point exactly like a light path's
+# origin (light_path_pick, then uniform on the light), so both strategies share that point's area density p_A.
+
+@always_inline
+def _vcm_sphere_of_slot(ref sd: SceneView, slot: Int) -> Int:
+    """The sphere index of sphere-light slot `slot` (_vcm_sphere_slot's inverse), -1 if there is none."""
+    var k = slot - Int(sd.areaLightCount)
+    for i in range(Int(sd.sphereCount)):
+        if sd.spheres[unsafe_offset=i].isAreaLight != Int8(0):
+            if k == 0:
+                return i
+            k -= 1
+    return -1
+
+
+@always_inline
+def _vcm_mnee_light_point(
+    ref sd: SceneView, slot: Int, mut pcg: PCG32,
+) -> Tuple[Bool, Vec3f, Vec3f, Vec3f, Vec3f, Float32, Float32, RGB]:
+    """A uniform point on the mesh or sphere light in light-path slot `slot`:
+    (ok, point, two tangents, unit emitting normal, area, emission-face probability, emission)."""
+    var z = Vec3f(Float32(0))
+    var none = (False, z, z, z, z, Float32(0), Float32(0), RGB(Float32(0)))
+    if slot < Int(sd.areaLightCount):
+        var al = sd.areaLights[unsafe_offset=slot]
+        if al.kind != Int8(0) or al.total_area <= Float32(0):
+            return none
+        var lmesh = sd.meshes[unsafe_offset=Int(al.meshIdx)]
+        var lb = area_light_pick_triangle(al, pcg.next_float()) * 3
+        var lv0 = Int(mesh_vi(lmesh, lb)); var lv1 = Int(mesh_vi(lmesh, lb + 1)); var lv2 = Int(mesh_vi(lmesh, lb + 2))
+        var lp0 = mesh_pos(lmesh, lv0); var lp1 = mesh_pos(lmesh, lv1); var lp2 = mesh_pos(lmesh, lv2)
+        var sr1 = sqrt(pcg.next_float()); var ru2 = pcg.next_float()
+        var bu = sr1 * (Float32(1) - ru2); var bv = sr1 * ru2
+        var ln = _emitter_face_normal(lmesh, lv0, lv1, lv2, bu, bv, lp0, lp1, lp2)
+        var lnl = sqrt(dot(ln, ln))
+        if lnl <= Float32(0):
+            return none
+        return (True, lp0 * (Float32(1) - bu - bv) + lp1 * bu + lp2 * bv, lp1 - lp0, lp2 - lp0, ln * (Float32(1) / lnl),
+                al.total_area, area_light_side_pdf(al), al.emission)
+    var si = _vcm_sphere_of_slot(sd, slot)
+    if si < 0:
+        return none
+    var sph = sd.spheres[unsafe_offset=si]
+    if sph.radius <= Float32(0):
+        return none
+    var cos_t = Float32(1) - Float32(2) * pcg.next_float()
+    var sin_t = sqrt(max(Float32(0), Float32(1) - cos_t * cos_t))
+    var phi = Float32(2) * PI * pcg.next_float()
+    var ln = Vec3f(sin_t * cos(phi), sin_t * sin(phi), cos_t)
+    return (True, sph.center.to_simd() + ln * sph.radius,
+            Vec3f(-sin_t * sin(phi), sin_t * cos(phi), Float32(0)) * sph.radius,
+            Vec3f(cos_t * cos(phi), cos_t * sin(phi), -sin_t) * sph.radius,
+            ln, Float32(4) * PI * sph.radius * sph.radius, Float32(1), sph.emission)
+
+
+@no_inline   # one copy of the solver in the camera bounce
+def _vcm_mnee(
+    ref sd: SceneView, v: BDPTVertex, hit_v: Vec3f, gn: Vec3f, beta: SpectralSample, mut pcg: PCG32,
+    wl: SampledWavelengths, eta_x: Float32, dvcm: Float32, dvc: Float32,
+) -> SpectralSample:
+    """MNEE from camera vertex `v` to a light behind glass, balance-weighted against BSDF sampling through the chain
+    and against every light-subpath strategy that reaches v through it. dvcm/dvc are v's arrival carries."""
+    var z = SpectralSample(Float32(0))
+    if sd.hasGlass == Int32(0):
+        return z
+    var (slot, p_pick) = light_path_pick(sd, pcg.next_float())
+    if p_pick <= Float32(0) or slot < 0 or slot >= Int(sd.areaLightCount) + Int(sd.sphereLightCount):   # -1: no lights
+        return z
+    var (ok, light_point, l_du, l_dv, ln, area, side, emission) = _vcm_mnee_light_point(sd, slot, pcg)
+    if not ok:
+        return z
+    var p_a = p_pick / area
+    var to_light = light_point - hit_v
+    var dist = sqrt(dot(to_light, to_light))
+    if dist < Float32(1e-4):
+        return z
+    var shadow_dir = to_light * (Float32(1) / dist)
+    var ctx = _shade_context(sd, Pointer[UInt32, MutUntrackedOrigin].unsafe_dangling())
+    var (glass, probe) = _mnee_first_probe(ctx, hit_v, shadow_dir, dist)
+    if not glass:
+        return z
+    var c = _mnee_chain(ctx, gn, hit_v, shadow_dir, dist, light_point, l_du, l_dv, pcg, probe)
+    if not c[1]:
+        return z
+    var n = c[2]
+    var verts = c[3].copy()
+    var wy = verts[n-1].pos - light_point
+    var cos_y = dot(ln, wy) / sqrt(max(dot(wy, wy), Float32(1e-30)))
+    if side < Float32(1):
+        cos_y = abs(cos_y)
+    if cos_y <= Float32(0):
+        return z
+    var w0 = verts[0].pos - hit_v
+    var le = _lobe_eval[want_pdfs=True](v, w0 * (Float32(1) / sqrt(dot(w0, w0))), sd, sd.spectral.coeffs, sd.spectral.res,
+        sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wl)
+    var (t_ch, eta_ch) = _mnee_chain_t_eta(hit_v, verts, n)
+    var g = c[5]
+    var w_light = le.pdf_fwd * t_ch * g / p_a
+    var w_camera = side / PI / (eta_ch * eta_ch) * c[6] * g * t_ch * (eta_x + dvcm + dvc * le.pdf_rev)
+    var w = Float32(1) / (w_light + Float32(1) + w_camera)
+    return (beta * le.f_cos
+        * spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, emission.r, emission.g, emission.b, wl)
+        * (g * c[4] / p_a * w))
+
+
+@no_inline
+def _vcm_mnee_hit_term(
+    ref sd: SceneView, x0: Vec3f, pdf_x0: Float32, n_glass: Int, last_glass: Vec3f, light_hit: Vec3f,
+    l_du: Vec3f, l_dv: Vec3f, p_a: Float32, mut pcg: PCG32,
+) -> Float32:
+    """MNEE's share in the weight of a camera path that reached light_hit from vertex x0 through n_glass glass
+    vertices: p_A / (p_bsdf (1 - F) g) when MNEE's solve reproduces the path, else 0."""
+    if sd.hasGlass == Int32(0) or n_glass <= 0 or pdf_x0 <= Float32(0):
+        return Float32(0)
+    var seg = light_hit - x0
+    var seg_len = sqrt(dot(seg, seg))
+    if seg_len < Float32(1e-4):
+        return Float32(0)
+    var ctx = _shade_context(sd, Pointer[UInt32, MutUntrackedOrigin].unsafe_dangling())
+    var (glass, probe) = _mnee_first_probe(ctx, x0, seg * (Float32(1) / seg_len), seg_len)
+    if not glass:
+        return Float32(0)
+    var rp = _mnee_reproduce(ctx, x0, n_glass, last_glass, light_hit, l_du, l_dv, probe, pcg)
+    if rp[0] != 1 or rp[3] <= Float32(0):
+        return Float32(0)
+    return p_a / (pdf_x0 * _mnee_chain_t_eta(x0, rp[2], rp[1])[0] * rp[3])
+
+
+@no_inline
+def _vcm_mnee_light_dvcm(
+    ref sd: SceneView, x0: Vec3f, n_geo: Vec3f, y: Vec3f, ny: Vec3f, side: Float32, n_glass: Int, first_glass: Vec3f,
+    mut pcg: PCG32,
+) -> Float32:
+    """dVCM on arriving at x0 for a light path that left light point y through n_glass glass vertices, the first at
+    first_glass: 1 / (p_emit (1 - F) J_light) when MNEE's solve from x0 reproduces that chain, else 0 (no share).
+    J_light = (n_x0 / n_y)^2 cos_x0 g / cos_y by etendue, and p_emit's cos_y / pi cancels its cos_y."""
+    if sd.hasGlass == Int32(0) or n_glass <= 0 or side <= Float32(0):
+        return Float32(0)
+    var seg = y - x0
+    var seg_len = sqrt(dot(seg, seg))
+    if seg_len < Float32(1e-4):
+        return Float32(0)
+    var ctx = _shade_context(sd, Pointer[UInt32, MutUntrackedOrigin].unsafe_dangling())
+    var (glass, probe) = _mnee_first_probe(ctx, x0, seg * (Float32(1) / seg_len), seg_len)
+    if not glass:
+        return Float32(0)
+    var a = Vec3f(Float32(1), Float32(0), Float32(0)) if abs(ny[0]) < Float32(0.9) else Vec3f(Float32(0), Float32(1), Float32(0))
+    var tu = cross(ny, a)
+    var rp = _mnee_reproduce(ctx, x0, n_glass, first_glass, y, tu, cross(ny, tu), probe, pcg)
+    if rp[0] != 1 or rp[3] <= Float32(0):
+        return Float32(0)
+    var (t_ch, eta_ch) = _mnee_chain_t_eta(x0, rp[2], rp[1])
+    var w0 = rp[2][0].pos - x0
+    var cos0 = abs(dot(n_geo, w0)) / sqrt(max(dot(w0, w0), Float32(1e-30)))
+    var den = side * cos0 * rp[3] * t_ch
+    return PI * eta_ch * eta_ch / den if den > Float32(0) else Float32(0)
+

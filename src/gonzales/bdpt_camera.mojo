@@ -3,10 +3,10 @@
 
 from std.collections import Array
 from std.math import sqrt, cos, sin, log, exp, max, abs
-from .geometry import offset_eps, face_toward, RGB, Point3f, Point2f, Vec3f, vec3f, point3f, Frame, dot, PI, INV_FOUR_PI, INV_PI
+from .geometry import offset_eps, face_toward, RGB, Point3f, Point2f, Vec3f, vec3f, point3f, Frame, dot, cross, PI, INV_FOUR_PI, INV_PI
 from .render_state import PDF_DELTA_FULL, PDF_DROP_DIRECT
 from .materials import Material, MatKind, LobeKind, dielectric_is_rough
-from .primitives import Ray, Intersection
+from .primitives import Ray, Intersection, mesh_pos
 from .media import sample_free_flight, spectral_free_flight_weight
 from .bssrdf import bssrdf_exit_ft
 from .vcm_mis import (
@@ -39,11 +39,11 @@ from .spectrum import (
     rgb_bands_to_spectral_sample,
 )
 from .bdpt_vertex import _VOL_PHASE_HIT, _BDPT_MAX_DEPTH, _BDPT_MAX_VERTS, BDPTVertex, _null_vertex
-from .bdpt_nee import (
-    _bdpt_simple_light_count, _bdpt_sample_simple_light, _bdpt_nee_contribute, _bdpt_mnee_diffuse_area_light,
-    _bdpt_mnee_sphere_light,
+from .bdpt_nee import _bdpt_simple_light_count, _bdpt_sample_simple_light, _bdpt_nee_contribute
+from .bdpt_eval import (
+    _vcm_sphere_slot, _vcm_infinite_slot, _vcm_nee_surface, _vertex_ctx, _bdpt_vertex_mis_scoped, _vcm_mnee,
+    _vcm_mnee_hit_term,
 )
-from .bdpt_eval import _vcm_sphere_slot, _vcm_infinite_slot, _vcm_nee_surface, _vertex_ctx, _bdpt_vertex_mis_scoped
 from .vcm_grid import _vcm_depth, _vcm_keep, _VCM_CAMIS, _CAMIS_CAM_RECS, _CAMIS_FORCE_C1, _vcm_eta_scale, _vcm_eta_at
 from .bdpt_connect import _bdpt_connect_to_cache, _bdpt_connect_to_cache_deferred
 from .vcm_merge import _bdpt_merge_from_cache
@@ -107,6 +107,7 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
     var current_dielectric_ior = st.current_dielectric_ior
     var previous_dielectric_ior = st.previous_dielectric_ior
     var cone_len = st.cone_len
+    var mnee = st.mnee
     var wavelengths = SampledWavelengths(st.wl0, st.wl1, st.wl2, st.wl3)
     if st.active == Int8(0):
         return (total, total_merge, first_alb, visit_naive, visit_footprint, visit_thin)
@@ -136,10 +137,23 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
             first_alb, n_verts, n_delta, n_bounces, cur_med_idx,
             dvcm_carry, dvc_carry, dvm_carry, prev_was_volume, last_bsdf_pdf, mis_null_dist,
             current_dielectric_ior, previous_dielectric_ior, wavelengths, cone_len,
-            camis, camis_recs, lvc_camis=lvc_camis, n_light_paths_f=n_light_paths_f):
+            camis, camis_recs, mnee, lvc_camis=lvc_camis, n_light_paths_f=n_light_paths_f):
             break
 
     return (total, total_merge, first_alb, visit_naive, visit_footprint, visit_thin)
+
+@fieldwise_init
+struct VCMMneeTrack(TrivialRegisterPassable):
+    """Where a camera path's glass chain began, for MNEE's share of an emitter hit at its end."""
+    var x0: Vec3f        # the last stored surface vertex
+    var pdf0: Float32    # its lobe's density for the direction taken; 0: MNEE does not start there
+    var n_glass: Int32   # dielectric vertices since
+
+
+@always_inline
+def vcm_mnee_track_none() -> VCMMneeTrack:
+    return VCMMneeTrack(Vec3f(Float32(0)), Float32(0), Int32(0))
+
 
 @fieldwise_init
 struct VCMCameraPathState(TrivialRegisterPassable):
@@ -178,6 +192,7 @@ struct VCMCameraPathState(TrivialRegisterPassable):
     # _bdpt_camera_path_bounce's `cone_len`.
     var cone_len: Float32
     var n_delta: Int32
+    var mnee: VCMMneeTrack
 
 def _bdpt_camera_path_init[use_gpu: Bool](
     r2c:     Pointer[Float32, MutUntrackedOrigin],
@@ -240,6 +255,7 @@ def _bdpt_camera_path_init[use_gpu: Bool](
         Float32(1.0), Float32(1.0),   # current_dielectric_ior, previous_dielectric_ior (vacuum)
         Float32(0.0),                 # cone_len
         Int32(0),                     # n_delta
+        vcm_mnee_track_none(),
     )
 
 def _vcm_scatter(
@@ -379,6 +395,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
     # Untouched when the hybrid is compiled out.
     mut camis: CamisCamCarry,
     mut camis_recs: Array[CamisCamRecord, _CAMIS_CAM_RECS],
+    mut mnee: VCMMneeTrack,
     # Task #163 stage 5: when set, the DIFFUSE branch's connect step queues
     # its shadow rays into these buffers (one _BDPT_MAX_VERTS-sized slice
     defer_shadow_rays: Bool = False,
@@ -473,6 +490,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                     Float32(4.0) * PI, INV_FOUR_PI, INV_FOUR_PI,
                     mis_vc_weight_factor, eta_v)
                 prev_was_volume = True
+                mnee.pdf0 = Float32(0)
                 if path_len > 0:
                     # BUG FIX (found investigating volumetric-caustic's
                     # colored-blob fireflies): merge is only safe to run
@@ -549,6 +567,11 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                         # EVERY strategy now that sphere lights start light
                         var aw_hit = Float32(4) * PI * sph_hit.radius * sph_hit.radius / light_path_pick_pdf(sd, _vcm_sphere_slot(sd, Int(inter.primId.id1)))
                         var w_cam_sph = pdf_cone * dvcm_carry / max(t_hit * t_hit, Float32(1e-12)) + dvc_carry / (PI * aw_hit)
+                        if last_bsdf_pdf == PDF_DELTA_FULL and mnee.pdf0 > Float32(0):
+                            var sn = (hit - sph_hit.center).to_simd() * (Float32(1) / sph_hit.radius)
+                            var st = cross(sn, Vec3f(Float32(1), Float32(0), Float32(0)) if abs(sn[0]) < Float32(0.9) else Vec3f(Float32(0), Float32(1), Float32(0)))
+                            w_cam_sph += _vcm_mnee_hit_term(sd, mnee.x0, mnee.pdf0, Int(mnee.n_glass), ro.to_simd(), hit.to_simd(),
+                                                            st, cross(sn, st), Float32(1) / aw_hit, pcg)
                         mis_w_sph_hit = Float32(1) / (Float32(1) + w_cam_sph)
                     elif last_bsdf_pdf < Float32(0):
                         pass   # delta bounce off a vertex with placeholder carries: unweighted, as before
@@ -590,6 +613,12 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                         # EVERY strategy -- not the 2-strategy power heuristic
                         var p_a = light_path_pick_pdf(sd, al_slot) / al_area
                         var emission_pdf_w = p_a * cos_l_hit * INV_PI * area_light_side_pdf(sd.areaLights[unsafe_offset=al_slot])
+                        var mnee_t = Float32(0)   # MNEE through the glass chain behind this hit, if it reproduces it
+                        if last_bsdf_pdf == PDF_DELTA_FULL and mnee.pdf0 > Float32(0) and not is_curve:
+                            var (lmesh_h, lv0_h, lv1_h, lv2_h, _) = _get_tri_verts(inter, sd.meshes)
+                            var lp0_h = mesh_pos(lmesh_h, lv0_h)
+                            mnee_t = _vcm_mnee_hit_term(sd, mnee.x0, mnee.pdf0, Int(mnee.n_glass), ro.to_simd(), hit.to_simd(),
+                                                        mesh_pos(lmesh_h, lv1_h) - lp0_h, mesh_pos(lmesh_h, lv2_h) - lp0_h, p_a, pcg)
                         comptime if _VCM_CAMIS:
                             if camis.in_class:
                                 # This hit is not a stored vertex (the path
@@ -607,10 +636,10 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                                     p_a, emission_pdf_w, log(cos_l_hit * INV_PI),
                                     n_light_paths_f, True, _CAMIS_FORCE_C1)
                             else:
-                                var w_cam_hit_off = (p_a * dvcm_carry + emission_pdf_w * dvc_carry) / cos_l_hit
+                                var w_cam_hit_off = (p_a * dvcm_carry + emission_pdf_w * dvc_carry) / cos_l_hit + mnee_t
                                 mis_w_al_hit = Float32(1) / (Float32(1) + w_cam_hit_off)
                         else:
-                            var w_cam_hit = (p_a * dvcm_carry + emission_pdf_w * dvc_carry) / cos_l_hit
+                            var w_cam_hit = (p_a * dvcm_carry + emission_pdf_w * dvc_carry) / cos_l_hit + mnee_t
                             mis_w_al_hit = Float32(1) / (Float32(1) + w_cam_hit)
                     elif last_bsdf_pdf < Float32(0):
                         pass   # delta bounce off a vertex with placeholder carries: unweighted, as before
@@ -739,25 +768,9 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                                           cur_med_idx, scratch, wavelengths, pcg, spawn_eps,
                                           v.mat_kind == LobeKind.diffuse_transmit or v.mat_kind == LobeKind.hair or v.mat_kind == LobeKind.rough_dielectric,
                                           Float32(0))
-                # MNEE's receiver evaluates albedo/pi itself (see
-                # _bdpt_mnee_diffuse_area_light), so only Lambertian lobes can
-                # host it -- a limitation of MNEE, not a material branch.
+                # MNEE toward a light behind glass, one more strategy in the balance (_vcm_mnee).
                 if v.mat_kind == LobeKind.lambertian or v.mat_kind == LobeKind.diffuse_transmit:
-                    # Real MNEE for area lights behind glass (task #161) -- see
-                    # _bdpt_mnee_diffuse_area_light's docstring. Ordinary (non-glass)
-                    # area lights are deliberately left to connect/merge, unchanged.
-                    total += _bdpt_mnee_diffuse_area_light(sd, hit, gn, eff_alb, beta, pcg, wavelengths)
-                    # Sphere-shaped area lights (task #161 follow-up, 2026-07-13):
-                    # a completely separate list from sd.areaLights (see
-                    var n_sph_mnee = Int(sd.sphereCount)
-                    if 0 < n_sph_mnee:
-                        total += _bdpt_mnee_sphere_light(sd, hit, gn, eff_alb, beta, pcg, 0, n_sph_mnee, wavelengths)
-                    if 1 < n_sph_mnee:
-                        total += _bdpt_mnee_sphere_light(sd, hit, gn, eff_alb, beta, pcg, 1, n_sph_mnee, wavelengths)
-                    if 2 < n_sph_mnee:
-                        total += _bdpt_mnee_sphere_light(sd, hit, gn, eff_alb, beta, pcg, 2, n_sph_mnee, wavelengths)
-                    if 3 < n_sph_mnee:
-                        total += _bdpt_mnee_sphere_light(sd, hit, gn, eff_alb, beta, pcg, 3, n_sph_mnee, wavelengths)
+                    total += _vcm_mnee(sd, v, hit.to_simd(), gn, beta, pcg, wavelengths, eta_x, dvcm_carry, dvc_carry)
 
             # Scatter through THE lobe sampler -- the same LobeCtx connect,
             # merge and NEE evaluate this vertex with (see _vcm_scatter).
@@ -777,8 +790,14 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 ro = hit + rd*Float32(0.0002)
             beta *= sc.weight
             last_bsdf_pdf = Float32(-1) if sc.is_delta else sc.pdf_fwd
+            if v.is_delta == Int32(0):
+                var receiver = v.mat_kind == LobeKind.lambertian or v.mat_kind == LobeKind.diffuse_transmit
+                mnee = VCMMneeTrack(hit.to_simd(), sc.pdf_fwd if receiver and not sc.is_delta else Float32(0), Int32(0))
+            else:
+                mnee.pdf0 = Float32(0)
 
         elif mat.type == MatKind.coated_conductor:
+            mnee.pdf0 = Float32(0)
             var wo_c = (-rd).to_simd()
             var (bs_c, gn_c, gn_c_geo) = _coated_conductor_scatter[use_gpu](
                 sd, pcg, mat, inter, hit.to_simd(), ray_dir, wo_c, vcm_cone_w)
@@ -939,11 +958,13 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                     dvm_carry = c2
                     n_bounces += 1
                     did_bssrdf_hop = True
+                    mnee.pdf0 = Float32(0)
             # Ordinary specular boundary, only when no hop was taken.
             if not did_bssrdf_hop:
                 if n_verts + n_delta >= _vcm_depth(sd):
                     return False   # a delta vertex past d starts no strategy either
                 n_delta += 1
+                mnee.n_glass += 1
                 # pbrt's outward normal: interpolated N when the mesh has it
                 # (_shading_normal_at), which pbrt also refracts through.
                 var gn = _shading_normal_at(inter, sd.meshes, sd.instances, sd.spheres, hit)

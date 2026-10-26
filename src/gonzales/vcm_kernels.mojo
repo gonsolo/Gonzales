@@ -308,6 +308,7 @@ def _bdpt_light_path_bounce_gpu(
     var current_dielectric_ior = states[unsafe_offset=k].current_dielectric_ior
     var previous_dielectric_ior = states[unsafe_offset=k].previous_dielectric_ior
     var mis_null_dist = states[unsafe_offset=k].mis_null_dist
+    var mnee_l = states[unsafe_offset=k].mnee
     var wavelengths = SampledWavelengths(states[unsafe_offset=k].wl0, states[unsafe_offset=k].wl1, states[unsafe_offset=k].wl2, states[unsafe_offset=k].wl3)
     # Placeholder: no _VCM_CAMIS on the wavefront driver (see its camera twin).
     var camis_l = camis_light_carry_off()
@@ -321,7 +322,7 @@ def _bdpt_light_path_bounce_gpu(
         _pwv_l,
         is_finite_origin, origin_sphere, cur_med_idx, n_lbounces,
         current_dielectric_ior, previous_dielectric_ior, mis_null_dist, wavelengths,
-        camis_l, Pointer[CamisLightRecord, MutUntrackedOrigin].unsafe_dangling(),
+        camis_l, Pointer[CamisLightRecord, MutUntrackedOrigin].unsafe_dangling(), mnee_l,
     )
     lvc_path_len[unsafe_offset=k] = Int32(n_verts)
     states[unsafe_offset=k].active = Int8(1) if cont else Int8(0)
@@ -339,6 +340,7 @@ def _bdpt_light_path_bounce_gpu(
     states[unsafe_offset=k].current_dielectric_ior = current_dielectric_ior
     states[unsafe_offset=k].previous_dielectric_ior = previous_dielectric_ior
     states[unsafe_offset=k].mis_null_dist = mis_null_dist
+    states[unsafe_offset=k].mnee = mnee_l
     states[unsafe_offset=k].pcg_state = pcg.state
     states[unsafe_offset=k].pcg_inc = pcg.inc
 
@@ -455,6 +457,7 @@ def _bdpt_camera_path_bounce_gpu(
     var current_dielectric_ior = states[unsafe_offset=pix].current_dielectric_ior
     var previous_dielectric_ior = states[unsafe_offset=pix].previous_dielectric_ior
     var cone_len = states[unsafe_offset=pix].cone_len
+    var mnee = states[unsafe_offset=pix].mnee
     var wavelengths = SampledWavelengths(states[unsafe_offset=pix].wl0, states[unsafe_offset=pix].wl1, states[unsafe_offset=pix].wl2, states[unsafe_offset=pix].wl3)
     # Placeholders: the wavefront driver does not support _VCM_CAMIS (it would
     # need the camera records persisted in VCMCameraPathState across launches;
@@ -478,7 +481,7 @@ def _bdpt_camera_path_bounce_gpu(
         first_alb, n_verts, n_delta, n_bounces, cur_med_idx,
         dvcm_carry, dvc_carry, dvm_carry, prev_was_volume, last_bsdf_pdf, mis_null_dist,
         current_dielectric_ior, previous_dielectric_ior, wavelengths, cone_len,
-        camis, camis_recs,
+        camis, camis_recs, mnee,
         defer_shadow_rays != Int8(0), shadow_rays, shadow_pending, shadow_valid, shadow_seg_med,
     )
     states[unsafe_offset=pix].active = Int8(1) if cont else Int8(0)
@@ -500,6 +503,7 @@ def _bdpt_camera_path_bounce_gpu(
     states[unsafe_offset=pix].current_dielectric_ior = current_dielectric_ior
     states[unsafe_offset=pix].previous_dielectric_ior = previous_dielectric_ior
     states[unsafe_offset=pix].cone_len = cone_len
+    states[unsafe_offset=pix].mnee = mnee
     states[unsafe_offset=pix].pcg_state = pcg.state
     states[unsafe_offset=pix].pcg_inc = pcg.inc
 

@@ -29,11 +29,27 @@ from .bxdf import (
 )
 from .spectrum import SampledWavelengths, SpectralSample, spec_refl, spec_refl_unbounded, spec_illum
 from .bdpt_vertex import _BDPT_MAX_DEPTH, _BDPT_MAX_VERTS, BDPTVertex, _null_vertex
-from .bdpt_eval import _bdpt_vertex_mis_scoped
+from .bdpt_eval import _bdpt_vertex_mis_scoped, _vcm_mnee_light_dvcm
 from .vcm_grid import _vcm_depth, _vcm_keep, _VCM_CAMIS, _vcm_eta_scale, _vcm_eta_at
 from .bdpt_connect import _bdpt_store_lvc_vertex
 from .bdpt_bssrdf import _bdpt_sample_bssrdf_exit
 from .bdpt_camera import _vcm_scatter, _resolve_mix, _coated_conductor_scatter
+
+@fieldwise_init
+struct VCMMneeLightTrack(TrivialRegisterPassable):
+    """A light path that leaves its light through glass only, for MNEE's share at the first surface it reaches."""
+    var y: Vec3f              # the light point
+    var ny: Vec3f             # its emitting normal
+    var side: Float32         # its emission-face probability; 0: no longer glass only, MNEE has no share
+    var first_glass: Vec3f    # the glass vertex nearest the light
+    var n_glass: Int32
+
+
+@always_inline
+def vcm_mnee_light_track_none() -> VCMMneeLightTrack:
+    var z = Vec3f(Float32(0))
+    return VCMMneeLightTrack(z, z, Float32(0), z, Int32(0))
+
 
 @fieldwise_init
 struct VCMLightPathState(TrivialRegisterPassable):
@@ -68,6 +84,7 @@ struct VCMLightPathState(TrivialRegisterPassable):
     var n_delta: Int32
     # Null-interface distance since the last real vertex: the d^2 of a crossing is applied once, over the whole edge.
     var mis_null_dist: Float32
+    var mnee: VCMMneeLightTrack
 
 def _null_light_path_state() -> VCMLightPathState:
     return VCMLightPathState(
@@ -81,6 +98,7 @@ def _null_light_path_state() -> VCMLightPathState:
         Float32(1.0), Float32(1.0),   # current_dielectric_ior, previous_dielectric_ior (vacuum)
         Int32(0),                     # n_delta
         Float32(0),                   # mis_null_dist
+        vcm_mnee_light_track_none(),
     )
 
 def _bdpt_light_path_init[use_gpu: Bool](
@@ -118,6 +136,7 @@ def _bdpt_light_path_init[use_gpu: Bool](
     var dvc_carry: Float32
     var dvm_carry: Float32
     var is_finite_origin = False
+    var mnee_l = vcm_mnee_light_track_none()
     var origin_sphere = Int32(-1)
     # This pass's shared hero wavelengths (see _bdpt_camera_path_init's
     # comment for why every subpath in a pass must agree on them).
@@ -151,6 +170,7 @@ def _bdpt_light_path_init[use_gpu: Bool](
         lv0_vert.normal = vec3f(ln)
         lv0_vert.shading_normal = vec3f(ln)
         lv0_vert.pdf_bwd = side_pdf   # a light vertex's pdf_bwd carries its emission-face probability
+        mnee_l = VCMMneeLightTrack(lp, ln, side_pdf, Vec3f(Float32(0)), Int32(0)) if al.kind == Int8(0) else mnee_l
         lv0_vert.beta = SpectralSample(area_weight)
         lv0_vert.alb = al.emission
         lv0_vert.is_surface = Int32(1); lv0_vert.is_light = Int32(1)
@@ -198,6 +218,7 @@ def _bdpt_light_path_init[use_gpu: Bool](
         n_verts = 0
         is_finite_origin = True
         origin_sphere = Int32(si_l)
+        mnee_l = VCMMneeLightTrack(sp_l, sn_l, Float32(1), Vec3f(Float32(0)), Int32(0))
         dvcm_carry = PI * area_weight_s
         dvc_carry = PI * area_weight_s
         comptime if _VCM_CAMIS:
@@ -277,6 +298,7 @@ def _bdpt_light_path_init[use_gpu: Bool](
         Float32(1.0), Float32(1.0),   # current_dielectric_ior, previous_dielectric_ior (vacuum)
         Int32(0),                     # n_delta
         Float32(0),                   # mis_null_dist
+        mnee_l,
     )
 
 def _bdpt_light_path_bounce[use_gpu: Bool](
@@ -312,6 +334,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
     # same slots as `lvc`). Untouched when the hybrid is compiled out.
     mut camis_l: CamisLightCarry,
     camis_recs: Pointer[CamisLightRecord, MutUntrackedOrigin],
+    mut mnee_l: VCMMneeLightTrack,
 ) -> Bool:
     """Task #163 stage 4: wavefront-staged variant of ONE bounce iteration of
     `_bdpt_trace_light_path`'s main loop (bdpt_*.mojo:1882-2383), split out so a"""
@@ -399,6 +422,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
                     Float32(4.0) * PI, INV_FOUR_PI, INV_FOUR_PI,
                     mis_vc_weight_factor, eta_v)
                 prev_was_volume = True
+                mnee_l.side = Float32(0)
                 # Continuation: flux = prev × alb_s (same as stored vertex beta)
                 flux *= spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (ff.albedo).r, (ff.albedo).g, (ff.albedo).b, wavelengths)
                 var u1 = pcg.next_float(); var u2 = pcg.next_float()
@@ -493,6 +517,13 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
             v.pdf_fwd = Float32(1); v.med_idx = cur_med_idx
             v.wo = vec3f(-ray_dir)  # VCM Stage 2b: needed for _connect's reverse-pdf eval
             v.wavelengths = wavelengths
+            if mnee_l.side > Float32(0) and mnee_l.n_glass > Int32(0) and v.is_delta == Int32(0) \
+               and (v.mat_kind == LobeKind.lambertian or v.mat_kind == LobeKind.diffuse_transmit):
+                # Reached through glass only: MNEE from here samples this path too (_vcm_mnee_light_dvcm).
+                var d_m = _vcm_mnee_light_dvcm(sd, hit.to_simd(), gn_geo, mnee_l.y, mnee_l.ny, mnee_l.side,
+                                               Int(mnee_l.n_glass), mnee_l.first_glass, pcg)
+                if d_m > Float32(0):
+                    dvcm_carry = d_m
             v.dVCM = dvcm_carry; v.dVC = dvc_carry; v.dVM = dvm_carry
             if v.is_delta != Int32(0):
                 n_delta += 1
@@ -504,6 +535,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
                     camis_light_arrive(camis_l, camis_recs, n_verts - 1, cos_fix, t_hit,
                                        log(_vcm_keep(sd, hit)), _bdpt_vertex_mis_scoped(v))
             var sc = _vcm_scatter(v, True, pcg, sd, wavelengths, dvcm_carry, dvc_carry, dvm_carry, mis_vc_weight_factor, eta_x)
+            mnee_l.side = Float32(0)
             if not sc.valid:
                 return False
             comptime if _VCM_CAMIS:
@@ -520,6 +552,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
             flux *= sc.weight
 
         elif mat.type == MatKind.coated_conductor:
+            mnee_l.side = Float32(0)
             var wo_c = (-rd).to_simd()
             var (bs_c, gn_c, gn_c_geo) = _coated_conductor_scatter[use_gpu](
                 sd, pcg, mat, inter, hit.to_simd(), ray_dir, wo_c, Float32(-1.0))
@@ -643,8 +676,12 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
                     dvm_carry = c2
                     n_lbounces += 1
                     did_bssrdf_hop = True
+                    mnee_l.side = Float32(0)
             if not did_bssrdf_hop:
                 n_delta += 1
+                if mnee_l.n_glass == Int32(0):
+                    mnee_l.first_glass = hit.to_simd()
+                mnee_l.n_glass += 1
                 # pbrt's outward normal: interpolated N when the mesh has it
                 # (_shading_normal_at), which pbrt also refracts through.
                 var gn = _shading_normal_at(inter, sd.meshes, sd.instances, sd.spheres, hit)
@@ -738,6 +775,7 @@ def _bdpt_trace_light_path[use_gpu: Bool](
     var wavelengths = SampledWavelengths(st.wl0, st.wl1, st.wl2, st.wl3)
     var prev_was_volume = False
     var mis_null_dist = Float32(0)
+    var mnee_l = st.mnee
     # CAMIS light state. Only an AREA light stores an origin vertex (n_verts
     # starts at 1), and only an area light starts a path inside the Class;
     # every other light's first stored vertex writes an out-of-Class record.
@@ -772,7 +810,7 @@ def _bdpt_trace_light_path[use_gpu: Bool](
             prev_was_volume,
             is_finite_origin, origin_sphere, cur_med_idx, n_lbounces,
             current_dielectric_ior, previous_dielectric_ior, mis_null_dist, wavelengths,
-            camis_l, camis_recs):
+            camis_l, camis_recs, mnee_l):
             break
 
     lvc_path_len[unsafe_offset=lp_idx] = Int32(n_verts)
