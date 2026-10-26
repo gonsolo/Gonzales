@@ -23,7 +23,7 @@ from .bvh import BVH2Node, SceneView, render_aux_buffers, _scene_bounding_sphere
 from .sppm import sppm_render
 from .sppm_gpu import sppm_render_gpu
 from .bdpt_render import vcm_render
-from .vcm_gpu import vcm_render_gpu
+from .vcm_gpu import vcm_render_gpu, VcmGpu
 from .vcm_wavefront import vcm_render_gpu_wavefront
 from .bdpt_vertex import _BDPT_MAX_VERTS
 from .guide import GuideGrid, GuidedRenderer, guide_create, guide_free, guide_clone_empty, guide_refine, null_guide, guide_merge, guide_cell_has_data, train_guided
@@ -3331,14 +3331,21 @@ def render_interactive(
 struct RenderSession(Movable):
     var psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin]
     var renderer: GpuGuidedRenderer
+    var spectral: SpectralHandle
     var spp: Int        # samples in the film
     var resolves: Int   # since the film was cleared
+    var integrator: Int # 0 path tracing, 1 BDPT, 2 VCM
+    var vcm: Pointer[VcmGpu, MutUntrackedOrigin]   # BDPT's and VCM's buffers, made at their first pass
 
-    def __init__(out self, psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin], var renderer: GpuGuidedRenderer):
+    def __init__(out self, psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin], var renderer: GpuGuidedRenderer,
+                 spectral: SpectralHandle):
         self.psc = psc
         self.renderer = renderer^
+        self.spectral = spectral
         self.spp = 0
         self.resolves = 0
+        self.integrator = 0
+        self.vcm = Pointer[VcmGpu, MutUntrackedOrigin].unsafe_dangling()
 
 comptime SessionPtr = Pointer[RenderSession, MutUntrackedOrigin]
 
@@ -3375,9 +3382,28 @@ def session_new(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin], sobol: Point
     s.unsafe_write(RenderSession(psc, GpuGuidedRenderer(
         handle, psc, UInt32(mix_bits_u64(UInt64(0))), UInt32(mix_bits_u64(UInt64(1))), n_pixels,
         Int(psc[unsafe_offset=0].samples_per_pixel), False, rtb.on, Pointer[UInt8, MutUntrackedOrigin].unsafe_dangling(),
-        rtb.rays, rtb.results, rtb.mesh_material_idx, rtb.mesh_al_idx, rtb.n_meshes, rtb.instance_base_mesh, quiet=True)))
+        rtb.rays, rtb.results, rtb.mesh_material_idx, rtb.mesh_al_idx, rtb.n_meshes, rtb.instance_base_mesh, quiet=True),
+        spectral))
     session_clear(s)
     return s
+
+def _session_vcm_free(s: SessionPtr):
+    if _is_real_ptr(s[].vcm):
+        s[].vcm.unsafe_deinit_pointee()
+        s[].vcm.unsafe_free()
+        s[].vcm = Pointer[VcmGpu, MutUntrackedOrigin].unsafe_dangling()
+
+def _session_vcm(s: SessionPtr) raises:
+    """The session's VCM state for its integrator, made anew for another integrator or film size."""
+    var merging = s[].integrator == 2
+    if _is_real_ptr(s[].vcm) and (s[].vcm[].merging != merging or s[].vcm[].n_pix != s[].renderer.n_pixels):
+        _session_vcm_free(s)
+    if not _is_real_ptr(s[].vcm):
+        var sd = mojo_parsed_scene_descriptor(s[].psc, s[].spectral)   # the host scene: bounding sphere and media
+        var v = VcmGpu(s[].renderer.handle, s[].psc, sd[unsafe_offset=0], 0, merging)
+        sd.unsafe_free()
+        s[].vcm = unsafe_alloc[VcmGpu](1)
+        s[].vcm.unsafe_write(v^)
 
 def session_clear(s: SessionPtr):
     """Starts the film over: after a camera, size or sample setting change."""
@@ -3386,6 +3412,16 @@ def session_clear(s: SessionPtr):
     var n = s[].renderer.n_pixels
     s[].spp = 0
     s[].resolves = 0
+    if _is_real_ptr(s[].vcm):
+        if s[].vcm[].n_pix != n:
+            _session_vcm_free(s)
+        else:
+            try:
+                s[].vcm[].upload_camera(psc)
+                s[].vcm[].clear()
+            except e:
+                print("Gonzales: VCM camera:", e)
+                _session_vcm_free(s)
     handle[].cam_fp = camera_footprint(psc[unsafe_offset=0].raster_to_camera, psc[unsafe_offset=0].camera_to_world,
                                        Int(psc[unsafe_offset=0].film_w), Int(psc[unsafe_offset=0].film_h),
                                        Int(psc[unsafe_offset=0].samples_per_pixel))
@@ -3445,6 +3481,11 @@ def session_set_bounces(s: SessionPtr, diffuse: Int32, glossy: Int32, transmissi
     h.cycles = c
     session_clear(s)
 
+def session_set_integrator(s: SessionPtr, integrator: Int32):
+    if Int(integrator) != s[].integrator:
+        s[].integrator = Int(integrator)
+        session_clear(s)
+
 def session_set_adaptive(s: SessionPtr, threshold: Float32, min_samples: Int32):
     """Cycles' adaptive sampling: its noise threshold (0 is off) and minimum samples (0 is Cycles' automatic count)."""
     var handle = s[].renderer.handle
@@ -3477,6 +3518,16 @@ def session_set_samples(s: SessionPtr, spp: Int32, max_depth: Int32):
 def session_render(s: SessionPtr, n_spp: Int) raises -> Int:
     """Adds up to `n_spp` samples, never beyond the converged count; returns the samples in the film."""
     var end = min(s[].spp + n_spp, Int(s[].psc[unsafe_offset=0].samples_per_pixel))
+    if end > s[].spp and s[].integrator != 0:
+        _session_vcm(s)
+        var handle = s[].renderer.handle
+        var film = handle[].film_buf.unsafe_ptr().unsafe_bitcast[Float32]()
+        var albedo = handle[].albedo_film_buf.unsafe_ptr().unsafe_bitcast[Float32]()
+        for si in range(s[].spp, end):
+            s[].vcm[].run_pass(s[].psc, si, film, albedo)
+        handle[].ctx.synchronize()
+        s[].spp = end
+        return s[].spp
     if end > s[].spp:
         s[].renderer.render_samples(s[].spp, end)
         s[].spp = end
@@ -3501,7 +3552,22 @@ def session_resolve(s: SessionPtr, rgb: Pointer[Float32, MutUntrackedOrigin], de
     var handle = s[].renderer.handle
     if s[].resolves > 0:
         handle[].ctx.enqueue_memset(handle[].hist_len_buf, UInt8(0))
-    _gpu_resolve(handle, s[].psc, rgb, s[].renderer.n_pixels, max(s[].spp, 1), denoise)
+    if s[].integrator != 0 and _is_real_ptr(s[].vcm):
+        # As a batch VCM render: the film is denoised, merging's caustics are added after, then the sensor.
+        ref psc = s[].psc[unsafe_offset=0]
+        var n = s[].renderer.n_pixels
+        var spp = max(s[].spp, 1)
+        gpu_atrous_denoise(handle, rgb, Int64(n), Int32(spp), psc.film_iso, psc.film_max_comp, apply_denoise=denoise)
+        var scale = psc.film_iso / Float32(100) / Float32(spp)
+        with s[].vcm[].accum_merge.map_to_host() as host:
+            var m = host.unsafe_ptr().unsafe_bitcast[Float32]()
+            for i in range(n * 3):
+                var v = m[unsafe_offset=i]
+                if v == v:
+                    rgb[unsafe_offset=i] += v * scale
+        apply_film_sensor(rgb, n, psc.film_exposuretime, psc.film_wb)
+    else:
+        _gpu_resolve(handle, s[].psc, rgb, s[].renderer.n_pixels, max(s[].spp, 1), denoise)
     s[].resolves += 1
 
 def session_free(s: SessionPtr):
@@ -3518,6 +3584,7 @@ def session_free(s: SessionPtr):
                 line += " " + names[k] + " " + String(b[unsafe_offset=16 + k] // 1000000)
         print(line)
     oxc_destroy(oxc_active())                      # the session's OptiX curves, if any (clears the active handle)
+    _session_vcm_free(s)
     gpu_free_scene(s[].renderer.handle)
     mojo_parsed_free(s[].psc)
     s.unsafe_deinit_pointee()
