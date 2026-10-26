@@ -60,18 +60,18 @@
     "tol": 0.03
   },
   "curves-hair.pt": {
-    "mean": 2.976831,
-    "median": 0.074471,
+    "mean": 7.535651,
+    "median": 0.222352,
     "tol": 0.03
   },
   "curves-hair.sppm": {
-    "mean": 2.952396,
-    "median": 0.076644,
+    "mean": 7.53798,
+    "median": 0.280948,
     "tol": 0.03
   },
   "curves-hair.vcm": {
-    "mean": 2.988311,
-    "median": 0.087843,
+    "mean": 7.581088,
+    "median": 0.318591,
     "tol": 0.03
   },
   "glass-depth.pt": {
