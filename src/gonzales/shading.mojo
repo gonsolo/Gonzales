@@ -4163,7 +4163,7 @@ def _mnee_area_light_contribute(
     if cos_s_x0 <= Float32(0.0):
         return True
     var dw0_dx1 = abs(dot(wi_fn, first_normal)) / (wi_len * wi_len)
-    var g = min(dw0_dx1 * dx1_dxlight, Float32(2.0))
+    var g = dw0_dx1 * dx1_dxlight
     var wo_f = light_point - last_vertex
     var wo_len = sqrt(dot(wo_f, wo_f))
     if wo_len <= Float32(1e-8):
