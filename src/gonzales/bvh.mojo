@@ -11,7 +11,7 @@ from std.bit import count_trailing_zeros
 from .transform import Mat4
 from .geometry import dot, cross, Point3f, Point2f, Vec3f, Frame, RGB, PI, TWO_PI, INV_PI, safe_sqrt, _is_real_ptr, store_vec3, _atan2f, point3f, fast_sincos
 from .sampling import ThinLens
-from .materials import Material, MatKind, fr_dielectric, MeasuredBRDF
+from .materials import Material, fr_dielectric, MeasuredBRDF
 from .render_state import GpuTexture, NormalSlopeMap
 from .primitives import Ray, Intersection, PrimId, TriangleMesh, Sphere, intersect_triangle, intersect_triangle_edges, alpha_killed, Instance, sphere_outward_normal, mesh_vi, mesh_material
 from .primitives import mesh_pos, mesh_point

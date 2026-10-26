@@ -23,7 +23,7 @@ from .bvh import traverse_dispatch, any_hit_dispatch
 from .bvh import SceneView, _scene_bounding_sphere, _sample_disk_perpendicular, _sample_infinite_light_dir, _eval_infinite_light_and_pdf, _hair_precompute, _hair_eval_lobes, _hair_sample_dir, curve_offset_eps, LightSample, _sample_distant_light_nee, _sample_point_light_nee, _sample_sphere_light_nee, _sample_infinite_light_nee, light_path_pick, render_aux_buffers
 from .vcm_mis import mis_policy_sole
 from .layered import layered_sample
-from .bxdf import ggx_lambda, dielectric_interface, bxdf_sample_dielectric, bxdf_sample_thin_dielectric, BxDFFlags, GeomContext, BxDFSample, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_is_delta, bxdf_eval_conductor_ggx, _nee_weight_simple, _nee_weight_hair, LobeCtx, lobe_eval, lobe_sample, LobeTables, nee_weight_lobe
+from .bxdf import ggx_lambda, dielectric_interface, bxdf_sample_dielectric, bxdf_sample_thin_dielectric, BxDFFlags, GeomContext, BxDFSample, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_is_delta, bxdf_eval_conductor_ggx, _nee_weight_simple, _nee_weight_hair, BSDF, LobeTables
 from .measured_bxdf_eval import bxdf_eval_measured, bxdf_sample_measured
 from .shading import _tex_lookup, _get_tri_verts, apply_surface_maps_at_hit, uv_footprint_at_hit, area_light_hit_cos
 from .geom_normal import _geom_normal
@@ -1621,7 +1621,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
         elif mat.is_rough_dielectric() and mat.sss_boundary == Int8(0):
             # Rough dielectric: a real BSDF, so a photon deposits here like
             # on any glossy surface, then scatters through THE lobe sampler
-            # in importance mode (LobeCtx.adjoint: no 1/eta^2), reflecting or
+            # in importance mode (BSDF.adjoint: no 1/eta^2), reflecting or
             # transmitting. The OUTWARD normal, as lobe_eval requires.
             if n_events - n_null > 1:
                 _sppm_store_photon[use_gpu](
@@ -1631,12 +1631,10 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
             gn_rd = apply_surface_maps_at_hit[tex_gpu](mat, inter, sd.meshes, sd.instances,
                 gn_rd, gn_rd, hit.to_simd(), ray_dir, Float32(-1.0), sd.camFp,
                 sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
-            var ctx_rd = LobeCtx(LobeKind.rough_dielectric, True, False, gn_rd, (-rd).to_simd(), mat.albedo,
+            var ctx_rd = BSDF(LobeKind.rough_dielectric, True, False, gn_rd, (-rd).to_simd(), mat.albedo,
                                  Int32(mat_idx), mat.lobe_param(), Float32(1),
                                  Int32(-1), Float32(0), Float32(0), True, True)
-            var s_rd = lobe_sample(ctx_rd, pcg.next_float(), pcg.next_float(), pcg.next_float(), pcg.next_float(),
-                LobeTables(sd.materials, sd.curves, sd.measuredBrdfs),
-                spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, ph_wavelengths)
+            var s_rd = ctx_rd.sample(pcg.next_float(), pcg.next_float(), pcg.next_float(), pcg.next_float(), LobeTables(sd.materials, sd.curves, sd.measuredBrdfs, sd.spectral), ph_wavelengths)
             if not s_rd.valid:
                 break
             # Russian roulette on the weight (Fresnel-weighted, ~1 for glass).
@@ -1831,7 +1829,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
             var cos_wi_m = dot(wi_m, gn_m)
             if cos_wi_m <= Float32(0):
                 break
-            # The ADJOINT BRDF, as in bdpt_*.mojo's light path (LobeCtx.adjoint):
+            # The ADJOINT BRDF, as in bdpt_*.mojo's light path (BSDF.adjoint):
             # a photon needs f(toward camera, toward light); f_m is the other
             # order, and this table is not reciprocal near grazing.
             var f_adj_m = bxdf_eval_measured(mb_m, wi_l_m, wo_l_m, ph_wavelengths, spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65)[0]
@@ -2336,7 +2334,7 @@ def _sppm_gather_one(
                             # diffuse_transmit alike, replacing what was a
                             # 5-way dispatch here (bxdf_eval_conductor_ggx,
                             # _hair_eval_lobes, _sppm_vp_brdf, a bespoke
-                            # LobeCtx for layered, and a bare vp.alb/PI
+                            # BSDF for layered, and a bare vp.alb/PI
                             # fallback for everything else). That fallback
                             # was diffuse_transmit's own path too: every
                             # photon gathered at a diffusetransmission VP was
@@ -2349,13 +2347,9 @@ def _sppm_gather_one(
                             # above already enforces the correct side for a
                             # plain Lambertian VP, and every other kind
                             # decides sidedness itself.
-                            var le = lobe_eval[want_pdfs=False](
-                                LobeCtx(vp.mat_kind, True, False, vp.normal.to_simd(), vp.wo.to_simd(), vp.alb,
+                            var le = (BSDF(vp.mat_kind, True, False, vp.normal.to_simd(), vp.wo.to_simd(), vp.alb,
                                         vp.mat_idx, _vp_base_alpha(vp.alpha), Float32(0), vp.hair_curve_idx,
-                                        vp.hair_h, vp.hair_v, True, False),
-                                (-ph.dir_in).to_simd(), LobeTables(sd.materials, sd.curves, sd.measuredBrdfs),
-                                spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
-                                ph.wavelengths)
+                                        vp.hair_h, vp.hair_v, True, False)).f[want_pdfs=False]((-ph.dir_in).to_simd(), LobeTables(sd.materials, sd.curves, sd.measuredBrdfs, sd.spectral), ph.wavelengths)
                             if le.cos_used > Float32(1e-6):
                                 var term_3 = le.f_cos * (Float32(1.0) / le.cos_used) * ph.flux
                                 var (tr_3, tg_3, tb_3) = spectral_sample_to_rgb(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, term_3, ph.wavelengths)
@@ -2521,7 +2515,7 @@ def _sppm_nee_weight(
         var li_v = spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65,
                               ls.Li.r, ls.Li.g, ls.Li.b, vp.wavelengths)
         return ph_v * li_v * (Float32(1.0) / ls.pdf)
-    # THE NEE weight (bxdf.mojo), from the SAME LobeCtx the gather and every
+    # THE NEE weight (bxdf.mojo), from the SAME BSDF the gather and every
     # other consumer of a stored vertex uses -- one call in place of the
     # separate hair/measured branches this used to hand-dispatch to
     # (_nee_weight_hair, _nee_weight_measured) plus a third call for
@@ -2532,12 +2526,8 @@ def _sppm_nee_weight(
     # measured never did before (barcelona-pavilion-day's shadowed-chair
     # deficit), and this is the same fix applied uniformly rather than at
     # one material's call site.
-    return nee_weight_lobe(ls,
-        LobeCtx(vp.mat_kind, True, False, vn, wo, vp.alb, vp.mat_idx, alpha,
-                Float32(0), vp.hair_curve_idx, vp.hair_h, vp.hair_v, True, False),
-        LobeTables(sd.materials, sd.curves, sd.measuredBrdfs),
-        sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65,
-        vp.wavelengths, mis_policy_sole())
+    return (BSDF(vp.mat_kind, True, False, vn, wo, vp.alb, vp.mat_idx, alpha,
+                Float32(0), vp.hair_curve_idx, vp.hair_h, vp.hair_v, True, False)).nee_weight(ls, LobeTables(sd.materials, sd.curves, sd.measuredBrdfs, sd.spectral), vp.wavelengths, mis_policy_sole())
 
 @always_inline
 def _sppm_vp_shadow_eps(vp: SPPMPixel, ref sd: SceneView, wo: Vec3f) -> Float32:
@@ -2724,7 +2714,7 @@ def _sppm_nee_one(
                                       * geom * tr_a)
                     else:
                         # THE shared evaluator (bxdf.mojo), the vertex's own
-                        # LobeCtx -- covers ggx/hair/measured/layered/
+                        # BSDF -- covers ggx/hair/measured/layered/
                         # lambertian/diffuse_transmit alike now, where this
                         # used to route hair and measured to a separate RGB
                         # fallback (_sppm_vp_brdf) because lobe_eval's own
@@ -2736,14 +2726,9 @@ def _sppm_nee_one(
                         # want f*cos and merging wants bare f; three consumers,
                         # three conventions, one evaluator that says which it
                         # applied.
-                        var le_vp = lobe_eval[want_pdfs=False](
-                            LobeCtx(vp.mat_kind, True, False, vn, wo, vp.alb,
+                        var le_vp = (BSDF(vp.mat_kind, True, False, vn, wo, vp.alb,
                                     vp.mat_idx, _vp_base_alpha(vp.alpha), Float32(0), vp.hair_curve_idx,
-                                    vp.hair_h, vp.hair_v, True, False),
-                            wi, LobeTables(sd.materials, sd.curves, sd.measuredBrdfs),
-                            sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x,
-                            sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65,
-                            vp.wavelengths)
+                                    vp.hair_h, vp.hair_v, True, False)).f[want_pdfs=False](wi, LobeTables(sd.materials, sd.curves, sd.measuredBrdfs, sd.spectral), vp.wavelengths)
                         var f_spec = (le_vp.f_cos * (Float32(1.0) / le_vp.cos_used)
                                       if le_vp.cos_used > Float32(1e-6)
                                       else SpectralSample(Float32(0.0)))

@@ -12,9 +12,9 @@ from std.testing import assert_true, TestSuite
 from gonzales.geometry import RGB, Vec3f, PI
 from gonzales.materials import Material, MatKind, LobeKind, MeasuredBRDF
 from gonzales.curves import Curve
-from gonzales.bxdf import LobeCtx, LobeTables, lobe_eval, lobe_sample
+from gonzales.bxdf import BSDF, LobeTables
 from gonzales.rng import PCG32
-from gonzales.spectrum import sample_wavelengths, SpectralContext, spectral_handle
+from gonzales.spectrum import sample_wavelengths, SpectralContext, spectral_handle, SpectralHandle
 from gonzales.rgb2spec import build_spectrum_table, build_cie_xyz_tables, SpectrumTable
 
 comptime _curves = Pointer[Curve, MutUntrackedOrigin].unsafe_dangling()
@@ -47,12 +47,13 @@ def _tables() -> LobeTables:
     mats[unsafe_offset=MAT_COAT_ROUGH] = _material(MatKind.coated_diffuse, RGB(Float32(0.8)), RGB(Float32(1.5), Float32(0.01), Float32(0)), Float32(0.3))
     mats[unsafe_offset=MAT_COAT_SMOOTH] = _material(MatKind.coated_diffuse, RGB(Float32(0.8)), RGB(Float32(1.5), Float32(0.01), Float32(0)), Float32(0))
     mats[unsafe_offset=MAT_GLASS] = _material(MatKind.dielectric, RGB(Float32(1.5)), RGB(Float32(0.0)), Float32(0.3))
-    return LobeTables(mats, _curves, _mbrdfs)
+    var none = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling()
+    return LobeTables(mats, _curves, _mbrdfs, SpectralHandle(none, 0, none, none, none, none))   # set per test
 
 
-def _ctx(kind: Int32, mat_idx: Int, alb: RGB, cos_o: Float32, param: Float32) -> LobeCtx:
+def _ctx(kind: Int32, mat_idx: Int, alb: RGB, cos_o: Float32, param: Float32) -> BSDF:
     var wo = Vec3f(sqrt(max(Float32(0), Float32(1) - cos_o * cos_o)), Float32(0), cos_o)
-    return LobeCtx(kind, True, False, Vec3f(0.0, 0.0, 1.0), wo, alb, Int32(mat_idx),
+    return BSDF(kind, True, False, Vec3f(0.0, 0.0, 1.0), wo, alb, Int32(mat_idx),
                    param, Float32(0), Int32(-1), Float32(0), Float32(0), False, False)
 
 
@@ -67,13 +68,14 @@ def _bin(z: Float32) -> Int:
     return min(NB - 1, max(0, Int((Float64(z) + 1.0) * 0.5 * Float64(NB))))
 
 
-def _check_density(name: String, c: LobeCtx, tab: LobeTables, n: Int, rev_tol: Float64,
+def _check_density(name: String, c: BSDF, tab: LobeTables, n: Int, rev_tol: Float64,
                    is_density: Bool = True) raises -> Int:
     """Returns the number of failed checks (and prints each one). is_density=False
     skips checks 1 and 2: layered's pdf is pbrt's weights-only estimate (90% walk
     estimate + 10% uniform), not the density of its sampler."""
     var ctx = _test_ctx()
     var h = spectral_handle(ctx)
+    var tab_h = LobeTables(tab.materials, tab.curves, tab.measured_brdfs, h)
     var wl = sample_wavelengths(Float32(0.37))
     var rng = PCG32(UInt64(3), UInt64(5))
     var hist = List[Float64]()
@@ -86,19 +88,18 @@ def _check_density(name: String, c: LobeCtx, tab: LobeTables, n: Int, rev_tol: F
     var sampled_nd = Float64(0)
     var worst_rev = Float64(0)
     for _ in range(n):
-        var s = lobe_sample(c, rng.next_float(), rng.next_float(), rng.next_float(), rng.next_float(), tab,
-                            h.coeffs, h.res, h.cie_x, h.cie_y, h.cie_z, h.d65, wl)
+        var s = c.sample(rng.next_float(), rng.next_float(), rng.next_float(), rng.next_float(), tab_h, wl)
         if s.valid and not s.is_delta:
             sampled_nd += 1.0
             hist[_bin(s.wi[2])] += 1.0
             if s.pdf_rev > Float32(0):
                 var c2 = c
                 c2.wo = s.wi
-                var le2 = lobe_eval[want_pdfs=True](c2, c.wo, tab, h.coeffs, h.res, h.cie_x, h.cie_y, h.cie_z, h.d65, wl)
+                var le2 = c2.f[want_pdfs=True](c.wo, tab_h, wl)
                 var rel = Float64(abs(le2.pdf_fwd - s.pdf_rev) / max(s.pdf_rev, Float32(1e-6)))
                 worst_rev = max(worst_rev, rel)
         var wi = _uniform_sphere(rng.next_float(), rng.next_float())
-        var le = lobe_eval[want_pdfs=True](c, wi, tab, h.coeffs, h.res, h.cie_x, h.cie_y, h.cie_z, h.d65, wl)
+        var le = c.f[want_pdfs=True](wi, tab_h, wl)
         var x = Float64(le.pdf_fwd) * Float64(4.0 * 3.14159265358979)
         var b = _bin(wi[2])
         mass[b] += x

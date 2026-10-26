@@ -30,7 +30,7 @@ from .shading import (
     uv_footprint_at_hit, _tex_lookup, _get_tri_verts, apply_surface_maps_at_hit, area_light_hit_cos,
     curve_light_hit,
 )
-from .bxdf import LobeCtx, lobe_sample, LobeSample, GeomContext, BxDFSample, bxdf_sample_coated_conductor, bxdf_is_delta, bxdf_pdf_conductor_ggx, LobeTables
+from .bxdf import BSDF, lobe_sample, LobeSample, GeomContext, BxDFSample, bxdf_sample_coated_conductor, bxdf_is_delta, bxdf_pdf_conductor_ggx, LobeTables
 from .spectrum import (
     SampledWavelengths, SpectralSample, spec_refl, spec_refl_unbounded, spec_illum,
     rgb_bands_to_spectral_sample,
@@ -228,10 +228,7 @@ def _vcm_scatter(
 ) -> LobeSample:
     """Scatter at a stored vertex through THE lobe sampler (bxdf.mojo's
     lobe_sample) and advance VCM's carries. `adjoint` on the light subpath."""
-    var s = lobe_sample(_vertex_ctx(v, adjoint), pcg.next_float(), pcg.next_float(), pcg.next_float(), pcg.next_float(),
-        LobeTables(sd.materials, sd.curves, sd.measuredBrdfs),
-        sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y,
-        sd.spectral.cie_z, sd.spectral.d65, wavelengths)
+    var s = (_vertex_ctx(v, adjoint)).sample(pcg.next_float(), pcg.next_float(), pcg.next_float(), pcg.next_float(), LobeTables(sd.materials, sd.curves, sd.measuredBrdfs, sd.spectral), wavelengths)
     if not s.valid:
         return s
     if s.is_delta:
@@ -459,7 +456,7 @@ def _vcm_lobe_vertex[use_gpu: Bool](
     # One lobe per material: everything after evaluates and samples the vertex through lobe_eval and lobe_sample.
     v.mat_kind = mat.lobe()
     v.mat_idx = Int32(mat_idx)
-    v.pdf_bwd = mat.lobe_param()   # LobeCtx.param: a conductor's GGX alpha
+    v.pdf_bwd = mat.lobe_param()   # BSDF.param: a conductor's GGX alpha
     # A smooth conductor is a mirror: it scatters, but stores no vertex and starts no strategy.
     v.is_delta = Int32(1) if mat.is_mirror() else Int32(0)
     if on_curve:
@@ -820,7 +817,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 if v.mat_kind == LobeKind.lambertian or v.mat_kind == LobeKind.diffuse_transmit:
                     st.total += _vcm_mnee(sd, v, hit.to_simd(), gn, st.beta, pcg, st.wl, eta_x, st.dvcm, st.dvc)
 
-            # Scatter through THE lobe sampler -- the same LobeCtx connect,
+            # Scatter through THE lobe sampler -- the same BSDF connect,
             # merge and NEE evaluate this vertex with (see _vcm_scatter).
             var sc = _vcm_scatter(v, False, pcg, sd, st.wl, st.dvcm, st.dvc, st.dvm, mis_vc_weight_factor, eta_x)
             if not sc.valid:
@@ -887,7 +884,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
 
                 # Distant/point/sphere/infinite NEE, via the shared Light
                 # interface + BxDF interface + _bdpt_nee_contribute glue —
-                var ctx_c = LobeCtx(LobeKind.ggx, True, False, gn_c, wo_c, mat.albedo, Int32(-1), alpha_c,
+                var ctx_c = BSDF(LobeKind.ggx, True, False, gn_c, wo_c, mat.albedo, Int32(-1), alpha_c,
                                     Float32(0), Int32(-1), Float32(0), Float32(0), True, False)
                 st.total += _vcm_nee_surface(sd, v, ctx_c, hit, gn_c_geo, st.beta, eta_x, st.dvcm, st.dvc,
                                           st.cur_med_idx, scratch, st.wl, pcg, offset_eps(hit.x, hit.y, hit.z), False, Float32(0))
@@ -959,7 +956,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                             st.total += _bdpt_connect_to_cache(v, sd, has_med, scratch, lvc, lp_idx, path_len, mis_vm_weight_factor, st.n_verts + st.n_delta, camis, camis_recs, lvc_camis, n_light_paths_f)
                     # Direct lighting at the exit: the diffuse vertex's NEE with
                     # the exit lobe's Fresnel factor toward each light.
-                    var ctx_x = LobeCtx(LobeKind.lambertian, True, False, n_o, n_o, RGB(Float32(1)), Int32(-1), Float32(0),
+                    var ctx_x = BSDF(LobeKind.lambertian, True, False, n_o, n_o, RGB(Float32(1)), Int32(-1), Float32(0),
                                         Float32(0), Int32(-1), Float32(0), Float32(0), True, False)
                     st.total += _vcm_nee_surface(sd, v, ctx_x, x_o, n_o, st.beta, mis_vm_weight_factor * _vcm_eta_scale(sd, x_o),
                                               v.dVCM, v.dVC, st.cur_med_idx, scratch, st.wl, pcg,

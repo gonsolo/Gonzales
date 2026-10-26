@@ -14,7 +14,7 @@ from .bssrdf import bssrdf_exit_ft
 from .vcm_mis import MisPolicy
 from .bvh import SceneView, _scene_bounding_sphere, LightSample, _sample_infinite_light_nee, light_path_pick, light_path_pick_pdf
 from .rng import PCG32
-from .bxdf import LobeCtx, LobeEval, lobe_eval, lobe_scoped, nee_weight_lobe, LobeTables
+from .bxdf import BSDF, LobeEval, LobeTables
 from .spectrum import SampledWavelengths, SpectralSample, spec_illum
 from .bdpt_vertex import BDPTVertex
 from .bdpt_nee import _bdpt_simple_light_count, _bdpt_sample_simple_light, _bdpt_nee_contribute
@@ -69,7 +69,7 @@ def _vcm_simple_light_policy(
 
 @always_inline
 def _vcm_nee_surface(
-    ref sd: SceneView, v: BDPTVertex, ctx: LobeCtx, pos: Point3f, gn_geo: Vec3f,
+    ref sd: SceneView, v: BDPTVertex, ctx: BSDF, pos: Point3f, gn_geo: Vec3f,
     beta: SpectralSample, eta_x: Float32, dvcm: Float32, dvc: Float32,
     cur_med_idx: Int32, scratch: Pointer[Intersection, MutUntrackedOrigin],
     wavelengths: SampledWavelengths, mut pcg: PCG32,
@@ -78,13 +78,13 @@ def _vcm_nee_surface(
     """NEE from one camera surface vertex to every distant/point/sphere and infinite
     light, weighted by VCM's balance policy. `ctx` is the lobe, `gn_geo` the geometric"""
     var total = SpectralSample(Float32(0))
-    var tab = LobeTables(sd.materials, sd.curves, sd.measuredBrdfs)
+    var tab = LobeTables(sd.materials, sd.curves, sd.measuredBrdfs, sd.spectral)
     for li in range(_bdpt_simple_light_count(sd)):
         var ls = _bdpt_sample_simple_light(sd, li, pos.to_simd(), pcg)
         if not ls.valid:
             continue   # a non-emitting sphere
         var pol = _vcm_simple_light_policy(sd, li, ls, v, eta_x, dvcm, dvc, abs(dot(ls.wi, gn_geo)), wavelengths)
-        var w = nee_weight_lobe(ls, ctx, tab, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths, pol)
+        var w = ctx.nee_weight(ls, tab, wavelengths, pol)
         if exit_eta > Float32(0):
             w = w * bssrdf_exit_ft(dot(gn_geo, ls.wi), exit_eta)
         total += _bdpt_nee_contribute(beta, w, ls, pos, gn_geo, cur_med_idx, sd, scratch, wavelengths, spawn_eps, two_sided)
@@ -96,17 +96,17 @@ def _vcm_nee_surface(
         var pol = MisPolicy(le.scoped, eta_x, dvcm, dvc,
                             ls.pdf * light_path_pick_pdf(sd, _vcm_infinite_slot(sd, inf_i)) / max(PI * r * r, Float32(1e-12)),
                             le.pdf_rev, False, abs(dot(ls.wi, gn_geo)))
-        var w = nee_weight_lobe(ls, ctx, tab, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths, pol)
+        var w = ctx.nee_weight(ls, tab, wavelengths, pol)
         if exit_eta > Float32(0):
             w = w * bssrdf_exit_ft(dot(gn_geo, ls.wi), exit_eta)
         total += _bdpt_nee_contribute(beta, w, ls, pos, gn_geo, cur_med_idx, sd, scratch, wavelengths, spawn_eps, two_sided)
     return total
 
 @always_inline
-def _vertex_ctx(v: BDPTVertex, adjoint: Bool = False) -> LobeCtx:
+def _vertex_ctx(v: BDPTVertex, adjoint: Bool = False) -> BSDF:
     """A stored VCM vertex, as the shared BxDF interface sees it. `adjoint`
-    for a light-subpath vertex -- see LobeCtx.adjoint."""
-    return LobeCtx(v.mat_kind, v.is_surface == Int32(1), v.is_delta != Int32(0),
+    for a light-subpath vertex -- see BSDF.adjoint."""
+    return BSDF(v.mat_kind, v.is_surface == Int32(1), v.is_delta != Int32(0),
                    v.shading_normal.to_simd(), v.wo.to_simd(), v.alb, v.mat_idx,
                    v.pdf_bwd, v.pdf_fwd, v.hair_curve_idx, v.hair_h, v.hair_v, False,
                    adjoint)
@@ -126,10 +126,7 @@ def _lobe_eval[want_pdfs: Bool = True](
     adjoint: Bool = False,
 ) -> LobeEval:
     """VCM's view of the shared lobe evaluator (bxdf.mojo)."""
-    var le = lobe_eval[want_pdfs](_vertex_ctx(v, adjoint), dir_to_other,
-        LobeTables(sd.materials, sd.curves, sd.measuredBrdfs),
-        spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y,
-        spectral_cie_z, spectral_d65, wavelengths)
+    var le = (_vertex_ctx(v, adjoint)).f[want_pdfs](dir_to_other, LobeTables(sd.materials, sd.curves, sd.measuredBrdfs, sd.spectral), wavelengths)
     if adjoint and v.is_surface == Int32(1) and v.mat_kind != LobeKind.hair:
         # Veach's adjoint shading-normal correction (pbrt-v3 Vertex::f in
         # Importance mode, CorrectShadingNormal): at a light-subpath vertex
@@ -178,7 +175,7 @@ def _bdpt_vertex_pdfs(
 @always_inline
 def _lobe_scoped(v: BDPTVertex) -> Bool:
     """VCM's view of the shared scope test (bxdf.mojo)."""
-    return lobe_scoped(_vertex_ctx(v))
+    return _vertex_ctx(v).scoped()
 
 @always_inline
 def _bdpt_vertex_mis_scoped(v: BDPTVertex) -> Bool:

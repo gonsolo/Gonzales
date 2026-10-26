@@ -9,9 +9,9 @@ from std.testing import assert_true, TestSuite
 from gonzales.geometry import RGB, Vec3f, PI
 from gonzales.materials import Material, MatKind, LobeKind, MeasuredBRDF
 from gonzales.curves import Curve
-from gonzales.bxdf import LobeCtx, LobeTables, lobe_eval, lobe_sample, lobe_scoped
+from gonzales.bxdf import BSDF, LobeTables
 from gonzales.rng import PCG32
-from gonzales.spectrum import sample_wavelengths, SpectralContext, spectral_handle
+from gonzales.spectrum import sample_wavelengths, SpectralContext, spectral_handle, SpectralHandle
 from gonzales.rgb2spec import build_spectrum_table, build_cie_xyz_tables, SpectrumTable
 
 comptime _curves = Pointer[Curve, MutUntrackedOrigin].unsafe_dangling()
@@ -43,12 +43,13 @@ def _tables() -> LobeTables:
     # coateddiffuse: eta in .emission.r, thickness in .emission.g, coat alpha in roughU/V
     mats[unsafe_offset=MAT_COAT_ROUGH] = _material(MatKind.coated_diffuse, RGB(Float32(0.8)), RGB(Float32(1.5), Float32(0.01), Float32(0)), Float32(0.3))
     mats[unsafe_offset=MAT_COAT_SMOOTH] = _material(MatKind.coated_diffuse, RGB(Float32(0.8)), RGB(Float32(1.5), Float32(0.01), Float32(0)), Float32(0))
-    return LobeTables(mats, _curves, _mbrdfs)
+    var none = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling()
+    return LobeTables(mats, _curves, _mbrdfs, SpectralHandle(none, 0, none, none, none, none))   # set per test
 
 
-def _ctx(kind: Int32, mat_idx: Int, alb: RGB, cos_o: Float32, adjoint: Bool) -> LobeCtx:
+def _ctx(kind: Int32, mat_idx: Int, alb: RGB, cos_o: Float32, adjoint: Bool) -> BSDF:
     var wo = Vec3f(sqrt(max(Float32(0), Float32(1) - cos_o * cos_o)), Float32(0), cos_o)
-    return LobeCtx(kind, True, False, Vec3f(0.0, 0.0, 1.0), wo, alb, Int32(mat_idx),
+    return BSDF(kind, True, False, Vec3f(0.0, 0.0, 1.0), wo, alb, Int32(mat_idx),
                    Float32(0), Float32(0), Int32(-1), Float32(0), Float32(0), False, adjoint)
 
 
@@ -59,11 +60,12 @@ def _uniform_sphere(u: Float32, v: Float32) -> Vec3f:
     return Vec3f(r * cos(phi), r * sin(phi), z)
 
 
-def _check_consistency(name: String, c: LobeCtx, tab: LobeTables) raises:
+def _check_consistency(name: String, c: BSDF, tab: LobeTables) raises:
     """E[weight] over non-delta samples == integral of lobe_eval's f*cos, and
     every sample's pdf_fwd == lobe_eval's pdf_fwd at that direction."""
     var ctx = _test_ctx()
     var h = spectral_handle(ctx)
+    var tab_h = LobeTables(tab.materials, tab.curves, tab.measured_brdfs, h)
     var wl = sample_wavelengths(Float32(0.37))
     var rng = PCG32(UInt64(7), UInt64(11))
     comptime N = 60000
@@ -71,15 +73,14 @@ def _check_consistency(name: String, c: LobeCtx, tab: LobeTables) raises:
     var uniform = Float64(0)
     var worst_pdf = Float32(0)
     for _ in range(N):
-        var s = lobe_sample(c, rng.next_float(), rng.next_float(), rng.next_float(), rng.next_float(), tab,
-                            h.coeffs, h.res, h.cie_x, h.cie_y, h.cie_z, h.d65, wl)
+        var s = c.sample(rng.next_float(), rng.next_float(), rng.next_float(), rng.next_float(), tab_h, wl)
         if s.valid and not s.is_delta:
             sampled += Float64(s.weight.v0)
-            var le_s = lobe_eval[want_pdfs=True](c, s.wi, tab, h.coeffs, h.res, h.cie_x, h.cie_y, h.cie_z, h.d65, wl)
+            var le_s = c.f[want_pdfs=True](s.wi, tab_h, wl)
             var rel = abs(le_s.pdf_fwd - s.pdf_fwd) / max(le_s.pdf_fwd, Float32(1e-6))
             worst_pdf = max(worst_pdf, rel)
         var wi = _uniform_sphere(rng.next_float(), rng.next_float())
-        var le = lobe_eval[want_pdfs=True](c, wi, tab, h.coeffs, h.res, h.cie_x, h.cie_y, h.cie_z, h.d65, wl)
+        var le = c.f[want_pdfs=True](wi, tab_h, wl)
         uniform += Float64(le.f_cos.v0) * Float64(4.0 * 3.14159265358979)
     sampled /= Float64(N)
     uniform /= Float64(N)
@@ -126,10 +127,11 @@ def test_ggx_mirror_is_delta() raises:
     var tab = _tables()
     var ctx = _test_ctx()
     var h = spectral_handle(ctx)
+    var tab_h = LobeTables(tab.materials, tab.curves, tab.measured_brdfs, h)
     var wl = sample_wavelengths(Float32(0.37))
     var c = _ctx(LobeKind.ggx, -1, RGB(Float32(0.9)), Float32(0.6), False)
     c.param = Float32(0)
-    var s = lobe_sample(c, Float32(0.5), Float32(0.5), Float32(0.5), Float32(0.5), tab, h.coeffs, h.res, h.cie_x, h.cie_y, h.cie_z, h.d65, wl)
+    var s = c.sample(Float32(0.5), Float32(0.5), Float32(0.5), Float32(0.5), tab_h, wl)
     assert_true(s.valid and s.is_delta, "a smooth conductor samples a delta mirror")
     # mirror of wo about +z
     assert_true(abs(s.wi[0] + c.wo[0]) < Float32(1e-5) and abs(s.wi[2] - c.wo[2]) < Float32(1e-5), "mirror direction")
@@ -144,14 +146,15 @@ def test_eval_scoped_is_lobe_scoped() raises:
     var tab = _tables()
     var ctx = _test_ctx()
     var h = spectral_handle(ctx)
+    var tab_h = LobeTables(tab.materials, tab.curves, tab.measured_brdfs, h)
     var wl = sample_wavelengths(Float32(0.37))
     var wi = Vec3f(0.3, 0.1, 0.9)
     for kind_mat in [(LobeKind.lambertian, -1), (LobeKind.ggx, -1),
                      (LobeKind.diffuse_transmit, MAT_DT), (LobeKind.layered, MAT_COAT_ROUGH)]:
         var c = _ctx(kind_mat[0], kind_mat[1], RGB(Float32(0.5)), Float32(0.8), False)
         c.param = Float32(0.3)
-        var le = lobe_eval[want_pdfs=True](c, wi, tab, h.coeffs, h.res, h.cie_x, h.cie_y, h.cie_z, h.d65, wl)
-        assert_true(le.scoped == lobe_scoped(c), "lobe_eval.scoped != lobe_scoped for kind " + String(kind_mat[0]))
+        var le = c.f[want_pdfs=True](wi, tab_h, wl)
+        assert_true(le.scoped == c.scoped(), "lobe_eval.scoped != lobe_scoped for kind " + String(kind_mat[0]))
     _ = ctx^
 
 

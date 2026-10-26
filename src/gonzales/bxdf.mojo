@@ -8,7 +8,7 @@ from .sampling import sample_ggx_vndf, sample_cosine_hemisphere_world
 from .vcm_mis import MisPolicy, mis_policy_power, nee_mis_weight
 from .measured_bxdf_eval import bxdf_eval_measured, bxdf_pdf_measured, bxdf_sample_measured
 from .bvh import LightSample, HairLobeConstants, _hair_eval_lobes, SceneView, _hair_precompute, _hair_sample_dir_u
-from .spectrum import SampledWavelengths, SpectralSample, rgb_to_spectral_sample, spec_refl_unbounded, rgb_illuminant_to_spectral_sample, rgb_bands_to_spectral_sample
+from .spectrum import SampledWavelengths, SpectralHandle, SpectralSample, rgb_to_spectral_sample, spec_refl_unbounded, rgb_illuminant_to_spectral_sample, rgb_bands_to_spectral_sample
 
 # ── Isotropic GGX (Trowbridge-Reitz) evaluation ───────────────────────────────
 # Companion to sample_ggx_vndf: that function only *samples* a half-vector: NEE
@@ -796,7 +796,7 @@ def _nee_weight_simple(
 struct LobeTables(TrivialRegisterPassable):
     """The three scene tables a lobe evaluation can read, and nothing else.
 
-    lobe_eval took these as three loose pointers because the integrators do
+    _lobe_eval took these as three loose pointers because the integrators do
     not share a context type: VCM has SceneView (39 fields, passed
     by ref), the path tracer has ShadeContext (23 fields, passed by value),
     and they carry ELEVEN of the same scene pointers between them.
@@ -809,10 +809,11 @@ struct LobeTables(TrivialRegisterPassable):
     var materials:      Pointer[Material, MutUntrackedOrigin]
     var curves:         Pointer[Curve, MutUntrackedOrigin]
     var measured_brdfs: Pointer[MeasuredBRDF, MutUntrackedOrigin]
+    var spectral:       SpectralHandle   # RGB to spectrum for the lobes' colours
 
 
 @fieldwise_init
-struct LobeCtx(TrivialRegisterPassable):
+struct BSDF(TrivialRegisterPassable):
     """Everything the ONE lobe evaluator needs about a shading point, and
     nothing about which integrator is asking.
 
@@ -855,6 +856,31 @@ struct LobeCtx(TrivialRegisterPassable):
     # MIS blend estimates of two different integrands.
     var adjoint:        Bool
 
+    @always_inline
+    def f[want_pdfs: Bool = True](self, wi: Vec3f, tab: LobeTables, wl: SampledWavelengths) -> LobeEval:
+        """f*cos toward `wi`, the densities both ways and whether they may take part in MIS."""
+        var s = tab.spectral
+        return _lobe_eval[want_pdfs](self, wi, tab, s.coeffs, s.res, s.cie_x, s.cie_y, s.cie_z, s.d65, wl)
+
+    @always_inline
+    def sample(self, uc: Float32, u0: Float32, u1: Float32, u2: Float32, tab: LobeTables,
+               wl: SampledWavelengths) -> LobeSample:
+        """A scattering direction and its weight f*cos/pdf; `uc` picks the lobe, u2 only hair draws."""
+        var s = tab.spectral
+        return _lobe_sample(self, uc, u0, u1, u2, tab, s.coeffs, s.res, s.cie_x, s.cie_y, s.cie_z, s.d65, wl)
+
+    @always_inline
+    def scoped(self) -> Bool:
+        """Real forward and reverse densities exist, so the vertex may take part in MIS."""
+        return _lobe_scoped(self)
+
+    @always_inline
+    def nee_weight(self, ls: LightSample, tab: LobeTables, wl: SampledWavelengths,
+                   mis: MisPolicy = mis_policy_power()) -> SpectralSample:
+        """A light sample's contribution through this BSDF, f*cos*Li/pdf times its MIS weight."""
+        var s = tab.spectral
+        return _nee_weight_lobe(ls, self, tab, s.coeffs, s.res, s.cie_x, s.cie_y, s.cie_z, s.d65, wl, mis)
+
 
 @fieldwise_init
 struct LobeEval(TrivialRegisterPassable):
@@ -887,9 +913,9 @@ struct LobeEval(TrivialRegisterPassable):
 
 
 @always_inline
-def lobe_scoped(c: LobeCtx) -> Bool:
+def _lobe_scoped(c: BSDF) -> Bool:
     """Does this lobe have REAL forward/reverse densities, i.e. may it take
-    part in MIS? THE one list -- lobe_eval reports it as LobeEval.scoped and
+    part in MIS? THE one list -- _lobe_eval reports it as LobeEval.scoped and
     every integrator asks this, so a kind cannot be in scope for one consumer
     and out of it for another.
 
@@ -906,9 +932,9 @@ def lobe_scoped(c: LobeCtx) -> Bool:
         return c.is_surface
     if not c.is_surface or c.is_delta:
         return False
-    # diffuse_transmit: lobe_eval returns its real two-lobe densities (the
+    # diffuse_transmit: _lobe_eval returns its real two-lobe densities (the
     # luminance split times each side's cosine). It was missing here while
-    # lobe_eval hard-coded True for it, so VCM's NEE at a leaf weighted
+    # _lobe_eval hard-coded True for it, so VCM's NEE at a leaf weighted
     # itself against connections that _connect then ran UNWEIGHTED: floor
     # lit only through a diffusetransmission panel read 1.8x pbrt.
     return (c.kind == LobeKind.lambertian or c.kind == LobeKind.ggx
@@ -918,8 +944,8 @@ def lobe_scoped(c: LobeCtx) -> Bool:
 
 
 @always_inline
-def lobe_eval[want_pdfs: Bool = True](
-    c:   LobeCtx,
+def _lobe_eval[want_pdfs: Bool = True](
+    c:   BSDF,
     dir_to_other:  Vec3f,
     tab: LobeTables,
     spectral_coeffs: Pointer[Float32, MutUntrackedOrigin], spectral_res: Int,
@@ -1077,7 +1103,7 @@ def lobe_eval[want_pdfs: Bool = True](
         var cos_dt = dot(dir_to_other, vn)
         var cos_wo_dt = dot(vwo, vn)
         if abs(cos_dt) <= Float32(1e-9) or abs(cos_wo_dt) <= Float32(1e-9):
-            return LobeEval(ZERO, Float32(1), Float32(0), Float32(0), lobe_scoped(c))
+            return LobeEval(ZERO, Float32(1), Float32(0), Float32(0), _lobe_scoped(c))
         var same_side = cos_dt * cos_wo_dt > Float32(0)
         var trans_dt = _dt_transmittance(c, tab)
         var refl_dt = _dt_reflectance(c, tab)
@@ -1096,7 +1122,7 @@ def lobe_eval[want_pdfs: Bool = True](
         comptime if want_pdfs:
             fwd_dt = p_lobe_dt * cos_a_dt * INV_PI
             rev_dt = p_lobe_dt * abs(cos_wo_dt) * INV_PI
-        return LobeEval(alb_dt * (INV_PI * cos_a_dt), cos_a_dt, fwd_dt, rev_dt, lobe_scoped(c))
+        return LobeEval(alb_dt * (INV_PI * cos_a_dt), cos_a_dt, fwd_dt, rev_dt, _lobe_scoped(c))
 
     # Opaque Lambertian, and the coated base's fallback. ZERO across the
     # surface: `c.wo` is the direction the subpath ARRIVED from, so an opaque
@@ -1114,20 +1140,20 @@ def lobe_eval[want_pdfs: Bool = True](
 
 
 @always_inline
-def _dt_transmittance(c: LobeCtx, tab: LobeTables) -> RGB:
+def _dt_transmittance(c: BSDF, tab: LobeTables) -> RGB:
     """A diffusetransmission lobe's transmittance. It lives in the MATERIAL
     (Material.emission, see shade_diffuse_transmission), so it needs a real
     mat_idx; callers without one pass -1, which falls back to a symmetric
     lobe rather than index the table out of bounds. One texture slot serves
     both lobes when textured, matching shade_diffuse_transmission; c.alb is
-    already the resolved one. Shared by lobe_eval and lobe_sample so the
+    already the resolved one. Shared by _lobe_eval and _lobe_sample so the
     density one reports is the split the other draws from."""
     if Int(c.mat_idx) >= 0:
         return tab.materials[unsafe_offset=Int(c.mat_idx)].dt_transmittance(c.alb)
     return c.alb
 
 @always_inline
-def _dt_reflectance(c: LobeCtx, tab: LobeTables) -> RGB:
+def _dt_reflectance(c: BSDF, tab: LobeTables) -> RGB:
     """The reflect lobe's colour: c.alb, unless the material's texture drives the transmittance only."""
     if Int(c.mat_idx) >= 0:
         return tab.materials[unsafe_offset=Int(c.mat_idx)].dt_reflectance(c.alb)
@@ -1136,16 +1162,16 @@ def _dt_reflectance(c: LobeCtx, tab: LobeTables) -> RGB:
 
 @fieldwise_init
 struct LobeSample(TrivialRegisterPassable):
-    """One scattering decision at a vertex -- lobe_eval's sampling half.
+    """One scattering decision at a vertex -- _lobe_eval's sampling half.
 
     `weight` is what the throughput is multiplied by, f*|cos|/pdf. `pdf_fwd`
     and `pdf_rev` are the densities MIS needs (solid angle, both 0 for a delta
-    event). For an analytic lobe they come FROM lobe_eval at the sampled
+    event). For an analytic lobe they come FROM _lobe_eval at the sampled
     direction, and so does the weight: sampling only chooses the direction,
     so a sampler and its evaluator cannot drift apart. A stochastic lobe
     (layered) is the exception: its f is itself an estimate, so the weight
     is the random walk's own throughput while the densities still come from
-    lobe_eval, the value every other strategy sees."""
+    _lobe_eval, the value every other strategy sees."""
     var valid:    Bool
     var wi:       Vec3f
     var weight:   SpectralSample
@@ -1153,7 +1179,7 @@ struct LobeSample(TrivialRegisterPassable):
     var pdf_fwd:  Float32
     var pdf_rev:  Float32
     var cos_out:  Float32   # the lobe's own |cos| at wi
-    var scoped:   Bool      # lobe_scoped(c), and nothing else
+    var scoped:   Bool      # _lobe_scoped(c), and nothing else
 
 
 @always_inline
@@ -1162,8 +1188,8 @@ def _lobe_sample_invalid() -> LobeSample:
                       Float32(0), Float32(0), Float32(0), False)
 
 
-def lobe_sample(
-    c:   LobeCtx,
+def _lobe_sample(
+    c:   BSDF,
     uc:  Float32,
     u0:  Float32,
     u1:  Float32,
@@ -1176,7 +1202,7 @@ def lobe_sample(
     spectral_d65: Pointer[Float32, MutUntrackedOrigin],
     wavelengths: SampledWavelengths,
 ) -> LobeSample:
-    """THE lobe sampler: the same LobeCtx lobe_eval takes, so the two see one
+    """THE lobe sampler: the same BSDF _lobe_eval takes, so the two see one
     vertex. `uc` picks among lobes, (u0, u1) the direction, and u2 is a
     fourth number only hair's logistic azimuth draws. Kinds not yet
     covered return valid=False; callers must not fall back to a sampler of
@@ -1198,9 +1224,9 @@ def lobe_sample(
             var sch = one_m * one_m * one_m * one_m * one_m
             var f0 = rgb_to_spectral_sample(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, c.alb.r, c.alb.g, c.alb.b, wavelengths)
             return LobeSample(True, wi_m, f0 * (Float32(1) - sch) + SpectralSample(sch), True,
-                              Float32(0), Float32(0), cos_o, lobe_scoped(c))
+                              Float32(0), Float32(0), cos_o, _lobe_scoped(c))
         # Rough: the multiple-scattering cosine lobe or a VNDF reflection,
-        # mixed exactly as bxdf_pdf_conductor_ggx (lobe_eval's density) says.
+        # mixed exactly as bxdf_pdf_conductor_ggx (_lobe_eval's density) says.
         var p_ms = Float32(1) - ggx_albedo(cos_o, c.param)
         var wi_g: Vec3f
         if uc < p_ms:
@@ -1214,19 +1240,19 @@ def lobe_sample(
             var wh = tx_g * wh_l.x + ty_g * wh_l.y + vn * wh_l.z
             wh = wh * (Float32(1) / sqrt(max(dot(wh, wh), Float32(1e-20))))
             wi_g = wh * (Float32(2) * dot(vwo, wh)) - vwo
-        var le_g = lobe_eval[want_pdfs=True](c, wi_g, tab, spectral_coeffs, spectral_res,
+        var le_g = _lobe_eval[want_pdfs=True](c, wi_g, tab, spectral_coeffs, spectral_res,
             spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, wavelengths)
         if le_g.pdf_fwd <= Float32(0):
             return _lobe_sample_invalid()
         return LobeSample(True, wi_g, le_g.f_cos * (Float32(1) / le_g.pdf_fwd), False,
-                          le_g.pdf_fwd, le_g.pdf_rev, le_g.cos_used, lobe_scoped(c))
+                          le_g.pdf_fwd, le_g.pdf_rev, le_g.cos_used, _lobe_scoped(c))
 
     if c.is_delta:
         return _lobe_sample_invalid()
 
     if c.kind == LobeKind.rough_dielectric:
         # diel_sample draws the direction (reflect or transmit by Fresnel,
-        # a VNDF microfacet); weight and densities come back from lobe_eval,
+        # a VNDF microfacet); weight and densities come back from _lobe_eval,
         # as for every analytic lobe, so sampler and evaluator cannot drift.
         var ior_rs = tab.materials[unsafe_offset=Int(c.mat_idx)].albedo.r
         var fr_rs = Frame.from_z(Vec3f(vn[0], vn[1], vn[2]))
@@ -1237,30 +1263,30 @@ def lobe_sample(
         if not ds.valid:
             return _lobe_sample_invalid()
         var wi_rs = tx_rs * ds.wi.x + ty_rs * ds.wi.y + vn * ds.wi.z
-        var le_rs = lobe_eval[want_pdfs=True](c, wi_rs, tab, spectral_coeffs, spectral_res,
+        var le_rs = _lobe_eval[want_pdfs=True](c, wi_rs, tab, spectral_coeffs, spectral_res,
             spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, wavelengths)
         if le_rs.pdf_fwd <= Float32(0):
             return _lobe_sample_invalid()
         return LobeSample(True, wi_rs, le_rs.f_cos * (Float32(1) / le_rs.pdf_fwd), False,
-                          le_rs.pdf_fwd, le_rs.pdf_rev, le_rs.cos_used, lobe_scoped(c))
+                          le_rs.pdf_fwd, le_rs.pdf_rev, le_rs.cos_used, _lobe_scoped(c))
 
     if c.kind == LobeKind.hair:
         # The 3-lobe Marschner sampler (bvh.mojo). Its density is the fibre
-        # cosine times pdf_over_cos, which is lobe_eval's pdf_fwd exactly.
+        # cosine times pdf_over_cos, which is _lobe_eval's pdf_fwd exactly.
         var mat_h = tab.materials[unsafe_offset=Int(c.mat_idx)]
         var hc = _hair_precompute(mat_h, tab.curves, Int(c.hair_curve_idx), c.hair_v, c.hair_h, vwo)
         var sh = _hair_sample_dir_u(hc, uc, u0, u1, u2)
-        var le_h = lobe_eval[want_pdfs=True](c, sh[0], tab, spectral_coeffs, spectral_res,
+        var le_h = _lobe_eval[want_pdfs=True](c, sh[0], tab, spectral_coeffs, spectral_res,
             spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, wavelengths)
         if le_h.pdf_fwd <= Float32(0):
             return _lobe_sample_invalid()
         return LobeSample(True, sh[0], le_h.f_cos * (Float32(1) / le_h.pdf_fwd), False,
-                          le_h.pdf_fwd, le_h.pdf_rev, le_h.cos_used, lobe_scoped(c))
+                          le_h.pdf_fwd, le_h.pdf_rev, le_h.cos_used, _lobe_scoped(c))
 
     if c.kind == LobeKind.measured:
-        # pbrt's MeasuredBxDF::Sample_f, in the same local frame lobe_eval
+        # pbrt's MeasuredBxDF::Sample_f, in the same local frame _lobe_eval
         # evaluates the table in. The weight divides by the density the
-        # sampler actually drew from; f comes from lobe_eval, which applies
+        # sampler actually drew from; f comes from _lobe_eval, which applies
         # the adjoint argument order on the light subpath.
         var mb = tab.measured_brdfs[unsafe_offset=Int(tab.materials[unsafe_offset=Int(c.mat_idx)].measured_idx)]
         var fr_m = Frame.from_z(Vec3f(vn[0], vn[1], vn[2]))
@@ -1274,10 +1300,10 @@ def lobe_sample(
         wi_m = wi_m * (Float32(1) / sqrt(max(dot(wi_m, wi_m), Float32(1e-20))))
         if dot(wi_m, vn) <= Float32(0):
             return _lobe_sample_invalid()
-        var le_m = lobe_eval[want_pdfs=True](c, wi_m, tab, spectral_coeffs, spectral_res,
+        var le_m = _lobe_eval[want_pdfs=True](c, wi_m, tab, spectral_coeffs, spectral_res,
             spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, wavelengths)
         return LobeSample(True, wi_m, le_m.f_cos * (Float32(1) / pdf_m), False,
-                          pdf_m, le_m.pdf_rev, le_m.cos_used, lobe_scoped(c))
+                          pdf_m, le_m.pdf_rev, le_m.cos_used, _lobe_scoped(c))
 
     if c.kind == LobeKind.layered:
         var mat_ly = tab.materials[unsafe_offset=Int(c.mat_idx)]
@@ -1294,18 +1320,18 @@ def lobe_sample(
         var cos_out = abs(bs.wi.z)
         var w = bs.f * (cos_out / bs.pdf)
         if bs.specular:
-            return LobeSample(True, wi, w, True, Float32(0), Float32(0), cos_out, lobe_scoped(c))
-        var le = lobe_eval[want_pdfs=True](c, wi, tab, spectral_coeffs, spectral_res,
+            return LobeSample(True, wi, w, True, Float32(0), Float32(0), cos_out, _lobe_scoped(c))
+        var le = _lobe_eval[want_pdfs=True](c, wi, tab, spectral_coeffs, spectral_res,
             spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, wavelengths)
-        return LobeSample(True, wi, w, False, le.pdf_fwd, le.pdf_rev, cos_out, lobe_scoped(c))
+        return LobeSample(True, wi, w, False, le.pdf_fwd, le.pdf_rev, cos_out, _lobe_scoped(c))
 
     var bounce_n = vn
     if c.kind == LobeKind.lambertian:
-        # The lobe lives on wo's side; lobe_eval zeroes the other one.
+        # The lobe lives on wo's side; _lobe_eval zeroes the other one.
         if dot(vwo, vn) < Float32(0):
             bounce_n = -vn
     elif c.kind == LobeKind.diffuse_transmit:
-        # The SAME luminance split lobe_eval reports as the lobe probability.
+        # The SAME luminance split _lobe_eval reports as the lobe probability.
         var pr = _dt_reflectance(c, tab).luma()
         var pt = _dt_transmittance(c, tab).luma()
         if pr + pt <= Float32(1e-9):
@@ -1317,12 +1343,12 @@ def lobe_sample(
 
     var s = sample_cosine_hemisphere_world(u0, u1, bounce_n)
     var wi = s[0]
-    var le = lobe_eval[want_pdfs=True](c, wi, tab, spectral_coeffs, spectral_res,
+    var le = _lobe_eval[want_pdfs=True](c, wi, tab, spectral_coeffs, spectral_res,
         spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, wavelengths)
     if le.pdf_fwd <= Float32(0):
         return _lobe_sample_invalid()
     return LobeSample(True, wi, le.f_cos * (Float32(1) / le.pdf_fwd), False,
-                      le.pdf_fwd, le.pdf_rev, le.cos_used, lobe_scoped(c))
+                      le.pdf_fwd, le.pdf_rev, le.cos_used, _lobe_scoped(c))
 
 
 # Moved here from bdpt_*.mojo so that the ONE lobe evaluator can live below
@@ -1401,9 +1427,9 @@ def _eval_conductor_ggx_spectral(
 # ctx.spectral.res, ctx.spectral.cie_x, ctx.spectral.cie_y, ctx.spectral.cie_z,
 # ctx.spectral.d65.
 @always_inline
-def nee_weight_lobe(
+def _nee_weight_lobe(
     ls:    LightSample,
-    c:     LobeCtx,
+    c:     BSDF,
     tab:   LobeTables,
     spectral_coeffs: Pointer[Float32, MutUntrackedOrigin], spectral_res: Int,
     spectral_cie_x: Pointer[Float32, MutUntrackedOrigin],
@@ -1414,19 +1440,19 @@ def nee_weight_lobe(
     mis: MisPolicy = mis_policy_power(),
 ) -> SpectralSample:
     """THE NEE weight: f*cos*Li/pdf times the MIS weight, for any lobe, from
-    the same LobeCtx lobe_eval and lobe_sample take -- so a stored vertex's
+    the same BSDF _lobe_eval and _lobe_sample take -- so a stored vertex's
     NEE, connections and merges all see one vertex (hair's curve fields
     included, which a flat (kind, alb, alpha) signature cannot carry).
 
     Opaque lobes reject a light behind the shading normal; diffuse_transmit
-    and hair transport to both sides, so for them lobe_eval decides."""
+    and hair transport to both sides, so for them _lobe_eval decides."""
     if not ls.valid:
         return SpectralSample(Float32(0.0))
     var cos_s = dot(c.n, ls.wi)
     var two_sided = c.kind == LobeKind.diffuse_transmit or c.kind == LobeKind.hair
     if (cos_s <= Float32(0.0) and not two_sided) or (two_sided and abs(cos_s) <= Float32(0.0) and c.kind != LobeKind.hair):
         return SpectralSample(Float32(0.0))
-    var le = lobe_eval[want_pdfs=True](c, ls.wi, tab,
+    var le = _lobe_eval[want_pdfs=True](c, ls.wi, tab,
         spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y,
         spectral_cie_z, spectral_d65, wavelengths)
     var f = le.f_cos
@@ -1477,8 +1503,8 @@ def _nee_weight_simple_spectral(
     rgb_illuminant_to_spectral_sample for the light's unbounded radiance/
     intensity) before multiplying, instead of multiplying plain RGB
     triples."""
-    return nee_weight_lobe(ls,
-        LobeCtx(mat_kind, True, False, n, wo, alb, mat_idx, alpha,
+    return _nee_weight_lobe(ls,
+        BSDF(mat_kind, True, False, n, wo, alb, mat_idx, alpha,
                 Float32(0), Int32(-1), Float32(0), Float32(0), True, False),
         tab, spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y,
         spectral_cie_z, spectral_d65, wavelengths, mis)
