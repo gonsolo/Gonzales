@@ -131,6 +131,15 @@ struct Material(TrivialRegisterPassable):
         return LobeKind.lambertian
 
     @always_inline
+    def uses_lobe(self) -> Bool:
+        """Scatters through its BSDF (lobe): everything but smooth glass, subsurface boundaries, the coated
+        conductor, mixes, emitters and pass-through boundaries."""
+        if self.type == MatKind.dielectric:
+            return self.is_rough_dielectric() and self.sss_boundary == Int8(0)
+        return self.type == MatKind.diffuse or self.type == MatKind.diffuse_transmit or self.type == MatKind.coated_diffuse \
+            or self.type == MatKind.conductor or self.type == MatKind.measured or self.type == MatKind.hair
+
+    @always_inline
     def has_lobe(self) -> Bool:
         """False when the lobe has no data: a measured material whose table did not load."""
         return not (self.type == MatKind.measured and self.measured_idx < Int32(0))

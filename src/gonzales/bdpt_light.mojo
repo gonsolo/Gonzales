@@ -412,7 +412,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
         if mat.type != MatKind.interface:
             st.mis_null_dist = Float32(0)
 
-        if mat.type == MatKind.diffuse or mat.type == MatKind.diffuse_transmit or mat.type == MatKind.coated_diffuse or mat.type == MatKind.conductor or mat.type == MatKind.measured or mat.type == MatKind.hair or (mat.is_rough_dielectric() and mat.sss_boundary == Int8(0)):
+        if mat.uses_lobe():
             if not mat.has_lobe():
                 return False   # e.g. a measured table that failed to load
             var lh = _vcm_lobe_vertex[use_gpu](sd, inter, mat, mat_idx, hit, ray_dir, Float32(-1.0), st.flux, st.cur_med_idx,

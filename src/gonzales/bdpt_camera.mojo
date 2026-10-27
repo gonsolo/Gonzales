@@ -18,19 +18,12 @@ from .vcm_camis import (
     CamisLightRecord, camis_clamp_log_p, camis_eval_emission_hit,
 )
 from .bvh import traverse_dispatch
-from .bvh import (
-    SceneView, test_spheres, _scene_bounding_sphere, _eval_infinite_light_and_pdf,
-    _hair_precompute, curve_offset_eps, sphere_light_cone_pdf, _sample_infinite_light_nee,
-    light_path_pick_pdf,
-)
+from .bvh import SceneView, test_spheres, _scene_bounding_sphere, _eval_infinite_light_and_pdf, sphere_light_cone_pdf, _sample_infinite_light_nee, light_path_pick_pdf
 from .sampling import power_heuristic, camera_ray_from_film_xy, FilmFilter, film_filter_offset, ThinLens
 from .rng import PCG32
 from .sppm import _geom_normal, _shading_normal_at, _dielectric_bounce, medium_after_crossing, _cosine_hemisphere_sample, area_light_side_pdf
-from .shading import (
-    uv_footprint_at_hit, _tex_lookup, _get_tri_verts, apply_surface_maps_at_hit, area_light_hit_cos,
-    curve_light_hit,
-)
-from .bxdf import BSDF, lobe_sample, LobeSample, GeomContext, BxDFSample, bxdf_sample_coated_conductor, bxdf_is_delta, bxdf_pdf_conductor_ggx, LobeTables
+from .shading import _get_tri_verts, apply_surface_maps_at_hit, area_light_hit_cos, curve_light_hit
+from .bxdf import BSDF, LobeSample, GeomContext, BxDFSample, bxdf_sample_coated_conductor, bxdf_is_delta, bxdf_pdf_conductor_ggx, LobeTables
 from .spectrum import (
     SampledWavelengths, SpectralSample, spec_refl, spec_refl_unbounded, spec_illum,
     rgb_bands_to_spectral_sample,
@@ -45,6 +38,7 @@ from .vcm_grid import _vcm_depth, _vcm_keep, _VCM_CAMIS, _CAMIS_CAM_RECS, _CAMIS
 from .bdpt_connect import _bdpt_connect_to_cache, _bdpt_connect_to_cache_deferred
 from .vcm_merge import _bdpt_merge_from_cache
 from .bdpt_bssrdf import _bdpt_sample_bssrdf_exit, BssrdfExitSample
+from .surface import surface_hit
 
 def _bdpt_trace_camera_and_connect[use_gpu: Bool](
     r2c:     Pointer[Float32, MutUntrackedOrigin],
@@ -416,58 +410,29 @@ def _vcm_lobe_vertex[use_gpu: Bool](
 ) -> VcmLobeHit:
     """The vertex either subpath stores at a lobe material, with the arrival applied to the MIS carries; its dVCM, dVC
     and dVM are the caller's to set. `cone_w` is the camera ray's footprint width for texture filtering, -1 for none."""
-    # Geometry, not material: a curve hit has its own normal and spawn offset, and no texture or bump map.
-    var on_curve = inter.primId.type == Int8(5)
-    var spawn_eps = offset_eps(hit.x, hit.y, hit.z)
-    var gn: Vec3f
-    if on_curve:
-        var hc_g = _hair_precompute(mat, sd.curves, Int(inter.primId.id1), inter.v, inter.u, (-ray_dir).to_simd())
-        gn = hc_g.geo_normal
-        spawn_eps = curve_offset_eps(hc_g.radius)
-    elif mat.type == MatKind.dielectric:
-        gn = _shading_normal_at(inter, sd.meshes, sd.instances, sd.spheres, hit)
-    else:
-        gn = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
-    # A rough dielectric needs the outward normal: inside vs outside is which side of it wo lies on.
-    var outward = mat.type == MatKind.dielectric
-    if dot(gn, ray_dir) > Float32(0) and not outward: gn = gn * Float32(-1)
-    var cos_fix = abs(dot(-ray_dir, gn))
-    (dvcm, dvc, dvm) = vcm_arrival_carries(dvcm, dvc, dvm, cos_fix)
-    var eff_alb = mat.albedo
-    var (tex_mesh, tv0, tv1, tv2, tex_ok) = _get_tri_verts(inter, sd.meshes)
-    if tex_ok and not on_curve:
-        eff_alb = _tex_lookup[use_gpu](mat, inter, tv0, tv1, tv2, tex_mesh, sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount),
-            uv_footprint_at_hit(inter, sd.meshes, sd.instances, hit.to_simd(), ray_dir, cone_w, sd.camFp).width)
-    # The stored vertex keeps the unperturbed normal as its geometric one.
-    var gn_geo = gn
-    if not on_curve:
-        gn = apply_surface_maps_at_hit[use_gpu](mat, inter, sd.meshes, sd.instances,
-            gn, gn, hit.to_simd(), ray_dir, cone_w, sd.camFp,
-            sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
-    if not outward:
-        gn = face_toward(gn, -ray_dir)   # pbrt two-sided reflection
+    var h = surface_hit[use_gpu](sd, inter, mat, hit, ray_dir, cone_w)
+    (dvcm, dvc, dvm) = vcm_arrival_carries(dvcm, dvc, dvm, h.cos_in)
     var v = _null_vertex()
     v.pos = hit
-    v.normal = vec3f(gn_geo)
-    v.shading_normal = vec3f(gn)
+    v.normal = vec3f(h.gn_geo)
+    v.shading_normal = vec3f(h.gn)
     v.beta = beta
-    v.alb = eff_alb
+    v.alb = h.alb
     v.is_surface = Int32(1)
-    # One lobe per material: everything after evaluates and samples the vertex through lobe_eval and lobe_sample.
+    # One lobe per material: everything after evaluates and samples the vertex through its BSDF.
     v.mat_kind = mat.lobe()
     v.mat_idx = Int32(mat_idx)
     v.pdf_bwd = mat.lobe_param()   # BSDF.param: a conductor's GGX alpha
     # A smooth conductor is a mirror: it scatters, but stores no vertex and starts no strategy.
     v.is_delta = Int32(1) if mat.is_mirror() else Int32(0)
-    if on_curve:
-        v.hair_curve_idx = Int32(inter.primId.id1)
-        v.hair_h = inter.u
-        v.hair_v = inter.v
+    v.hair_curve_idx = h.curve_idx
+    v.hair_h = h.curve_h
+    v.hair_v = h.curve_v
     v.pdf_fwd = Float32(1)   # unused by the uniform-subsample estimator
     v.wo = vec3f(-ray_dir)
     v.med_idx = med_idx
     v.wavelengths = wl
-    return VcmLobeHit(v, gn, gn_geo, cos_fix, spawn_eps, on_curve, eff_alb)
+    return VcmLobeHit(v, h.gn, h.gn_geo, h.cos_in, h.spawn_eps, h.on_curve, h.alb)
 
 
 def _bdpt_camera_path_bounce[use_gpu: Bool](
@@ -773,7 +738,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
         if mat.type != MatKind.interface:
             st.mis_null_dist = Float32(0)
 
-        if mat.type == MatKind.diffuse or mat.type == MatKind.diffuse_transmit or mat.type == MatKind.coated_diffuse or mat.type == MatKind.conductor or mat.type == MatKind.measured or mat.type == MatKind.hair or (mat.is_rough_dielectric() and mat.sss_boundary == Int8(0)):
+        if mat.uses_lobe():
             if not mat.has_lobe():
                 return False   # e.g. a measured table that failed to load
             var lh = _vcm_lobe_vertex[use_gpu](sd, inter, mat, mat_idx, hit, ray_dir, vcm_cone_w, st.beta, st.cur_med_idx,

@@ -12,19 +12,17 @@ from std.atomic import Atomic
 from std.memory import bitcast
 from .geometry import offset_eps, face_toward, TERMINAL_SEGMENT_GRACE_ROUNDS, RGB, Point3f, Point2f, Vec3f, vec3f, point3f, dot, cross, PI, INV_FOUR_PI, Frame, _is_real_ptr
 from .materials import Material, MatKind, LobeKind, PhotonKind, fr_dielectric
-from .render_state import GpuTexture
 from .primitives import Ray, Intersection, PrimId, TriangleMesh, Sphere, Instance, sphere_outward_normal, mesh_normal, mesh_vi
 from .primitives import mesh_pos
-from .media import Medium, MediumInterface, Grid, NvdbGrid, sample_free_flight, medium_is_heterogeneous, medium_sigma_t_spectral, medium_grid_for, medium_nvdb_for, grid_sample_density, nvdb_sample_density, SSS_WALK_ROUNDS, spectral_free_flight_weight
+from .media import Medium, Grid, NvdbGrid, sample_free_flight, medium_is_heterogeneous, medium_sigma_t_spectral, medium_grid_for, medium_nvdb_for, grid_sample_density, nvdb_sample_density, SSS_WALK_ROUNDS, spectral_free_flight_weight
 from .lights import area_light_pick_triangle, AreaLight
 from .curves import Curve, curve_at, curve_piece_endpoints, _curve_perp_axis
 from .bssrdf import dipole_rd, dipole_max_radius
 from .bvh import traverse_dispatch, any_hit_dispatch
-from .bvh import SceneView, _scene_bounding_sphere, _sample_disk_perpendicular, _sample_infinite_light_dir, _eval_infinite_light_and_pdf, _hair_precompute, _hair_eval_lobes, _hair_sample_dir, curve_offset_eps, LightSample, _sample_distant_light_nee, _sample_point_light_nee, _sample_sphere_light_nee, _sample_infinite_light_nee, light_path_pick, render_aux_buffers
+from .bvh import SceneView, _scene_bounding_sphere, _sample_disk_perpendicular, _sample_infinite_light_dir, _eval_infinite_light_and_pdf, _hair_precompute, curve_offset_eps, LightSample, _sample_distant_light_nee, _sample_point_light_nee, _sample_sphere_light_nee, _sample_infinite_light_nee, light_path_pick
 from .vcm_mis import mis_policy_sole
-from .layered import layered_sample
-from .bxdf import ggx_lambda, dielectric_interface, bxdf_sample_dielectric, bxdf_sample_thin_dielectric, BxDFFlags, GeomContext, BxDFSample, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_is_delta, bxdf_eval_conductor_ggx, _nee_weight_simple, _nee_weight_hair, BSDF, LobeTables
-from .measured_bxdf_eval import bxdf_eval_measured, bxdf_sample_measured
+from .bxdf import ggx_lambda, dielectric_interface, bxdf_sample_dielectric, bxdf_sample_thin_dielectric, BxDFFlags, GeomContext, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_is_delta, BSDF, LobeTables
+from .surface import surface_hit
 from .shading import _tex_lookup, _get_tri_verts, apply_surface_maps_at_hit, uv_footprint_at_hit, area_light_hit_cos
 from .geom_normal import _geom_normal
 from .shadow_media import shadow_transmittance
@@ -32,7 +30,6 @@ from .sampling import sample_ggx_vndf, camera_ray_from_film_xy, FilmFilter, film
 from .transform import transform_normal, Mat4
 from .rng import PCG32
 from .pbrt_parser import ParsedScene_Mojo
-from .postprocess import denoise
 from .progress import Progress
 from .outputs import finish_render
 from .spectrum import (
@@ -944,37 +941,13 @@ def _sppm_trace_visible_point[use_gpu: Bool](
         if bounce > max_charged:
             break
 
-        if mat.type == MatKind.diffuse or mat.type == MatKind.diffuse_transmit or mat.type == MatKind.coated_diffuse or mat.type == MatKind.conductor or mat.type == MatKind.measured or mat.type == MatKind.hair or (mat.is_rough_dielectric() and mat.sss_boundary == Int8(0)):
+        if mat.uses_lobe():
             if not mat.has_lobe():
                 break   # e.g. a measured table that failed to load
-            # A rough dielectric keeps its OUTWARD normal (lobe_eval's
-            # rough_dielectric reads inside vs outside off it).
-            var outward = mat.type == MatKind.dielectric
-            # GEOMETRY, not material: a curve hit has its own normal, and no
-            # texture or bump map -- matches bdpt_*.mojo's own on_curve gate.
-            var on_curve = inter.primId.type == Int8(5)
-            var gn: Vec3f
-            if on_curve:
-                var hc_g = _hair_precompute(mat, sd.curves, Int(inter.primId.id1), inter.v, inter.u, (-rd).to_simd())
-                gn = hc_g.geo_normal
-            elif outward:
-                gn = _shading_normal_at(inter, sd.meshes, sd.instances, sd.spheres, hit)
-            else:
-                gn = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
-            if dot(gn, ray_dir) > Float32(0.0) and not outward:
-                gn = gn * Float32(-1.0)
-            var gn_geo = gn   # before any bump/normal map -- see SPPMPixel.geo_normal
-            var eff_alb = mat.albedo
-            var (tex_mesh, tv0, tv1, tv2, tex_ok) = _get_tri_verts(inter, sd.meshes)
-            if tex_ok and not on_curve:
-                eff_alb = _tex_lookup[use_gpu](mat, inter, tv0, tv1, tv2, tex_mesh, sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount),
-                    uv_footprint_at_hit(inter, sd.meshes, sd.instances, hit.to_simd(), ray_dir, sd.camFp.cone_spread * cone_len, sd.camFp).width)
-            if not on_curve:
-                gn = apply_surface_maps_at_hit[use_gpu](mat, inter, sd.meshes, sd.instances,
-                    gn, gn, hit.to_simd(), ray_dir, sd.camFp.cone_spread * cone_len, sd.camFp,
-                    sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
-                if not outward:
-                    gn = face_toward(gn, -ray_dir)   # pbrt two-sided reflection, see face_toward
+            var sh = surface_hit[use_gpu](sd, inter, mat, hit, ray_dir, sd.camFp.cone_spread * cone_len)
+            var gn = sh.gn
+            var gn_geo = sh.gn_geo   # before any bump/normal map -- see SPPMPixel.geo_normal
+            var eff_alb = sh.alb
             # A smooth conductor is the one kind here that is genuinely
             # delta: it scatters but stores no visible point, exactly like
             # VCM's Material.is_mirror gate.
@@ -1024,10 +997,9 @@ def _sppm_trace_visible_point[use_gpu: Bool](
                 vp.wo = vec3f((-rd).to_simd())
                 # smooth top: the gather skips the glossy coat lobe; a negative alpha keeps the real one for delta lights
                 vp.alpha = (Float32(1e-4) if coat_alpha <= Float32(0.05) else -coat_alpha) if coat_as_mirror else mat.lobe_param()
-                if on_curve:
-                    vp.hair_curve_idx = Int32(inter.primId.id1)
-                    vp.hair_h = inter.u
-                    vp.hair_v = inter.v
+                vp.hair_curve_idx = sh.curve_idx
+                vp.hair_h = sh.curve_h
+                vp.hair_v = sh.curve_v
                 vp.is_volume = PhotonKind.surface
                 vp.med_idx = cur_med_idx
                 vp.valid = Int32(1)
@@ -1497,155 +1469,29 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
         if bounce > max_charged:
             break
 
-        if mat.type == MatKind.coated_diffuse:
-            # pbrt's LayeredBxDF (layered.mojo), in importance mode: store the
-            # photon for the flux arriving at the coated surface (the diffuse
-            # branch's convention), then scatter with a layered sample. Now
-            # after the maxdepth guard above, like every other material; the
-            # old coat walk sat before it and could scatter one bounce past.
-            if n_events - n_null > 1:
+        if mat.uses_lobe():
+            if not mat.has_lobe():
+                break   # a measured table that did not load
+            # The photon has arrived, so it is deposited whatever its continuation; a mirror stores none. Not at the
+            # light's first segment: the visible point's NEE covers that (pbrt's SPPM skips depth 0 too).
+            if not mat.is_mirror() and n_events - n_null > 1:
                 _sppm_store_photon[use_gpu](
                     SPPMPhoton(pos=hit, flux=flux, nxt=Int32(-1), is_volume=PhotonKind.surface, dir_in=rd, wavelengths=ph_wavelengths),
                     photons, max_photons, counter)
-            var eff_alb_cd = mat.albedo
-            var (tm_cd, t0_cd, t1_cd, t2_cd, tok_cd) = _get_tri_verts(inter, sd.meshes)
-            if tok_cd:
-                eff_alb_cd = _tex_lookup[tex_gpu](mat, inter, t0_cd, t1_cd, t2_cd, tm_cd, sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount),
-                    uv_footprint_at_hit(inter, sd.meshes, sd.instances, hit.to_simd(), ray_dir, Float32(-1.0), sd.camFp).width)
-            var gn_cd = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
-            if dot(gn_cd, ray_dir) > Float32(0.0):
-                gn_cd = gn_cd * Float32(-1.0)
-            gn_cd = apply_surface_maps_at_hit[tex_gpu](mat, inter, sd.meshes, sd.instances,
-                gn_cd, gn_cd, hit.to_simd(), ray_dir, Float32(-1.0), sd.camFp,
-                sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
-            gn_cd = face_toward(gn_cd, -ray_dir)   # pbrt two-sided reflection, see face_toward
-            var n_cd = vec3f(gn_cd)
-            var fr_cd = Frame.from_z(n_cd)
-            var tx_cd = Vec3f(fr_cd.x.x, fr_cd.x.y, fr_cd.x.z)
-            var ty_cd = Vec3f(fr_cd.y.x, fr_cd.y.y, fr_cd.y.z)
-            var wo_w = vec3f(-ray_dir)
-            var wo_cd = Vec3f(dot(wo_w, tx_cd), dot(wo_w, ty_cd), dot(wo_w, n_cd))
-            var R_cd = spec_refl(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, eff_alb_cd.r, eff_alb_cd.g, eff_alb_cd.b, ph_wavelengths)
-            var bs_cd = layered_sample(wo_cd, pcg.next_float(), pcg.next_float(), pcg.next_float(), R_cd,
-                                       mat.emission.r, max(mat.roughU, mat.roughV), False, mat.emission.g)
-            if not bs_cd.valid or bs_cd.pdf <= Float32(0.0):
+            var sh = surface_hit[tex_gpu](sd, inter, mat, hit, ray_dir, Float32(-1.0))
+            var s_l = sh.bsdf(mat, mat_idx, adjoint=True).sample(pcg.next_float(), pcg.next_float(), pcg.next_float(),
+                pcg.next_float(), LobeTables(sd.materials, sd.curves, sd.measuredBrdfs, sd.spectral), ph_wavelengths)
+            if not s_l.valid:
                 break
-            var w_cd = bs_cd.f * (abs(bs_cd.wi.z) / bs_cd.pdf)
-            var rr_cd = min(Float32(1.0), w_cd.max_component())
-            if rr_cd <= Float32(0.0) or pcg.next_float() >= rr_cd:
+            var rr_l = min(Float32(1.0), s_l.weight.max_component())
+            if rr_l <= Float32(0.0) or pcg.next_float() >= rr_l:
                 break
-            flux *= w_cd * (Float32(1.0) / rr_cd)
-            rd = tx_cd * bs_cd.wi.x + ty_cd * bs_cd.wi.y + n_cd * bs_cd.wi.z
-            ro = hit + rd * Float32(0.0002)
+            flux *= s_l.weight * (Float32(1.0) / rr_l)
+            rd = vec3f(s_l.wi)
+            ro = sh.spawn(s_l.wi)
             continue
 
-        if mat.type == MatKind.diffuse or mat.type == MatKind.diffuse_transmit:
-            # n_events > 1: skip storing a photon at a surface directly hit
-            # by the light with no intermediate bounce — that direct
-            # contribution is now covered by _sppm_nee_update instead
-            # (matches pbrt's own SPPM, which skips gathering at depth 0
-            # for the same reason: avoid double-counting direct light
-            # once via NEE and again via an unfiltered photon density).
-            if n_events - n_null > 1:
-                _sppm_store_photon[use_gpu](
-                    SPPMPhoton(pos=hit, flux=flux, nxt=Int32(-1), is_volume=PhotonKind.surface, dir_in=rd, wavelengths=ph_wavelengths),
-                    photons, max_photons, counter)
-            # Real image-texture reflectance -- see bdpt_*.mojo's matching
-            # light-side comment (task #150/#151). Affects the RR
-            # continuation probability AND the flux multiply below, since a
-            # wrong (flat-grey) albedo here would corrupt every subsequent
-            # bounce's stored photon flux, not just this vertex.
-            var eff_alb = mat.albedo
-            var (tex_mesh, tv0, tv1, tv2, tex_ok) = _get_tri_verts(inter, sd.meshes)
-            if tex_ok:
-                eff_alb = _tex_lookup[tex_gpu](mat, inter, tv0, tv1, tv2, tex_mesh, sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount),
-                    uv_footprint_at_hit(inter, sd.meshes, sd.instances, hit.to_simd(), ray_dir, Float32(-1.0), sd.camFp).width)
-            # diffusetransmission has a REFLECT lobe (eff_alb, computed
-            # above) and a TRANSMIT lobe (mat.emission, or eff_alb again
-            # when textured -- "texture reflectance"/"texture transmittance"
-            # share one texture slot, see shading.mojo's matching comment),
-            # picked stochastically by luminance, same convention as the
-            # shared bxdf.mojo:bxdf_sample_diffuse_transmit the path tracer
-            # uses and bdpt_*.mojo's two camera/light-path copies (see
-            # project_photon_estimator_energy_gap memory for the 1e-6-clamp
-            # bug those two had and its fix, d2a3cd84 -- NOT reproduced
-            # here). Before this, the photon pass ignored the transmit lobe
-            # entirely and always reflected off the ray-facing side, so a
-            # photon could never pass THROUGH a leaf: any indirect light
-            # that should reach a shadowed point by transmitting through
-            # backlit foliage was simply absent from the photon map (only
-            # SPPM's own single-bounce direct NEE could ever see it).
-            # `p_sel == 1, bounce_n == gn, lobe_alb == eff_alb` for every
-            # other material -- a no-op, no extra random draw.
-            var p_sel = Float32(1.0)
-            var bounce_side = Float32(1.0)   # flips to -1 for the transmit lobe
-            var lobe_alb = eff_alb
-            if mat.type == MatKind.diffuse_transmit:
-                var trans_dt = mat.dt_transmittance(eff_alb)
-                var refl_dt = mat.dt_reflectance(eff_alb)
-                var pr_dt = refl_dt.luma()
-                var pt_dt = trans_dt.luma()
-                # Nothing to scatter -- see bdpt_*.mojo's matching comment
-                # (d2a3cd84) for why this must TERMINATE, not force a lobe.
-                if pr_dt + pt_dt <= Float32(1e-9):
-                    break
-                var tot_dt = pr_dt + pt_dt
-                var take_refl = pcg.next_float() < pr_dt / tot_dt
-                p_sel = max((pr_dt if take_refl else pt_dt) / tot_dt, Float32(1e-6))
-                bounce_side = Float32(1.0) if take_refl else Float32(-1.0)
-                lobe_alb = refl_dt if take_refl else trans_dt
-            # Russian-roulette continuation for indirect diffuse-diffuse
-            # bounces (color bleeding) — without this, photons always
-            # terminated at the first diffuse hit, so light could never
-            # bounce off one diffuse surface onto another (e.g. a red
-            # wall tinting a nearby box's facing side). Uses the CHOSEN
-            # lobe's own albedo (== eff_alb, unchanged, for plain diffuse).
-            var rr_prob = max(lobe_alb.r, max(lobe_alb.g, lobe_alb.b))
-            if rr_prob <= Float32(0.0) or pcg.next_float() >= rr_prob:
-                break
-            var gn = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
-            if dot(gn, ray_dir) > Float32(0.0):
-                gn = gn * Float32(-1.0)
-            # Bump/normal maps -- see the coateddiffuse branch above.
-            gn = apply_surface_maps_at_hit[tex_gpu](mat, inter, sd.meshes, sd.instances,
-                gn, gn, hit.to_simd(), ray_dir, Float32(-1.0), sd.camFp,
-                sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
-            gn = face_toward(gn, -ray_dir)   # pbrt two-sided reflection, see face_toward
-            gn = gn * bounce_side   # flip to the transmit side, chosen above
-            var new_dir = _cosine_hemisphere_sample(gn, pcg.next_float(), pcg.next_float())
-            flux *= spec_refl_unbounded(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, (lobe_alb / (rr_prob * p_sel)).r, (lobe_alb / (rr_prob * p_sel)).g, (lobe_alb / (rr_prob * p_sel)).b, ph_wavelengths)
-            rd = vec3f(new_dir)
-            ro = hit + rd * Float32(0.0002)   # along rd: gn may face into the surface (face_toward)
-            continue
-
-        elif mat.is_rough_dielectric() and mat.sss_boundary == Int8(0):
-            # Rough dielectric: a real BSDF, so a photon deposits here like
-            # on any glossy surface, then scatters through THE lobe sampler
-            # in importance mode (BSDF.adjoint: no 1/eta^2), reflecting or
-            # transmitting. The OUTWARD normal, as lobe_eval requires.
-            if n_events - n_null > 1:
-                _sppm_store_photon[use_gpu](
-                    SPPMPhoton(pos=hit, flux=flux, nxt=Int32(-1), is_volume=PhotonKind.surface, dir_in=rd, wavelengths=ph_wavelengths),
-                    photons, max_photons, counter)
-            var gn_rd = _shading_normal_at(inter, sd.meshes, sd.instances, sd.spheres, hit)
-            gn_rd = apply_surface_maps_at_hit[tex_gpu](mat, inter, sd.meshes, sd.instances,
-                gn_rd, gn_rd, hit.to_simd(), ray_dir, Float32(-1.0), sd.camFp,
-                sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
-            var ctx_rd = BSDF(LobeKind.rough_dielectric, True, False, gn_rd, (-rd).to_simd(), mat.albedo,
-                                 Int32(mat_idx), mat.lobe_param(), Float32(1),
-                                 Int32(-1), Float32(0), Float32(0), True, True)
-            var s_rd = ctx_rd.sample(pcg.next_float(), pcg.next_float(), pcg.next_float(), pcg.next_float(), LobeTables(sd.materials, sd.curves, sd.measuredBrdfs, sd.spectral), ph_wavelengths)
-            if not s_rd.valid:
-                break
-            # Russian roulette on the weight (Fresnel-weighted, ~1 for glass).
-            var rr_rd = min(Float32(1.0), s_rd.weight.max_component())
-            if rr_rd <= Float32(0.0) or pcg.next_float() >= rr_rd:
-                break
-            flux *= s_rd.weight * (Float32(1.0) / rr_rd)
-            rd = vec3f(s_rd.wi)
-            ro = hit + rd * Float32(0.0002)
-
-        elif mat.type == MatKind.dielectric or mat.type == MatKind.thin_dielectric:
+        if mat.type == MatKind.dielectric or mat.type == MatKind.thin_dielectric:
             # ── Subsurface boundary: deposit on the SURFACE and stop ───────
             # The photon's remaining transport is what the diffusion kernel
             # models, so entering the medium and random-walking would double
@@ -1714,7 +1560,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
                 if new_idx != Int32(-1) or mat.medium_interface_idx >= Int32(0):
                     cur_med_idx = new_idx
 
-        elif mat.type == MatKind.conductor or mat.type == MatKind.coated_conductor:
+        elif mat.type == MatKind.coated_conductor:
             # Rough conductor/coated_conductor: store a gatherable photon
             # (same n_events > 1 depth-0 double-count guard as diffuse) unless
             # the sampled lobe is a perfect-mirror delta, which just
@@ -1751,13 +1597,9 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
                 alb=eff_alb_c, pixel_uv=Float32(0),
             )
             var uc1 = pcg.next_float(); var uc2 = pcg.next_float()
-            var bs_c: BxDFSample
-            if mat.type == MatKind.conductor:
-                bs_c = bxdf_sample_conductor(gc_c, mat, uc1, uc2)
-            else:
-                var ior_c = mat.emission.r if mat.emission.r > Float32(1) else Float32(1.5)
-                var usplit_c = pcg.next_float()
-                bs_c = bxdf_sample_coated_conductor(gc_c, mat, ior_c, usplit_c, uc1, uc2)
+            var ior_c = mat.emission.r if mat.emission.r > Float32(1) else Float32(1.5)
+            var usplit_c = pcg.next_float()
+            var bs_c = bxdf_sample_coated_conductor(gc_c, mat, ior_c, usplit_c, uc1, uc2)
             # Same ordering as the camera side above, same reason: this
             # photon has ALREADY ARRIVED at the surface, so it must be
             # deposited whether or not its OUTGOING sample is valid. Only
@@ -1770,71 +1612,6 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
                 break
             flux *= spec_refl_unbounded(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, (bs_c.f).r, (bs_c.f).g, (bs_c.f).b, ph_wavelengths)
             rd = vec3f(bs_c.wi)
-            ro = hit + rd * Float32(0.0002)
-
-        elif mat.type == MatKind.hair:
-            # No delta lobe, so always store (subject to the same depth-0
-            # guard) and always importance-sample a continuation direction —
-            # mirrors bdpt_*.mojo's light-path hair treatment.
-            var curve_idx_h = Int(inter.primId.id1)
-            var wo_h = (-rd).to_simd()
-            var hc = _hair_precompute(mat, sd.curves, curve_idx_h, inter.v, inter.u, wo_h)
-            if n_events - n_null > 1:
-                _sppm_store_photon[use_gpu](
-                    SPPMPhoton(pos=hit, flux=flux, nxt=Int32(-1), is_volume=PhotonKind.surface, dir_in=rd, wavelengths=ph_wavelengths),
-                    photons, max_photons, counter)
-            var (wi_hs, f_hs, pdf_hs, _) = _hair_sample_dir(hc, pcg)
-            flux *= spec_refl_unbounded(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, (f_hs / pdf_hs).r, (f_hs / pdf_hs).g, (f_hs / pdf_hs).b, ph_wavelengths)
-            rd = vec3f(wi_hs)
-            var hsign = Float32(1) if dot(wi_hs, hc.geo_normal) >= Float32(0) else Float32(-1)
-            ro = hit + vec3f(hc.geo_normal) * curve_offset_eps(hc.radius) * hsign
-
-        elif mat.type == MatKind.measured:
-            # No delta lobe, so always store (same depth-0 guard as the
-            # other branches) and always importance-sample a continuation
-            # direction -- mirrors bdpt_*.mojo's light-path measured
-            # treatment, via the same shared bxdf.mojo/measured_bxdf_eval.mojo
-            # interface.
-            var gn_m = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
-            if dot(gn_m, ray_dir) > Float32(0.0):
-                gn_m = gn_m * Float32(-1.0)
-            # Bump/normal maps -- see the coateddiffuse branch above.
-            gn_m = apply_surface_maps_at_hit[tex_gpu](mat, inter, sd.meshes, sd.instances,
-                gn_m, gn_m, hit.to_simd(), ray_dir, Float32(-1.0), sd.camFp,
-                sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
-            gn_m = face_toward(gn_m, -ray_dir)   # pbrt two-sided reflection, see face_toward
-            if mat.measured_idx < Int32(0):
-                break
-            var wo_m = (-rd).to_simd()
-            var frm_m = Frame.from_z(Vec3f(gn_m[0], gn_m[1], gn_m[2]))
-            var tangent_m = Vec3f(frm_m.x.x, frm_m.x.y, frm_m.x.z)
-            var bitangent_m = Vec3f(frm_m.y.x, frm_m.y.y, frm_m.y.z)
-            var mb_m = sd.measuredBrdfs[unsafe_offset=Int(mat.measured_idx)]
-            var wo_l_m = Vec3f(dot(wo_m, tangent_m), dot(wo_m, bitangent_m), dot(wo_m, gn_m))
-            # Deposited BEFORE sampling the continuation, like the conductor
-            # branch: the photon arrived whether or not its outgoing sample
-            # is valid.
-            if n_events - n_null > 1:
-                _sppm_store_photon[use_gpu](
-                    SPPMPhoton(pos=hit, flux=flux, nxt=Int32(-1), is_volume=PhotonKind.surface, dir_in=rd, wavelengths=ph_wavelengths),
-                    photons, max_photons, counter)
-            var uml1 = pcg.next_float(); var uml2 = pcg.next_float()
-            var (wi_l_m, _, pdf_m, valid_m) = bxdf_sample_measured(mb_m, wo_l_m, uml1, uml2, ph_wavelengths, spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65)
-            if not valid_m or pdf_m <= Float32(0):
-                break
-            var wi_m = tangent_m * wi_l_m[0] + bitangent_m * wi_l_m[1] + gn_m * wi_l_m[2]
-            var wilen_m = dot(wi_m, wi_m)
-            if wilen_m > Float32(0):
-                wi_m = wi_m * (Float32(1.0) / sqrt(wilen_m))
-            var cos_wi_m = dot(wi_m, gn_m)
-            if cos_wi_m <= Float32(0):
-                break
-            # The ADJOINT BRDF, as in bdpt_*.mojo's light path (BSDF.adjoint):
-            # a photon needs f(toward camera, toward light); f_m is the other
-            # order, and this table is not reciprocal near grazing.
-            var f_adj_m = bxdf_eval_measured(mb_m, wi_l_m, wo_l_m, ph_wavelengths, spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65)[0]
-            flux *= f_adj_m * (cos_wi_m / pdf_m)
-            rd = vec3f(wi_m)
             ro = hit + rd * Float32(0.0002)
 
         elif mat.type == MatKind.interface:
@@ -2328,25 +2105,7 @@ def _sppm_gather_one(
                                 var (tr_2, tg_2, tb_2) = spectral_sample_to_rgb(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, term_2, ph.wavelengths)
                                 phi_rgb += RGB(tr_2, tg_2, tb_2)
                         else:
-                            # THE lobe evaluator, bare f (the density
-                            # estimate itself carries the cosine) -- one call
-                            # for ggx/hair/measured/layered/lambertian/
-                            # diffuse_transmit alike, replacing what was a
-                            # 5-way dispatch here (bxdf_eval_conductor_ggx,
-                            # _hair_eval_lobes, _sppm_vp_brdf, a bespoke
-                            # BSDF for layered, and a bare vp.alb/PI
-                            # fallback for everything else). That fallback
-                            # was diffuse_transmit's own path too: every
-                            # photon gathered at a diffusetransmission VP was
-                            # charged the REFLECT lobe's colour regardless of
-                            # which side it arrived from --
-                            # _sppm_photon_on_vp_surface already admits
-                            # photons from both sides for this kind, but
-                            # nothing here picked the transmit colour for the
-                            # back one. pre_oriented=True: the accept test
-                            # above already enforces the correct side for a
-                            # plain Lambertian VP, and every other kind
-                            # decides sidedness itself.
+                            # The VP's BSDF, bare f: the density estimate carries the cosine.
                             var le = (BSDF(vp.mat_kind, True, False, vp.normal.to_simd(), vp.wo.to_simd(), vp.alb,
                                         vp.mat_idx, _vp_base_alpha(vp.alpha), Float32(0), vp.hair_curve_idx,
                                         vp.hair_h, vp.hair_v, True, False)).f[want_pdfs=False]((-ph.dir_in).to_simd(), LobeTables(sd.materials, sd.curves, sd.measuredBrdfs, sd.spectral), ph.wavelengths)
@@ -2429,48 +2188,6 @@ def _gather_update(
 # whatever medium the VP sits in.
 
 @always_inline
-def _sppm_vp_brdf(
-    vp: SPPMPixel,
-    ref sd: SceneView,
-    vn: Vec3f,
-    wi: Vec3f,
-) -> RGB:
-    """Raw f_r(wo,wi) at a surface VP for NEE — dispatches on mat_kind, same
-    "raw BRDF, cosine supplied externally via the caller's geom/cos_s/
-    cos_env factor" convention as _sppm_gather_one. Lambertian is
-    angle-independent (alb/π); conductor/hair both need the actual wi."""
-    if vp.mat_kind == LobeKind.ggx:
-        return bxdf_eval_conductor_ggx(vn, vp.wo.to_simd(), wi, vp.alpha, vp.alb)
-    if vp.mat_kind == LobeKind.hair:
-        var mat_h = sd.materials[unsafe_offset=Int(vp.mat_idx)]
-        var hc = _hair_precompute(mat_h, sd.curves, Int(vp.hair_curve_idx), vp.hair_v, vp.hair_h, vp.wo.to_simd())
-        var (_, f_h, _) = _hair_eval_lobes(
-            wi, hc.tangent, hc.b_perp, hc.n_perp, hc.phi_o,
-            hc.dphi0, hc.dphi1, hc.dphi2,
-            hc.cos_tp0_o, hc.sin_tp0_o, hc.cos_tp1_o, hc.sin_tp1_o, hc.cos_tp2_o, hc.sin_tp2_o,
-            hc.cos_theta_o, hc.sin_theta_o, hc.inv_vm0, hc.inv_vm1, hc.inv_vm2, hc.mp_c0, hc.mp_c1, hc.mp_c2, hc.s,
-            hc.A0, hc.A1, hc.A2, hc.A3, hc.lum0, hc.lum1, hc.lum2, hc.lum3, hc.total_lum,
-        )
-        return f_h
-    if vp.mat_kind == LobeKind.measured:
-        # Measured BxDF is inherently spectral (tabulated `spectra` tensor
-        # indexed by wavelength) -- does its own spectral eval + RGB
-        # conversion internally using vp.wavelengths, same as bdpt_*.mojo's
-        # _eval_vertex mat_kind=3 branch.
-        var mat_m = sd.materials[unsafe_offset=Int(vp.mat_idx)]
-        var mb_m = sd.measuredBrdfs[unsafe_offset=Int(mat_m.measured_idx)]
-        var frm_m = Frame.from_z(Vec3f(vn[0], vn[1], vn[2]))
-        var tangent_m = Vec3f(frm_m.x.x, frm_m.x.y, frm_m.x.z)
-        var bitangent_m = Vec3f(frm_m.y.x, frm_m.y.y, frm_m.y.z)
-        var wo_m = vp.wo.to_simd()
-        var wo_l_m = Vec3f(dot(wo_m, tangent_m), dot(wo_m, bitangent_m), dot(wo_m, vn))
-        var wi_l_m = Vec3f(dot(wi, tangent_m), dot(wi, bitangent_m), dot(wi, vn))
-        var (fr_spec_m, _) = bxdf_eval_measured(mb_m, wo_l_m, wi_l_m, vp.wavelengths, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65)
-        var (r_m, g_m, b_m) = spectral_sample_to_rgb(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, fr_spec_m, vp.wavelengths)
-        return RGB(r_m, g_m, b_m)
-    return vp.alb / PI
-
-@always_inline
 def _vp_base_alpha(alpha: Float32) -> Float32:
     """The lobe parameter for the gather and area/infinite NEE: a split-coat VP (alpha < 0, see
     _sppm_trace_visible_point) leaves the coat's glossy lobe to the continued camera path."""
@@ -2486,14 +2203,7 @@ def _sppm_nee_weight(
     ls: LightSample,
     alpha: Float32,
 ) -> SpectralSample:
-    """Dispatches one LightSample (bvh.mojo's shared distant/point/sphere/
-    infinite sampler output — see that struct's docstring) to the right
-    per-material NEE weight function for a stored SPPM visible point, via
-    bxdf.mojo's _nee_weight_simple/_nee_weight_hair — the shared "BxDF
-    interface" half of the Light/BxDF refactor. Supersedes hand-deriving
-    direction/pdf/MIS math once per light type inside _sppm_nee_one; area
-    lights still go through _sppm_vp_brdf directly (see that function's own
-    docstring for why area-light NEE isn't part of this shared interface)."""
+    """One distant, point, sphere or infinite light sample's NEE weight at a visible point, through its BSDF."""
     if vp.is_volume == PhotonKind.volume:
         # Isotropic phase function: albedo/4pi, and NO cosine factor -- a
         # volume vertex has no normal. Same convention the photon gather
@@ -2683,20 +2393,6 @@ def _sppm_nee_one(
                     # assumption, same as the emission-sampling flux scale factor.
                     var inv_pdf_area = Float32(n_area) * al.total_area
                     var geom = cos_surface * cos_light / dist2 * inv_pdf_area
-                    # Spectral eval (staged spectral rendering rollout, Stage 4
-                    # -- see project_spectral_rendering memory): real
-                    # per-wavelength material response x light emission,
-                    # multiplied as a SpectralSample product (not each factor
-                    # separately, for real product-of-spectra accuracy) then
-                    # converted back to RGB, mirroring bdpt_connect.mojo's _connect.
-                    # bxdf_eval_any_spectral's conductor branch uses the same
-                    # arbitrary-direction (no cosine fused) convention
-                    # _sppm_vp_brdf's own bxdf_eval_conductor_ggx call already
-                    # relies on, so this is a drop-in spectral replacement for
-                    # mat_kind in {diffuse(0), conductor(1)}. Hair (2),
-                    # measured (3, always spectral internally regardless --
-                    # see _sppm_vp_brdf's own mat_kind=3 branch), and the
-                    # no-table-loaded case fall back to the original RGB path.
                     if is_vol:
                         # Isotropic phase (albedo/4pi), matching the photon
                         # gather's own volume-VP convention.
@@ -2704,28 +2400,8 @@ def _sppm_nee_one(
                                                 vp.alb.r * INV_FOUR_PI, vp.alb.g * INV_FOUR_PI, vp.alb.b * INV_FOUR_PI, vp.wavelengths)
                                       * spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, al.emission.r, al.emission.g, al.emission.b, vp.wavelengths)
                                       * geom * tr_a)
-                    elif sd.spectral.res <= 0:
-                        # No spectral tables loaded: the one case
-                        # lobe_eval's spectral path can't serve, so this
-                        # keeps the plain-RGB fallback.
-                        var brdf = _sppm_vp_brdf(vp, sd, vn, wi)
-                        vps[unsafe_offset=i].ld += (spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, brdf.r, brdf.g, brdf.b, vp.wavelengths)
-                                      * spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, al.emission.r, al.emission.g, al.emission.b, vp.wavelengths)
-                                      * geom * tr_a)
                     else:
-                        # THE shared evaluator (bxdf.mojo), the vertex's own
-                        # BSDF -- covers ggx/hair/measured/layered/
-                        # lambertian/diffuse_transmit alike now, where this
-                        # used to route hair and measured to a separate RGB
-                        # fallback (_sppm_vp_brdf) because lobe_eval's own
-                        # dispatch didn't cover them yet. SPPM's NEE uses the
-                        # BARE BRDF -- the surface cosine is already inside
-                        # `geom`, the convention _sppm_vp_brdf's docstring
-                        # states -- so it divides out the lobe's own cosine
-                        # rather than assuming which one that is. Connections
-                        # want f*cos and merging wants bare f; three consumers,
-                        # three conventions, one evaluator that says which it
-                        # applied.
+                        # The vertex's own BSDF, bare f: the surface cosine is already in `geom`.
                         var le_vp = (BSDF(vp.mat_kind, True, False, vn, wo, vp.alb,
                                     vp.mat_idx, _vp_base_alpha(vp.alpha), Float32(0), vp.hair_curve_idx,
                                     vp.hair_h, vp.hair_v, True, False)).f[want_pdfs=False](wi, LobeTables(sd.materials, sd.curves, sd.measuredBrdfs, sd.spectral), vp.wavelengths)
@@ -2735,11 +2411,7 @@ def _sppm_nee_one(
                         var light_spec = rgb_illuminant_to_spectral_sample(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, al.emission.r, al.emission.g, al.emission.b, vp.wavelengths)
                         vps[unsafe_offset=i].ld += f_spec * light_spec * geom * tr_a
 
-    # Distant/point/sphere/infinite NEE — via the shared Light interface
-    # (bvh.mojo's LightSample samplers) + BxDF interface (_sppm_nee_weight
-    # above), replacing 4 formerly hand-inlined per-light-type blocks. Area
-    # lights are handled separately above (still via _sppm_vp_brdf directly
-    # — see that function's docstring).
+    # Distant/point/sphere/infinite NEE through the Light interface and the BSDF (_sppm_nee_weight).
     # distant/point/sphere via the shared sampler -- pure loop collapse,
     # order was already distant,point,sphere. Sphere-light NEE loops ALL
     # analytic spheres (the sampler itself skips non-emissive ones), since
