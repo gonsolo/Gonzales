@@ -759,8 +759,13 @@ struct LobeTables(TrivialRegisterPassable):
     var spectral:       SpectralHandle   # RGB to spectrum for the lobes' colours
 
 
+trait NeeLobe(TrivialRegisterPassable):
+    """What light sampling asks of a shading point: a light sample's contribution, f*cos*Li/pdf times its MIS weight."""
+    def nee_weight(self, ls: LightSample, tab: LobeTables, wl: SampledWavelengths) -> SpectralSample: ...
+
+
 @fieldwise_init
-struct BSDF(TrivialRegisterPassable):
+struct BSDF(NeeLobe, TrivialRegisterPassable):
     """Everything the ONE lobe evaluator needs about a shading point, and
     nothing about which integrator is asking.
 
@@ -810,11 +815,11 @@ struct BSDF(TrivialRegisterPassable):
         return _lobe_eval[want_pdfs](self, wi, tab, s.coeffs, s.res, s.cie_x, s.cie_y, s.cie_z, s.d65, wl)
 
     @always_inline
-    def sample(self, uc: Float32, u0: Float32, u1: Float32, u2: Float32, tab: LobeTables,
+    def sample[want_rev: Bool = True](self, uc: Float32, u0: Float32, u1: Float32, u2: Float32, tab: LobeTables,
                wl: SampledWavelengths) -> LobeSample:
         """A scattering direction and its weight f*cos/pdf; `uc` picks the lobe, u2 only hair draws."""
         var s = tab.spectral
-        return _lobe_sample(self, uc, u0, u1, u2, tab, s.coeffs, s.res, s.cie_x, s.cie_y, s.cie_z, s.d65, wl)
+        return _lobe_sample[want_rev](self, uc, u0, u1, u2, tab, s.coeffs, s.res, s.cie_x, s.cie_y, s.cie_z, s.d65, wl)
 
     @always_inline
     def scoped(self) -> Bool:
@@ -822,11 +827,44 @@ struct BSDF(TrivialRegisterPassable):
         return _lobe_scoped(self)
 
     @always_inline
-    def nee_weight(self, ls: LightSample, tab: LobeTables, wl: SampledWavelengths,
-                   mis: MisPolicy = mis_policy_power()) -> SpectralSample:
-        """A light sample's contribution through this BSDF, f*cos*Li/pdf times its MIS weight."""
+    def nee_weight(self, ls: LightSample, tab: LobeTables, wl: SampledWavelengths) -> SpectralSample:
+        """A light sample's contribution through this BSDF, f*cos*Li/pdf times its power-heuristic weight."""
+        return self.nee_weight_mis(ls, tab, wl, mis_policy_power())
+
+    @always_inline
+    def nee_weight_mis(self, ls: LightSample, tab: LobeTables, wl: SampledWavelengths, mis: MisPolicy) -> SpectralSample:
+        """nee_weight under another integrator's MIS policy."""
         var s = tab.spectral
         return _nee_weight_lobe(ls, self, tab, s.coeffs, s.res, s.cie_x, s.cie_y, s.cie_z, s.d65, wl, mis)
+
+
+@fieldwise_init
+struct HairBSDF(NeeLobe, TrivialRegisterPassable):
+    """A hair BSDF with its fibre setup made once for wo, for a shading point that lights and samples it repeatedly."""
+    var bsdf: BSDF
+    var hc:   HairLobeConstants
+
+    @staticmethod
+    @always_inline
+    def at(bsdf: BSDF, mat: Material, tab: LobeTables) -> HairBSDF:
+        """`mat` as the caller shades it, e.g. after Filter Glossy widened its lobes."""
+        return HairBSDF(bsdf, _hair_precompute(mat, tab.curves, Int(bsdf.hair_curve_idx), bsdf.hair_v, bsdf.hair_h, bsdf.wo))
+
+    @always_inline
+    def nee_weight(self, ls: LightSample, tab: LobeTables, wl: SampledWavelengths) -> SpectralSample:
+        if not _nee_faces(ls, self.bsdf):
+            return SpectralSample(Float32(0.0))
+        var s = tab.spectral
+        var le = _hair_lobe_eval[True, False](self.bsdf, self.hc, ls.wi, tab, s.coeffs, s.res, s.cie_x, s.cie_y,
+                                             s.cie_z, s.d65, wl)
+        return _nee_weight_of(ls, self.bsdf, le, s.coeffs, s.res, s.cie_x, s.cie_y, s.cie_z, s.d65, wl, mis_policy_power())
+
+    @always_inline
+    def sample[want_rev: Bool = True](self, uc: Float32, u0: Float32, u1: Float32, u2: Float32, tab: LobeTables,
+                                      wl: SampledWavelengths) -> LobeSample:
+        var s = tab.spectral
+        return _hair_lobe_sample[want_rev](self.bsdf, self.hc, uc, u0, u1, u2, tab, s.coeffs, s.res, s.cie_x,
+                                           s.cie_y, s.cie_z, s.d65, wl)
 
 
 @fieldwise_init
@@ -891,7 +929,41 @@ def _lobe_scoped(c: BSDF) -> Bool:
 
 
 @always_inline
-def _lobe_eval[want_pdfs: Bool = True](
+def _hair_lobe_eval[want_pdfs: Bool, want_rev: Bool](
+    c: BSDF, hc: HairLobeConstants, dir_to_other: Vec3f, tab: LobeTables,
+    spectral_coeffs: Pointer[Float32, MutUntrackedOrigin], spectral_res: Int,
+    spectral_cie_x: Pointer[Float32, MutUntrackedOrigin],
+    spectral_cie_y: Pointer[Float32, MutUntrackedOrigin],
+    spectral_cie_z: Pointer[Float32, MutUntrackedOrigin],
+    spectral_d65: Pointer[Float32, MutUntrackedOrigin],
+    wavelengths: SampledWavelengths,
+) -> LobeEval:
+    """_lobe_eval's hair lobe from a fibre setup already made for wo. Its cosine is the fibre's cos_ti, not |n.wi|."""
+    var (cos_ti, f_val, pdf_oc_fwd) = _hair_eval_lobes(
+        dir_to_other, hc.tangent, hc.b_perp, hc.n_perp, hc.phi_o,
+        hc.dphi0, hc.dphi1, hc.dphi2,
+        hc.cos_tp0_o, hc.sin_tp0_o, hc.cos_tp1_o, hc.sin_tp1_o, hc.cos_tp2_o, hc.sin_tp2_o,
+        hc.cos_theta_o, hc.sin_theta_o, hc.inv_vm0, hc.inv_vm1, hc.inv_vm2, hc.mp_c0, hc.mp_c1, hc.mp_c2, hc.s,
+        hc.A0, hc.A1, hc.A2, hc.A3, hc.lum0, hc.lum1, hc.lum2, hc.lum3, hc.total_lum,
+    )
+    # f, not a reflectance: a narrow R or TT lobe peaks far above 1, and the [0,1] reflectance upsampler cut it there.
+    var hair_spec = spec_refl_unbounded(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, f_val.r, f_val.g, f_val.b, wavelengths)
+    var rev_h = Float32(0)
+    comptime if want_pdfs and want_rev:
+        var hc_rev = _hair_precompute(tab.materials[unsafe_offset=Int(c.mat_idx)], tab.curves, Int(c.hair_curve_idx), c.hair_v, c.hair_h, dir_to_other)
+        var (cos_ti_rev, _, pdf_oc_rev) = _hair_eval_lobes(
+            c.wo, hc_rev.tangent, hc_rev.b_perp, hc_rev.n_perp, hc_rev.phi_o,
+            hc_rev.dphi0, hc_rev.dphi1, hc_rev.dphi2,
+            hc_rev.cos_tp0_o, hc_rev.sin_tp0_o, hc_rev.cos_tp1_o, hc_rev.sin_tp1_o, hc_rev.cos_tp2_o, hc_rev.sin_tp2_o,
+            hc_rev.cos_theta_o, hc_rev.sin_theta_o, hc_rev.inv_vm0, hc_rev.inv_vm1, hc_rev.inv_vm2, hc_rev.mp_c0, hc_rev.mp_c1, hc_rev.mp_c2, hc_rev.s,
+            hc_rev.A0, hc_rev.A1, hc_rev.A2, hc_rev.A3, hc_rev.lum0, hc_rev.lum1, hc_rev.lum2, hc_rev.lum3, hc_rev.total_lum,
+        )
+        rev_h = cos_ti_rev * pdf_oc_rev
+    return LobeEval(hair_spec * cos_ti, cos_ti, cos_ti * pdf_oc_fwd, rev_h, True)
+
+
+@always_inline
+def _lobe_eval[want_pdfs: Bool = True, want_rev: Bool = True](
     c:   BSDF,
     dir_to_other:  Vec3f,
     tab: LobeTables,
@@ -943,7 +1015,8 @@ def _lobe_eval[want_pdfs: Bool = True](
         var rev_rd = Float32(0)
         comptime if want_pdfs:
             fwd_rd = diel_pdf(wo_rd, wi_rd, ior_rd, c.param, True, True)
-            rev_rd = diel_pdf(wi_rd, wo_rd, ior_rd, c.param, True, True)
+            comptime if want_rev:
+                rev_rd = diel_pdf(wi_rd, wo_rd, ior_rd, c.param, True, True)
         return LobeEval(SpectralSample(f_rd * cos_rd), cos_rd, fwd_rd, rev_rd, True)
 
     if c.kind == LobeKind.layered:
@@ -971,10 +1044,12 @@ def _lobe_eval[want_pdfs: Bool = True](
         comptime if want_pdfs:
             if cond_ly:
                 fwd_ly = layered_pdf[True](wo_ly, wi_ly, ior_ly, alpha_ly, rad_ly, ab_ly)
-                rev_ly = layered_pdf[True](wi_ly, wo_ly, ior_ly, alpha_ly, not rad_ly, ab_ly)
+                comptime if want_rev:
+                    rev_ly = layered_pdf[True](wi_ly, wo_ly, ior_ly, alpha_ly, not rad_ly, ab_ly)
             else:
                 fwd_ly = layered_pdf(wo_ly, wi_ly, ior_ly, alpha_ly, rad_ly)
-                rev_ly = layered_pdf(wi_ly, wo_ly, ior_ly, alpha_ly, not rad_ly)
+                comptime if want_rev:
+                    rev_ly = layered_pdf(wi_ly, wo_ly, ior_ly, alpha_ly, not rad_ly)
         return LobeEval(f_ly * cos_ly, cos_ly, fwd_ly, rev_ly, True)
     if c.kind == LobeKind.bssrdf:
         var cos_x = abs(dot(dir_to_other, vn))
@@ -990,35 +1065,15 @@ def _lobe_eval[want_pdfs: Bool = True](
         var rev_g = Float32(0)
         comptime if want_pdfs:
             fwd_g = bxdf_pdf_conductor_ggx(vn, vwo, dir_to_other, c.param)
-            rev_g = bxdf_pdf_conductor_ggx(vn, dir_to_other, vwo, c.param)
+            comptime if want_rev:
+                rev_g = bxdf_pdf_conductor_ggx(vn, dir_to_other, vwo, c.param)
         return LobeEval(f_g, cos_g, fwd_g, rev_g, True)
 
     if c.kind == LobeKind.hair:
-        # Hair's cosine is the FIBRE's cos_ti, not |n.wi| -- the case a caller
-        # dividing by |cos(dir,n)| gets silently wrong.
         var mat_h = tab.materials[unsafe_offset=Int(c.mat_idx)]
         var hc = _hair_precompute(mat_h, tab.curves, Int(c.hair_curve_idx), c.hair_v, c.hair_h, vwo)
-        var (cos_ti, f_val, pdf_oc_fwd) = _hair_eval_lobes(
-            dir_to_other, hc.tangent, hc.b_perp, hc.n_perp, hc.phi_o,
-            hc.dphi0, hc.dphi1, hc.dphi2,
-            hc.cos_tp0_o, hc.sin_tp0_o, hc.cos_tp1_o, hc.sin_tp1_o, hc.cos_tp2_o, hc.sin_tp2_o,
-            hc.cos_theta_o, hc.sin_theta_o, hc.inv_vm0, hc.inv_vm1, hc.inv_vm2, hc.mp_c0, hc.mp_c1, hc.mp_c2, hc.s,
-            hc.A0, hc.A1, hc.A2, hc.A3, hc.lum0, hc.lum1, hc.lum2, hc.lum3, hc.total_lum,
-        )
-        # f, not a reflectance: a narrow R or TT lobe peaks far above 1, and the [0,1] reflectance upsampler cut it there.
-        var hair_spec = spec_refl_unbounded(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, f_val.r, f_val.g, f_val.b, wavelengths)
-        var rev_h = Float32(0)
-        comptime if want_pdfs:
-            var hc_rev = _hair_precompute(mat_h, tab.curves, Int(c.hair_curve_idx), c.hair_v, c.hair_h, dir_to_other)
-            var (cos_ti_rev, _, pdf_oc_rev) = _hair_eval_lobes(
-                vwo, hc_rev.tangent, hc_rev.b_perp, hc_rev.n_perp, hc_rev.phi_o,
-                hc_rev.dphi0, hc_rev.dphi1, hc_rev.dphi2,
-                hc_rev.cos_tp0_o, hc_rev.sin_tp0_o, hc_rev.cos_tp1_o, hc_rev.sin_tp1_o, hc_rev.cos_tp2_o, hc_rev.sin_tp2_o,
-                hc_rev.cos_theta_o, hc_rev.sin_theta_o, hc_rev.inv_vm0, hc_rev.inv_vm1, hc_rev.inv_vm2, hc_rev.mp_c0, hc_rev.mp_c1, hc_rev.mp_c2, hc_rev.s,
-                hc_rev.A0, hc_rev.A1, hc_rev.A2, hc_rev.A3, hc_rev.lum0, hc_rev.lum1, hc_rev.lum2, hc_rev.lum3, hc_rev.total_lum,
-            )
-            rev_h = cos_ti_rev * pdf_oc_rev
-        return LobeEval(hair_spec * cos_ti, cos_ti, cos_ti * pdf_oc_fwd, rev_h, True)
+        return _hair_lobe_eval[want_pdfs, want_rev](c, hc, dir_to_other, tab, spectral_coeffs, spectral_res,
+            spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, wavelengths)
 
     if c.kind == LobeKind.measured:
         var vmat = tab.materials[unsafe_offset=Int(c.mat_idx)]
@@ -1038,7 +1093,8 @@ def _lobe_eval[want_pdfs: Bool = True](
         var rev_m = Float32(0)
         comptime if want_pdfs:
             fwd_m = bxdf_pdf_measured(mb, wo_l, wi_l)
-            rev_m = bxdf_pdf_measured(mb, wi_l, wo_l)
+            comptime if want_rev:
+                rev_m = bxdf_pdf_measured(mb, wi_l, wo_l)
         return LobeEval(fr_spec * cos_m, cos_m, fwd_m, rev_m, True)
 
     if c.kind == LobeKind.diffuse_transmit:
@@ -1134,15 +1190,45 @@ struct LobeSample(TrivialRegisterPassable):
     var pdf_rev:  Float32
     var cos_out:  Float32   # the lobe's own |cos| at wi
     var scoped:   Bool      # _lobe_scoped(c), and nothing else
+    var transmit: Bool      # a transmission event, for Cycles' per-kind bounce limits
 
 
 @always_inline
 def _lobe_sample_invalid() -> LobeSample:
     return LobeSample(False, Vec3f(Float32(0)), SpectralSample(Float32(0)), False,
-                      Float32(0), Float32(0), Float32(0), False)
+                      Float32(0), Float32(0), Float32(0), False, False)
 
 
-def _lobe_sample(
+@always_inline
+def _hair_lobe_sample[want_rev: Bool](
+    c: BSDF, hc: HairLobeConstants, uc: Float32, u0: Float32, u1: Float32, u2: Float32, tab: LobeTables,
+    spectral_coeffs: Pointer[Float32, MutUntrackedOrigin], spectral_res: Int,
+    spectral_cie_x: Pointer[Float32, MutUntrackedOrigin],
+    spectral_cie_y: Pointer[Float32, MutUntrackedOrigin],
+    spectral_cie_z: Pointer[Float32, MutUntrackedOrigin],
+    spectral_d65: Pointer[Float32, MutUntrackedOrigin],
+    wavelengths: SampledWavelengths,
+) -> LobeSample:
+    """The 3-lobe Marschner sampler; its density is the fibre cosine times pdf_over_cos, _lobe_eval's pdf_fwd."""
+    var (wi, f_rgb, pdf_oc, cos_ti) = _hair_sample_dir_u(hc, uc, u0, u1, u2)
+    var transmit = uc * hc.total_lum >= hc.lum0   # Cycles counts the R lobe as glossy, TT and TRT as transmission
+    comptime if want_rev:
+        var le_h = _hair_lobe_eval[True, True](c, hc, wi, tab, spectral_coeffs, spectral_res,
+            spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, wavelengths)
+        if le_h.pdf_fwd <= Float32(0):
+            return _lobe_sample_invalid()
+        return LobeSample(True, wi, le_h.f_cos * (Float32(1) / le_h.pdf_fwd), False,
+                          le_h.pdf_fwd, le_h.pdf_rev, le_h.cos_used, _lobe_scoped(c), transmit)
+    # The sampler evaluated the lobes at wi already: its f and pdf over cos_ti are _lobe_eval's.
+    if pdf_oc * cos_ti <= Float32(0):
+        return _lobe_sample_invalid()
+    var f = spec_refl_unbounded(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
+                                f_rgb.r, f_rgb.g, f_rgb.b, wavelengths)
+    return LobeSample(True, wi, f * (Float32(1) / pdf_oc), False, pdf_oc * cos_ti, Float32(0), cos_ti,
+                      _lobe_scoped(c), transmit)
+
+
+def _lobe_sample[want_rev: Bool = True](
     c:   BSDF,
     uc:  Float32,
     u0:  Float32,
@@ -1178,7 +1264,7 @@ def _lobe_sample(
             var sch = one_m * one_m * one_m * one_m * one_m
             var f0 = rgb_to_spectral_sample(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, c.alb.r, c.alb.g, c.alb.b, wavelengths)
             return LobeSample(True, wi_m, f0 * (Float32(1) - sch) + SpectralSample(sch), True,
-                              Float32(0), Float32(0), cos_o, _lobe_scoped(c))
+                              Float32(0), Float32(0), cos_o, _lobe_scoped(c), False)
         # Rough: the multiple-scattering cosine lobe or a VNDF reflection,
         # mixed exactly as bxdf_pdf_conductor_ggx (_lobe_eval's density) says.
         var p_ms = Float32(1) - ggx_albedo(cos_o, c.param)
@@ -1194,12 +1280,12 @@ def _lobe_sample(
             var wh = tx_g * wh_l.x + ty_g * wh_l.y + vn * wh_l.z
             wh = wh * (Float32(1) / sqrt(max(dot(wh, wh), Float32(1e-20))))
             wi_g = wh * (Float32(2) * dot(vwo, wh)) - vwo
-        var le_g = _lobe_eval[want_pdfs=True](c, wi_g, tab, spectral_coeffs, spectral_res,
+        var le_g = _lobe_eval[want_pdfs=True, want_rev=want_rev](c, wi_g, tab, spectral_coeffs, spectral_res,
             spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, wavelengths)
         if le_g.pdf_fwd <= Float32(0):
             return _lobe_sample_invalid()
         return LobeSample(True, wi_g, le_g.f_cos * (Float32(1) / le_g.pdf_fwd), False,
-                          le_g.pdf_fwd, le_g.pdf_rev, le_g.cos_used, _lobe_scoped(c))
+                          le_g.pdf_fwd, le_g.pdf_rev, le_g.cos_used, _lobe_scoped(c), False)
 
     if c.is_delta:
         return _lobe_sample_invalid()
@@ -1217,25 +1303,20 @@ def _lobe_sample(
         if not ds.valid:
             return _lobe_sample_invalid()
         var wi_rs = tx_rs * ds.wi.x + ty_rs * ds.wi.y + vn * ds.wi.z
-        var le_rs = _lobe_eval[want_pdfs=True](c, wi_rs, tab, spectral_coeffs, spectral_res,
+        var le_rs = _lobe_eval[want_pdfs=True, want_rev=want_rev](c, wi_rs, tab, spectral_coeffs, spectral_res,
             spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, wavelengths)
         if le_rs.pdf_fwd <= Float32(0):
             return _lobe_sample_invalid()
         return LobeSample(True, wi_rs, le_rs.f_cos * (Float32(1) / le_rs.pdf_fwd), False,
-                          le_rs.pdf_fwd, le_rs.pdf_rev, le_rs.cos_used, _lobe_scoped(c))
+                          le_rs.pdf_fwd, le_rs.pdf_rev, le_rs.cos_used, _lobe_scoped(c), ds.wi.z * wo_rs.z < Float32(0))
 
     if c.kind == LobeKind.hair:
         # The 3-lobe Marschner sampler (bvh.mojo). Its density is the fibre
         # cosine times pdf_over_cos, which is _lobe_eval's pdf_fwd exactly.
-        var mat_h = tab.materials[unsafe_offset=Int(c.mat_idx)]
-        var hc = _hair_precompute(mat_h, tab.curves, Int(c.hair_curve_idx), c.hair_v, c.hair_h, vwo)
-        var sh = _hair_sample_dir_u(hc, uc, u0, u1, u2)
-        var le_h = _lobe_eval[want_pdfs=True](c, sh[0], tab, spectral_coeffs, spectral_res,
+        var hc = _hair_precompute(tab.materials[unsafe_offset=Int(c.mat_idx)], tab.curves, Int(c.hair_curve_idx),
+                                  c.hair_v, c.hair_h, vwo)
+        return _hair_lobe_sample[want_rev](c, hc, uc, u0, u1, u2, tab, spectral_coeffs, spectral_res,
             spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, wavelengths)
-        if le_h.pdf_fwd <= Float32(0):
-            return _lobe_sample_invalid()
-        return LobeSample(True, sh[0], le_h.f_cos * (Float32(1) / le_h.pdf_fwd), False,
-                          le_h.pdf_fwd, le_h.pdf_rev, le_h.cos_used, _lobe_scoped(c))
 
     if c.kind == LobeKind.measured:
         # pbrt's MeasuredBxDF::Sample_f, in the same local frame _lobe_eval
@@ -1257,12 +1338,12 @@ def _lobe_sample(
         var cos_m = abs(dot(wi_m, vn))
         if not c.adjoint:   # the sampler's f is already f(wo, wi)
             var wi_lm = Vec3f(dot(wi_m, tx_m), dot(wi_m, ty_m), dot(wi_m, vn))
-            return LobeSample(True, wi_m, f_m * (cos_m / pdf_m), False, pdf_m, bxdf_pdf_measured(mb, wi_lm, wo_l), cos_m,
-                              _lobe_scoped(c))
-        var le_m = _lobe_eval[want_pdfs=True](c, wi_m, tab, spectral_coeffs, spectral_res,
+            return LobeSample(True, wi_m, f_m * (cos_m / pdf_m), False, pdf_m,
+                              bxdf_pdf_measured(mb, wi_lm, wo_l) if want_rev else Float32(0), cos_m, _lobe_scoped(c), False)
+        var le_m = _lobe_eval[want_pdfs=True, want_rev=want_rev](c, wi_m, tab, spectral_coeffs, spectral_res,
             spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, wavelengths)
         return LobeSample(True, wi_m, le_m.f_cos * (Float32(1) / pdf_m), False,
-                          pdf_m, le_m.pdf_rev, le_m.cos_used, _lobe_scoped(c))
+                          pdf_m, le_m.pdf_rev, le_m.cos_used, _lobe_scoped(c), False)
 
     if c.kind == LobeKind.layered:
         var mat_ly = tab.materials[unsafe_offset=Int(c.mat_idx)]
@@ -1281,10 +1362,10 @@ def _lobe_sample(
         var cos_out = abs(bs.wi.z)
         var w = bs.f * (cos_out / bs.pdf)
         if bs.specular:
-            return LobeSample(True, wi, w, True, Float32(0), Float32(0), cos_out, _lobe_scoped(c))
-        var le = _lobe_eval[want_pdfs=True](c, wi, tab, spectral_coeffs, spectral_res,
+            return LobeSample(True, wi, w, True, Float32(0), Float32(0), cos_out, _lobe_scoped(c), False)
+        var le = _lobe_eval[want_pdfs=True, want_rev=want_rev](c, wi, tab, spectral_coeffs, spectral_res,
             spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, wavelengths)
-        return LobeSample(True, wi, w, False, le.pdf_fwd, le.pdf_rev, cos_out, _lobe_scoped(c))
+        return LobeSample(True, wi, w, False, le.pdf_fwd, le.pdf_rev, cos_out, _lobe_scoped(c), False)
 
     var bounce_n = vn
     if c.kind == LobeKind.lambertian:
@@ -1304,12 +1385,12 @@ def _lobe_sample(
 
     var s = sample_cosine_hemisphere_world(u0, u1, bounce_n)
     var wi = s[0]
-    var le = _lobe_eval[want_pdfs=True](c, wi, tab, spectral_coeffs, spectral_res,
+    var le = _lobe_eval[want_pdfs=True, want_rev=want_rev](c, wi, tab, spectral_coeffs, spectral_res,
         spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, wavelengths)
     if le.pdf_fwd <= Float32(0):
         return _lobe_sample_invalid()
     return LobeSample(True, wi, le.f_cos * (Float32(1) / le.pdf_fwd), False,
-                      le.pdf_fwd, le.pdf_rev, le.cos_used, _lobe_scoped(c))
+                      le.pdf_fwd, le.pdf_rev, le.cos_used, _lobe_scoped(c), dot(wi, vn) * dot(vwo, vn) < Float32(0))
 
 
 # Moved here from bdpt_*.mojo so that the ONE lobe evaluator can live below
@@ -1373,9 +1454,7 @@ def _eval_conductor_ggx_spectral(
 # change into BDPT/SPPM ahead of their own stages, defeating the point of
 # staging. shading.mojo (Stage 2) calls these new spectral versions instead;
 # bdpt_*.mojo/sppm.mojo keep calling the RGB originals unchanged until their
-# own stage migrates them. Hair is NOT covered here (Marschner lobe color
-# comes from sigma_a absorption, a genuinely more involved conversion) —
-# _nee_weight_hair stays RGB-only for now, a deliberate scoped exclusion.
+# own stage migrates them.
 # The `spectral_coeffs/_res/_cie_x/_cie_y/_cie_z/_d65` sextuple below replaces
 # a single `ctx: SpectralHandle` parameter -- see spectrum.mojo's long
 # comment above rgb_to_spectral_sample for why: passing that 6-field struct
@@ -1407,15 +1486,38 @@ def _nee_weight_lobe(
 
     Opaque lobes reject a light behind the shading normal; diffuse_transmit
     and hair transport to both sides, so for them _lobe_eval decides."""
-    if not ls.valid:
+    if not _nee_faces(ls, c):
         return SpectralSample(Float32(0.0))
-    var cos_s = dot(c.n, ls.wi)
-    var two_sided = c.kind == LobeKind.diffuse_transmit or c.kind == LobeKind.hair
-    if (cos_s <= Float32(0.0) and not two_sided) or (two_sided and abs(cos_s) <= Float32(0.0) and c.kind != LobeKind.hair):
-        return SpectralSample(Float32(0.0))
-    var le = _lobe_eval[want_pdfs=True](c, ls.wi, tab,
+    var le = _lobe_eval[want_pdfs=True, want_rev=False](c, ls.wi, tab,
         spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y,
         spectral_cie_z, spectral_d65, wavelengths)
+    return _nee_weight_of(ls, c, le, spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z,
+                          spectral_d65, wavelengths, mis)
+
+
+@always_inline
+def _nee_faces(ls: LightSample, c: BSDF) -> Bool:
+    """A valid light sample the lobe can see: opaque lobes reject one behind the normal, two-sided ones do not."""
+    if not ls.valid:
+        return False
+    var cos_s = dot(c.n, ls.wi)
+    var two_sided = c.kind == LobeKind.diffuse_transmit or c.kind == LobeKind.hair
+    return not ((cos_s <= Float32(0.0) and not two_sided) or (two_sided and abs(cos_s) <= Float32(0.0) and c.kind != LobeKind.hair))
+
+
+@always_inline
+def _nee_weight_of(
+    ls: LightSample, c: BSDF, le: LobeEval,
+    spectral_coeffs: Pointer[Float32, MutUntrackedOrigin], spectral_res: Int,
+    spectral_cie_x: Pointer[Float32, MutUntrackedOrigin],
+    spectral_cie_y: Pointer[Float32, MutUntrackedOrigin],
+    spectral_cie_z: Pointer[Float32, MutUntrackedOrigin],
+    spectral_d65: Pointer[Float32, MutUntrackedOrigin],
+    wavelengths: SampledWavelengths,
+    mis: MisPolicy,
+) -> SpectralSample:
+    """_nee_weight_lobe from the lobe's evaluation toward the light."""
+    var cos_s = dot(c.n, ls.wi)
     var f = le.f_cos
     var pdf_bsdf = le.pdf_fwd
     if f.v0 <= Float32(0.0) and f.v1 <= Float32(0.0) and f.v2 <= Float32(0.0) and f.v3 <= Float32(0.0):
@@ -1470,31 +1572,3 @@ def _nee_weight_simple_spectral(
         tab, spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y,
         spectral_cie_z, spectral_d65, wavelengths, mis)
 
-
-@always_inline
-def _nee_weight_hair(
-    ls: LightSample, hc: HairLobeConstants,
-    mis: MisPolicy = mis_policy_power(),
-) -> RGB:
-    """Hair's own version of _nee_weight_simple above — hair's BRDF needs
-    the full precomputed per-hit HairLobeConstants (Marschner R/TT/TRT lobe
-    state) rather than a flat (alb, alpha) pair, so it can't share
-    bxdf_eval_any's signature, but presents the same LightSample-in,
-    weight-out shape."""
-    if not ls.valid:
-        return RGB(Float32(0.0))
-    var (cos_ti, f_val, pdf_over_cos) = _hair_eval_lobes(
-        ls.wi, hc.tangent, hc.b_perp, hc.n_perp, hc.phi_o,
-        hc.dphi0, hc.dphi1, hc.dphi2,
-        hc.cos_tp0_o, hc.sin_tp0_o, hc.cos_tp1_o, hc.sin_tp1_o, hc.cos_tp2_o, hc.sin_tp2_o,
-        hc.cos_theta_o, hc.sin_theta_o, hc.inv_vm0, hc.inv_vm1, hc.inv_vm2, hc.mp_c0, hc.mp_c1, hc.mp_c2, hc.s,
-        hc.A0, hc.A1, hc.A2, hc.A3, hc.lum0, hc.lum1, hc.lum2, hc.lum3, hc.total_lum,
-    )
-    if ls.is_delta:
-        return f_val * cos_ti * ls.Li
-    var pdf_bsdf = max(cos_ti * pdf_over_cos, Float32(1e-6))
-    # `cos_ti` is the FIBRE cosine, not |n.wi| -- hair's lobe has no surface
-    # normal to take one against. Same distinction LobeEval.cos_used exists
-    # for in bdpt_*.mojo, and the reason a caller must never guess it.
-    var mis_w = nee_mis_weight(mis, ls.pdf, pdf_bsdf, cos_ti)
-    return f_val * cos_ti * ls.Li * (mis_w / ls.pdf)

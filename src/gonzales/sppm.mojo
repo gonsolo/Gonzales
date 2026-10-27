@@ -2165,7 +2165,7 @@ def _sppm_nee_weight(
     # deficit), and this is the same fix applied uniformly rather than at
     # one material's call site.
     return (BSDF(vp.mat_kind, True, False, vn, wo, vp.alb, vp.mat_idx, alpha,
-                Float32(0), vp.hair_curve_idx, vp.hair_h, vp.hair_v, True, False)).nee_weight(ls, LobeTables(sd.materials, sd.curves, sd.measuredBrdfs, sd.spectral), vp.wavelengths, mis_policy_sole())
+                Float32(0), vp.hair_curve_idx, vp.hair_h, vp.hair_v, True, False)).nee_weight_mis(ls, LobeTables(sd.materials, sd.curves, sd.measuredBrdfs, sd.spectral), vp.wavelengths, mis_policy_sole())
 
 @always_inline
 def _sppm_vp_shadow_eps(vp: SPPMPixel, ref sd: SceneView, wo: Vec3f) -> Float32:

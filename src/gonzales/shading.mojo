@@ -17,10 +17,10 @@ from .media import Medium, MediumInterface, Grid, NvdbGrid
 from .shadow_media import shadow_transmittance
 from .curves import Curve, curve_at, curve_piece_endpoints, _curve_perp_axis, curve_hit_normal
 from .layered import layered_f, layered_sample, layered_pdf, diel_f, diel_pdf, diel_sample
-from .bxdf import BSDF, LobeSample, BxDFSample, GeomContext, SobolSamples8, BxDFFlags, bxdf_sample_dielectric, bxdf_sample_thin_dielectric, bxdf_eval_diffuse, bxdf_pdf_diffuse, bxdf_sample_diffuse_transmit, bxdf_eval_conductor_ggx, ggx_albedo, bxdf_pdf_conductor_ggx, _nee_weight_hair, _nee_weight_simple_spectral, LobeTables
+from .bxdf import BSDF, HairBSDF, NeeLobe, LobeSample, BxDFSample, GeomContext, SobolSamples8, BxDFFlags, bxdf_sample_dielectric, bxdf_sample_thin_dielectric, bxdf_eval_diffuse, bxdf_pdf_diffuse, bxdf_sample_diffuse_transmit, bxdf_eval_conductor_ggx, ggx_albedo, bxdf_pdf_conductor_ggx, _nee_weight_simple_spectral, LobeTables
 from .rng import PCG32
 from .footprint import CameraFootprint, UVFootprint, TriWorld, tri_world, hit_uv_footprint
-from .bvh import BVH2Node, BVH4, SceneView, any_hit_dispatch, traverse_dispatch, HairLobeConstants, _hair_precompute, _hair_sample_dir_u, curve_offset_eps, LightSample, _sample_distant_light_nee, _sample_point_light_nee, _sample_sphere_light_nee, _sample_infinite_light_nee, _sample_infinite_light_textured, _equal_area_sphere_to_square
+from .bvh import BVH2Node, BVH4, SceneView, any_hit_dispatch, traverse_dispatch, curve_hit_frame, curve_offset_eps, LightSample, _sample_distant_light_nee, _sample_point_light_nee, _sample_sphere_light_nee, _sample_infinite_light_nee, _sample_infinite_light_textured, _equal_area_sphere_to_square
 from .sampling import power_heuristic, sample_cosine_hemisphere_world, sample_ggx_vndf, sobol_sample_n, sobol_dim_seed
 from .transform import transform_normal, Mat4
 from .guide import GuideGrid, guide_pos_to_cell, guide_pdf, guide_sample, guide_cell_has_data, guide_record, null_guide, guide_is_active
@@ -1074,19 +1074,6 @@ def _to_spec_illum(ctx: ShadeContext, c: RGB, wl: SampledWavelengths) -> Spectra
     return rgb_illuminant_to_spectral_sample(ctx.spectral.coeffs, ctx.spectral.res,
         ctx.spectral.cie_x, ctx.spectral.cie_y, ctx.spectral.cie_z,
         ctx.spectral.d65, c.r, c.g, c.b, wl)
-
-@always_inline
-def _nee_weight_hair_unlit(ls: LightSample, hc: HairLobeConstants) -> RGB:
-    """_nee_weight_hair for unit radiance: the hair's part, to be upsampled apart from the light's."""
-    var unit = ls.copy()
-    unit.Li = RGB(Float32(1.0))
-    return _nee_weight_hair(unit, hc)
-
-@always_inline
-def _to_spec_hair_lit(ctx: ShadeContext, w: RGB, li: RGB, wl: SampledWavelengths) -> SpectralSample:
-    """A coloured hair weight times a light's radiance, each upsampled with its own converter (as
-    _to_spec_diffuse_lit): their RGB product is a valid input to neither."""
-    return _to_spec_weight(ctx, w, wl) * _to_spec_illum(ctx, li, wl)
 
 @always_inline
 def _to_spec_diffuse_lit(ctx: ShadeContext, alb: RGB, le: RGB, wl: SampledWavelengths) -> SpectralSample:
@@ -2170,22 +2157,38 @@ def _lobe_nee[enqueue_shadow: Bool](
     mut pcg: PCG32,
 ):
     """NEE through a BSDF: one area-light sample, every simple light, every environment."""
-    var tab = LobeTables(ctx.materials, ctx.curves, ctx.measured_brdfs, ctx.spectral)
     var ls_area = _sample_area_light_nee(ctx, hit_point, pcg)
-    _lobe_nee_one[enqueue_shadow](path_ptr, ctx, bsdf, tab, hit_point, ls_area, ls_area.dist * Float32(0.9999))
-    for li in range(_nee_simple_light_count(ctx)):
-        var res = _nee_sample_simple_light(ctx, li, hit_point, pcg)
-        _lobe_nee_one[enqueue_shadow](path_ptr, ctx, bsdf, tab, hit_point, res[0].copy(), res[1])
-    for inf_i in range(ctx.lights.infinite_count):
-        var ls_e = _sample_infinite_light_nee(ctx.lights.infinite_lights[unsafe_offset=inf_i], Point2f(pcg.next_float(), pcg.next_float()))
-        _lobe_nee_one[enqueue_shadow](path_ptr, ctx, bsdf, tab, hit_point, ls_e, ls_e.dist)
+    _lobe_nee_with[BSDF, enqueue_shadow](path_ptr, ctx, bsdf, hit_point, ls_area, Point2f(Float32(0), Float32(0)), False, pcg)
 
 
 @always_inline
-def _lobe_nee_one[enqueue_shadow: Bool](
+def _lobe_nee_with[L: NeeLobe, enqueue_shadow: Bool](
     path_ptr: Pointer[PathState, MutUntrackedOrigin],
     ctx: ShadeContext,
-    bsdf: BSDF,
+    bsdf: L,
+    hit_point: Vec3f,
+    ls_area: LightSample,
+    u_env: Point2f,
+    has_u_env: Bool,
+    mut pcg: PCG32,
+):
+    """_lobe_nee with the area-light sample drawn, and the first environment's numbers when `has_u_env` (Sobol)."""
+    var tab = LobeTables(ctx.materials, ctx.curves, ctx.measured_brdfs, ctx.spectral)
+    _lobe_nee_one[L, enqueue_shadow](path_ptr, ctx, bsdf, tab, hit_point, ls_area, ls_area.dist * Float32(0.9999))
+    for li in range(_nee_simple_light_count(ctx)):
+        var res = _nee_sample_simple_light(ctx, li, hit_point, pcg)
+        _lobe_nee_one[L, enqueue_shadow](path_ptr, ctx, bsdf, tab, hit_point, res[0].copy(), res[1])
+    for inf_i in range(ctx.lights.infinite_count):
+        var u = u_env if inf_i == 0 and has_u_env else Point2f(pcg.next_float(), pcg.next_float())
+        var ls_e = _sample_infinite_light_nee(ctx.lights.infinite_lights[unsafe_offset=inf_i], u)
+        _lobe_nee_one[L, enqueue_shadow](path_ptr, ctx, bsdf, tab, hit_point, ls_e, ls_e.dist)
+
+
+@always_inline
+def _lobe_nee_one[L: NeeLobe, enqueue_shadow: Bool](
+    path_ptr: Pointer[PathState, MutUntrackedOrigin],
+    ctx: ShadeContext,
+    bsdf: L,
     tab: LobeTables,
     hit_point: Vec3f,
     ls: LightSample,
@@ -2259,13 +2262,17 @@ def _lobe_bounce[aov_from_f: Bool](
     geo_n: Vec3f,
     albedo: RGB,
     mut pcg: PCG32,
+    curve_eps: Float32 = Float32(0),
 ):
-    """Continue a reflected path along a BSDF sample; `aov_from_f` takes the albedo AOV from f instead of `albedo`."""
+    """Continue a path along a BSDF sample; `aov_from_f` takes the albedo AOV from f instead of `albedo`.
+    A curve hit passes its offset `curve_eps`: the ray leaves along geo_n to whichever side wi points."""
     if not s.valid:
         path_ptr[].active = 0
         path_ptr[].pcgState = pcg.state
         return
     var org = spawn_origin(hit_point, geo_n, s.wi)
+    if curve_eps > Float32(0):
+        org = hit_point + geo_n * (curve_eps if dot(s.wi, geo_n) >= Float32(0) else -curve_eps)
     path_ptr[].ray = Ray(Point3f(org[0], org[1], org[2]), Vec3f(s.wi[0], s.wi[1], s.wi[2]))
     if path_ptr[].bounce == 0 or path_ptr[].specularBounce == Int8(1):
         comptime if aov_from_f:
@@ -2286,7 +2293,7 @@ def _lobe_bounce[aov_from_f: Bool](
         path_ptr[].lastBsdfPdf = s.pdf_fwd
     path_ptr[].bounce += 1
     var u_rr = pcg.next_float()
-    _apply_russian_roulette(path_ptr, ctx.cycles, pcg, u_rr, BOUNCE_GLOSSY)
+    _apply_russian_roulette(path_ptr, ctx.cycles, pcg, u_rr, BOUNCE_TRANSMIT if s.transmit else BOUNCE_GLOSSY)
 
 
 # ── Measured (tabulated Dupuy & Jakob BxDF) ──────────────────────────────────
@@ -2887,111 +2894,26 @@ def shade_hair[use_gpu: Bool, enqueue_shadow: Bool](
     ctx: ShadeContext,
     mat: Material,
 ):
-    """3-lobe hair BSDF (Marschner R/TT/TRT). Material packing:
-       albedo = sigma_a (RGB absorption), emission.r = eta (IOR),
-       roughU = betaM (longitudinal), roughV = betaN (azimuthal)."""
-
-
-
-    # ── Steps 1-10: geometry + optical + per-lobe precompute ─────────────────
-    # h and v_global come straight from intersect_curve (geometry.mojo) via
-    # Intersection.u/.v — no tessellated mesh, no barycentric interpolation.
-    # Delegated to bvh.mojo's _hair_precompute (shared with bdpt_*.mojo/
-    # sppm.mojo's connectible-vertex/gather/NEE evaluation of a stored hair
-    # vertex) — same formulas as before this was extracted, just relocated.
+    """Hair (Marschner R/TT/TRT) through its BSDF, with the Sobol dimensions for light and scatter."""
     if inter.primId.type != 5:
         path_ptr[].active = 0
         return
     var curve_idx = Int(inter.primId.id1)
-    var h = max(Float32(-0.99), min(Float32(0.99), inter.u))
-    var v_global = inter.v
     var ray_dir = Vec3f(path_ptr[].ray.direction.x, path_ptr[].ray.direction.y, path_ptr[].ray.direction.z)
-    var wo = -ray_dir
-    var hc = _hair_precompute(mat, ctx.curves, curve_idx, v_global, h, wo)
-    # NEE (all light types) and indirect sampling now go through hc directly
-    # (bxdf.mojo's _nee_weight_hair, bvh.mojo's _hair_sample_dir) — only
-    # geo_normal is still needed locally, for shadow-ray/hit-point offsets.
-    var geo_normal = hc.geo_normal
-
-    # ── Hit point for shadow rays (always offset toward incoming side) ────────
     var ray_org = Vec3f(path_ptr[].ray.origin.x, path_ptr[].ray.origin.y, path_ptr[].ray.origin.z)
+    var wo = -ray_dir
+    var cf = curve_hit_frame(ctx.curves, curve_idx, inter.v, inter.u, wo)
     var hit_base = ray_org + ray_dir * inter.tHit
-    var curve_eps = curve_offset_eps(hc.radius)
-
+    var tab = LobeTables(ctx.materials, ctx.curves, ctx.measured_brdfs, ctx.spectral)
+    var bsdf = HairBSDF.at(BSDF(LobeKind.hair, True, False, cf[3], wo, mat.albedo, Int32(inter.primId.materialIndex),
+                                Float32(0), Float32(0), Int32(curve_idx), inter.u, inter.v, False, False), mat, tab)
     var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
-
-    # ── NEE for infinite/distant/point/sphere lights, via the shared Light
-    # interface (bvh.mojo's LightSample samplers) + BxDF interface
-    # (bxdf.mojo's _nee_weight_hair, using the `hc` HairLobeConstants
-    # already computed above) — replacing 3 formerly hand-inlined blocks
-    # also duplicated in _shade_diffuse_nee/_shade_conductor_nee. Each
-    # light's shadow-ray origin still needs hair's own sign-flip offset
-    # (toward whichever side of geo_normal wi points), so that glue stays
-    # here rather than in the shared weight function. Sphere-light NEE is
-    # new (this material previously had none).
-    # Mesh/curve area lights: without this sample, a bounce that hits one keeps only its tiny MIS weight.
     var ss = _draw_sobol_8(path_ptr, ctx.sobol_matrices)
     var ls_area = _sample_area_light_nee_u(ctx, hit_base, ss.light, ss.bary1, ss.bary2, pcg)
-    var w_area = _nee_weight_hair_unlit(ls_area, hc)
-    if not w_area.is_black():
-        var contrib_area = path_ptr[].throughput * _to_spec_hair_lit(ctx, w_area, ls_area.Li, path_ptr[].wavelengths)
-        _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_base, ls_area.wi, ls_area.dist * Float32(0.9999), contrib_area)
-    for inf_i in range(ctx.lights.infinite_count):
-        var ls_e = _sample_infinite_light_nee(ctx.lights.infinite_lights[unsafe_offset=inf_i], Point2f(ss.env1, ss.env2) if inf_i == 0 else Point2f(pcg.next_float(), pcg.next_float()))
-        var w_e = _nee_weight_hair_unlit(ls_e, hc)
-        if not w_e.is_black():
-            var contrib_e = path_ptr[].throughput * _to_spec_hair_lit(ctx, w_e, ls_e.Li, path_ptr[].wavelengths)
-            _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_base, ls_e.wi, ls_e.dist, contrib_e)
-
-    # distant/point/sphere via the shared sampler. `infinite` stays outside
-    # (unchanged, still first) -- of these four types only infinite and
-    # sphere draw pcg, and sphere still fires immediately after infinite's
-    # draw with nothing pcg-consuming in between, in both the old order
-    # (distant,point,sphere all after infinite) and this one.
-    for li in range(_nee_simple_light_count(ctx)):
-        var res = _nee_sample_simple_light(ctx, li, hit_base, pcg)
-        var ls = res[0].copy()
-        var tmax = res[1]
-        var w = _nee_weight_hair_unlit(ls, hc)
-        if not w.is_black():
-            var contrib = path_ptr[].throughput * _to_spec_hair_lit(ctx, w, ls.Li, path_ptr[].wavelengths)
-            _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_base, ls.wi, tmax, contrib)
-
-    # ── Step 15: Indirect sampling ────────────────────────────────────────────
-    # Delegated to bvh.mojo's _hair_sample_dir (same lobe-pick + vMF/logistic
-    # sampling as before this was extracted, identical RNG draw order) —
-    # shared with bdpt_*.mojo/sppm.mojo's own hair-vertex bounce continuation.
-    var u_lobe = ss.rr
-    var u_th = ss.scat1
-    var u_phi_v = ss.scat2
-    var u3 = pcg.next_float()
-    var r_lobe = u_lobe * hc.total_lum < hc.lum0   # Cycles counts the R lobe as glossy, the rest as transmission
-    var (wi_s, f_s, pdf, cos_ti_s2) = _hair_sample_dir_u(hc, u_lobe, u_th, u_phi_v, u3)
-    var frs = f_s.r; var fgs = f_s.g; var fbs = f_s.b
-
-    # Solid-angle PDF (remove the embedded /cos_ti_s) — used for MIS when indirect path hits env.
-    var pdf_solid_angle = pdf * cos_ti_s2
-
-    # Update path state
-    path_ptr[].pcgState = pcg.state
-    # Offset scattered ray origin based on which side wi_s exits (avoids self-intersection
-    # for transmission rays that cross through the ribbon).
-    var scatter_sign = Float32(1.0) if dot(wi_s, geo_normal) >= Float32(0.0) else Float32(-1.0)
-    var scatter_org = hit_base + geo_normal * curve_eps * scatter_sign
-    path_ptr[].ray = Ray(
-        Point3f(scatter_org[0], scatter_org[1], scatter_org[2]),
-        Vec3f(wi_s[0], wi_s[1], wi_s[2]))
-    if path_ptr[].bounce == 0 or path_ptr[].specularBounce == Int8(1):
-        # Approximate albedo AOV from TT lobe (closest to diffuse color)
-        path_ptr[].albedo = hc.A1
-    # A sampling weight, not a reflectance: hair's peaked lobes give f (and f/pdf) well above 1.
-    path_ptr[].throughput *= _to_spec_weight(ctx, RGB(frs, fgs, fbs) * (Float32(1.0) / pdf), path_ptr[].wavelengths)
-    path_ptr[].lastBsdfPdf = pdf_solid_angle
-    path_ptr[].specularBounce = Int8(0)
-    path_ptr[].bounce += 1
-
-    var u_rr_hair = pcg.next_float()
-    _apply_russian_roulette(path_ptr, ctx.cycles, pcg, u_rr_hair, BOUNCE_GLOSSY if r_lobe else BOUNCE_TRANSMIT)
+    _lobe_nee_with[HairBSDF, enqueue_shadow](path_ptr, ctx, bsdf, hit_base, ls_area, Point2f(ss.env1, ss.env2), True, pcg)
+    var s = bsdf.sample[want_rev=False](ss.rr, ss.scat1, ss.scat2, pcg.next_float(), tab, path_ptr[].wavelengths)
+    # Albedo AOV: the TT lobe's colour, the closest hair has to a diffuse one.
+    _lobe_bounce[False](path_ptr, ctx, s, hit_base, cf[3], bsdf.hc.A1, pcg, curve_offset_eps(cf[4]))
 
 
 # 2-vertex MNEE: Newton walk for x0→x1(glass1)→x2(glass2)→x3.
