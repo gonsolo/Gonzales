@@ -1,5 +1,5 @@
-"""pbrt-v4's LayeredBxDF, specialised to coateddiffuse: a (rough) dielectric
-coat over a Lambertian base, twoSided, no medium albedo.
+"""pbrt-v4's LayeredBxDF: a (rough) dielectric coat over a Lambertian base
+(coateddiffuse) or a GGX conductor base (coatedconductor), twoSided, no medium albedo.
 
 A line-by-line port of pbrt's bxdfs.h (LayeredBxDF::f / Sample_f / PDF) and
 bxdfs.cpp (DielectricBxDF), with util/scattering.h's TrowbridgeReitz
@@ -293,6 +293,74 @@ def diffuse_pdf(wo: Vec3f, wi: Vec3f) -> Float32:
 
 
 @always_inline
+def _schlick(f0: SpectralSample, c: Float32) -> SpectralSample:
+    var m = Float32(1) - min(abs(c), Float32(1))
+    var m2 = m * m
+    var m5 = m2 * m2 * m
+    return f0 * (Float32(1) - m5) + SpectralSample(m5)
+
+@always_inline
+def cond_sample(wo: Vec3f, u0: Float32, u1: Float32, F0: SpectralSample, alpha: Float32) -> ISample:
+    """ConductorBxDF::Sample_f, with a Schlick Fresnel on the coat-relative f0."""
+    if tr_effectively_smooth(alpha):
+        var wr = Vec3f(-wo.x, -wo.y, wo.z)
+        return ISample(True, _schlick(F0, wr.z) * fast_recip(abs(wr.z)), wr, Float32(1), True, True)
+    if wo.z == Float32(0):
+        return _no_sample()
+    var wm = tr_sample_wm(wo, u0, u1, alpha)
+    var wi = _reflect(wo, wm)
+    if wo.z * wi.z <= Float32(0):
+        return _no_sample()
+    var pdf = fast_div(tr_pdf(wo, wm, alpha), Float32(4) * abs(dot(wo, wm)))
+    var f = _schlick(F0, dot(wo, wm)) * fast_div(tr_D(wm, alpha) * tr_G(wo, wi, alpha), Float32(4) * abs(wi.z * wo.z))
+    return ISample(True, f, wi, pdf, False, True)
+
+@always_inline
+def cond_f(wo: Vec3f, wi: Vec3f, F0: SpectralSample, alpha: Float32) -> SpectralSample:
+    var wm = wi + wo
+    if wo.z * wi.z <= Float32(0) or tr_effectively_smooth(alpha) or wm.length_sq() == Float32(0):
+        return SpectralSample(Float32(0))
+    wm = wm.normalize()
+    return _schlick(F0, dot(wo, wm)) * fast_div(tr_D(wm, alpha) * tr_G(wo, wi, alpha), Float32(4) * abs(wi.z * wo.z))
+
+@always_inline
+def cond_pdf(wo: Vec3f, wi: Vec3f, alpha: Float32) -> Float32:
+    var wm = wi + wo
+    if wo.z * wi.z <= Float32(0) or tr_effectively_smooth(alpha) or wm.length_sq() == Float32(0):
+        return Float32(0)
+    wm = wm.normalize()
+    if wm.z < Float32(0):
+        wm = -wm
+    return fast_div(tr_pdf(wo, wm, alpha), Float32(4) * abs(dot(wo, wm)))
+
+
+# The base: Lambertian of reflectance R, or a conductor of coat-relative f0 R and roughness alpha_b.
+@always_inline
+def _base_sample[conductor: Bool](wo: Vec3f, u0: Float32, u1: Float32, R: SpectralSample, alpha_b: Float32) -> ISample:
+    comptime if conductor:
+        return cond_sample(wo, u0, u1, R, alpha_b)
+    return diffuse_sample(wo, u0, u1, R)
+
+@always_inline
+def _base_f[conductor: Bool](wo: Vec3f, wi: Vec3f, R: SpectralSample, alpha_b: Float32) -> SpectralSample:
+    comptime if conductor:
+        return cond_f(wo, wi, R, alpha_b)
+    return diffuse_f(wo, wi, R)
+
+@always_inline
+def _base_pdf[conductor: Bool](wo: Vec3f, wi: Vec3f, alpha_b: Float32) -> Float32:
+    comptime if conductor:
+        return cond_pdf(wo, wi, alpha_b)
+    return diffuse_pdf(wo, wi)
+
+@always_inline
+def _base_specular[conductor: Bool](alpha_b: Float32) -> Bool:
+    comptime if conductor:
+        return tr_effectively_smooth(alpha_b)
+    return False
+
+
+@always_inline
 def _power(a: Float32, b: Float32) -> Float32:
     var aa = a * a
     var bb = b * b
@@ -331,10 +399,10 @@ def _r(mut rng: PCG32) -> Float32:
     return min(rng.next_float(), _ONE_MINUS_EPS)
 
 
-# ── LayeredBxDF<Dielectric, Diffuse, twoSided=true>, albedo = 0 ─────────────
+# ── LayeredBxDF<Dielectric, Diffuse or Conductor, twoSided=true>, albedo = 0 ─
 
-def layered_f(wo_in: Vec3f, wi_in: Vec3f, R: SpectralSample, eta: Float32, alpha: Float32,
-              radiance: Bool, thickness: Float32) -> SpectralSample:
+def layered_f[conductor: Bool = False](wo_in: Vec3f, wi_in: Vec3f, R: SpectralSample, eta: Float32, alpha: Float32,
+              radiance: Bool, thickness: Float32, alpha_b: Float32 = Float32(0)) -> SpectralSample:
     """LayeredBxDF::f. A coat over an opaque base never transmits, so paths in
     opposite hemispheres are zero outright (pbrt reaches the same zero through
     the bottom's refusal to sample transmission)."""
@@ -349,6 +417,7 @@ def layered_f(wo_in: Vec3f, wi_in: Vec3f, R: SpectralSample, eta: Float32, alpha
     var f = SpectralSample(diel_f(wo, wi, eta, alpha, radiance))
     var rng = _hash_dirs(wo, wi, UInt64(1))
     var top_specular = _top_specular(eta, alpha)
+    var base_specular = _base_specular[conductor](alpha_b)
 
     var wos = diel_sample(wo, _r(rng), _r(rng), _r(rng), eta, alpha, radiance, False, True)
     if not wos.valid or wos.f.is_black() or wos.pdf == Float32(0) or wos.wi.z == Float32(0):
@@ -377,13 +446,14 @@ def layered_f(wo_in: Vec3f, wi_in: Vec3f, R: SpectralSample, eta: Float32, alpha
             beta = beta * bs.f * fast_div(abs(bs.wi.z), bs.pdf)
             w = bs.wi
         else:
-            # The diffuse base (non-exit, non-specular): NEE along wis...
-            var wt = Float32(1)
-            if not top_specular:
-                wt = _power(wis.pdf, diffuse_pdf(-w, -wis.wi))
-            f += beta * diffuse_f(-w, -wis.wi, R) * fast_div(abs(wis.wi.z) * wt * _tr(wis.wi, thickness), wis.pdf) * wis.f
+            # The base (non-exit): NEE along wis unless it is specular...
+            if not base_specular:
+                var wt = Float32(1)
+                if not top_specular:
+                    wt = _power(wis.pdf, _base_pdf[conductor](-w, -wis.wi, alpha_b))
+                f += beta * _base_f[conductor](-w, -wis.wi, R, alpha_b) * fast_div(abs(wis.wi.z) * wt * _tr(wis.wi, thickness), wis.pdf) * wis.f
             # ...then sample the base for the next direction...
-            var bs = diffuse_sample(-w, _r(rng), _r(rng), R)
+            var bs = _base_sample[conductor](-w, _r(rng), _r(rng), R, alpha_b)
             if not bs.valid or bs.f.is_black() or bs.pdf == Float32(0) or bs.wi.z == Float32(0):
                 break
             beta = beta * bs.f * fast_div(abs(bs.wi.z), bs.pdf)
@@ -394,8 +464,10 @@ def layered_f(wo_in: Vec3f, wi_in: Vec3f, R: SpectralSample, eta: Float32, alpha
                 if fexit > Float32(0):
                     # wis's density of this inside direction, not pbrt's
                     # PDF(-w, wi) -- see the module docstring.
-                    var wis_pdf_here = diel_pdf(wi, -w, eta, alpha, False, True)
-                    f += beta * (_tr(bs.wi, thickness) * fexit * _power(bs.pdf, wis_pdf_here))
+                    var wt = Float32(1)
+                    if not base_specular:
+                        wt = _power(bs.pdf, diel_pdf(wi, -w, eta, alpha, False, True))
+                    f += beta * (_tr(bs.wi, thickness) * fexit * wt)
     return f
 
 
@@ -409,8 +481,9 @@ struct LayeredSample(TrivialRegisterPassable):
     var pdf_is_proportional: Bool
 
 
-def layered_sample(wo_in: Vec3f, uc: Float32, u0: Float32, u1: Float32, R: SpectralSample,
-                   eta: Float32, alpha: Float32, radiance: Bool, thickness: Float32) -> LayeredSample:
+def layered_sample[conductor: Bool = False](wo_in: Vec3f, uc: Float32, u0: Float32, u1: Float32, R: SpectralSample,
+                   eta: Float32, alpha: Float32, radiance: Bool, thickness: Float32,
+                   alpha_b: Float32 = Float32(0)) -> LayeredSample:
     """LayeredBxDF::Sample_f. The returned pdf is only proportional (pbrt sets
     pdfIsProportional): throughput uses f*cos/pdf, MIS must call layered_pdf."""
     var wo = wo_in
@@ -443,7 +516,7 @@ def layered_sample(wo_in: Vec3f, uc: Float32, u0: Float32, u1: Float32, R: Spect
         f = f * _tr(w, thickness)
         var s: ISample
         if not at_top:
-            s = diffuse_sample(-w, _r(rng), _r(rng), R)
+            s = _base_sample[conductor](-w, _r(rng), _r(rng), R, alpha_b)
         else:
             var c0 = _r(rng)
             var c1 = _r(rng)
@@ -463,7 +536,8 @@ def layered_sample(wo_in: Vec3f, uc: Float32, u0: Float32, u1: Float32, R: Spect
     return LayeredSample(False, SpectralSample(Float32(0)), Vec3f(Float32(0)), Float32(0), False, False)
 
 
-def layered_pdf(wo_in: Vec3f, wi_in: Vec3f, eta: Float32, alpha: Float32, radiance: Bool) -> Float32:
+def layered_pdf[conductor: Bool = False](wo_in: Vec3f, wi_in: Vec3f, eta: Float32, alpha: Float32, radiance: Bool,
+                                         alpha_b: Float32 = Float32(0)) -> Float32:
     """LayeredBxDF::PDF: a stochastic estimate, mixed 90/10 with a uniform
     sphere density exactly as pbrt does."""
     var wo = wo_in
@@ -480,14 +554,16 @@ def layered_pdf(wo_in: Vec3f, wi_in: Vec3f, eta: Float32, alpha: Float32, radian
         var wis = diel_sample(wi, _r(rng), _r(rng), _r(rng), eta, alpha, not radiance, False, True)
         if wos.valid and not wos.f.is_black() and wos.pdf > Float32(0) and wis.valid and not wis.f.is_black() and wis.pdf > Float32(0):
             if _top_specular(eta, alpha):
-                pdf_sum += diffuse_pdf(-wos.wi, -wis.wi)
+                pdf_sum += _base_pdf[conductor](-wos.wi, -wis.wi, alpha_b)
             else:
                 var R1 = SpectralSample(Float32(1))
-                var rs = diffuse_sample(-wos.wi, _r(rng), _r(rng), R1)
-                if rs.valid and rs.pdf > Float32(0):
-                    var r_pdf = diffuse_pdf(-wos.wi, -wis.wi)
+                var rs = _base_sample[conductor](-wos.wi, _r(rng), _r(rng), R1, alpha_b)
+                if rs.valid and rs.pdf > Float32(0) and _base_specular[conductor](alpha_b):
+                    pdf_sum += diel_pdf(-rs.wi, wi, eta, alpha, True, True)
+                elif rs.valid and rs.pdf > Float32(0):
+                    var r_pdf = _base_pdf[conductor](-wos.wi, -wis.wi, alpha_b)
                     pdf_sum += _power(wis.pdf, r_pdf) * r_pdf
                     var t_pdf = diel_pdf(-rs.wi, wi, eta, alpha, True, True)
                     pdf_sum += _power(rs.pdf, t_pdf) * t_pdf
-    # (TT is always zero here: the diffuse base does not transmit.)
+    # (TT is always zero here: neither base transmits.)
     return Float32(0.9) * pdf_sum + Float32(0.1) * (Float32(1) / (Float32(4) * PI))
