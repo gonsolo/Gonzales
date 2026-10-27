@@ -1535,7 +1535,8 @@ def _nee_faces(ls: LightSample, c: BSDF) -> Bool:
     if not ls.valid or (not ls.is_delta and ls.pdf <= Float32(0)):
         return False
     var cos_s = dot(c.n, ls.wi)
-    var two_sided = c.kind == LobeKind.diffuse_transmit or c.kind == LobeKind.hair
+    # Lobes that transmit see lights on both sides; rough glass was missing, so VCM and SPPM lost its transmitted NEE.
+    var two_sided = c.kind == LobeKind.diffuse_transmit or c.kind == LobeKind.hair or c.kind == LobeKind.rough_dielectric
     return not ((cos_s <= Float32(0.0) and not two_sided) or (two_sided and abs(cos_s) <= Float32(0.0) and c.kind != LobeKind.hair))
 
 
