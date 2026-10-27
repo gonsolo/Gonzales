@@ -4,11 +4,11 @@
 from max.algorithm import parallelize
 from std.math import sqrt, floor, max, min, abs, pow
 from std.memory.alloc import unsafe_alloc
-from .geometry import Point3f, Vec3f, dot
+from .geometry import Point3f, Vec3f, dot, PI
 from .materials import LobeKind
 from .primitives import Ray, Intersection, PrimId
 from .bvh import traverse_dispatch
-from .bvh import SceneView, test_spheres, _is_real_ptr, curve_tangent, fibre_cos
+from .bvh import SceneView, test_spheres, _is_real_ptr, curve_tangent, fibre_cos, curve_radius
 from .sppm import (
     _HSIZE, _hash_cell, _PHOTON_BUCKET_CAP, grid_reset_cell, grid_count, grid_keep, grid_coin_bits, grid_push,
 )
@@ -146,16 +146,30 @@ def _vcm_eta_scale_vol(ref sd: SceneView, p: Point3f) -> Float32:
     return s
 
 @always_inline
-def _vcm_mergeable(v: BDPTVertex) -> Bool:
-    """Whether merging may estimate a density here: not on a hair fibre, which has no surface to estimate it on."""
-    return not (v.is_surface == Int32(1) and v.mat_kind == LobeKind.hair)
+def _vcm_on_fibre(v: BDPTVertex) -> Bool:
+    return v.is_surface == Int32(1) and v.mat_kind == LobeKind.hair
+
+@always_inline
+def _vcm_fibre_scale(ref sd: SceneView, p: Point3f, curve_idx: Int, v_global: Float32) -> Float32:
+    """eta(x) / eta on a hair fibre: the fibre kernel's measure 2 r(x) w(x) -- the strand within r, a ribbon of its
+    width w facing every direction -- over pi r_pass^2, times thinning's keep probability. 0 without a pass radius."""
+    if sd.vcmMergeR <= Float32(0):
+        return Float32(0)
+    var r = _vcm_merge_radius_at(sd, p) if sd.vcmFootprint > Float32(0) else sd.vcmMergeR
+    var w = Float32(2) * curve_radius(sd.curves, curve_idx, v_global)
+    return _vcm_keep(sd, p) * Float32(2) * r * w / (PI * sd.vcmMergeR * sd.vcmMergeR)
+
+@always_inline
+def _vcm_mergeable(ref sd: SceneView, v: BDPTVertex) -> Bool:
+    """Whether merging may estimate a density here: a fibre only with its kernel's pass radius."""
+    return not _vcm_on_fibre(v) or sd.vcmMergeR > Float32(0)
 
 @always_inline
 def _vcm_eta_at(ref sd: SceneView, v: BDPTVertex, mis_vm_weight_factor: Float32) -> Float32:
     """This vertex's own eta(x) = N * (kernel measure at x), fully scaled --
     a DISK area on a surface, a BALL volume in a medium; 0 where it cannot merge. `mis_vm_weight_factor`"""
-    if not _vcm_mergeable(v):
-        return Float32(0)
+    if _vcm_on_fibre(v):
+        return mis_vm_weight_factor * _vcm_fibre_scale(sd, v.pos, Int(v.hair_curve_idx), v.hair_v)
     if v.is_surface == Int32(0):
         var s3 = _VCM_RADIUS_VOLUME_SCALE * _VCM_RADIUS_VOLUME_SCALE * _VCM_RADIUS_VOLUME_SCALE
         return mis_vm_weight_factor * (Float32(4.0 / 3.0) * sd.vcmMergeR * s3) * _vcm_eta_scale_vol(sd, v.pos)
@@ -167,6 +181,9 @@ def _vcm_inv_eta_at(ref sd: SceneView, v: BDPTVertex, mis_vc_weight_factor: Floa
     convention _bdpt_merge_mis_weight uses (the merge weight's dVM = dVC/eta
     rule divides by eta rather than multiplying, see vcm_mis.mojo's
     vcm_scatter_carries docstring)."""
+    if _vcm_on_fibre(v):
+        var fs = _vcm_fibre_scale(sd, v.pos, Int(v.hair_curve_idx), v.hair_v)
+        return mis_vc_weight_factor / fs if fs > Float32(0) else Float32(0)
     if v.is_surface == Int32(0):
         var s3 = _VCM_RADIUS_VOLUME_SCALE * _VCM_RADIUS_VOLUME_SCALE * _VCM_RADIUS_VOLUME_SCALE
         return mis_vc_weight_factor / ((Float32(4.0 / 3.0) * sd.vcmMergeR * s3) * _vcm_eta_scale_vol(sd, v.pos))
@@ -202,7 +219,7 @@ def _bdpt_merge_slot_bucket(
     # is_surface is NOT required here any more: a volume light vertex is a
     # legitimate merge candidate too (Scenes/vcm_volume_mis_derivation.py) --
     if not (lv.is_delta == Int32(0) and lv.is_light == Int32(0)
-            and lv.mat_kind != LobeKind.bssrdf and _bdpt_vertex_mis_scoped(lv) and _vcm_mergeable(lv)):
+            and lv.mat_kind != LobeKind.bssrdf and _bdpt_vertex_mis_scoped(lv)):
         return -1
     var ix = Int(floor(lvc[unsafe_offset=k].pos.x * inv_cell))
     var iy = Int(floor(lvc[unsafe_offset=k].pos.y * inv_cell))

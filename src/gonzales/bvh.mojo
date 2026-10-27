@@ -955,6 +955,15 @@ def curve_tangent(curves: Pointer[Curve, MutUntrackedOrigin], curve_idx: Int, v_
 
 
 @always_inline
+def curve_radius(curves: Pointer[Curve, MutUntrackedOrigin], curve_idx: Int, v_global: Float32) -> Float32:
+    """The curve piece's mean radius at parameter v_global."""
+    var curve = curve_at(curves, curve_idx)
+    var piece = min(Int(curve.n_pieces) - 1, max(0, Int(v_global * Float32(curve.n_pieces))))
+    var (_, _, r0, r1) = curve_piece_endpoints(curve, piece)
+    return (r0 + r1) * Float32(0.5)
+
+
+@always_inline
 def fibre_cos(tangent: Vec3f, w: Vec3f) -> Float32:
     """|cos| of w against a fibre's normal plane: the measure a ray-facing ribbon presents to w."""
     var s = dot(w, tangent)

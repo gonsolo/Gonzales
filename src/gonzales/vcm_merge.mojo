@@ -4,10 +4,10 @@
 from std.collections import Array
 from std.math import sqrt, floor, max, abs
 from std.atomic import Atomic
-from .geometry import dot
+from .geometry import dot, PI
 from .materials import LobeKind
 from .vcm_camis import CamisCamRecord, CamisCamCarry, CamisLightRecord
-from .bvh import SceneView, _is_real_ptr
+from .bvh import SceneView, _is_real_ptr, curve_radius
 from .sppm import (
     _HSIZE, _hash_cell, _PHOTON_BUCKET_CAP, grid_keep, grid_weight, gather_disk_coverage,
     gather_disk_contains,
@@ -18,7 +18,7 @@ from .bdpt_eval import _lobe_eval, _bdpt_vertex_mis_scoped
 from .vcm_grid import (
     _vcm_depth, _vcm_light_count, _vcm_keep, _vcm_cap, _MERGE_COVERAGE, _VCM_FINE_LEVELS, _VCM_MN_STRIDE,
     _VCM_VISIT_INSTRUMENT, _CAMIS_CAM_RECS, _vcm_budget_active, _vcm_merge_radius_at,
-    _VCM_RADIUS_VOLUME_SCALE, _vcm_mergeable,
+    _VCM_RADIUS_VOLUME_SCALE, _vcm_mergeable, _vcm_on_fibre,
 )
 from .vcm_merge_weight import _bdpt_merge_mis_weight
 
@@ -58,7 +58,7 @@ def _bdpt_merge_from_cache(
         return SpectralSample(Float32(0))
     # A vertex kind with no real pdf has no real MIS weight either -- the
     # weight below falls back to 1, and an unweighted merge summed with an
-    if not _bdpt_vertex_mis_scoped(cv) or not _vcm_mergeable(cv):
+    if not _bdpt_vertex_mis_scoped(cv) or not _vcm_mergeable(sd, cv):
         return SpectralSample(Float32(0))
     var total = SpectralSample(Float32(0))
     var d_len = _vcm_depth(sd)
@@ -82,6 +82,11 @@ def _bdpt_merge_from_cache(
         var rq = _vcm_merge_radius_at(sd, cv.pos)
         r2 = rq * rq
         norm = norm_pass * (r2_pass / max(r2, Float32(1e-20)))
+    var on_fibre = _vcm_on_fibre(cv)
+    if on_fibre:
+        # The fibre kernel: N * 2r * w, the strand within r as a ribbon of its own width, instead of N * pi r^2.
+        var w = Float32(2) * curve_radius(sd.curves, Int(cv.hair_curve_idx), cv.hair_v)
+        norm = norm_pass * PI * r2_pass / max(Float32(2) * sqrt(r2) * w, Float32(1e-20))
     var cix = Int(floor(cv.pos.x * inv_cell))
     var ciy = Int(floor(cv.pos.y * inv_cell))
     var ciz = Int(floor(cv.pos.z * inv_cell))
@@ -113,11 +118,13 @@ def _bdpt_merge_from_cache(
                     var lv = lvc[unsafe_offset=k]
                     # is_light==1 vertices are the light SOURCE's own point
                     # (the s=1 connection strategy): their beta is 1/pdf_area
-                    if lv.is_delta == Int32(0) and lv.is_surface == cv.is_surface and lv.is_light == Int32(0) and lv.mat_kind != LobeKind.bssrdf and _bdpt_vertex_mis_scoped(lv) and _vcm_mergeable(lv):
+                    if lv.is_delta == Int32(0) and lv.is_surface == cv.is_surface and lv.is_light == Int32(0) and lv.mat_kind != LobeKind.bssrdf and _bdpt_vertex_mis_scoped(lv) and _vcm_on_fibre(lv) == on_fibre:
                         var e = lv.pos - cv.pos
                         var dist2 = e.length_sq()
                         var accept: Bool
-                        if cv.is_surface == Int32(1):
+                        if on_fibre:   # photons on the same strand only
+                            accept = lv.hair_curve_idx == cv.hair_curve_idx and dist2 <= r2
+                        elif cv.is_surface == Int32(1):
                             # Surface-compatibility guard: a distance-only gather
                             # counts a photon lying on a DIFFERENT surface (the
                             var _ncmp = dot(cv.normal.to_simd(), lv.normal.to_simd())

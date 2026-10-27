@@ -34,7 +34,7 @@ from .bdpt_eval import (
     _vcm_sphere_slot, _vcm_infinite_slot, _vcm_nee_surface, _vertex_ctx, _bdpt_vertex_mis_scoped, _vcm_mnee,
     _vcm_mnee_hit_term,
 )
-from .vcm_grid import _vcm_depth, _vcm_keep, _VCM_CAMIS, _CAMIS_CAM_RECS, _CAMIS_FORCE_C1, _vcm_eta_scale, _vcm_eta_at
+from .vcm_grid import _vcm_depth, _vcm_keep, _VCM_CAMIS, _CAMIS_CAM_RECS, _CAMIS_FORCE_C1, _vcm_eta_scale, _vcm_eta_at, _vcm_fibre_scale
 from .bdpt_connect import _bdpt_connect_to_cache, _bdpt_connect_to_cache_deferred
 from .vcm_merge import _bdpt_merge_from_cache
 from .bdpt_bssrdf import _bdpt_sample_bssrdf_exit, BssrdfExitSample
@@ -610,8 +610,8 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 return False   # direct hit on emissive analytic sphere -- terminates the path
 
         resolve_mix(sd.materials, pcg, mat, mat_idx)
-        if mat.type == MatKind.hair:
-            eta_x = Float32(0)   # no merging on a fibre (_vcm_mergeable)
+        if mat.type == MatKind.hair:   # the fibre kernel's density (_vcm_fibre_scale)
+            eta_x = mis_vm_weight_factor * _vcm_fibre_scale(sd, hit, Int(inter.primId.id1), inter.v)
 
         if mat.type == MatKind.area_light or mat.type == MatKind.lamp:
             # Direct hit on a triangle/curve area light — same MIS-against-

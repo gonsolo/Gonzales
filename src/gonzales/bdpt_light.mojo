@@ -18,7 +18,7 @@ from .sppm import medium_after_crossing, _cosine_hemisphere_sample, sample_area_
 from .spectrum import SampledWavelengths, SpectralSample, spec_refl, spec_illum
 from .bdpt_vertex import _BDPT_MAX_DEPTH, _BDPT_MAX_VERTS, BDPTVertex, _null_vertex
 from .bdpt_eval import _bdpt_vertex_mis_scoped, _vcm_mnee_light_dvcm
-from .vcm_grid import _vcm_depth, _vcm_keep, _VCM_CAMIS, _vcm_eta_scale, _vcm_eta_at
+from .vcm_grid import _vcm_depth, _vcm_keep, _VCM_CAMIS, _vcm_eta_scale, _vcm_eta_at, _vcm_fibre_scale
 from .bdpt_connect import _bdpt_store_lvc_vertex
 from .bdpt_camera import (
     _vcm_scatter, _vcm_lobe_vertex, _vcm_bssrdf_hop, _vcm_bssrdf_vertex,
@@ -408,8 +408,8 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
         var eta_x = mis_vm_weight_factor * _vcm_eta_scale(sd, hit)   # merging's MIS density HERE
 
         resolve_mix(sd.materials, pcg, mat, mat_idx)
-        if mat.type == MatKind.hair:
-            eta_x = Float32(0)   # no merging on a fibre (_vcm_mergeable)
+        if mat.type == MatKind.hair:   # the fibre kernel's density (_vcm_fibre_scale)
+            eta_x = mis_vm_weight_factor * _vcm_fibre_scale(sd, hit, Int(inter.primId.id1), inter.v)
         if mat.type != MatKind.interface:
             st.mis_null_dist = Float32(0)
 
