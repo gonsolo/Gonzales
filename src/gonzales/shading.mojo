@@ -17,7 +17,7 @@ from .media import Medium, MediumInterface, Grid, NvdbGrid
 from .shadow_media import shadow_transmittance
 from .curves import Curve, curve_at, curve_piece_endpoints, _curve_perp_axis, curve_hit_normal
 from .layered import layered_f, layered_sample, layered_pdf, diel_f, diel_pdf, diel_sample
-from .bxdf import BSDF, BxDFSample, GeomContext, SobolSamples8, BxDFFlags, bxdf_is_delta, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_sample_dielectric, bxdf_sample_thin_dielectric, bxdf_eval_diffuse, bxdf_pdf_diffuse, bxdf_sample_diffuse_transmit, bxdf_eval_conductor_ggx, ggx_albedo, bxdf_pdf_conductor_ggx, _nee_weight_simple, _nee_weight_hair, _nee_weight_simple_spectral, LobeTables
+from .bxdf import BSDF, BxDFSample, GeomContext, SobolSamples8, BxDFFlags, bxdf_is_delta, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_sample_dielectric, bxdf_sample_thin_dielectric, bxdf_eval_diffuse, bxdf_pdf_diffuse, bxdf_sample_diffuse_transmit, bxdf_eval_conductor_ggx, ggx_albedo, bxdf_pdf_conductor_ggx, _nee_weight_hair, _nee_weight_simple_spectral, LobeTables
 from .measured_bxdf_eval import bxdf_sample_measured, bxdf_pdf_measured
 from .rng import PCG32
 from .footprint import CameraFootprint, UVFootprint, TriWorld, tri_world, hit_uv_footprint
@@ -1512,14 +1512,9 @@ def _shade_sss_exit[enqueue_shadow: Bool](
     var n = face_toward(_shading_normal(mesh, v0, v1, v2, inter.u, inter.v, geo_normal, inter.primId.instanceIdx, ctx.instances), ray_dir)
     var hit_point = offset_point(ray_org + ray_dir * inter.tHit, gn)
     var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
-    var ls_area = _sample_area_light_nee(ctx, hit_point, pcg)
-    _sss_exit_nee[enqueue_shadow](path_ptr, ctx, hit_point, n, ls_area, ls_area.dist * Float32(0.9999))
-    for li in range(_nee_simple_light_count(ctx)):
-        var res = _nee_sample_simple_light(ctx, li, hit_point, pcg)
-        _sss_exit_nee[enqueue_shadow](path_ptr, ctx, hit_point, n, res[0].copy(), res[1])
-    for inf_i in range(ctx.lights.infinite_count):
-        var ls_inf = _sample_infinite_light_nee(ctx.lights.infinite_lights[unsafe_offset=inf_i], Point2f(pcg.next_float(), pcg.next_float()))
-        _sss_exit_nee[enqueue_shadow](path_ptr, ctx, hit_point, n, ls_inf, ls_inf.dist)
+    var white = BSDF(LobeKind.lambertian, True, False, n, n, RGB(Float32(1)), Int32(-1), Float32(0), Float32(0), Int32(-1),
+                     Float32(0), Float32(0), True, False)
+    _lobe_nee[enqueue_shadow](path_ptr, ctx, white, hit_point, pcg)
     var (wi, pdf) = sample_cosine_hemisphere_world(pcg.next_float(), pcg.next_float(), n)
     path_ptr[].pcgState = pcg.state
     if pdf <= Float32(0) or dot(wi, gn) <= Float32(0):
@@ -1530,22 +1525,6 @@ def _shade_sss_exit[enqueue_shadow: Bool](
     path_ptr[].specularBounce = Int8(0)
     path_ptr[].lastBsdfPdf = pdf
     path_ptr[].bounce += 1
-
-
-@always_inline
-def _sss_exit_nee[enqueue_shadow: Bool](
-    path_ptr: Pointer[PathState, MutUntrackedOrigin],
-    ctx: ShadeContext,
-    hit_point: Vec3f, n: Vec3f,
-    ls: LightSample, tmax: Float32,
-):
-    var unit = ls.copy()
-    unit.Li = RGB(Float32(1))
-    var w = _nee_weight_simple(unit, LobeKind.lambertian, RGB(Float32(1)), Float32(0), n, n)
-    if w.is_black():
-        return
-    var contrib = path_ptr[].throughput * _to_spec_weight(ctx, w, path_ptr[].wavelengths) * _to_spec_illum(ctx, ls.Li, path_ptr[].wavelengths)
-    _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, ls.wi, tmax, contrib)
 
 
 def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool, defer_only: Bool = False](
