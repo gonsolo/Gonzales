@@ -420,7 +420,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
             var v = lh.v
             var gn_geo = lh.gn_geo; var spawn_eps = lh.spawn_eps; var on_curve = lh.on_curve
             if st.mnee.side > Float32(0) and st.mnee.n_glass > Int32(0) and v.is_delta == Int32(0) \
-               and (v.mat_kind == LobeKind.lambertian or v.mat_kind == LobeKind.diffuse_transmit):
+               and LobeKind.is_diffuse(v.mat_kind):
                 # Reached through glass only: MNEE from here samples this path too (_vcm_mnee_light_dvcm).
                 var d_m = _vcm_mnee_light_dvcm(sd, hit.to_simd(), gn_geo, st.mnee.y, st.mnee.ny, st.mnee.side,
                                                Int(st.mnee.n_glass), st.mnee.first_glass, pcg)

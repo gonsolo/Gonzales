@@ -762,7 +762,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                                           v.mat_kind == LobeKind.diffuse_transmit or v.mat_kind == LobeKind.hair or v.mat_kind == LobeKind.rough_dielectric,
                                           Float32(0))
                 # MNEE toward a light behind glass, one more strategy in the balance (_vcm_mnee).
-                if v.mat_kind == LobeKind.lambertian or v.mat_kind == LobeKind.diffuse_transmit:
+                if LobeKind.is_diffuse(v.mat_kind):
                     st.total += _vcm_mnee(sd, v, hit.to_simd(), gn, st.beta, pcg, st.wl, eta_x, st.dvcm, st.dvc)
 
             # Scatter through THE lobe sampler -- the same BSDF connect,
@@ -784,7 +784,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             st.beta *= sc.weight
             st.last_bsdf_pdf = Float32(-1) if sc.is_delta else sc.pdf_fwd
             if v.is_delta == Int32(0):
-                var receiver = v.mat_kind == LobeKind.lambertian or v.mat_kind == LobeKind.diffuse_transmit
+                var receiver = LobeKind.is_diffuse(v.mat_kind)
                 st.mnee = VCMMneeTrack(hit.to_simd(), sc.pdf_fwd if receiver and not sc.is_delta else Float32(0), Int32(0))
             else:
                 st.mnee.pdf0 = Float32(0)

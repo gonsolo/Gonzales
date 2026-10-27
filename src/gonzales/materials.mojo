@@ -34,6 +34,12 @@ struct LobeKind:
     comptime layered = Int32(8)   # coateddiffuse as pbrt's LayeredBxDF (layered.mojo): f, pdf_fwd, pdf_rev all real
     comptime rough_dielectric = Int32(9)   # pbrt DielectricBxDF over Trowbridge-Reitz (layered.mojo diel_*); param = alpha, IOR from the material
 
+    @staticmethod
+    @always_inline
+    def is_diffuse(k: Int32) -> Bool:
+        """A cosine lobe on one or both sides: what MNEE treats as a receiver."""
+        return k == LobeKind.lambertian or k == LobeKind.diffuse_transmit
+
 struct PhotonKind:
     """What an SPPM photon (or visible point) was deposited on. A gather only
     pairs equal kinds."""
