@@ -18,7 +18,7 @@ from .bdpt_eval import _lobe_eval, _bdpt_vertex_mis_scoped
 from .vcm_grid import (
     _vcm_depth, _vcm_light_count, _vcm_keep, _vcm_cap, _MERGE_COVERAGE, _VCM_FINE_LEVELS, _VCM_MN_STRIDE,
     _VCM_VISIT_INSTRUMENT, _CAMIS_CAM_RECS, _vcm_budget_active, _vcm_merge_radius_at,
-    _VCM_RADIUS_VOLUME_SCALE,
+    _VCM_RADIUS_VOLUME_SCALE, _vcm_mergeable,
 )
 from .vcm_merge_weight import _bdpt_merge_mis_weight
 
@@ -58,7 +58,7 @@ def _bdpt_merge_from_cache(
         return SpectralSample(Float32(0))
     # A vertex kind with no real pdf has no real MIS weight either -- the
     # weight below falls back to 1, and an unweighted merge summed with an
-    if not _bdpt_vertex_mis_scoped(cv):
+    if not _bdpt_vertex_mis_scoped(cv) or not _vcm_mergeable(cv):
         return SpectralSample(Float32(0))
     var total = SpectralSample(Float32(0))
     var d_len = _vcm_depth(sd)
@@ -113,7 +113,7 @@ def _bdpt_merge_from_cache(
                     var lv = lvc[unsafe_offset=k]
                     # is_light==1 vertices are the light SOURCE's own point
                     # (the s=1 connection strategy): their beta is 1/pdf_area
-                    if lv.is_delta == Int32(0) and lv.is_surface == cv.is_surface and lv.is_light == Int32(0) and lv.mat_kind != LobeKind.bssrdf and _bdpt_vertex_mis_scoped(lv):
+                    if lv.is_delta == Int32(0) and lv.is_surface == cv.is_surface and lv.is_light == Int32(0) and lv.mat_kind != LobeKind.bssrdf and _bdpt_vertex_mis_scoped(lv) and _vcm_mergeable(lv):
                         var e = lv.pos - cv.pos
                         var dist2 = e.length_sq()
                         var accept: Bool

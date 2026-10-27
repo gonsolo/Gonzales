@@ -610,6 +610,8 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 return False   # direct hit on emissive analytic sphere -- terminates the path
 
         resolve_mix(sd.materials, pcg, mat, mat_idx)
+        if mat.type == MatKind.hair:
+            eta_x = Float32(0)   # no merging on a fibre (_vcm_mergeable)
 
         if mat.type == MatKind.area_light or mat.type == MatKind.lamp:
             # Direct hit on a triangle/curve area light — same MIS-against-

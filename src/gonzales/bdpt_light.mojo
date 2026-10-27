@@ -408,6 +408,8 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
         var eta_x = mis_vm_weight_factor * _vcm_eta_scale(sd, hit)   # merging's MIS density HERE
 
         resolve_mix(sd.materials, pcg, mat, mat_idx)
+        if mat.type == MatKind.hair:
+            eta_x = Float32(0)   # no merging on a fibre (_vcm_mergeable)
         if mat.type != MatKind.interface:
             st.mis_null_dist = Float32(0)
 

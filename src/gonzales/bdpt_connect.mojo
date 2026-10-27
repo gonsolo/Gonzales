@@ -20,7 +20,7 @@ from .bdpt_nee import _visible_transmittance
 from .bdpt_eval import _eval_vertex_spectral, _bdpt_vertex_pdfs, _bdpt_vertex_mis_scoped, _bdpt_connect_pair_weighted
 from .vcm_grid import (
     _vcm_depth, _vcm_light_count, _vcm_keep, _VCM_CAMIS, _CAMIS_CAM_RECS, _CAMIS_FORCE_C1, _vcm_eta_scale,
-    _vcm_eta_at, _vcm_cos_at,
+    _vcm_eta_at, _vcm_cos_at, _vcm_mergeable,
 )
 from .vcm_merge_weight import _camis_gather_light
 
@@ -198,7 +198,7 @@ def _bdpt_connect_to_camera(
     #   wLight = (cameraPdfA / lightSubPathCount)
     var (_dp, rev_pdf_w) = _bdpt_vertex_pdfs(lv, Vec3f(dir_to_cam[0], dir_to_cam[1], dir_to_cam[2]), sd)
     var camera_pdf_a = image_to_surface
-    var eta_lv_splat = mis_vm_weight_factor * _vcm_eta_scale(sd, lv.pos)
+    var eta_lv_splat = mis_vm_weight_factor * _vcm_eta_scale(sd, lv.pos) if _vcm_mergeable(lv) else Float32(0)
     var mis_weight: Float32
     comptime if _VCM_CAMIS:
         var light_arr = lvc_camis[unsafe_offset=k]

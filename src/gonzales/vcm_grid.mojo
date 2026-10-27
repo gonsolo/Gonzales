@@ -146,9 +146,16 @@ def _vcm_eta_scale_vol(ref sd: SceneView, p: Point3f) -> Float32:
     return s
 
 @always_inline
+def _vcm_mergeable(v: BDPTVertex) -> Bool:
+    """Whether merging may estimate a density here: not on a hair fibre, which has no surface to estimate it on."""
+    return not (v.is_surface == Int32(1) and v.mat_kind == LobeKind.hair)
+
+@always_inline
 def _vcm_eta_at(ref sd: SceneView, v: BDPTVertex, mis_vm_weight_factor: Float32) -> Float32:
     """This vertex's own eta(x) = N * (kernel measure at x), fully scaled --
-    a DISK area on a surface, a BALL volume in a medium. `mis_vm_weight_factor`"""
+    a DISK area on a surface, a BALL volume in a medium; 0 where it cannot merge. `mis_vm_weight_factor`"""
+    if not _vcm_mergeable(v):
+        return Float32(0)
     if v.is_surface == Int32(0):
         var s3 = _VCM_RADIUS_VOLUME_SCALE * _VCM_RADIUS_VOLUME_SCALE * _VCM_RADIUS_VOLUME_SCALE
         return mis_vm_weight_factor * (Float32(4.0 / 3.0) * sd.vcmMergeR * s3) * _vcm_eta_scale_vol(sd, v.pos)
@@ -195,7 +202,7 @@ def _bdpt_merge_slot_bucket(
     # is_surface is NOT required here any more: a volume light vertex is a
     # legitimate merge candidate too (Scenes/vcm_volume_mis_derivation.py) --
     if not (lv.is_delta == Int32(0) and lv.is_light == Int32(0)
-            and lv.mat_kind != LobeKind.bssrdf and _bdpt_vertex_mis_scoped(lv)):
+            and lv.mat_kind != LobeKind.bssrdf and _bdpt_vertex_mis_scoped(lv) and _vcm_mergeable(lv)):
         return -1
     var ix = Int(floor(lvc[unsafe_offset=k].pos.x * inv_cell))
     var iy = Int(floor(lvc[unsafe_offset=k].pos.y * inv_cell))
