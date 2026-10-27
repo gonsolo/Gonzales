@@ -688,7 +688,6 @@ def _sss_walk_step[steps: Int = 256](
         var iso = step > Int32(_SSS_SIMILARITY_STEPS)
         var st = st_iso if iso else st0
         var al = al_iso if iso else al0
-        var g = Float32(0) if iso else walk.g
         var guided_fraction = Float32(0.75) if iso else guided_g
         path_ptr[].sss.steps += 1
         var inter = store[0]
