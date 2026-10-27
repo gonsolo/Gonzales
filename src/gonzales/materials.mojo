@@ -1,6 +1,7 @@
 """Material kinds, lobe kinds, the Material record and dielectric Fresnel."""
 from std.math import min, max, sqrt
 from .geometry import RGB, safe_sqrt, fast_div, fast_recip
+from .rng import PCG32
 
 struct MatKind:
     comptime diffuse           = Int8(1)
@@ -219,6 +220,22 @@ struct Material(TrivialRegisterPassable):
     @always_inline
     def sss_walk_van_de_hulst(self) -> Bool:
         return self.checker_tex2.b != Float32(0)
+
+    @always_inline
+    def mix_pick(self, u: Float32) -> Int:
+        """A mix's sub-material index for a uniform draw `u`."""
+        return Int((self.tex_idx >> 16) & Int32(0xFFFF)) if u < self.roughU else Int(self.tex_idx & Int32(0xFFFF))
+
+
+@always_inline
+def resolve_mix(materials: Pointer[Material, MutUntrackedOrigin], mut pcg: PCG32, mut mat: Material, mut mat_idx: Int):
+    """A mix becomes one of its sub-materials, a mix of mixes diffuse; draws only for a mix."""
+    if mat.type != MatKind.mix:
+        return
+    mat_idx = mat.mix_pick(pcg.next_float())
+    mat = materials[unsafe_offset=mat_idx]
+    if mat.type == MatKind.mix:
+        mat.type = MatKind.diffuse
 
 # ── Measured (tabulated) BRDF ────────────────────────────────────────────────
 # One instance per distinct ".bsdf" tensor file (deduped by path — a scene may

@@ -5,7 +5,7 @@ from std.collections import Array
 from std.math import sqrt, cos, sin, log, exp, max, abs
 from .geometry import offset_eps, face_toward, RGB, Point3f, Point2f, Vec3f, vec3f, point3f, Frame, dot, cross, PI, INV_FOUR_PI, INV_PI
 from .render_state import PDF_DELTA_FULL, PDF_DROP_DIRECT
-from .materials import Material, MatKind, LobeKind
+from .materials import Material, MatKind, LobeKind, resolve_mix
 from .primitives import Ray, Intersection, mesh_pos
 from .media import sample_free_flight, spectral_free_flight_weight
 from .bssrdf import bssrdf_exit_ft
@@ -252,23 +252,6 @@ def _area_light_hit(ref sd: SceneView, inter: Intersection, mat: Material,
     var al_hit = sd.areaLights[unsafe_offset=Int(inter.primId.id1)]
     return (al_hit.emission, al_hit.total_area, Int(inter.primId.id1),
             area_light_hit_cos(inter, sd.meshes, sd.instances, ray_dir))
-
-
-@always_inline
-def _resolve_mix(ref sd: SceneView, mut pcg: PCG32, mut mat: Material, mut mat_idx: Int):
-    """Mix material: stochastically resolve to one of its two sub-materials
-    (mirrors shading.mojo's shade_mix; a mix of mix collapses to diffuse).
-    Draws from `pcg` only for a mix, and keeps `mat_idx` in sync with the
-    resolved material (hair needs the real index to re-fetch at connect time)."""
-    if mat.type != MatKind.mix:
-        return
-    var mix_idx1 = Int(mat.tex_idx & Int32(0xFFFF))
-    var mix_idx2 = Int((mat.tex_idx >> 16) & Int32(0xFFFF))
-    var mix_chosen = mix_idx2 if pcg.next_float() < mat.roughU else mix_idx1
-    mat = sd.materials[unsafe_offset=mix_chosen]
-    mat_idx = mix_chosen
-    if mat.type == MatKind.mix:
-        mat.type = MatKind.diffuse
 
 
 @always_inline
@@ -653,7 +636,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 st.total += st.beta * spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (sph_hit.emission).r, (sph_hit.emission).g, (sph_hit.emission).b, st.wl) * mis_w_sph_hit
                 return False   # direct hit on emissive analytic sphere -- terminates the path
 
-        _resolve_mix(sd, pcg, mat, mat_idx)
+        resolve_mix(sd.materials, pcg, mat, mat_idx)
 
         if mat.type == MatKind.area_light or mat.type == MatKind.lamp:
             # Direct hit on a triangle/curve area light — same MIS-against-

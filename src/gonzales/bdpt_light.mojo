@@ -3,7 +3,7 @@
 
 from std.math import sqrt, cos, sin, log, exp, max, abs
 from .geometry import Point3f, Point2f, Vec3f, vec3f, point3f, dot, PI, INV_FOUR_PI
-from .materials import MatKind, LobeKind
+from .materials import MatKind, LobeKind, resolve_mix
 from .primitives import Ray, Intersection
 from .media import sample_free_flight, spectral_free_flight_weight
 from .vcm_mis import vcm_scatter_carries
@@ -22,7 +22,7 @@ from .bdpt_eval import _bdpt_vertex_mis_scoped, _vcm_mnee_light_dvcm
 from .vcm_grid import _vcm_depth, _vcm_keep, _VCM_CAMIS, _vcm_eta_scale, _vcm_eta_at
 from .bdpt_connect import _bdpt_store_lvc_vertex
 from .bdpt_camera import (
-    _vcm_scatter, _resolve_mix, _coated_conductor_scatter, _vcm_lobe_vertex, _vcm_bssrdf_hop, _vcm_bssrdf_vertex,
+    _vcm_scatter, _coated_conductor_scatter, _vcm_lobe_vertex, _vcm_bssrdf_hop, _vcm_bssrdf_vertex,
     _vcm_bssrdf_exit_scatter, _vcm_dielectric_cross,
 )
 
@@ -408,7 +408,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
         var hit = st.ro + st.rd*t_hit
         var eta_x = mis_vm_weight_factor * _vcm_eta_scale(sd, hit)   # merging's MIS density HERE
 
-        _resolve_mix(sd, pcg, mat, mat_idx)
+        resolve_mix(sd.materials, pcg, mat, mat_idx)
         if mat.type != MatKind.interface:
             st.mis_null_dist = Float32(0)
 

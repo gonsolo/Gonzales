@@ -11,7 +11,7 @@ from std.memory.alloc import unsafe_alloc
 from std.atomic import Atomic
 from std.memory import bitcast
 from .geometry import offset_eps, face_toward, TERMINAL_SEGMENT_GRACE_ROUNDS, RGB, Point3f, Point2f, Vec3f, vec3f, point3f, dot, cross, PI, INV_FOUR_PI, Frame, _is_real_ptr
-from .materials import Material, MatKind, LobeKind, PhotonKind, fr_dielectric
+from .materials import Material, MatKind, LobeKind, PhotonKind, fr_dielectric, resolve_mix
 from .primitives import Ray, Intersection, PrimId, TriangleMesh, Sphere, Instance, sphere_outward_normal, mesh_normal, mesh_vi
 from .primitives import mesh_pos
 from .media import Medium, Grid, NvdbGrid, sample_free_flight, medium_is_heterogeneous, medium_sigma_t_spectral, medium_grid_for, medium_nvdb_for, grid_sample_density, nvdb_sample_density, SSS_WALK_ROUNDS, spectral_free_flight_weight
@@ -894,17 +894,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
                 vp.env += vp.beta * _film_rgb(sph_hit.emission, vp.wavelengths, sd)
                 break
 
-        # Mix material: stochastically resolve to one of two sub-materials
-        # (mirrors shading.mojo's shade_mix / bdpt_*.mojo's own resolution).
-        if mat.type == MatKind.mix:
-            var mix_idx1 = Int(mat.tex_idx & Int32(0xFFFF))
-            var mix_idx2 = Int((mat.tex_idx >> 16) & Int32(0xFFFF))
-            var mix_amount = mat.roughU
-            var mix_chosen = mix_idx2 if pcg.next_float() < mix_amount else mix_idx1
-            mat = sd.materials[unsafe_offset=mix_chosen]
-            mat_idx = mix_chosen  # keep in sync with the resolved sub-material (hair needs the real index to re-fetch at gather/NEE time)
-            if mat.type == MatKind.mix:
-                mat.type = MatKind.diffuse
+        resolve_mix(sd.materials, pcg, mat, mat_idx)
 
         if mat.type == MatKind.area_light:
             # Direct hit on a triangle/curve area light — same treatment as
@@ -1450,15 +1440,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
         var mat = sd.materials[unsafe_offset=mat_idx]
         var hit = ro + rd * t_hit
 
-        if mat.type == MatKind.mix:
-            var mix_idx1 = Int(mat.tex_idx & Int32(0xFFFF))
-            var mix_idx2 = Int((mat.tex_idx >> 16) & Int32(0xFFFF))
-            var mix_amount = mat.roughU
-            var mix_chosen = mix_idx2 if pcg.next_float() < mix_amount else mix_idx1
-            mat = sd.materials[unsafe_offset=mix_chosen]
-            mat_idx = mix_chosen   # the resolved sub-material, for lobe_eval's table lookups
-            if mat.type == MatKind.mix:
-                mat.type = MatKind.diffuse
+        resolve_mix(sd.materials, pcg, mat, mat_idx)
 
         # See geometry.mojo's TERMINAL_SEGMENT_GRACE_ROUNDS and the matching
         # guard in _sppm_trace_visible_point above. A photon that simply

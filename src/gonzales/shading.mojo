@@ -7,7 +7,7 @@ from std.ffi import external_call
 from std.memory.alloc import unsafe_alloc
 from .geometry import offset_point, RGB, Point3f, Point2f, Point2i, restir_jitter_pixel, Vec3f, dot, face_toward, cross, Frame, fast_sincos, PI, TWO_PI, INV_PI, INV_FOUR_PI, _is_real_ptr, _atan2f
 from .render_state import PDF_DROP_DIRECT
-from .materials import Material, MatKind, LobeKind, MeasuredBRDF, fr_dielectric
+from .materials import Material, MatKind, LobeKind, MeasuredBRDF, fr_dielectric, resolve_mix
 from .render_state import PathState, SssWalk, GpuTexture, NormalSlopeMap, normal_slope_map_none, ShadowTask, SuppressTask, SHADOW_SLOTS
 from .primitives import Ray, Intersection, PrimId, TriangleMesh, Sphere, Instance, mesh_uv, mesh_has_uvs, mesh_normal, mesh_vi, mesh_face
 from .primitives import mesh_pos
@@ -2596,17 +2596,14 @@ def shade_mix[use_gpu: Bool, enqueue_shadow: Bool](
     ctx: ShadeContext,
     mat: Material,
 ):
-    var packed = mat.tex_idx
-    var idx1 = Int(packed & Int32(0xFFFF))
-    var idx2 = Int((packed >> 16) & Int32(0xFFFF))
-    var amount = mat.roughU  # blend factor: 0 = all mat1, 1 = all mat2
     var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
-    var chosen_idx = idx2 if pcg.next_float() < amount else idx1
+    var sub_mat = mat
+    var sub_idx = Int(inter.primId.materialIndex)
+    resolve_mix(ctx.materials, pcg, sub_mat, sub_idx)
     path_ptr[].pcgState = pcg.state
-    var sub_mat = ctx.materials[unsafe_offset=chosen_idx]
-    if sub_mat.type == Int8(8):
-        sub_mat.type = Int8(1)  # guard against mix-of-mix cycle
-    _shade_dispatch[use_gpu, enqueue_shadow](sub_mat, path_ptr, inter, ctx)
+    var sub_inter = inter
+    sub_inter.primId.materialIndex = Int64(sub_idx)
+    _shade_dispatch[use_gpu, enqueue_shadow](sub_mat, path_ptr, sub_inter, ctx)
 
 # Apply tangent-space normal map: samples the texture, decodes [-1,1] normal,
 # rotates it into world space via UV-gradient tangent frame.

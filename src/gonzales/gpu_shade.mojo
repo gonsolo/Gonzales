@@ -4,7 +4,7 @@ from .gpu_tuning import MINCTA_NEE, MINCTA_DIFFUSE, MINCTA_COATED, MINCTA_CONDUC
 from .bvh import SceneView
 from .geometry import _is_real_ptr, Vec3f, dot
 from std.math import sqrt
-from .materials import MatKind
+from .materials import MatKind, resolve_mix
 from .primitives import Intersection
 from .render_state import PathState, ShadowTask, SuppressTask
 from .restir_di import DIReservoir, ReservoirIO, reservoir_io_null
@@ -261,18 +261,12 @@ def shade_mix_gpu(
         return
     var inter = intersections[unsafe_offset=tid]
     var mat = sd.materials[unsafe_offset=Int(inter.primId.materialIndex)]
-    var packed = mat.tex_idx
-    var idx1 = Int(packed & Int32(0xFFFF))
-    var idx2 = Int((packed >> 16) & Int32(0xFFFF))
-    var amount = mat.roughU  # blend factor: 0 = all mat1, 1 = all mat2
     var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
-    var chosen_idx = idx2 if pcg.next_float() < amount else idx1
+    var mat_idx = Int(inter.primId.materialIndex)
+    resolve_mix(sd.materials, pcg, mat, mat_idx)
     path_ptr[].pcgState = pcg.state
-    var sub_type = sd.materials[unsafe_offset=chosen_idx].type
-    if sub_type == MatKind.mix:
-        sub_type = MatKind.diffuse  # guard against mix-of-mix cycle, matches shade_mix (shading.mojo)
-    intersections[unsafe_offset=tid].primId.materialIndex = Int64(chosen_idx)
-    path_ptr[].pending_mat = sub_type
+    intersections[unsafe_offset=tid].primId.materialIndex = Int64(mat_idx)
+    path_ptr[].pending_mat = mat.type
 
 
 @__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
