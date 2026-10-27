@@ -4,7 +4,7 @@ from std.math import abs
 from .geometry import offset_eps, face_toward, RGB, Point3f, Vec3f, vec3f, dot
 from .materials import Material, MatKind
 from .primitives import Intersection
-from .bvh import SceneView, curve_hit_frame, curve_offset_eps
+from .bvh import SceneView, curve_hit_frame, curve_offset_eps, curve_tangent, fibre_cos
 from .geom_normal import _geom_normal
 from .shading import _tex_lookup, _get_tri_verts, apply_surface_maps_at_hit, uv_footprint_at_hit
 from .sppm import _shading_normal_at
@@ -59,7 +59,8 @@ def surface_hit[use_gpu: Bool](ref sd: SceneView, inter: Intersection, mat: Mate
     # A rough dielectric needs the outward normal: inside vs outside is which side of it wo lies on.
     var outward = mat.type == MatKind.dielectric
     if dot(gn, ray_dir) > Float32(0) and not outward: gn = gn * Float32(-1)
-    var cos_in = abs(dot(-ray_dir, gn))
+    var cos_in = fibre_cos(curve_tangent(sd.curves, Int(inter.primId.id1), inter.v), -ray_dir) if on_curve \
+        else abs(dot(-ray_dir, gn))
     var alb = mat.albedo
     var (tex_mesh, tv0, tv1, tv2, tex_ok) = _get_tri_verts(inter, sd.meshes)
     if tex_ok and not on_curve:

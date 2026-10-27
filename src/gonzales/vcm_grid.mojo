@@ -8,7 +8,7 @@ from .geometry import Point3f, Vec3f, dot
 from .materials import LobeKind
 from .primitives import Ray, Intersection, PrimId
 from .bvh import traverse_dispatch
-from .bvh import SceneView, test_spheres, _is_real_ptr
+from .bvh import SceneView, test_spheres, _is_real_ptr, curve_tangent, fibre_cos
 from .sppm import (
     _HSIZE, _hash_cell, _PHOTON_BUCKET_CAP, grid_reset_cell, grid_count, grid_keep, grid_coin_bits, grid_push,
 )
@@ -166,11 +166,13 @@ def _vcm_inv_eta_at(ref sd: SceneView, v: BDPTVertex, mis_vc_weight_factor: Floa
     return mis_vc_weight_factor / _vcm_eta_scale(sd, v.pos)
 
 @always_inline
-def _vcm_cos_at(v: BDPTVertex, w: Vec3f) -> Float32:
+def _vcm_cos_at(ref sd: SceneView, v: BDPTVertex, w: Vec3f) -> Float32:
     """|cos| between direction `w` and this vertex's own geometric normal --
     1.0 at a volume vertex, which has none (Scenes/vcm_volume_mis_derivation.py's"""
     if v.is_surface == Int32(0):
         return Float32(1.0)
+    if v.mat_kind == LobeKind.hair:   # the fibre cosine, as the lobe's own cos_used and the arrival use
+        return fibre_cos(curve_tangent(sd.curves, Int(v.hair_curve_idx), v.hair_v), w)
     return abs(dot(w, v.normal.to_simd()))
 
 

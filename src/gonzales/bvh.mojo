@@ -944,6 +944,24 @@ struct HairLobeConstants(TrivialRegisterPassable):
     var radius: Float32   # local curve radius at the hit piece; scales self-intersection offset epsilon
 
 @always_inline
+def curve_tangent(curves: Pointer[Curve, MutUntrackedOrigin], curve_idx: Int, v_global: Float32) -> Vec3f:
+    """The unit tangent of the curve piece at parameter v_global."""
+    var curve = curve_at(curves, curve_idx)
+    var piece = min(Int(curve.n_pieces) - 1, max(0, Int(v_global * Float32(curve.n_pieces))))
+    var (q0, q1, _, _) = curve_piece_endpoints(curve, piece)
+    var seg_axis = q1 - q0
+    var seg_len = sqrt(dot(seg_axis, seg_axis))
+    return seg_axis * (Float32(1.0) / seg_len) if seg_len > Float32(1e-8) else Vec3f(Float32(1), Float32(0), Float32(0))
+
+
+@always_inline
+def fibre_cos(tangent: Vec3f, w: Vec3f) -> Float32:
+    """|cos| of w against a fibre's normal plane: the measure a ray-facing ribbon presents to w."""
+    var s = dot(w, tangent)
+    return sqrt(max(Float32(0), Float32(1) - s * s))
+
+
+@always_inline
 def curve_hit_frame(curves: Pointer[Curve, MutUntrackedOrigin], curve_idx: Int, v_global: Float32, h_raw: Float32,
                     wo: Vec3f) -> Tuple[Vec3f, Vec3f, Vec3f, Vec3f, Float32]:
     """A curve hit's tangent, view frame (n_perp, b_perp), outward normal and local radius."""

@@ -170,7 +170,7 @@ def _bdpt_connect_to_camera(
         return (False, Float32(-1), Float32(-1), SpectralSample(Float32(0)))
 
     var wl = lv.wavelengths
-    var cos_to_camera = abs(dot(lv.normal.to_simd(), dir_to_cam))
+    var cos_to_camera = _vcm_cos_at(sd, lv, Vec3f(dir_to_cam[0], dir_to_cam[1], dir_to_cam[2]))
     var f = _eval_vertex_spectral(lv, Vec3f(dir_to_cam[0], dir_to_cam[1], dir_to_cam[2]), sd, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wl, adjoint=True)
     if f.is_black():
         return (False, Float32(-1), Float32(-1), SpectralSample(Float32(0)))
@@ -434,8 +434,8 @@ def _bdpt_connect_mis_weight(
     # VCM Stage 2b/2d: real MIS weight for diffuse/conductor/light-source
     # connections (see _connect's docstring + _bdpt_vertex_pdfs'/
     if _bdpt_vertex_mis_scoped(cv) and (lv.is_light == Int32(1) or _bdpt_vertex_mis_scoped(lv)):
-        var cos_cv = _vcm_cos_at(cv, dir)
-        var cos_lv = _vcm_cos_at(lv, neg_dir)
+        var cos_cv = _vcm_cos_at(sd, cv, dir)
+        var cos_lv = _vcm_cos_at(sd, lv, neg_dir)
         var (camera_bsdf_dir_pdf_w, camera_bsdf_rev_pdf_w) = _bdpt_vertex_pdfs(cv, dir, sd)
         # Light-source vertex: forward and reverse pdf are the SAME
         # cosine-weighted-emission formula (no real "wo" to distinguish a
