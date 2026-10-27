@@ -19,7 +19,7 @@ from .lights import area_light_pick_triangle, AreaLight
 from .curves import Curve, curve_at, curve_piece_endpoints, _curve_perp_axis
 from .bssrdf import dipole_rd, dipole_max_radius
 from .bvh import traverse_dispatch, any_hit_dispatch
-from .bvh import SceneView, curve_radius, _scene_bounding_sphere, _sample_disk_perpendicular, _sample_infinite_light_dir, _eval_infinite_light_and_pdf, _hair_precompute, LightSample, _sample_distant_light_nee, _sample_point_light_nee, _sample_sphere_light_nee, _sample_infinite_light_nee, light_path_pick
+from .bvh import SceneView, curve_radius, _hair_sample_dir_u, _scene_bounding_sphere, _sample_disk_perpendicular, _sample_infinite_light_dir, _eval_infinite_light_and_pdf, _hair_precompute, LightSample, _sample_distant_light_nee, _sample_point_light_nee, _sample_sphere_light_nee, _sample_infinite_light_nee, light_path_pick
 from .vcm_mis import mis_policy_sole
 from .bxdf import ggx_lambda, dielectric_interface, bxdf_sample_dielectric, bxdf_sample_thin_dielectric, BxDFFlags, GeomContext, bxdf_sample_conductor, BSDF, LobeTables
 from .surface import surface_hit
@@ -805,6 +805,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
     var max_charged = min(maxdepth, _MAX_B)
     var bounce = 0
     var n_events = 0   # interactions so far, charged or not
+    var after_glossy = False   # a glossy vertex lit itself (pbrt's SPPM): emission found after it is NEE's, not ours
     while bounce < max_charged + TERMINAL_SEGMENT_GRACE_ROUNDS and n_events < max_charged + SSS_WALK_ROUNDS + TERMINAL_SEGMENT_GRACE_ROUNDS:
         n_events += 1
         # Charged up front, and the two subsurface-exempt branches below undo
@@ -827,7 +828,8 @@ def _sppm_trace_visible_point[use_gpu: Bool](
             for inf_i in range(Int(sd.infiniteLightCount)):
                 var ilight = sd.infiniteLights[unsafe_offset=inf_i]
                 var (Le, _pdf_unused) = _eval_infinite_light_and_pdf(ilight, rd, ro.to_simd())
-                vp.env += vp.beta * _film_rgb(Le, vp.wavelengths, sd)
+                if not after_glossy:
+                    vp.env += vp.beta * _film_rgb(Le, vp.wavelengths, sd)
             break
 
         var inter = scratch[unsafe_offset=0]
@@ -892,7 +894,8 @@ def _sppm_trace_visible_point[use_gpu: Bool](
         if inter.primId.type == Int8(4):
             var sph_hit = sd.spheres[unsafe_offset=Int(inter.primId.id1)]
             if sph_hit.isAreaLight != Int8(0):
-                vp.env += vp.beta * _film_rgb(sph_hit.emission, vp.wavelengths, sd)
+                if not after_glossy:
+                    vp.env += vp.beta * _film_rgb(sph_hit.emission, vp.wavelengths, sd)
                 break
 
         resolve_mix(sd.materials, pcg, mat, mat_idx)
@@ -915,7 +918,9 @@ def _sppm_trace_visible_point[use_gpu: Bool](
             # median there was 0. For a curve, id1 is the curve index, not an
             # AreaLight index, and the curve's emission lives in its own
             # material slot; a closed tube is always hit on its outside.
-            if inter.primId.type == Int8(5):
+            if after_glossy:
+                pass
+            elif inter.primId.type == Int8(5):
                 vp.env += vp.beta * _film_rgb(mat.emission, vp.wavelengths, sd)
             elif area_light_hit_cos(inter, sd.meshes, sd.instances, ray_dir) > Float32(0):
                 vp.env += vp.beta * _film_rgb(sd.areaLights[unsafe_offset=Int(inter.primId.id1)].emission, vp.wavelengths, sd)
@@ -939,6 +944,36 @@ def _sppm_trace_visible_point[use_gpu: Bool](
             var gn = sh.gn
             var gn_geo = sh.gn_geo   # before any bump/normal map -- see SPPMPixel.geo_normal
             var eff_alb = sh.alb
+            if mat.type == MatKind.hair and bounce < max_charged:
+                # pbrt's SPPM: hair is glossy, so no visible point on it before the last bounce. Light it here,
+                # radiance into env, and scatter on with the sampler's own RGB f/pdf.
+                var hv = vp
+                hv.pos = hit
+                hv.normal = vec3f(gn)
+                hv.geo_normal = vec3f(gn_geo)
+                hv.alb = eff_alb
+                hv.mat_kind = LobeKind.hair
+                hv.mat_idx = Int32(mat_idx)
+                hv.wo = vec3f((-rd).to_simd())
+                hv.alpha = Float32(0)
+                hv.hair_curve_idx = sh.curve_idx
+                hv.hair_h = sh.curve_h
+                hv.hair_v = sh.curve_v
+                hv.is_volume = PhotonKind.surface
+                hv.med_idx = cur_med_idx
+                hv.valid = Int32(1)
+                var (lr, lg, lb) = spectral_sample_to_rgb(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x,
+                    sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, _sppm_nee_at(hv, sd, pcg), vp.wavelengths)
+                vp.env += vp.beta * RGB(lr, lg, lb)
+                var hc = _hair_precompute(mat, sd.curves, Int(sh.curve_idx), sh.curve_v, sh.curve_h, (-rd).to_simd())
+                var hs = _hair_sample_dir_u(hc, pcg.next_float(), pcg.next_float(), pcg.next_float(), pcg.next_float())
+                if hs[2] <= Float32(0):
+                    break
+                vp.beta *= hs[1] * (Float32(1) / hs[2])
+                rd = vec3f(hs[0])
+                ro = sh.spawn(hs[0])
+                after_glossy = True
+                continue
             # A smooth conductor is the one kind here that is genuinely
             # delta: it scatters but stores no visible point, exactly like
             # VCM's Material.is_mirror gate.
@@ -2240,16 +2275,15 @@ def _sppm_shadow(
     return SpectralSample(Float32(1.0))
 
 
-def _sppm_nee_one(
-    vps:     Pointer[SPPMPixel, MutUntrackedOrigin],
-    i:       Int,
+def _sppm_nee_at(
+    vp:      SPPMPixel,
     ref sd:      SceneView,
     mut pcg: PCG32,
-):
+) -> SpectralSample:
     """Direct (NEE) lighting update for visible point `i`. Shared verbatim
     between the CPU driver (_sppm_nee_update, one call per VP in a loop) and
     the GPU kernel (sppm_nee_gpu, one call per thread) — no divergence, each
-    call only ever touches its own vps[i]. Samples area lights (one random
+    call only ever touches its own visible point. Samples area lights (one random
     CDF-uniform pick), distant lights, and infinite lights (all of the
     latter two — few and typically dominant, matching shading.mojo's own
     NEE asymmetry rationale) — no MIS weighting needed for infinite lights
@@ -2258,9 +2292,9 @@ def _sppm_nee_one(
     own miss-escape env contribution (vp.env) only fires when it didn't —
     mutually exclusive per sample, so there's no competing strategy to
     double-count against."""
-    var vp = vps[unsafe_offset=i]
+    var ld = SpectralSample(Float32(0))
     if vp.valid == Int32(0):
-        return
+        return ld
     var is_vol = vp.is_volume == PhotonKind.volume
     var vn   = vp.normal.to_simd()
     var wo   = vp.wo.to_simd()
@@ -2329,7 +2363,7 @@ def _sppm_nee_one(
                     if is_vol:
                         # Isotropic phase (albedo/4pi), matching the photon
                         # gather's own volume-VP convention.
-                        vps[unsafe_offset=i].ld += (spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65,
+                        ld += (spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65,
                                                 vp.alb.r * INV_FOUR_PI, vp.alb.g * INV_FOUR_PI, vp.alb.b * INV_FOUR_PI, vp.wavelengths)
                                       * spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, al.emission.r, al.emission.g, al.emission.b, vp.wavelengths)
                                       * geom * tr_a)
@@ -2339,7 +2373,7 @@ def _sppm_nee_one(
                                     vp.mat_idx, _vp_base_alpha(vp.alpha), Float32(0), vp.hair_curve_idx,
                                     vp.hair_h, vp.hair_v, True, False)).f[want_pdfs=False](wi, LobeTables(sd.materials, sd.curves, sd.measuredBrdfs, sd.spectral), vp.wavelengths)
                         var light_spec = rgb_illuminant_to_spectral_sample(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, al.emission.r, al.emission.g, al.emission.b, vp.wavelengths)
-                        vps[unsafe_offset=i].ld += le_vp.f_cos * light_spec * geom * tr_a
+                        ld += le_vp.f_cos * light_spec * geom * tr_a
 
     # Distant/point/sphere/infinite NEE through the Light interface and the BSDF (_sppm_nee_weight).
     # distant/point/sphere via the shared sampler -- pure loop collapse,
@@ -2360,7 +2394,7 @@ def _sppm_nee_one(
             var s_org = shadow_org_back if (two_sided_vp and dot(vp.geo_normal.to_simd(), ls.wi) < Float32(0)) else shadow_org
             var tr_s = _sppm_shadow(vp, sd, s_org, ls.wi, tmax, pcg)
             if not tr_s.is_black():
-                vps[unsafe_offset=i].ld += w * tr_s
+                ld += w * tr_s
 
     for inf_i in range(Int(sd.infiniteLightCount)):
         var ls_e = _sample_infinite_light_nee(sd.infiniteLights[unsafe_offset=inf_i], Point2f(pcg.next_float(), pcg.next_float()))
@@ -2369,7 +2403,18 @@ def _sppm_nee_one(
             var s_org_e = shadow_org_back if (two_sided_vp and dot(vp.geo_normal.to_simd(), ls_e.wi) < Float32(0)) else shadow_org
             var tr_e = _sppm_shadow(vp, sd, s_org_e, ls_e.wi, ls_e.dist, pcg)
             if not tr_e.is_black():
-                vps[unsafe_offset=i].ld += w_e * tr_e
+                ld += w_e * tr_e
+    return ld
+
+
+def _sppm_nee_one(
+    vps:     Pointer[SPPMPixel, MutUntrackedOrigin],
+    i:       Int,
+    ref sd:      SceneView,
+    mut pcg: PCG32,
+):
+    """_sppm_nee_at for visible point `i`."""
+    vps[unsafe_offset=i].ld += _sppm_nee_at(vps[unsafe_offset=i], sd, pcg)
 
 
 def _sppm_nee_update(
@@ -2407,7 +2452,8 @@ def _sppm_flush_one(
     var (dr, dg, db) = spectral_sample_to_rgb(
         spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y,
         spectral_cie_z, spectral_d65, vp.ld, vp.wavelengths)
-    vps[unsafe_offset=i].gsum = vp.gsum + vp.beta * RGB(dr, dg, db)
+    # env is radiance the camera path already weighted: escapes, and the light at glossy vertices it passed.
+    vps[unsafe_offset=i].gsum = vp.gsum + vp.env + vp.beta * RGB(dr, dg, db)
     vps[unsafe_offset=i].ld = SpectralSample(Float32(0))
 
 
