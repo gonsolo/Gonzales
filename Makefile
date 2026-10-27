@@ -345,7 +345,7 @@ test_release: release
 # `mojo run` invocation (TestSuite.discover_tests[__functions_in_module()]).
 UNIT_TEST_SRCS := $(filter-out Tests/unit/_%,$(wildcard Tests/unit/*.mojo))
 
-# These four instantiate GPU kernels at COMPILE time (DeviceContext /
+# These instantiate GPU kernels at COMPILE time (DeviceContext /
 # vulkaninterop entry points), so on a machine without the CUDA toolkit they
 # fail with "function instantiation failed" before any of their own
 # has_accelerator() runtime guards can print "SKIP: no GPU". That is a
@@ -355,6 +355,7 @@ UNIT_TEST_SRCS := $(filter-out Tests/unit/_%,$(wildcard Tests/unit/*.mojo))
 # other GPU-touching test (test_vulkanrt_*, test_gpu_scene_upload) compiles
 # fine and skips at runtime, so they stay in.
 GPU_ONLY_TEST_SRCS := Tests/unit/test_gpu.mojo \
+                      Tests/unit/test_gpu_bvh.mojo \
                       Tests/unit/test_vulkaninterop.mojo \
                       Tests/unit/test_vulkaninterop_rt.mojo \
                       Tests/unit/test_rtcore.mojo
