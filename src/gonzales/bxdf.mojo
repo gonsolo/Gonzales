@@ -986,18 +986,14 @@ def _hair_lobe_eval[want_pdfs: Bool, want_rev: Bool](
     )
     # f, not a reflectance: a narrow R or TT lobe peaks far above 1, and the [0,1] reflectance upsampler cut it there.
     var hair_spec = spec_refl_unbounded(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, f_val.r, f_val.g, f_val.b, wavelengths)
+    var fwd_h = Float32(0)
     var rev_h = Float32(0)
-    comptime if want_pdfs and want_rev:
-        var hc_rev = _hair_precompute(tab.materials[unsafe_offset=Int(c.mat_idx)], tab.curves, Int(c.hair_curve_idx), c.hair_v, c.hair_h, dir_to_other)
-        var (cos_ti_rev, _, pdf_oc_rev) = _hair_eval_lobes(
-            c.wo, hc_rev.tangent, hc_rev.b_perp, hc_rev.n_perp, hc_rev.phi_o,
-            hc_rev.dphi0, hc_rev.dphi1, hc_rev.dphi2,
-            hc_rev.cos_tp0_o, hc_rev.sin_tp0_o, hc_rev.cos_tp1_o, hc_rev.sin_tp1_o, hc_rev.cos_tp2_o, hc_rev.sin_tp2_o,
-            hc_rev.cos_theta_o, hc_rev.sin_theta_o, hc_rev.inv_vm0, hc_rev.inv_vm1, hc_rev.inv_vm2, hc_rev.mp_c0, hc_rev.mp_c1, hc_rev.mp_c2, hc_rev.s,
-            hc_rev.A0, hc_rev.A1, hc_rev.A2, hc_rev.A3, hc_rev.lum0, hc_rev.lum1, hc_rev.lum2, hc_rev.lum3, hc_rev.total_lum,
-        )
-        rev_h = cos_ti_rev * pdf_oc_rev
-    return LobeEval(hair_spec * cos_ti, cos_ti, cos_ti * pdf_oc_fwd, rev_h, True)
+    comptime if want_pdfs:
+        fwd_h = _hair_mis_pdf(c, tab, c.wo, dir_to_other)
+        comptime if want_rev:
+            rev_h = _hair_mis_pdf(c, tab, dir_to_other, c.wo)
+    _ = pdf_oc_fwd
+    return LobeEval(hair_spec * cos_ti, cos_ti, fwd_h, rev_h, True)
 
 
 @always_inline
@@ -1233,6 +1229,22 @@ def _lobe_sample_invalid() -> LobeSample:
 
 
 @always_inline
+def _hair_mis_pdf(c: BSDF, tab: LobeTables, wo: Vec3f, wi: Vec3f) -> Float32:
+    """Hair's density of wi given wo for MIS, at h = 0. The true density depends on the offset h the ARRIVING ray
+    hit the fibre at, which the camera and light subpaths see differently at one vertex; MIS needs one value."""
+    var hc0 = _hair_precompute(tab.materials[unsafe_offset=Int(c.mat_idx)], tab.curves, Int(c.hair_curve_idx), c.hair_v,
+                               Float32(0), wo)
+    var (cos_ti, _, pdf_oc) = _hair_eval_lobes(
+        wi, hc0.tangent, hc0.b_perp, hc0.n_perp, hc0.phi_o,
+        hc0.dphi0, hc0.dphi1, hc0.dphi2,
+        hc0.cos_tp0_o, hc0.sin_tp0_o, hc0.cos_tp1_o, hc0.sin_tp1_o, hc0.cos_tp2_o, hc0.sin_tp2_o,
+        hc0.cos_theta_o, hc0.sin_theta_o, hc0.inv_vm0, hc0.inv_vm1, hc0.inv_vm2, hc0.mp_c0, hc0.mp_c1, hc0.mp_c2, hc0.s,
+        hc0.A0, hc0.A1, hc0.A2, hc0.A3, hc0.lum0, hc0.lum1, hc0.lum2, hc0.lum3, hc0.total_lum,
+    )
+    return cos_ti * pdf_oc
+
+
+@always_inline
 def _hair_lobe_sample[want_rev: Bool](
     c: BSDF, hc: HairLobeConstants, uc: Float32, u0: Float32, u1: Float32, u2: Float32, tab: LobeTables,
     spectral_coeffs: Pointer[Float32, MutUntrackedOrigin], spectral_res: Int,
@@ -1245,19 +1257,15 @@ def _hair_lobe_sample[want_rev: Bool](
     """The 3-lobe Marschner sampler; its density is the fibre cosine times pdf_over_cos, _lobe_eval's pdf_fwd."""
     var (wi, f_rgb, pdf_oc, cos_ti) = _hair_sample_dir_u(hc, uc, u0, u1, u2)
     var transmit = uc * hc.total_lum >= hc.lum0   # Cycles counts the R lobe as glossy, TT and TRT as transmission
-    comptime if want_rev:
-        var le_h = _hair_lobe_eval[True, True](c, hc, wi, tab, spectral_coeffs, spectral_res,
-            spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, wavelengths)
-        if le_h.pdf_fwd <= Float32(0):
-            return _lobe_sample_invalid()
-        return LobeSample(True, wi, le_h.f_cos * (Float32(1) / le_h.pdf_fwd), False,
-                          le_h.pdf_fwd, le_h.pdf_rev, le_h.cos_used, _lobe_scoped(c), transmit)
-    # The sampler evaluated the lobes at wi already: its f and pdf over cos_ti are _lobe_eval's.
     if pdf_oc * cos_ti <= Float32(0):
         return _lobe_sample_invalid()
+    # The weight is the sampler's own f/pdf; the densities MIS sees are the h-free ones (_hair_mis_pdf).
     var f = spec_refl_unbounded(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
                                 f_rgb.r, f_rgb.g, f_rgb.b, wavelengths)
-    return LobeSample(True, wi, f * (Float32(1) / pdf_oc), False, pdf_oc * cos_ti, Float32(0), cos_ti,
+    var rev = Float32(0)
+    comptime if want_rev:
+        rev = _hair_mis_pdf(c, tab, wi, c.wo)
+    return LobeSample(True, wi, f * (Float32(1) / pdf_oc), False, _hair_mis_pdf(c, tab, c.wo, wi), rev, cos_ti,
                       _lobe_scoped(c), transmit)
 
 
