@@ -792,7 +792,7 @@ def _alpha_rejects(
 # was already the bottleneck): every thread of the block must call this (no early return before it). Returns -1 if !live.
 @always_inline
 def warp_append(counter: Pointer[Int32, MutUntrackedOrigin], live: Bool) -> Int:
-    var warp_counts = stack_allocation[8, Scalar[DType.int32], address_space=AddressSpace.SHARED]()
+    var warp_counts = stack_allocation[256 // WARP_SIZE, Scalar[DType.int32], address_space=AddressSpace.SHARED]()   # one per warp of the 256-thread block
     var block_base = stack_allocation[1, Scalar[DType.int32], address_space=AddressSpace.SHARED]()
     comptime MaskT = DType.uint32 if WARP_SIZE == 32 else DType.uint64
     var mask = vote[MaskT](live)
