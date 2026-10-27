@@ -5,7 +5,7 @@ from std.collections import Array
 from std.math import sqrt, floor, atan, log2, ceil, exp, abs, pow
 from std.ffi import external_call
 from std.memory.alloc import unsafe_alloc
-from .geometry import offset_point, RGB, Point3f, Point2f, Point2i, restir_jitter_pixel, Vec3f, dot, face_toward, cross, Frame, fast_sincos, PI, TWO_PI, INV_PI, INV_FOUR_PI, _is_real_ptr, _atan2f
+from .geometry import offset_point, offset_eps, RGB, Point3f, Point2f, Point2i, restir_jitter_pixel, Vec3f, dot, face_toward, cross, Frame, fast_sincos, PI, TWO_PI, INV_PI, INV_FOUR_PI, _is_real_ptr, _atan2f
 from .render_state import PDF_DROP_DIRECT
 from .materials import Material, MatKind, LobeKind, MeasuredBRDF, fr_dielectric, resolve_mix
 from .render_state import PathState, SssWalk, GpuTexture, NormalSlopeMap, normal_slope_map_none, ShadowTask, SuppressTask, SHADOW_SLOTS
@@ -16,7 +16,6 @@ from .portal_light import portal_frame, portal_ray_crosses
 from .media import Medium, MediumInterface, Grid, NvdbGrid
 from .shadow_media import shadow_transmittance
 from .curves import Curve, curve_at, curve_piece_endpoints, _curve_perp_axis, curve_hit_normal
-from .layered import diel_f, diel_pdf, diel_sample
 from .bxdf import BSDF, HairBSDF, NeeLobe, LobeSample, BxDFSample, GeomContext, SobolSamples8, BxDFFlags, bxdf_sample_dielectric, bxdf_sample_thin_dielectric, bxdf_eval_diffuse, bxdf_pdf_diffuse, bxdf_sample_diffuse_transmit, bxdf_eval_conductor_ggx, ggx_albedo, bxdf_pdf_conductor_ggx, _nee_weight_simple_spectral, LobeTables
 from .rng import PCG32
 from .footprint import CameraFootprint, UVFootprint, TriWorld, tri_world, hit_uv_footprint
@@ -1788,7 +1787,8 @@ def shade_dielectric[use_gpu: Bool, enqueue_shadow: Bool](
     var ior = mat.albedo.r
     if mat.is_rough_dielectric() and mat.sss_boundary == Int8(0):
         # A real BSDF, not a delta: pbrt's rough DielectricBxDF, with NEE.
-        _shade_rough_dielectric[enqueue_shadow](path_ptr, ctx, mat, geom_normal, ray_dir, ray_org, inter.tHit, ior)
+        _shade_rough_dielectric[enqueue_shadow](path_ptr, ctx, mat, Int(inter.primId.materialIndex), geom_normal, ray_dir,
+                                                ray_org, inter.tHit, ior)
         return
     # Entering vs exiting is the mesh's own orientation, as in pbrt (ReverseOrientation negates the
     # normals at parse time); a pane whose normal faces away from the camera totally reflects.
@@ -1877,95 +1877,37 @@ def _shade_rough_dielectric[enqueue_shadow: Bool](
     path_ptr: Pointer[PathState, MutUntrackedOrigin],
     ctx: ShadeContext,
     mat: Material,
+    mat_idx: Int,
     n: Vec3f,          # the OUTWARD normal (not face-forwarded): inside/outside is wo's side of it
     ray_dir: Vec3f,
     ray_org: Vec3f,
     t_hit: Float32,
     ior: Float32,
 ):
-    var alpha = max(mat.roughU, mat.roughV)
     var hit_raw = ray_org + ray_dir * t_hit
-    var frame = Frame.from_z(Vec3f(n[0], n[1], n[2]))
-    var tx = Vec3f(frame.x.x, frame.x.y, frame.x.z)
-    var ty = Vec3f(frame.y.x, frame.y.y, frame.y.z)
     var wo = -ray_dir
-    var wo_l = Vec3f(dot(wo, tx), dot(wo, ty), dot(wo, n))
     var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
-    if path_ptr[].bounce == 0 or path_ptr[].specularBounce == Int8(1):
-        path_ptr[].albedo = RGB(Float32(1))
-
-    # NEE to every light type, in reflection AND transmission (a shadow ray
-    # leaving through the surface is offset to that side; like pbrt, the
-    # glass it then has to cross blocks it).
+    # param is `mat`'s alpha: Filter Glossy may have widened it. Shadow and scatter rays leave to their side of n.
+    var bsdf = BSDF(LobeKind.rough_dielectric, True, False, n, wo, RGB(Float32(1)), Int32(mat_idx),
+                    max(mat.roughU, mat.roughV), Float32(0), Int32(-1), Float32(0), Float32(0), False, False)
     var ss = _draw_sobol_8(path_ptr, ctx.sobol_matrices)
     var ls_area = _sample_area_light_nee_u(ctx, hit_raw, ss.light, ss.bary1, ss.bary2, pcg)
-    _rough_dielectric_nee[enqueue_shadow](path_ptr, ctx, hit_raw, n, ls_area, ls_area.dist * Float32(0.9999), wo_l, tx, ty, ior, alpha)
-    for li in range(_nee_simple_light_count(ctx)):
-        var res = _nee_sample_simple_light(ctx, li, hit_raw, pcg)
-        var ls = res[0].copy()
-        _rough_dielectric_nee[enqueue_shadow](path_ptr, ctx, hit_raw, n, ls, res[1], wo_l, tx, ty, ior, alpha)
-    for inf_i in range(ctx.lights.infinite_count):
-        var ls_inf = _sample_infinite_light_nee(ctx.lights.infinite_lights[unsafe_offset=inf_i], Point2f(ss.env1, ss.env2) if inf_i == 0 else Point2f(pcg.next_float(), pcg.next_float()))
-        _rough_dielectric_nee[enqueue_shadow](path_ptr, ctx, hit_raw, n, ls_inf, ls_inf.dist, wo_l, tx, ty, ior, alpha)
-
-    var bs = diel_sample(wo_l, ss.rr, ss.scat1, ss.scat2, ior, alpha, True, True, True)
-    if not bs.valid or bs.pdf <= Float32(0.0):
-        path_ptr[].active = 0
-        path_ptr[].pcgState = pcg.state
-        return
-    var wi = tx * bs.wi.x + ty * bs.wi.y + n * bs.wi.z
-    var side = Float32(1.0) if dot(wi, n) > Float32(0.0) else Float32(-1.0)
-    var org = offset_point(hit_raw, n * side)
-    path_ptr[].ray = Ray(Point3f(org[0], org[1], org[2]), Vec3f(wi[0], wi[1], wi[2]))
-    path_ptr[].throughput *= bs.f * (abs(bs.wi.z) / bs.pdf)
-    if bs.wi.z * wo_l.z < Float32(0.0):
-        # Transmission: the same bookkeeping as the smooth branch. The
-        # radiance f carried 1/etap^2, which eta_scale undoes for Russian
-        # roulette (pbrt's etaScale); and the touching-dielectric IOR stack
-        # pushes on the way in, pops on the way out.
-        var etap = ior if wo_l.z > Float32(0.0) else Float32(1.0) / ior
+    _lobe_nee_with[BSDF, enqueue_shadow](path_ptr, ctx, bsdf, hit_raw, ls_area, Point2f(ss.env1, ss.env2), True, pcg, n)
+    var s = bsdf.sample[want_rev=False](ss.rr, ss.scat1, ss.scat2, Float32(0),
+                                        LobeTables(ctx.materials, ctx.curves, ctx.measured_brdfs, ctx.spectral), path_ptr[].wavelengths)
+    if s.valid and s.transmit:
+        # The radiance f carried 1/etap^2, which eta_scale undoes for Russian roulette (pbrt's etaScale); the
+        # touching-dielectric IOR stack pushes on the way in, pops on the way out.
+        var entering = dot(wo, n) > Float32(0.0)
+        var etap = ior if entering else Float32(1.0) / ior
         path_ptr[].eta_scale *= etap * etap
-        if wo_l.z > Float32(0.0):
+        if entering:
             path_ptr[].previous_dielectric_ior = path_ptr[].current_dielectric_ior
             path_ptr[].current_dielectric_ior = ior
         else:
             path_ptr[].current_dielectric_ior = path_ptr[].previous_dielectric_ior
             path_ptr[].previous_dielectric_ior = Float32(1.0)
-    path_ptr[].specularBounce = Int8(0)
-    path_ptr[].lastBsdfPdf = bs.pdf
-    path_ptr[].bounce += 1
-    var u_rr = pcg.next_float()
-    _apply_russian_roulette(path_ptr, ctx.cycles, pcg, u_rr, BOUNCE_TRANSMIT if bs.wi.z * wo_l.z < Float32(0.0) else BOUNCE_GLOSSY)
-
-
-@always_inline
-def _rough_dielectric_nee[enqueue_shadow: Bool](
-    path_ptr: Pointer[PathState, MutUntrackedOrigin],
-    ctx: ShadeContext,
-    hit_raw: Vec3f,
-    n: Vec3f,
-    ls: LightSample,
-    tmax: Float32,
-    wo_l: Vec3f, tx: Vec3f, ty: Vec3f,
-    ior: Float32, alpha: Float32,
-):
-    """One NEE sample against the rough dielectric, MIS'd against its own
-    sampling density (pbrt's PathIntegrator: power heuristic)."""
-    if not ls.valid:
-        return
-    var wi_l = Vec3f(dot(ls.wi, tx), dot(ls.wi, ty), dot(ls.wi, n))
-    var f = diel_f(wo_l, wi_l, ior, alpha, True)
-    if f <= Float32(0.0):
-        return
-    var w = abs(wi_l.z)
-    if not ls.is_delta:
-        if ls.pdf <= Float32(0.0):
-            return
-        w *= power_heuristic(ls.pdf, diel_pdf(wo_l, wi_l, ior, alpha, True, True)) / ls.pdf
-    var contrib = path_ptr[].throughput * _to_spec_illum(ctx, ls.Li, path_ptr[].wavelengths) * (f * w)
-    var side = Float32(1.0) if dot(ls.wi, n) > Float32(0.0) else Float32(-1.0)
-    var org = offset_point(hit_raw, n * side)
-    _shadow_contribute[enqueue_shadow](path_ptr, ctx, org, ls.wi, tmax, contrib)
+    _lobe_bounce[False](path_ptr, ctx, s, hit_raw, n, RGB(Float32(1)), pcg, offset_eps(hit_raw.x, hit_raw.y, hit_raw.z))
 
 
 # Thin dielectric (type 9): one-sided glass — Fresnel selects reflect or transmit,
@@ -2097,17 +2039,19 @@ def _lobe_nee_with[L: NeeLobe, enqueue_shadow: Bool, defer_only: Bool = False](
     u_env: Point2f,
     has_u_env: Bool,
     mut pcg: PCG32,
+    side_n: Vec3f = Vec3f(Float32(0)),
 ):
-    """_lobe_nee with the area-light sample drawn, and the first environment's numbers when `has_u_env` (Sobol)."""
+    """_lobe_nee with the area-light sample drawn, and the first environment's numbers when `has_u_env` (Sobol).
+    A transmitting lobe passes its normal as `side_n`: each shadow ray then leaves to the light's side of it."""
     var tab = LobeTables(ctx.materials, ctx.curves, ctx.measured_brdfs, ctx.spectral)
-    _lobe_nee_one[L, enqueue_shadow, defer_only](path_ptr, ctx, bsdf, tab, hit_point, ls_area, ls_area.dist * Float32(0.9999))
+    _lobe_nee_one[L, enqueue_shadow, defer_only](path_ptr, ctx, bsdf, tab, hit_point, ls_area, ls_area.dist * Float32(0.9999), side_n)
     for li in range(_nee_simple_light_count(ctx)):
         var res = _nee_sample_simple_light(ctx, li, hit_point, pcg)
-        _lobe_nee_one[L, enqueue_shadow, defer_only](path_ptr, ctx, bsdf, tab, hit_point, res[0].copy(), res[1])
+        _lobe_nee_one[L, enqueue_shadow, defer_only](path_ptr, ctx, bsdf, tab, hit_point, res[0].copy(), res[1], side_n)
     for inf_i in range(ctx.lights.infinite_count):
         var u = u_env if inf_i == 0 and has_u_env else Point2f(pcg.next_float(), pcg.next_float())
         var ls_e = _sample_infinite_light_nee(ctx.lights.infinite_lights[unsafe_offset=inf_i], u)
-        _lobe_nee_one[L, enqueue_shadow, defer_only](path_ptr, ctx, bsdf, tab, hit_point, ls_e, ls_e.dist)
+        _lobe_nee_one[L, enqueue_shadow, defer_only](path_ptr, ctx, bsdf, tab, hit_point, ls_e, ls_e.dist, side_n)
 
 
 @always_inline
@@ -2119,15 +2063,19 @@ def _lobe_nee_one[L: NeeLobe, enqueue_shadow: Bool, defer_only: Bool = False](
     hit_point: Vec3f,
     ls: LightSample,
     tmax: Float32,
+    side_n: Vec3f,
 ):
     if not bsdf.faces(ls):
         return
+    var org = hit_point
+    if dot(side_n, side_n) > Float32(0):
+        org = offset_point(hit_point, side_n if dot(ls.wi, side_n) > Float32(0) else -side_n)
     # A costly lobe tests visibility first: a blocked sample then needs no evaluation.
     var inline_shadow = False
     comptime if not defer_only:
         if bsdf.costly():
             inline_shadow = _shadow_inline(ctx, null_guide())
-            if inline_shadow and _shadow_blocked(ctx, hit_point, ls.wi, tmax):
+            if inline_shadow and _shadow_blocked(ctx, org, ls.wi, tmax):
                 return
     var w = bsdf.nee_weight(ls, tab, path_ptr[].wavelengths)
     if w.is_black():
@@ -2135,7 +2083,7 @@ def _lobe_nee_one[L: NeeLobe, enqueue_shadow: Bool, defer_only: Bool = False](
     if inline_shadow:
         path_ptr[].estimate += _clamped(ctx, path_ptr[].throughput * w, Int(path_ptr[].bounce))
     else:
-        _shadow_contribute[enqueue_shadow, defer_only](path_ptr, ctx, hit_point, ls.wi, tmax, path_ptr[].throughput * w)
+        _shadow_contribute[enqueue_shadow, defer_only](path_ptr, ctx, org, ls.wi, tmax, path_ptr[].throughput * w)
 
 
 @always_inline
@@ -2201,18 +2149,18 @@ def _lobe_bounce[aov_from_f: Bool](
     geo_n: Vec3f,
     albedo: RGB,
     mut pcg: PCG32,
-    curve_eps: Float32 = Float32(0),
+    side_eps: Float32 = Float32(0),
     diffuse: Bool = False,
 ):
     """Continue a path along a BSDF sample; `aov_from_f` takes the albedo AOV from f instead of `albedo`.
-    A curve hit passes its offset `curve_eps`: the ray leaves along geo_n to whichever side wi points."""
+    A curve or rough-glass hit passes its offset `side_eps`: the ray leaves along geo_n to whichever side wi points."""
     if not s.valid:
         path_ptr[].active = 0
         path_ptr[].pcgState = pcg.state
         return
     var org = spawn_origin(hit_point, geo_n, s.wi)
-    if curve_eps > Float32(0):
-        org = hit_point + geo_n * (curve_eps if dot(s.wi, geo_n) >= Float32(0) else -curve_eps)
+    if side_eps > Float32(0):
+        org = hit_point + geo_n * (side_eps if dot(s.wi, geo_n) >= Float32(0) else -side_eps)
     path_ptr[].ray = Ray(Point3f(org[0], org[1], org[2]), Vec3f(s.wi[0], s.wi[1], s.wi[2]))
     if path_ptr[].bounce == 0 or path_ptr[].specularBounce == Int8(1):
         comptime if aov_from_f:
