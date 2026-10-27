@@ -36,10 +36,8 @@
 from std.math import sqrt, sin, cos, acos, abs, max, floor
 from .geometry import safe_sqrt, PI, dot, Vec3f
 from .materials import MeasuredBRDF
-from .spectrum import SampledWavelengths, SpectralSample, rgb_illuminant_to_spectral_sample
-from .bvh import LightSample
+from .spectrum import SampledWavelengths, SpectralSample
 from .geometry import _atan2f
-from .vcm_mis import MisPolicy, mis_policy_power, nee_mis_weight
 
 # ── Local-frame warps (bxdfs.h:1058-1065) ────────────────────────────────────
 
@@ -721,75 +719,3 @@ def bxdf_sample_measured(
     # The per-wavelength max(fr_i, 0) above is the correct and only clamp
     # point, matching pbrt's own MeasuredBxDF::Sample_f.
     return (wi, fr_scaled, pdf, True)
-
-# ── NEE weight (mirrors bxdf.mojo's _nee_weight_simple / _nee_weight_hair) ──
-
-# NOT @always_inline (unlike bxdf.mojo's _nee_weight_simple/_via_spectral,
-# which stay inline since conductor/diffuse's total NEE bulk fits fine) --
-# called 5x from _shade_measured_nee (one per light type), and that call
-# site is itself now a real function specifically to keep shade_measured_gpu
-# small (see _shade_measured_nee's docstring in shading.mojo); leaving this
-# inline would still unroll its full spectral-compositing body 5x into
-# _shade_measured_nee's own compiled body. De-inlining it directly reduces
-# that to 5 real calls instead.
-def _nee_weight_measured(
-    ls: LightSample,
-    mb: MeasuredBRDF,
-    tangent: Vec3f, bitangent: Vec3f, normal: Vec3f,
-    wo: Vec3f,
-    wavelengths: SampledWavelengths,
-    spectral_coeffs: Pointer[Float32, MutUntrackedOrigin], spectral_res: Int,
-    spectral_cie_x: Pointer[Float32, MutUntrackedOrigin],
-    spectral_cie_y: Pointer[Float32, MutUntrackedOrigin],
-    spectral_cie_z: Pointer[Float32, MutUntrackedOrigin],
-    spectral_d65: Pointer[Float32, MutUntrackedOrigin],
-    mis: MisPolicy = mis_policy_power(),
-) -> SpectralSample:
-    """Measured's own version of _nee_weight_simple (bxdf.mojo) — can't share
-    that function's flat (mat_kind, alb, alpha) signature since it needs the
-    full MeasuredBRDF descriptor + wavelengths, same reason hair has its
-    own _nee_weight_hair. Projects wo/ls.wi into the local (tangent,
-    bitangent, normal) frame bxdf_eval_measured expects.
-
-    Mirrors _nee_weight_simple_spectral (bxdf.mojo) exactly: bxdf_eval_measured
-    returns a RAW spectral reflectance (not RGB -- see its docstring), which is
-    composited with the light's own spectral radiance (via
-    rgb_illuminant_to_spectral_sample on ls.Li) and returned SPECTRAL.
-
-    Returns SpectralSample, NOT RGB. It used to return RGB, which forced every
-    caller to re-upsample via _to_spec_illum/spec_illum -- a
-    spectral->RGB->spectral round trip that (a) clamps to [0,1], discarding the
-    out-of-gamut negative red a saturated measured blue legitimately carries,
-    and (b) reconstructs a SMOOTH Jakob-Hanika sigmoid, which cannot represent
-    the sharp spectrum that IS a measured material's iridescence. The sampling
-    path (bxdf_sample_measured) was freed of the same round trip in f0df724a;
-    this is its NEE counterpart.
-
-    `mis` (added retroactively -- see barcelona-pavilion-day's shadowed-chair
-    deficit investigation): every OTHER material's NEE weight was migrated
-    from the path tracer's hardcoded two-strategy power_heuristic to a
-    caller-supplied MisPolicy (see mis_policy_sole's docstring for the
-    canonical derivation of why that matters for SPPM). Measured was the one
-    material left behind. Defaults to mis_policy_power() -- the path
-    tracer's own two-strategy heuristic, exactly the old hardcoded
-    behavior -- so shading.mojo's call sites are unaffected."""
-    if not ls.valid:
-        return SpectralSample(Float32(0.0))
-    var cos_s = dot(normal, ls.wi)
-    if cos_s <= Float32(0.0):
-        return SpectralSample(Float32(0.0))
-    var wo_l = Vec3f(dot(wo, tangent), dot(wo, bitangent), dot(wo, normal))
-    var wi_l = Vec3f(dot(ls.wi, tangent), dot(ls.wi, bitangent), dot(ls.wi, normal))
-    var (fr_spectral, pdf_bsdf) = bxdf_eval_measured(mb, wo_l, wi_l, wavelengths, spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65)
-    if fr_spectral.v0 <= Float32(0.0) and fr_spectral.v1 <= Float32(0.0) and fr_spectral.v2 <= Float32(0.0) and fr_spectral.v3 <= Float32(0.0):
-        return SpectralSample(Float32(0.0))
-    var li_spectral = rgb_illuminant_to_spectral_sample(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, ls.Li.r, ls.Li.g, ls.Li.b, wavelengths)
-    var f_times_li = fr_spectral * li_spectral
-    if ls.is_delta:
-        if not mis.is_vcm:
-            return f_times_li * cos_s
-        return f_times_li * cos_s * nee_mis_weight(mis, Float32(1.0), Float32(0.0), cos_s)
-    if ls.pdf <= Float32(0.0):
-        return SpectralSample(Float32(0.0))
-    var mis_w = nee_mis_weight(mis, ls.pdf, pdf_bsdf, cos_s)
-    return f_times_li * (cos_s * mis_w / ls.pdf)

@@ -17,8 +17,8 @@ from .media import Medium, MediumInterface, Grid, NvdbGrid
 from .shadow_media import shadow_transmittance
 from .curves import Curve, curve_at, curve_piece_endpoints, _curve_perp_axis, curve_hit_normal
 from .layered import layered_f, layered_sample, layered_pdf, diel_f, diel_pdf, diel_sample
-from .bxdf import BxDFSample, GeomContext, SobolSamples8, BxDFFlags, bxdf_is_delta, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_sample_dielectric, bxdf_sample_thin_dielectric, bxdf_eval_diffuse, bxdf_pdf_diffuse, bxdf_sample_diffuse_transmit, bxdf_eval_conductor_ggx, ggx_albedo, bxdf_pdf_conductor_ggx, _nee_weight_simple, _nee_weight_hair, _nee_weight_simple_spectral, LobeTables
-from .measured_bxdf_eval import bxdf_sample_measured, bxdf_pdf_measured, _nee_weight_measured
+from .bxdf import BSDF, BxDFSample, GeomContext, SobolSamples8, BxDFFlags, bxdf_is_delta, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_sample_dielectric, bxdf_sample_thin_dielectric, bxdf_eval_diffuse, bxdf_pdf_diffuse, bxdf_sample_diffuse_transmit, bxdf_eval_conductor_ggx, ggx_albedo, bxdf_pdf_conductor_ggx, _nee_weight_simple, _nee_weight_hair, _nee_weight_simple_spectral, LobeTables
+from .measured_bxdf_eval import bxdf_sample_measured, bxdf_pdf_measured
 from .rng import PCG32
 from .footprint import CameraFootprint, UVFootprint, TriWorld, tri_world, hit_uv_footprint
 from .bvh import BVH2Node, BVH4, SceneView, any_hit_dispatch, traverse_dispatch, HairLobeConstants, _hair_precompute, _hair_sample_dir_u, curve_offset_eps, LightSample, _sample_distant_light_nee, _sample_point_light_nee, _sample_sphere_light_nee, _sample_infinite_light_nee, _sample_infinite_light_textured, _equal_area_sphere_to_square
@@ -2184,51 +2184,44 @@ def _nee_loop_simple[enqueue_shadow: Bool, defer_only: Bool = False](
             var contrib = path_ptr[].throughput * w
             _shadow_contribute[enqueue_shadow, defer_only](path_ptr, ctx, hit_point, ls.wi, tmax, contrib, guide_write)
 
-@always_inline
-def _shade_conductor_nee[enqueue_shadow: Bool](
+def _lobe_nee[enqueue_shadow: Bool](
     path_ptr: Pointer[PathState, MutUntrackedOrigin],
     ctx: ShadeContext,
-    n: Vec3f,
-    wo: Vec3f,
+    bsdf: BSDF,
     hit_point: Vec3f,
-    f0: RGB,
-    alpha: Float32,
     mut pcg: PCG32,
 ):
-    """Distant + point + infinite-light NEE for a ROUGH (non-delta) conductor
-    bounce — isotropic GGX approximation (alpha = max(roughU,roughV), same
-    simplification bdpt_*.mojo/sppm.mojo's own conductor connection/gather use
-    for anisotropic materials; see bxdf_eval_conductor_ggx's docstring).
-    Only called when bxdf_is_delta(bs.flags) is False — a true mirror bounce
-    has zero probability of reflecting any finite-solid-angle/delta light
-    except along the exact mirror direction, so NEE is skipped entirely for
-    those (matches _finish_delta_bounce's existing behavior).
-
-    Distant/point/sphere lights need MIS exactly as bxdf_eval_any/
-    _nee_weight_simple already handle it (none for delta distant/point, power
-    heuristic against bxdf_pdf_conductor_ggx for sphere/infinite) — via the
-    shared Light interface (bvh.mojo's LightSample samplers) + BxDF
-    interface, replacing 4 formerly hand-inlined blocks also duplicated in
-    _shade_diffuse_nee/shade_hair. Sphere-light NEE is new here (this
-    material previously had none). Area-light NEE (via _sample_area_light_nee,
-    a generic LightSample wrapper around the mesh/curve area-light picker)
-    is also new here — conductor/coated_conductor previously had NO
-    area-light NEE at all (a pre-existing, explicitly documented gap; see
-    project_light_bxdf_interfaces memory)."""
+    """NEE through a BSDF: one area-light sample, every simple light, every environment."""
+    var tab = LobeTables(ctx.materials, ctx.curves, ctx.measured_brdfs, ctx.spectral)
     var ls_area = _sample_area_light_nee(ctx, hit_point, pcg)
-    var w_area = _nee_weight_simple_spectral(ls_area, LobeKind.ggx, f0, alpha, n, wo, ctx.spectral.coeffs, ctx.spectral.res, ctx.spectral.cie_x, ctx.spectral.cie_y, ctx.spectral.cie_z, ctx.spectral.d65, path_ptr[].wavelengths, LobeTables(ctx.materials, ctx.curves, ctx.measured_brdfs, ctx.spectral))
-    if not w_area.is_black():
-        var contrib_area = path_ptr[].throughput * w_area
-        _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, ls_area.wi, ls_area.dist * Float32(0.9999), contrib_area)
-
-    _nee_loop_simple[enqueue_shadow](path_ptr, ctx, n, hit_point, f0, alpha, Int32(1), wo, pcg)
-
+    _lobe_nee_one[enqueue_shadow](path_ptr, ctx, bsdf, tab, hit_point, ls_area, ls_area.dist * Float32(0.9999))
+    for li in range(_nee_simple_light_count(ctx)):
+        var res = _nee_sample_simple_light(ctx, li, hit_point, pcg)
+        _lobe_nee_one[enqueue_shadow](path_ptr, ctx, bsdf, tab, hit_point, res[0].copy(), res[1])
     for inf_i in range(ctx.lights.infinite_count):
         var ls_e = _sample_infinite_light_nee(ctx.lights.infinite_lights[unsafe_offset=inf_i], Point2f(pcg.next_float(), pcg.next_float()))
-        var w_e = _nee_weight_simple_spectral(ls_e, LobeKind.ggx, f0, alpha, n, wo, ctx.spectral.coeffs, ctx.spectral.res, ctx.spectral.cie_x, ctx.spectral.cie_y, ctx.spectral.cie_z, ctx.spectral.d65, path_ptr[].wavelengths, LobeTables(ctx.materials, ctx.curves, ctx.measured_brdfs, ctx.spectral))
-        if not w_e.is_black():
-            var contrib_e = path_ptr[].throughput * w_e
-            _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, ls_e.wi, ls_e.dist, contrib_e)
+        _lobe_nee_one[enqueue_shadow](path_ptr, ctx, bsdf, tab, hit_point, ls_e, ls_e.dist)
+
+
+@always_inline
+def _lobe_nee_one[enqueue_shadow: Bool](
+    path_ptr: Pointer[PathState, MutUntrackedOrigin],
+    ctx: ShadeContext,
+    bsdf: BSDF,
+    tab: LobeTables,
+    hit_point: Vec3f,
+    ls: LightSample,
+    tmax: Float32,
+):
+    var w = bsdf.nee_weight(ls, tab, path_ptr[].wavelengths)
+    if not w.is_black():
+        _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, ls.wi, tmax, path_ptr[].throughput * w)
+
+
+@always_inline
+def _ggx_bsdf(n: Vec3f, wo: Vec3f, f0: RGB, alpha: Float32) -> BSDF:
+    """Isotropic GGX for NEE: what an anisotropic or coated conductor is lit through."""
+    return BSDF(LobeKind.ggx, True, False, n, wo, f0, Int32(-1), alpha, Float32(0), Int32(-1), Float32(0), Float32(0), True, False)
 
 
 @always_inline
@@ -2337,7 +2330,7 @@ def shade_conductor[use_gpu: Bool, enqueue_shadow: Bool](
     var bs = bxdf_sample_conductor(gc, mat_eff, pcg.next_float(), pcg.next_float())
     if bs.is_valid != Int8(0) and not bxdf_is_delta(bs.flags):
         var alpha_iso = max(alpha_x, alpha_y)
-        _shade_conductor_nee[enqueue_shadow](path_ptr, ctx, normal, wo, hit_point, mat_eff.albedo, alpha_iso, pcg)
+        _lobe_nee[enqueue_shadow](path_ptr, ctx, _ggx_bsdf(normal, wo, mat_eff.albedo, alpha_iso), hit_point, pcg)
         path_ptr[].pcgState = pcg.state
         var org_c = spawn_origin(hit_point, geo_normal, bs.wi)
         path_ptr[].ray = Ray(Point3f(org_c[0], org_c[1], org_c[2]), Vec3f(bs.wi[0], bs.wi[1], bs.wi[2]))
@@ -2360,73 +2353,6 @@ def shade_conductor[use_gpu: Bool, enqueue_shadow: Bool](
 # the loader's isotropic-only scope note), so an arbitrary Frisvad tangent
 # frame is fine — no UV alignment needed (measured materials aren't
 # anisotropic in this scene corpus).
-#
-# Deliberately NOT @always_inline, unlike every sibling _shade_X_nee (e.g.
-# _shade_conductor_nee) -- matching _shade_diffuse_nee's precedent (the other
-# NEE helper in this file heavy enough to warrant it). This is a genuine
-# code-size win kept on its own merits, but it turned out NOT to be the fix
-# for shade_measured_gpu's CUDA_ERROR_INVALID_PTX (see below).
-#
-# Takes `measured_brdfs` + an index rather than `mb: MeasuredBRDF` (loading
-# mb LOCALLY below instead) to avoid MeasuredBRDF -- a TrivialRegisterPassable
-# struct with 12 pointer fields -- crossing this now-real call boundary by
-# value, the same by-value hazard already documented on SpectralHandle (see
-# spectrum.mojo; filed as modular/modular#6759, later retracted by its own
-# author as unreproducible). This was tried as a fix candidate before the
-# real bug (below) was found and did NOT resolve it on its own -- but it's a
-# reasonable precaution independent of that, so it's kept.
-#
-# The ACTUAL root cause (root-caused 2026-07-10 via progressive stubbing of
-# _shade_measured_nee's body down to single expressions): `_bxdf_eval_measured_core`
-# used plain `std.math.atan2` for phi_o/phi_m, which depends on an unresolved
-# CUDA libdevice extern and cannot produce valid PTX on this machine's
-# toolchain -- see `_atan2f` in bvh.mojo ("avoids the unresolved libdevice
-# extern on GPU"), already used for hair's own phi computation for exactly
-# this reason. Fixed by switching measured_bxdf_eval.mojo's atan2 calls to
-# `_atan2f`. See project_gpu_ptx_environment_break memory for the full
-# bisection trail, including the earlier wrong kernel-size and by-value-struct
-# hypotheses.
-def _shade_measured_nee[enqueue_shadow: Bool](
-    path_ptr: Pointer[PathState, MutUntrackedOrigin],
-    ctx: ShadeContext,
-    measured_brdfs: Pointer[MeasuredBRDF, MutUntrackedOrigin],
-    measured_idx: Int32,
-    tangent: Vec3f, bitangent: Vec3f, normal: Vec3f,
-    wo: Vec3f,
-    hit_point: Vec3f,
-    mut pcg: PCG32,
-):
-    """Distant + point + sphere + area + infinite-light NEE for a measured
-    surface — same 5-light-type shape as _shade_conductor_nee, with
-    _nee_weight_measured in place of _nee_weight_simple_spectral (which
-    can't take a MeasuredBRDF, same reason hair has its own NEE)."""
-    var mb = measured_brdfs[unsafe_offset=Int(measured_idx)]
-    var ls_area = _sample_area_light_nee(ctx, hit_point, pcg)
-    var w_area = _nee_weight_measured(ls_area, mb, tangent, bitangent, normal, wo, path_ptr[].wavelengths, ctx.spectral.coeffs, ctx.spectral.res, ctx.spectral.cie_x, ctx.spectral.cie_y, ctx.spectral.cie_z, ctx.spectral.d65)
-    if not w_area.is_black():
-        var contrib_area = path_ptr[].throughput * w_area
-        _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, ls_area.wi, ls_area.dist * Float32(0.9999), contrib_area)
-
-    # distant/point/sphere via the shared sampler. Note this is the ONE
-    # conversion in this file where the ORIGINAL order (distant, point,
-    # sphere) already matches the iterator's canonical order exactly -- no
-    # reordering happens, this is a pure loop collapse.
-    for li in range(_nee_simple_light_count(ctx)):
-        var res = _nee_sample_simple_light(ctx, li, hit_point, pcg)
-        var ls = res[0].copy()
-        var tmax = res[1]
-        var w = _nee_weight_measured(ls, mb, tangent, bitangent, normal, wo, path_ptr[].wavelengths, ctx.spectral.coeffs, ctx.spectral.res, ctx.spectral.cie_x, ctx.spectral.cie_y, ctx.spectral.cie_z, ctx.spectral.d65)
-        if not w.is_black():
-            var contrib = path_ptr[].throughput * w
-            _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, ls.wi, tmax, contrib)
-
-    for inf_i in range(ctx.lights.infinite_count):
-        var ls_e = _sample_infinite_light_nee(ctx.lights.infinite_lights[unsafe_offset=inf_i], Point2f(pcg.next_float(), pcg.next_float()))
-        var w_e = _nee_weight_measured(ls_e, mb, tangent, bitangent, normal, wo, path_ptr[].wavelengths, ctx.spectral.coeffs, ctx.spectral.res, ctx.spectral.cie_x, ctx.spectral.cie_y, ctx.spectral.cie_z, ctx.spectral.d65)
-        if not w_e.is_black():
-            var contrib_e = path_ptr[].throughput * w_e
-            _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, ls_e.wi, ls_e.dist, contrib_e)
-
 @always_inline
 def shade_measured[use_gpu: Bool, enqueue_shadow: Bool](
     path_ptr: Pointer[PathState, MutUntrackedOrigin],
@@ -2485,7 +2411,9 @@ def shade_measured[use_gpu: Bool, enqueue_shadow: Bool](
     # body), and gating NEE on that sample's validity was discarding real,
     # correctly-lit direct illumination at exactly those pixels -- confirmed
     # against the pbrt reference showing they should stay lit, not black.
-    _shade_measured_nee[enqueue_shadow](path_ptr, ctx, ctx.measured_brdfs, mat.measured_idx, tangent, bitangent, normal, wo, hit_point, pcg)
+    var bsdf = BSDF(LobeKind.measured, True, False, normal, wo, RGB(Float32(0)), Int32(inter.primId.materialIndex), Float32(0),
+                    Float32(0), Int32(-1), Float32(0), Float32(0), True, False)
+    _lobe_nee[enqueue_shadow](path_ptr, ctx, bsdf, hit_point, pcg)
 
     var wo_l = Vec3f(dot(wo, tangent), dot(wo, bitangent), dot(wo, normal))
     var (wi_l, f, pdf, valid) = bxdf_sample_measured(mb, wo_l, pcg.next_float(), pcg.next_float(), path_ptr[].wavelengths, ctx.spectral.coeffs, ctx.spectral.res, ctx.spectral.cie_x, ctx.spectral.cie_y, ctx.spectral.cie_z, ctx.spectral.d65)
@@ -2570,7 +2498,7 @@ def shade_coated_conductor[use_gpu: Bool, enqueue_shadow: Bool](
         # luma-Fresnel blend. alpha = (roughU+roughV)/2, matching
         # bxdf_sample_coated_conductor's own internal averaging.
         var alpha_cc = (max(mat.roughU, Float32(0.0001)) + max(mat.roughV, Float32(0.0001))) * Float32(0.5)
-        _shade_conductor_nee[enqueue_shadow](path_ptr, ctx, normal, wo, hit_point, mat.albedo, alpha_cc, pcg)
+        _lobe_nee[enqueue_shadow](path_ptr, ctx, _ggx_bsdf(normal, wo, mat.albedo, alpha_cc), hit_point, pcg)
         path_ptr[].pcgState = pcg.state
         var org_cc = spawn_origin(hit_point, normal, bs.wi)
         path_ptr[].ray = Ray(Point3f(org_cc[0], org_cc[1], org_cc[2]), Vec3f(bs.wi[0], bs.wi[1], bs.wi[2]))
