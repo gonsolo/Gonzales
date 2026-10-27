@@ -19,7 +19,7 @@ from .lights import area_light_pick_triangle, AreaLight
 from .curves import Curve, curve_at, curve_piece_endpoints, _curve_perp_axis
 from .bssrdf import dipole_rd, dipole_max_radius
 from .bvh import traverse_dispatch, any_hit_dispatch
-from .bvh import SceneView, _scene_bounding_sphere, _sample_disk_perpendicular, _sample_infinite_light_dir, _eval_infinite_light_and_pdf, _hair_precompute, curve_offset_eps, LightSample, _sample_distant_light_nee, _sample_point_light_nee, _sample_sphere_light_nee, _sample_infinite_light_nee, light_path_pick
+from .bvh import SceneView, curve_radius, _scene_bounding_sphere, _sample_disk_perpendicular, _sample_infinite_light_dir, _eval_infinite_light_and_pdf, _hair_precompute, curve_offset_eps, LightSample, _sample_distant_light_nee, _sample_point_light_nee, _sample_sphere_light_nee, _sample_infinite_light_nee, light_path_pick
 from .vcm_mis import mis_policy_sole
 from .bxdf import ggx_lambda, dielectric_interface, bxdf_sample_dielectric, bxdf_sample_thin_dielectric, BxDFFlags, GeomContext, bxdf_sample_conductor, BSDF, LobeTables
 from .surface import surface_hit
@@ -209,6 +209,7 @@ struct SPPMPhoton(TrivialRegisterPassable):
     # not kept spectral through tau's progressive accumulator). Unused until
     # Stage 4.
     var wavelengths: SampledWavelengths
+    var curve: Int32   # the strand a photon on hair landed on, else -1: hair gathers per strand (the fibre kernel)
 
 
 # ── Geometry helpers ──────────────────────────────────────────────────────────
@@ -1405,7 +1406,8 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
                 # term).
                 if n_events - n_null > 1:
                     _sppm_store_photon[use_gpu](
-                        SPPMPhoton(pos=sp, flux=flux, nxt=Int32(-1), is_volume=PhotonKind.volume, dir_in=rd, wavelengths=ph_wavelengths),
+                        SPPMPhoton(pos=sp, flux=flux, nxt=Int32(-1), is_volume=PhotonKind.volume, dir_in=rd, wavelengths=ph_wavelengths,
+                                   curve=Int32(-1)),
                         photons, max_photons, counter)
                 # Scatter: isotropic phase function, modulate by albedo
                 # Single-scattering albedo is a per-channel COEFFICIENT
@@ -1458,7 +1460,8 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
             # light's first segment: the visible point's NEE covers that (pbrt's SPPM skips depth 0 too).
             if not mat.is_mirror() and n_events - n_null > 1:
                 _sppm_store_photon[use_gpu](
-                    SPPMPhoton(pos=hit, flux=flux, nxt=Int32(-1), is_volume=PhotonKind.surface, dir_in=rd, wavelengths=ph_wavelengths),
+                    SPPMPhoton(pos=hit, flux=flux, nxt=Int32(-1), is_volume=PhotonKind.surface, dir_in=rd, wavelengths=ph_wavelengths,
+                               curve=Int32(inter.primId.id1) if inter.primId.type == Int8(5) else Int32(-1)),
                     photons, max_photons, counter)
             var sh = surface_hit[tex_gpu](sd, inter, mat, hit, ray_dir, Float32(-1.0))
             var s_l = sh.bsdf(mat, mat_idx, adjoint=True).sample(pcg.next_float(), pcg.next_float(), pcg.next_float(),
@@ -1505,7 +1508,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
                     _sppm_store_photon[use_gpu](
                         SPPMPhoton(pos=hit, flux=flux * ft, nxt=Int32(-1),
                                    is_volume=PhotonKind.bssrdf, dir_in=rd,
-                                   wavelengths=ph_wavelengths),
+                                   wavelengths=ph_wavelengths, curve=Int32(-1)),
                         photons, max_photons, counter)
                 break
             # Entering, leaving or total-internal-reflecting at the boundary of
@@ -1900,7 +1903,9 @@ def _sppm_gather_one(
                     # material property, not a bias parameter.
                     var want_kind = PhotonKind.bssrdf if bssrdf_ok else vp.is_volume
                     var reach2 = bssrdf_r2 if bssrdf_ok else r2
-                    if dist2 <= reach2 and ph.is_volume == want_kind and _sppm_photon_on_vp_surface(
+                    # A hair visible point gathers its own strand's photons, every other one no hair photon.
+                    var same_strand = ph.curve == vp.hair_curve_idx if vp.mat_kind == LobeKind.hair else ph.curve < Int32(0)
+                    if dist2 <= reach2 and ph.is_volume == want_kind and same_strand and _sppm_photon_on_vp_surface(
                             Int32(vp.is_volume), Int32(vp.mat_kind), vp.geo_normal.to_simd(), e.to_simd(), dist2, r2,
                             ph.dir_in.to_simd(), bssrdf_ok):
                         # Volume VP: isotropic phase f=alb/(4π). Surface VP:
@@ -2062,6 +2067,10 @@ def _sppm_gather_one(
             var cov = gather_disk_coverage(sd, vp.pos, vp.geo_normal, sqrt(r2), salt=7 + pass_idx * 1000003)
             if cov > Float32(0):
                 phi_rgb = phi_rgb * (Float32(1) / cov)
+        if vp.mat_kind == LobeKind.hair:
+            # The fibre kernel measures 2 r w, not pi r^2: rescale this pass into the disk convention tau carries.
+            phi_rgb = phi_rgb * (PI * sqrt(r2) / max(Float32(4) * curve_radius(sd.curves, Int(vp.hair_curve_idx), vp.hair_v),
+                                                    Float32(1e-20)))
         var N = vp.N_acc
         var ratio = (N + _ALPHA * M) / (N + M)
         vps[unsafe_offset=i].r2  = r2 * ratio
