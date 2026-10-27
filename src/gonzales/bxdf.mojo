@@ -7,7 +7,7 @@ from .bssrdf import bssrdf_exit_ft
 from .sampling import sample_ggx_vndf, sample_cosine_hemisphere_world
 from .vcm_mis import MisPolicy, mis_policy_power, nee_mis_weight
 from .measured_bxdf_eval import bxdf_eval_measured, bxdf_pdf_measured, bxdf_sample_measured
-from .bvh import LightSample, HairLobeConstants, _hair_eval_lobes, SceneView, _hair_precompute, _hair_sample_dir_u
+from .bvh import LightSample, HairLobeConstants, _hair_eval_lobes, _hair_precompute, _hair_sample_dir_u
 from .spectrum import SampledWavelengths, SpectralHandle, SpectralSample, rgb_to_spectral_sample, spec_refl_unbounded, rgb_illuminant_to_spectral_sample, rgb_bands_to_spectral_sample
 
 # ── Isotropic GGX (Trowbridge-Reitz) evaluation ───────────────────────────────

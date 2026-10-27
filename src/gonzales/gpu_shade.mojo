@@ -5,7 +5,6 @@ from .bvh import SceneView
 from .geometry import _is_real_ptr, Vec3f, dot
 from std.math import sqrt
 from .materials import MatKind
-from .media import Medium
 from .primitives import Intersection
 from .render_state import PathState, ShadowTask, SuppressTask
 from .restir_di import DIReservoir, ReservoirIO, reservoir_io_null

@@ -1,4 +1,4 @@
-from std.math import sqrt, rsqrt, recip, atan2, cos, sin, min, max, abs, floor, copysign
+from std.math import sqrt, rsqrt, recip, cos, sin, min, max, abs, floor, copysign
 from std.sys import is_nvidia_gpu
 from std.sys.info import align_of
 

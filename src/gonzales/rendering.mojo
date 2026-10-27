@@ -4,7 +4,7 @@ from max.algorithm import parallelize
 from std.atomic import Atomic
 from std.sys import prefetch
 from std.sys.info import num_performance_cores
-from .geometry import RGB, Vec3f, dot, INV_FOUR_PI
+from .geometry import RGB, Vec3f, INV_FOUR_PI
 from .render_state import PathState, MIN_RAY_PDF_NONE, SssWalk, TileResult
 from .progress import Progress
 from .primitives import sphere_outward_normal, Intersection, TriangleMesh, mesh_vi

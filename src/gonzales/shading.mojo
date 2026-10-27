@@ -2,10 +2,10 @@ from std.atomic import Atomic
 from .ptex_cache import PTEX_QUEUE_CAP
 from std.sys import size_of
 from std.collections import Array
-from std.math import sqrt, cos, floor, atan, atan2, log2, ceil, exp, abs, pow
+from std.math import sqrt, floor, atan, log2, ceil, exp, abs, pow
 from std.ffi import external_call
 from std.memory.alloc import unsafe_alloc
-from .geometry import offset_point, RGB, Point3f, Point2f, Point2i, restir_jitter_pixel, Vec3f, dot, face_toward, cross, Frame, fast_sincos, refract, PI, TWO_PI, INV_PI, INV_FOUR_PI, _is_real_ptr, _atan2f
+from .geometry import offset_point, RGB, Point3f, Point2f, Point2i, restir_jitter_pixel, Vec3f, dot, face_toward, cross, Frame, fast_sincos, PI, TWO_PI, INV_PI, INV_FOUR_PI, _is_real_ptr, _atan2f
 from .render_state import PDF_DROP_DIRECT
 from .materials import Material, MatKind, LobeKind, MeasuredBRDF, fr_dielectric
 from .render_state import PathState, SssWalk, GpuTexture, NormalSlopeMap, normal_slope_map_none, ShadowTask, SuppressTask, SHADOW_SLOTS

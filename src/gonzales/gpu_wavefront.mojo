@@ -7,7 +7,7 @@ from std.sys import get_defined_int
 from .bvh import _node_box_hit, _node_hi, _node_lo, _node_oc, _bvh_has_nodes, _shadow_is_null_material, _traverse_instances, BVH2Node, any_hit_bvh2_core, ray_sphere_hit, test_spheres, traverse_bvh2_core, traverse_bvh2_core_defer_curves, SceneView
 from .curve_bvh import curve_bvh_occluded, curve_bvh_closest, curve_bvh_prim
 from .curves import CURVE_DEFER_K, Curve, curve_at, curve_piece_endpoints, intersect_curve, curve_hit_normal
-from .geometry import INV_FOUR_PI, Point3f, RGB, Vec3f, _is_real_ptr, cross, dot, store_vec3, vec3f
+from .geometry import INV_FOUR_PI, Point3f, RGB, Vec3f, _is_real_ptr, dot, store_vec3, vec3f
 from .primitives import Instance, Intersection, PrimId, Ray, Sphere, TriangleMesh, alpha_killed, intersect_triangle, sphere_outward_normal, mesh_vi
 from .primitives import mesh_pos, mesh_point, mesh_material
 from .render_state import PathState, MIN_RAY_PDF_NONE, SssWalk, ShadowTask, SHADOW_SLOTS
