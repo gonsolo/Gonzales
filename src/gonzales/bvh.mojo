@@ -944,6 +944,24 @@ struct HairLobeConstants(TrivialRegisterPassable):
     var radius: Float32   # local curve radius at the hit piece; scales self-intersection offset epsilon
 
 @always_inline
+def curve_hit_frame(curves: Pointer[Curve, MutUntrackedOrigin], curve_idx: Int, v_global: Float32, h_raw: Float32,
+                    wo: Vec3f) -> Tuple[Vec3f, Vec3f, Vec3f, Vec3f, Float32]:
+    """A curve hit's tangent, view frame (n_perp, b_perp), outward normal and local radius."""
+    var h = max(Float32(-0.99), min(Float32(0.99), h_raw))
+    var curve = curve_at(curves, curve_idx)
+    var piece = min(Int(curve.n_pieces) - 1, max(0, Int(v_global * Float32(curve.n_pieces))))
+    var (q0, q1, r0, r1) = curve_piece_endpoints(curve, piece)
+    var seg_axis = q1 - q0
+    var seg_len = sqrt(dot(seg_axis, seg_axis))
+    var tangent = Vec3f(Float32(1), Float32(0), Float32(0))
+    if seg_len > Float32(1e-8):
+        tangent = seg_axis * (Float32(1.0) / seg_len)
+    var (n_perp, b_perp) = curve_view_frame(tangent, wo)
+    var geo_normal = n_perp * h + b_perp * sqrt(max(Float32(0.0), Float32(1.0) - h*h))
+    return (tangent, n_perp, b_perp, geo_normal, (r0 + r1) * Float32(0.5))
+
+
+@always_inline
 def _hair_precompute(
     mat: Material,
     curves: Pointer[Curve, MutUntrackedOrigin],
@@ -961,19 +979,7 @@ def _hair_precompute(
     bdpt_*.mojo/sppm.mojo's connectible-vertex/gather/NEE evaluation of a
     stored hair vertex."""
     var h = max(Float32(-0.99), min(Float32(0.99), h_raw))
-    var curve = curve_at(curves, curve_idx)
-    var piece = min(Int(curve.n_pieces) - 1, max(0, Int(v_global * Float32(curve.n_pieces))))
-    var (q0, q1, r0, r1) = curve_piece_endpoints(curve, piece)
-    var radius = (r0 + r1) * Float32(0.5)
-    var seg_axis = q1 - q0
-    var seg_len = sqrt(dot(seg_axis, seg_axis))
-    var tangent: Vec3f
-    if seg_len > Float32(1e-8):
-        tangent = seg_axis * (Float32(1.0) / seg_len)
-    else:
-        tangent = Vec3f(Float32(1), Float32(0), Float32(0))
-    var (n_perp, b_perp) = curve_view_frame(tangent, wo)
-    var geo_normal = n_perp * h + b_perp * sqrt(max(Float32(0.0), Float32(1.0) - h*h))
+    var (tangent, n_perp, b_perp, geo_normal, radius) = curve_hit_frame(curves, curve_idx, v_global, h_raw, wo)
 
     var sin_theta_o = dot(wo, tangent)
     var cos_theta_o = safe_sqrt(Float32(1.0) - sin_theta_o * sin_theta_o)

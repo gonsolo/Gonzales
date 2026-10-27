@@ -4,7 +4,7 @@ from std.math import abs
 from .geometry import offset_eps, face_toward, RGB, Point3f, Vec3f, vec3f, dot
 from .materials import Material, MatKind
 from .primitives import Intersection
-from .bvh import SceneView, _hair_precompute, curve_offset_eps
+from .bvh import SceneView, curve_hit_frame, curve_offset_eps
 from .geom_normal import _geom_normal
 from .shading import _tex_lookup, _get_tri_verts, apply_surface_maps_at_hit, uv_footprint_at_hit
 from .sppm import _shading_normal_at
@@ -49,9 +49,9 @@ def surface_hit[use_gpu: Bool](ref sd: SceneView, inter: Intersection, mat: Mate
     var spawn_eps = offset_eps(hit.x, hit.y, hit.z)
     var gn: Vec3f
     if on_curve:
-        var hc_g = _hair_precompute(mat, sd.curves, Int(inter.primId.id1), inter.v, inter.u, (-ray_dir).to_simd())
-        gn = hc_g.geo_normal
-        spawn_eps = curve_offset_eps(hc_g.radius)
+        var cf = curve_hit_frame(sd.curves, Int(inter.primId.id1), inter.v, inter.u, (-ray_dir).to_simd())
+        gn = cf[3]
+        spawn_eps = curve_offset_eps(cf[4])
     elif mat.type == MatKind.dielectric:
         gn = _shading_normal_at(inter, sd.meshes, sd.instances, sd.spheres, hit)
     else:
