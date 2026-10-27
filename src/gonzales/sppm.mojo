@@ -10,7 +10,7 @@ from std.math import sqrt, cos, sin, floor, max, min
 from std.memory.alloc import unsafe_alloc
 from std.atomic import Atomic
 from std.memory import bitcast
-from .geometry import offset_eps, face_toward, TERMINAL_SEGMENT_GRACE_ROUNDS, RGB, Point3f, Point2f, Vec3f, vec3f, point3f, dot, cross, PI, INV_FOUR_PI, Frame, _is_real_ptr
+from .geometry import offset_eps, TERMINAL_SEGMENT_GRACE_ROUNDS, RGB, Point3f, Point2f, Vec3f, vec3f, point3f, dot, cross, PI, INV_FOUR_PI, Frame, _is_real_ptr
 from .materials import Material, MatKind, LobeKind, PhotonKind, fr_dielectric, resolve_mix
 from .primitives import Ray, Intersection, PrimId, TriangleMesh, Sphere, Instance, sphere_outward_normal, mesh_normal, mesh_vi
 from .primitives import mesh_pos
@@ -21,9 +21,9 @@ from .bssrdf import dipole_rd, dipole_max_radius
 from .bvh import traverse_dispatch, any_hit_dispatch
 from .bvh import SceneView, _scene_bounding_sphere, _sample_disk_perpendicular, _sample_infinite_light_dir, _eval_infinite_light_and_pdf, _hair_precompute, curve_offset_eps, LightSample, _sample_distant_light_nee, _sample_point_light_nee, _sample_sphere_light_nee, _sample_infinite_light_nee, light_path_pick
 from .vcm_mis import mis_policy_sole
-from .bxdf import ggx_lambda, dielectric_interface, bxdf_sample_dielectric, bxdf_sample_thin_dielectric, BxDFFlags, GeomContext, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_is_delta, BSDF, LobeTables
+from .bxdf import ggx_lambda, dielectric_interface, bxdf_sample_dielectric, bxdf_sample_thin_dielectric, BxDFFlags, GeomContext, bxdf_sample_conductor, BSDF, LobeTables
 from .surface import surface_hit
-from .shading import _tex_lookup, _get_tri_verts, apply_surface_maps_at_hit, uv_footprint_at_hit, area_light_hit_cos
+from .shading import apply_surface_maps_at_hit, area_light_hit_cos
 from .geom_normal import _geom_normal
 from .shadow_media import shadow_transmittance
 from .sampling import sample_ggx_vndf, camera_ray_from_film_xy, FilmFilter, film_filter_of, film_filter_offset
@@ -944,8 +944,8 @@ def _sppm_trace_visible_point[use_gpu: Bool](
             var near_mirror = mat.type == MatKind.conductor and max(mat.roughU, mat.roughV) <= Float32(0.02)
             var coat_as_mirror = False
             if not mat.is_mirror() and not near_mirror:   # near-mirror chrome: the photon map can't resolve its lobe
-                var coat_alpha = max(mat.roughU, mat.roughV)
-                if mat.type == MatKind.coated_diffuse and coat_alpha <= Float32(0.3):
+                var coat_alpha = mat.coat_alpha()
+                if mat.lobe() == LobeKind.layered and coat_alpha <= Float32(0.3):
                     # The coat's glossy lobe is too narrow for the gather: sample a microfacet,
                     # reflect off it with probability F and keep tracing, else the VP carries 1/(1-F).
                     var wo_s = (-rd).to_simd()
@@ -1541,60 +1541,6 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
                 var new_idx = medium_after_crossing(ray_dir, inter, sd.meshes, mat, sd, hit)
                 if new_idx != Int32(-1) or mat.medium_interface_idx >= Int32(0):
                     cur_med_idx = new_idx
-
-        elif mat.type == MatKind.coated_conductor:
-            # Rough conductor/coated_conductor: store a gatherable photon
-            # (same n_events > 1 depth-0 double-count guard as diffuse) unless
-            # the sampled lobe is a perfect-mirror delta, which just
-            # continues the path — mirrors bdpt_*.mojo's light-path treatment.
-            var gn_c = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
-            if dot(gn_c, ray_dir) > Float32(0.0):
-                gn_c = gn_c * Float32(-1.0)
-            # Bump/normal maps -- see the coateddiffuse branch above.
-            gn_c = apply_surface_maps_at_hit[tex_gpu](mat, inter, sd.meshes, sd.instances,
-                gn_c, gn_c, hit.to_simd(), ray_dir, Float32(-1.0), sd.camFp,
-                sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
-            gn_c = face_toward(gn_c, -ray_dir)   # pbrt two-sided reflection, see face_toward
-            var wo_c = (-rd).to_simd()
-            # Real image-texture F0, exactly as the diffuse branch does for
-            # reflectance. Without it a TEXTURED conductor was stored/weighted
-            # with its flat `mat.albedo` -- the scaffolding default for many
-            # corpus materials -- so it rendered as one colour with no image.
-            # kroken's framed wall pictures came out BLACK for this reason
-            # (that scene has 6 coatedconductor + 3 conductor materials, and
-            # this branch serves both). Same defect the diffuse branch fixed
-            # under task #150/#151; the fix never reached conductor. BOTH the
-            # camera and photon sides need it, or the two disagree on the
-            # surface's own colour.
-            var eff_alb_c = mat.albedo
-            var (tmc, tvc0, tvc1, tvc2, tex_ok_c) = _get_tri_verts(inter, sd.meshes)
-            if tex_ok_c:
-                eff_alb_c = _tex_lookup[use_gpu](mat, inter, tvc0, tvc1, tvc2, tmc, sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount),
-                    uv_footprint_at_hit(inter, sd.meshes, sd.instances, hit.to_simd(), ray_dir, Float32(-1.0), sd.camFp).width)
-            var frm_c = Frame.from_z(Vec3f(gn_c[0], gn_c[1], gn_c[2]))
-            var gc_c = GeomContext(
-                normal=gn_c, geo_normal=gn_c, hit_point=hit.to_simd(), wo=wo_c,
-                tangent=Vec3f(frm_c.x.x, frm_c.x.y, frm_c.x.z),
-                bitangent=Vec3f(frm_c.y.x, frm_c.y.y, frm_c.y.z),
-                alb=eff_alb_c, pixel_uv=Float32(0),
-            )
-            var uc1 = pcg.next_float(); var uc2 = pcg.next_float()
-            var ior_c = mat.emission.r if mat.emission.r > Float32(1) else Float32(1.5)
-            var usplit_c = pcg.next_float()
-            var bs_c = bxdf_sample_coated_conductor(gc_c, mat, ior_c, usplit_c, uc1, uc2)
-            # Same ordering as the camera side above, same reason: this
-            # photon has ALREADY ARRIVED at the surface, so it must be
-            # deposited whether or not its OUTGOING sample is valid. Only
-            # the continuation below consumes bs_c.
-            if not bxdf_is_delta(bs_c.flags) and n_events - n_null > 1:
-                _sppm_store_photon[use_gpu](
-                    SPPMPhoton(pos=hit, flux=flux, nxt=Int32(-1), is_volume=PhotonKind.surface, dir_in=rd, wavelengths=ph_wavelengths),
-                    photons, max_photons, counter)
-            if bs_c.is_valid == Int8(0):
-                break
-            flux *= spec_refl_unbounded(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, (bs_c.f).r, (bs_c.f).g, (bs_c.f).b, ph_wavelengths)
-            rd = vec3f(bs_c.wi)
-            ro = hit + rd * Float32(0.0002)
 
         elif mat.type == MatKind.interface:
             n_null += 1   # a null boundary is not an interaction for the surface "first segment" store gates

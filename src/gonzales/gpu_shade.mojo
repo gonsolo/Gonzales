@@ -9,7 +9,7 @@ from .primitives import Intersection
 from .render_state import PathState, ShadowTask, SuppressTask
 from .restir_di import DIReservoir, ReservoirIO, reservoir_io_null
 from .rng import PCG32
-from .shading import ShadeContext, _shade_context, _shade_sss_exit, shade_coated_conductor, shade_coated_diffuse, shade_conductor, shade_dielectric, shade_diffuse, shade_diffuse_transmission, shade_hair, shade_interface, shade_measured, shade_nee_core, shade_thin_dielectric, _mnee_first_probe, _mnee_bsdf_weight
+from .shading import ShadeContext, _shade_context, _shade_sss_exit, shade_coated_diffuse, shade_conductor, shade_dielectric, shade_diffuse, shade_diffuse_transmission, shade_hair, shade_interface, shade_measured, shade_nee_core, shade_thin_dielectric, _mnee_first_probe, _mnee_bsdf_weight
 from max.gpu import block_dim, block_idx, thread_idx
 
 
@@ -400,7 +400,7 @@ def shade_coated_conductor_gpu(
     var mat = sd.materials[unsafe_offset=Int(inter.primId.materialIndex)]
     mat = mat.glossy_filtered(path_ptr[].min_ray_pdf, sd.filterGlossy)
     var ctx = _shade_context(sd, sobol_matrices, path_idx=tid, shadow_tasks=shadow_tasks)
-    shade_coated_conductor[True, True](path_ptr, inter, ctx, mat)
+    shade_conductor[True, True](path_ptr, inter, ctx, mat)
 
 
 @__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))

@@ -3,7 +3,7 @@
 
 from std.collections import Array
 from std.math import sqrt, cos, sin, log, exp, max, abs
-from .geometry import offset_eps, face_toward, RGB, Point3f, Point2f, Vec3f, vec3f, point3f, Frame, dot, cross, PI, INV_FOUR_PI, INV_PI
+from .geometry import offset_eps, RGB, Point3f, Point2f, Vec3f, vec3f, point3f, dot, cross, PI, INV_FOUR_PI, INV_PI
 from .render_state import PDF_DELTA_FULL, PDF_DROP_DIRECT
 from .materials import Material, MatKind, LobeKind, resolve_mix
 from .primitives import Ray, Intersection, mesh_pos
@@ -23,7 +23,7 @@ from .sampling import power_heuristic, camera_ray_from_film_xy, FilmFilter, film
 from .rng import PCG32
 from .sppm import _geom_normal, _shading_normal_at, _dielectric_bounce, medium_after_crossing, _cosine_hemisphere_sample, area_light_side_pdf
 from .shading import _get_tri_verts, apply_surface_maps_at_hit, area_light_hit_cos, curve_light_hit
-from .bxdf import BSDF, LobeSample, GeomContext, BxDFSample, bxdf_sample_coated_conductor, bxdf_is_delta, bxdf_pdf_conductor_ggx, LobeTables
+from .bxdf import BSDF, LobeSample, LobeTables
 from .spectrum import (
     SampledWavelengths, SpectralSample, spec_refl, spec_refl_unbounded, spec_illum,
     rgb_bands_to_spectral_sample,
@@ -252,33 +252,6 @@ def _area_light_hit(ref sd: SceneView, inter: Intersection, mat: Material,
     var al_hit = sd.areaLights[unsafe_offset=Int(inter.primId.id1)]
     return (al_hit.emission, al_hit.total_area, Int(inter.primId.id1),
             area_light_hit_cos(inter, sd.meshes, sd.instances, ray_dir))
-
-
-@always_inline
-def _coated_conductor_scatter[use_gpu: Bool](
-    ref sd: SceneView, mut pcg: PCG32, mat: Material, inter: Intersection,
-    hit: Vec3f, ray_dir: Vec3f, wo: Vec3f, cone_w: Float32,
-) -> Tuple[BxDFSample, Vec3f, Vec3f]:
-    """Geometry and sample shared by both subpaths' coated_conductor branch:
-    (sample, perturbed face-forwarded normal, geometric normal before bump/"""
-    var gn = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit)
-    if dot(gn, ray_dir) > Float32(0): gn = gn * Float32(-1)
-    var gn_geo = gn
-    gn = apply_surface_maps_at_hit[use_gpu](mat, inter, sd.meshes, sd.instances,
-        gn, gn, hit, ray_dir, cone_w, sd.camFp,
-        sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
-    gn = face_toward(gn, -ray_dir)   # pbrt two-sided reflection, see face_toward
-    var frm = Frame.from_z(Vec3f(gn[0], gn[1], gn[2]))
-    var gc = GeomContext(
-        normal=gn, geo_normal=gn, hit_point=hit, wo=wo,
-        tangent=Vec3f(frm.x.x, frm.x.y, frm.x.z),
-        bitangent=Vec3f(frm.y.x, frm.y.y, frm.y.z),
-        alb=mat.albedo, pixel_uv=Float32(0),
-    )
-    var uc1 = pcg.next_float(); var uc2 = pcg.next_float()
-    var ior = mat.emission.r if mat.emission.r > Float32(1) else Float32(1.5)
-    var usplit = pcg.next_float()
-    return (bxdf_sample_coated_conductor(gc, mat, ior, usplit, uc1, uc2), gn, gn_geo)
 
 
 @always_inline
@@ -788,88 +761,6 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 st.mnee = VCMMneeTrack(hit.to_simd(), sc.pdf_fwd if receiver and not sc.is_delta else Float32(0), Int32(0))
             else:
                 st.mnee.pdf0 = Float32(0)
-
-        elif mat.type == MatKind.coated_conductor:
-            st.mnee.pdf0 = Float32(0)
-            var wo_c = (-st.rd).to_simd()
-            var (bs_c, gn_c, gn_c_geo) = _coated_conductor_scatter[use_gpu](
-                sd, pcg, mat, inter, hit.to_simd(), ray_dir, wo_c, vcm_cone_w)
-            if bs_c.is_valid == Int8(0):
-                return False   # conductor/coated_conductor sample invalid
-            var alpha_c = max(mat.roughU, mat.roughV)
-            # VCM Stage 2d: rough conductor DOES have a real standalone pdf
-            # (bxdf_pdf_conductor_ggx, the same Heitz 2018 VNDF density
-            var cos_fix_c = abs(dot(-ray_dir, gn_c))
-            if cos_fix_c > Float32(1e-6):
-                st.dvc /= cos_fix_c
-                st.dvm /= cos_fix_c
-            if not bxdf_is_delta(bs_c.flags):
-                var v = _null_vertex()
-                v.pos = hit
-                v.normal = vec3f(gn_c_geo)
-                v.shading_normal = vec3f(gn_c)
-                v.beta = st.beta
-                v.alb = mat.albedo
-                v.is_surface = Int32(1); v.is_delta = Int32(0); v.mat_kind = LobeKind.ggx
-                v.pdf_bwd = alpha_c
-                v.wo = vec3f(wo_c)
-                v.pdf_fwd = Float32(1)
-                v.med_idx = st.cur_med_idx
-                v.wavelengths = st.wl
-                v.dVCM = st.dvcm; v.dVC = st.dvc; v.dVM = st.dvm
-                if st.n_verts == 0: st.first_alb = mat.albedo
-                if st.n_verts + st.n_delta >= _vcm_depth(sd):
-                    return False   # a vertex past d starts no strategy (see _vcm_depth)
-                st.n_verts += 1
-                comptime if _VCM_CAMIS:
-                    camis_cam_arrive(camis, camis_recs, st.n_verts - 1, st.dvcm, cos_fix_c, t_hit,
-                                     _bdpt_vertex_mis_scoped(v))
-                # Merging queries the GLOBAL photon grid and does not use this
-                # pixel's own paired light path, so unlike the connect below it
-                st.total_merge += _bdpt_merge_from_cache(v, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm, mis_vc_weight_factor, st.n_verts + st.n_delta, camis, camis_recs, lvc_camis, n_light_paths_f, visit_naive=visit_naive, visit_footprint=visit_footprint, visit_thin=visit_thin)
-                if path_len > 0:
-                    st.total += _bdpt_connect_to_cache(v, sd, has_med, scratch, lvc, lp_idx, path_len, mis_vm_weight_factor, st.n_verts + st.n_delta, camis, camis_recs, lvc_camis, n_light_paths_f)
-
-                # Distant/point/sphere/infinite NEE, via the shared Light
-                # interface + BxDF interface + _bdpt_nee_contribute glue —
-                var ctx_c = BSDF(LobeKind.ggx, True, False, gn_c, wo_c, mat.albedo, Int32(-1), alpha_c,
-                                    Float32(0), Int32(-1), Float32(0), Float32(0), True, False)
-                st.total += _vcm_nee_surface(sd, v, ctx_c, hit, gn_c_geo, st.beta, eta_x, st.dvcm, st.dvc,
-                                          st.cur_med_idx, scratch, st.wl, pcg, offset_eps(hit.x, hit.y, hit.z), False, Float32(0))
-
-            st.beta *= spec_refl_unbounded(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (bs_c.f).r, (bs_c.f).g, (bs_c.f).b, st.wl)
-            st.rd = vec3f(bs_c.wi)
-            st.ro = hit + st.rd*Float32(0.0002)
-            var cos_theta_out_c = abs(dot(bs_c.wi, gn_c))
-            if bxdf_is_delta(bs_c.flags):
-                st.last_bsdf_pdf = Float32(-1)  # mirror bounce: no infinite-light NEE done at this vertex
-                # VCM: specular bounce -- same dVCM=0/cosine-rescale reset
-                # SmallVCM's own delta-bounce case uses (vertexcm.hxx's
-                st.dvcm = Float32(0)
-                st.dvc *= cos_theta_out_c
-                st.dvm *= cos_theta_out_c
-                comptime if _VCM_CAMIS:
-                    camis.in_class = False
-            else:
-                # VCM Stage 2d: real non-specular recursive update using the
-                # actual VNDF sampling density -- see
-                var bsdf_dir_pdf_w_c = bxdf_pdf_conductor_ggx(gn_c, wo_c, bs_c.wi, alpha_c)
-                st.last_bsdf_pdf = bsdf_dir_pdf_w_c
-                if bsdf_dir_pdf_w_c > Float32(1e-8):
-                    var bsdf_rev_pdf_w_c = bxdf_pdf_conductor_ggx(gn_c, bs_c.wi, wo_c, alpha_c)
-                    var inv_pdf_c = cos_theta_out_c / bsdf_dir_pdf_w_c
-                    (st.dvcm, st.dvc, st.dvm) = vcm_scatter_carries[dvc0=_VCM_CAMIS](
-                        st.dvcm, st.dvc, st.dvm, inv_pdf_c, bsdf_dir_pdf_w_c, bsdf_rev_pdf_w_c,
-                        mis_vc_weight_factor, eta_x)
-                    comptime if _VCM_CAMIS:
-                        camis_cam_scatter(camis, camis_recs, st.n_verts - 1, eta_x, log(_vcm_keep(sd, hit)),
-                                          inv_pdf_c, cos_theta_out_c, bsdf_dir_pdf_w_c, bsdf_rev_pdf_w_c)
-                else:
-                    st.dvcm = Float32(0)
-                    st.dvc = Float32(0)
-                    st.dvm = Float32(0)
-                    comptime if _VCM_CAMIS:
-                        camis.in_class = False
 
         elif mat.type == MatKind.dielectric or mat.type == MatKind.thin_dielectric:
             comptime if _VCM_CAMIS:

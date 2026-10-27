@@ -1,7 +1,7 @@
 # BDPT/VCM light subpath: state, init and the per-bounce step.
 # Part of the BDPT/VCM machinery that used to be one file (bdpt_*.mojo).
 
-from std.math import sqrt, cos, sin, log, exp, max, abs
+from std.math import sqrt, cos, sin, log, exp, max
 from .geometry import Point3f, Point2f, Vec3f, vec3f, point3f, dot, PI, INV_FOUR_PI
 from .materials import MatKind, LobeKind, resolve_mix
 from .primitives import Ray, Intersection
@@ -15,14 +15,13 @@ from .bvh import traverse_dispatch
 from .bvh import SceneView, test_spheres, _scene_bounding_sphere, _sample_disk_perpendicular, _sample_infinite_light_dir, sphere_light_cone_pdf, light_path_pick
 from .rng import PCG32
 from .sppm import medium_after_crossing, _cosine_hemisphere_sample, sample_area_light_point, sample_sphere_light_emission, area_light_emit_normal, area_light_side_pdf
-from .bxdf import bxdf_is_delta, bxdf_pdf_conductor_ggx
-from .spectrum import SampledWavelengths, SpectralSample, spec_refl, spec_refl_unbounded, spec_illum
+from .spectrum import SampledWavelengths, SpectralSample, spec_refl, spec_illum
 from .bdpt_vertex import _BDPT_MAX_DEPTH, _BDPT_MAX_VERTS, BDPTVertex, _null_vertex
 from .bdpt_eval import _bdpt_vertex_mis_scoped, _vcm_mnee_light_dvcm
 from .vcm_grid import _vcm_depth, _vcm_keep, _VCM_CAMIS, _vcm_eta_scale, _vcm_eta_at
 from .bdpt_connect import _bdpt_store_lvc_vertex
 from .bdpt_camera import (
-    _vcm_scatter, _coated_conductor_scatter, _vcm_lobe_vertex, _vcm_bssrdf_hop, _vcm_bssrdf_vertex,
+    _vcm_scatter, _vcm_lobe_vertex, _vcm_bssrdf_hop, _vcm_bssrdf_vertex,
     _vcm_bssrdf_exit_scatter, _vcm_dielectric_cross,
 )
 
@@ -452,70 +451,6 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
             else:
                 st.ro = hit + st.rd*Float32(0.0002)
             st.flux *= sc.weight
-
-        elif mat.type == MatKind.coated_conductor:
-            st.mnee.side = Float32(0)
-            var wo_c = (-st.rd).to_simd()
-            var (bs_c, gn_c, gn_c_geo) = _coated_conductor_scatter[use_gpu](
-                sd, pcg, mat, inter, hit.to_simd(), ray_dir, wo_c, Float32(-1.0))
-            if bs_c.is_valid == Int8(0):
-                return False   # conductor/coated_conductor sample invalid
-            # VCM Stage 2d: rough conductor DOES have a real standalone pdf
-            # (bxdf_pdf_conductor_ggx) -- finish the shared dist² correction
-            var alpha_c = max(mat.roughU, mat.roughV)
-            var cos_fix_c = abs(dot(-ray_dir, gn_c))
-            if cos_fix_c > Float32(1e-6):
-                st.dvc /= cos_fix_c
-                st.dvm /= cos_fix_c
-            if not bxdf_is_delta(bs_c.flags):
-                var v = _null_vertex()
-                v.pos = hit
-                v.normal = vec3f(gn_c_geo)
-                v.shading_normal = vec3f(gn_c)
-                v.beta = st.flux
-                v.alb = mat.albedo
-                v.is_surface = Int32(1); v.is_delta = Int32(0); v.mat_kind = LobeKind.ggx
-                v.pdf_bwd = alpha_c
-                v.wo = vec3f(wo_c)
-                v.pdf_fwd = Float32(1)
-                v.med_idx = st.cur_med_idx
-                v.wavelengths = st.wl
-                v.dVCM = st.dvcm; v.dVC = st.dvc; v.dVM = st.dvm
-                st.n_verts += 1
-                v.n_delta = Int32(st.n_delta)
-                _bdpt_store_lvc_vertex(v, lvc, lp_idx, st.n_verts - 1)
-                comptime if _VCM_CAMIS:
-                    camis_light_arrive(camis_l, camis_recs, st.n_verts - 1, cos_fix_c, t_hit,
-                                       log(_vcm_keep(sd, hit)), _bdpt_vertex_mis_scoped(v))
-            st.flux *= spec_refl_unbounded(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (bs_c.f).r, (bs_c.f).g, (bs_c.f).b, st.wl)
-            st.rd = vec3f(bs_c.wi)
-            st.ro = hit + st.rd*Float32(0.0002)
-            var cos_theta_out_c = abs(dot(bs_c.wi, gn_c))
-            if bxdf_is_delta(bs_c.flags):
-                # VCM: specular bounce -- same reset SmallVCM's own delta-
-                # bounce case uses, matches the camera-side conductor branch.
-                st.dvcm = Float32(0)
-                st.dvc *= cos_theta_out_c
-                st.dvm *= cos_theta_out_c
-                comptime if _VCM_CAMIS:
-                    camis_l.in_class = False
-            else:
-                var bsdf_dir_pdf_w_c = bxdf_pdf_conductor_ggx(gn_c, wo_c, bs_c.wi, alpha_c)
-                if bsdf_dir_pdf_w_c > Float32(1e-8):
-                    var bsdf_rev_pdf_w_c = bxdf_pdf_conductor_ggx(gn_c, bs_c.wi, wo_c, alpha_c)
-                    var inv_pdf_c = cos_theta_out_c / bsdf_dir_pdf_w_c
-                    (st.dvcm, st.dvc, st.dvm) = vcm_scatter_carries[dvc0=_VCM_CAMIS](
-                        st.dvcm, st.dvc, st.dvm, inv_pdf_c, bsdf_dir_pdf_w_c, bsdf_rev_pdf_w_c,
-                        mis_vc_weight_factor, eta_x)
-                    comptime if _VCM_CAMIS:
-                        camis_light_scatter(camis_l, st.n_verts - 1, eta_x, inv_pdf_c,
-                                            cos_theta_out_c, bsdf_dir_pdf_w_c, bsdf_rev_pdf_w_c)
-                else:
-                    st.dvcm = Float32(0)
-                    st.dvc = Float32(0)
-                    st.dvm = Float32(0)
-                    comptime if _VCM_CAMIS:
-                        camis_l.in_class = False
 
         elif mat.type == MatKind.dielectric or mat.type == MatKind.thin_dielectric:
             comptime if _VCM_CAMIS:

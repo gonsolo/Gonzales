@@ -13,6 +13,17 @@ from std.math import log, sqrt, cos
 
 
 @always_inline
+def _conductor_f0(eta: Float32, k: Float32, ie: Float32) -> Float32:
+    """Normal-incidence Fresnel of a conductor (eta, k) seen from a medium of index `ie`."""
+    return ((eta - ie) * (eta - ie) + k * k) / ((eta + ie) * (eta + ie) + k * k)
+
+
+@always_inline
+def _reflectance_k(r: Float32) -> Float32:
+    return Float32(2) * sqrt(max(r, Float32(0))) / sqrt(max(Float32(1) - r, Float32(1e-6)))
+
+
+@always_inline
 def _mb_float_or_rgb(params: ParameterDictionary, name: StringLiteral, default: RGB) -> RGB:
     """A param that may be written as a bare float (replicated to all three
     channels) or an rgb triple. Local twin of pbrt_parser's
@@ -545,6 +556,10 @@ def _psc_handle_make_named_material(handle: Pointer[PbrtScanner, MutUntrackedOri
         var iior_f = params.get_floats("intIOR")
         if len(iior_f) > 0:
             mat_ior = iior_f[0]
+    if params.has("interface.eta"):
+        var ie_f = params.get_floats("interface.eta")
+        if len(ie_f) > 0:
+            mat_ior = ie_f[0]
     if has_k:
         if len(k_f) >= 3:
             metal_k = RGB(k_f[0], k_f[1], k_f[2])
@@ -686,35 +701,16 @@ def _psc_handle_make_named_material(handle: Pointer[PbrtScanner, MutUntrackedOri
     # GetFloat("uroughness", roughness_default) accessor chain uses,
     # independent of the params' declaration order in the scene file.
     var rough_tex_idx_for_mat = Int32(-1)
-    # pbrt NAMESPACES a coatedconductor's two roughnesses: the dielectric coat
-    # is "interface.roughness" and the metal underneath is
-    # "conductor.roughness"; plain "roughness" is not what such a material
-    # declares. We only ever queried the plain name, so BOTH were silently
-    # dropped and the material fell back to roughness 0 -- a PERFECT MIRROR
-    # where the scene asked for a slightly rough metal under a slightly rough
-    # coat. killeroo-coated-gold ("interface.roughness" 0.02,
-    # "conductor.roughness" 0.002) is exactly that scene, and a delta mirror is
-    # unshadeable for SPPM: a visible point on it can gather no photons and
-    # NEE through no lobe, so 408 of 9216 pixels held a visible point that
-    # received neither photons nor light, and rendered BLACK.
-    #
-    # Same namespacing bug already fixed once for this material's
-    # conductor.eta/conductor.k (project_spd_spectrum_files_unsupported); the
-    # roughness pair was missed in that pass. Our coated_conductor reuses the
-    # conductor GGX lobe (see shade_coated_conductor), so the CONDUCTOR
-    # roughness is the one that maps onto roughU/roughV; the coat's own
-    # roughness has nowhere to go yet and says so rather than vanishing.
+    # pbrt namespaces a coatedconductor's roughnesses: "interface.*" is the coat, "conductor.*" the metal.
+    var coat_rough = Float32(0)
     if params.has("conductor.roughness"):
         var cr = params.get_floats("conductor.roughness")
         if len(cr) > 0:
             mat_roughU = cr[0]; mat_roughV = cr[0]
-    if params.has("interface.roughness") and not params.has("conductor.roughness"):
+    if params.has("interface.roughness"):
         var ir = params.get_floats("interface.roughness")
         if len(ir) > 0:
-            mat_roughU = ir[0]; mat_roughV = ir[0]
-    elif params.has("interface.roughness"):
-        print("Note: coatedconductor \"interface.roughness\" is not modelled separately —"
-              + " the coat reuses the conductor lobe, so only \"conductor.roughness\" is applied.")
+            coat_rough = ir[0]
     var rough_f = params.get_floats("roughness")
     if len(rough_f) > 0:
         mat_roughU = rough_f[0]; mat_roughV = rough_f[0]
@@ -965,14 +961,15 @@ def _psc_handle_make_named_material(handle: Pointer[PbrtScanner, MutUntrackedOri
     # Store into named_materials List
     var nm = NamedMaterial(String(unsafe_from_utf8_ptr=mat_name.as_imm()))
     # For named-spectrum conductors: compute Fresnel F0 per channel
+    # Under a coat the metal's Fresnel is relative to the coat: pbrt divides eta and k by interface.eta.
+    var f0_ie = mat_ior if mat_type == MatKind.coated_conductor else Float32(1)
     if has_spectral_conductor and (mat_type == MatKind.conductor or mat_type == MatKind.coated_conductor):
-        var f0r = ((metal_eta.r-Float32(1.0))*(metal_eta.r-Float32(1.0)) + metal_k.r*metal_k.r) / \
-                  ((metal_eta.r+Float32(1.0))*(metal_eta.r+Float32(1.0)) + metal_k.r*metal_k.r)
-        var f0g = ((metal_eta.g-Float32(1.0))*(metal_eta.g-Float32(1.0)) + metal_k.g*metal_k.g) / \
-                  ((metal_eta.g+Float32(1.0))*(metal_eta.g+Float32(1.0)) + metal_k.g*metal_k.g)
-        var f0b = ((metal_eta.b-Float32(1.0))*(metal_eta.b-Float32(1.0)) + metal_k.b*metal_k.b) / \
-                  ((metal_eta.b+Float32(1.0))*(metal_eta.b+Float32(1.0)) + metal_k.b*metal_k.b)
-        nm.albedo = RGB(f0r, f0g, f0b)
+        nm.albedo = RGB(_conductor_f0(metal_eta.r, metal_k.r, f0_ie), _conductor_f0(metal_eta.g, metal_k.g, f0_ie),
+                        _conductor_f0(metal_eta.b, metal_k.b, f0_ie))
+    elif mat_type == MatKind.coated_conductor:
+        # pbrt's "reflectance" form: eta 1 and k = 2 sqrt(r) / sqrt(1 - r).
+        var kr = _reflectance_k(rgb.r); var kg = _reflectance_k(rgb.g); var kb = _reflectance_k(rgb.b)
+        nm.albedo = RGB(_conductor_f0(Float32(1), kr, f0_ie), _conductor_f0(Float32(1), kg, f0_ie), _conductor_f0(Float32(1), kb, f0_ie))
     elif mat_type == MatKind.hair:
         if not has_eta:
             mat_ior = Float32(1.55)  # pbrt's hair eta
@@ -1005,6 +1002,7 @@ def _psc_handle_make_named_material(handle: Pointer[PbrtScanner, MutUntrackedOri
             mat_roughV = sqrt(mat_roughV) if mat_roughV > Float32(0.0) else Float32(0.0)
         # else: roughU/V already IS alpha (pbrt RoughnessToAlpha semantics) — use as-is.
     nm.roughness_u    = mat_roughU
+    nm.coat_alpha     = sqrt(coat_rough) if mat_remap_roughness else coat_rough
     nm.roughness_v    = mat_roughV
     # diffusetransmission: which lobes the one texture slot drives (see Material.dt_tex_lobes).
     var dt_tex_lobes = Int8(0)

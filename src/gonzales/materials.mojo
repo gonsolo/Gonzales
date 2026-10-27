@@ -125,7 +125,7 @@ struct Material(TrivialRegisterPassable):
         not a lobe (is_specular_glass)."""
         if self.type == MatKind.diffuse_transmit:
             return LobeKind.diffuse_transmit
-        if self.type == MatKind.coated_diffuse:
+        if self.type == MatKind.coated_diffuse or self.type == MatKind.coated_conductor:
             return LobeKind.layered
         if self.type == MatKind.conductor:
             return LobeKind.ggx
@@ -139,12 +139,13 @@ struct Material(TrivialRegisterPassable):
 
     @always_inline
     def uses_lobe(self) -> Bool:
-        """Scatters through its BSDF (lobe): everything but smooth glass, subsurface boundaries, the coated
-        conductor, mixes, emitters and pass-through boundaries."""
+        """Scatters through its BSDF (lobe): everything but smooth glass, subsurface boundaries, mixes, emitters
+        and pass-through boundaries."""
         if self.type == MatKind.dielectric:
             return self.is_rough_dielectric() and self.sss_boundary == Int8(0)
         return self.type == MatKind.diffuse or self.type == MatKind.diffuse_transmit or self.type == MatKind.coated_diffuse \
-            or self.type == MatKind.conductor or self.type == MatKind.measured or self.type == MatKind.hair
+            or self.type == MatKind.conductor or self.type == MatKind.measured or self.type == MatKind.hair \
+            or self.type == MatKind.coated_conductor
 
     @always_inline
     def has_lobe(self) -> Bool:
@@ -157,6 +158,11 @@ struct Material(TrivialRegisterPassable):
         if self.type == MatKind.conductor or self.type == MatKind.dielectric:
             return max(self.roughU, self.roughV)
         return Float32(0)
+
+    @always_inline
+    def coat_alpha(self) -> Float32:
+        """A layered material's coat roughness; a coated conductor keeps its metal's in roughU/V."""
+        return self.emission.b if self.type == MatKind.coated_conductor else max(self.roughU, self.roughV)
 
     @always_inline
     def is_mirror(self) -> Bool:

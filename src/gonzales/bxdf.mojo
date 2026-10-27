@@ -1,7 +1,7 @@
 from std.math import sqrt
 from .layered import diel_f, diel_pdf, diel_sample, layered_f, layered_pdf, layered_sample
 from .geometry import RGB, Vec3f, dot, INV_PI, PI, Frame, INV_FOUR_PI
-from .materials import LobeKind, Material, fr_dielectric, MeasuredBRDF
+from .materials import LobeKind, MatKind, Material, fr_dielectric, MeasuredBRDF
 from .curves import Curve
 from .bssrdf import bssrdf_exit_ft
 from .sampling import sample_ggx_vndf, sample_cosine_hemisphere_world
@@ -451,59 +451,6 @@ def bxdf_sample_conductor(
                 (f_ss_cos * fresnel_rgb.g + ms_shape_cos * ggx_ms_tint(mat.albedo.g, eavg)) * inv_pdf,
                 (f_ss_cos * fresnel_rgb.b + ms_shape_cos * ggx_ms_tint(mat.albedo.b, eavg)) * inv_pdf)
     return BxDFSample(wi, w, Float32(1.0), BxDFFlags.glossy | BxDFFlags.reflect, Int8(1), Int8(0), Int8(0))
-
-# ── CoatedConductor: dielectric clearcoat over GGX conductor ─────────────────
-# Schlick Fresnel at the air/coat interface selects: specular reflection off
-# the coat, or the isotropic GGX conductor lobe beneath. Energy-conserving
-# two-lobe approximation of pbrt's LayeredBxDF. Isotropic only (single alpha)
-# so gc.tangent/gc.bitangent (Frisvad) need no UV alignment.
-@always_inline
-def bxdf_sample_coated_conductor(
-    gc: GeomContext,
-    mat: Material,
-    ior: Float32,
-    u_split: Float32, u1: Float32, u2: Float32,
-) -> BxDFSample:
-    var cos_theta = max(Float32(0.0), dot(gc.wo, gc.normal))
-    var r0 = (ior - Float32(1.0)) / (ior + Float32(1.0))
-    r0 = r0 * r0
-    var one_m = Float32(1.0) - cos_theta
-    var one_m2 = one_m * one_m
-    var f_coat = r0 + (Float32(1.0) - r0) * one_m2 * one_m2 * one_m
-    var white = RGB(Float32(1.0))
-
-    if u_split < f_coat:
-        var wi = gc.normal * (Float32(2.0) * dot(gc.wo, gc.normal)) - gc.wo
-        var wlen = dot(wi, wi)
-        if wlen > Float32(0.0):
-            wi = wi * (Float32(1.0) / sqrt(wlen))
-        return BxDFSample(wi, white, Float32(1.0), BxDFFlags.delta | BxDFFlags.reflect, Int8(1), Int8(0), Int8(0))
-
-    # roughU/V already hold the resolved GGX alpha — no squaring here.
-    var alpha_u = max(mat.roughU, Float32(0.0001))
-    var alpha_v = max(mat.roughV, Float32(0.0001))
-    var alpha = (alpha_u + alpha_v) * Float32(0.5)
-    var wo_l = Vec3f(dot(gc.wo, gc.tangent), dot(gc.wo, gc.bitangent), dot(gc.wo, gc.normal))
-    var wh_l = sample_ggx_vndf(wo_l, alpha, alpha, u1, u2)
-    var wh = gc.tangent * wh_l.x + gc.bitangent * wh_l.y + gc.normal * wh_l.z
-    var whlen = dot(wh, wh)
-    if whlen > Float32(0.0):
-        wh = wh * (Float32(1.0) / sqrt(whlen))
-    var wo_dot_wh = dot(gc.wo, wh)
-    var wi = wh * (Float32(2.0) * wo_dot_wh) - gc.wo
-    var wilen = dot(wi, wi)
-    if wilen > Float32(0.0):
-        wi = wi * (Float32(1.0) / sqrt(wilen))
-    if dot(wi, gc.normal) <= Float32(0.0):
-        return BxDFSample(wi, RGB(Float32(0.0)), Float32(1.0), BxDFFlags.glossy | BxDFFlags.reflect, Int8(0), Int8(0), Int8(0))
-    var cos_wh = max(Float32(0.0), wo_dot_wh)
-    var one_m3 = Float32(1.0) - cos_wh
-    var one_m4 = one_m3 * one_m3
-    var schlick = one_m4 * one_m4 * one_m3
-    var f0_luma = mat.albedo.luma()
-    var f_metal = f0_luma + (Float32(1.0) - f0_luma) * schlick
-    var tput = mat.albedo * f_metal * (Float32(1.0) - f_coat)
-    return BxDFSample(wi, tput, Float32(1.0), BxDFFlags.glossy | BxDFFlags.reflect, Int8(1), Int8(0), Int8(0))
 
 # ── Dielectric (smooth glass) ─────────────────────────────────────────────────
 # Needs the RAW winding/shading normal (not faceforward to the ray) to tell
@@ -1006,7 +953,9 @@ def _lobe_eval[want_pdfs: Bool = True](
         # Light-side vertices evaluate the adjoint (importance transport).
         var mat_ly = tab.materials[unsafe_offset=Int(c.mat_idx)]
         var ior_ly = mat_ly.emission.r
-        var alpha_ly = c.param if c.param > Float32(0) else max(mat_ly.roughU, mat_ly.roughV)   # param>0: caller forces the top alpha
+        var alpha_ly = c.param if c.param > Float32(0) else mat_ly.coat_alpha()   # param>0: caller forces the top alpha
+        var cond_ly = mat_ly.type == MatKind.coated_conductor
+        var ab_ly = max(mat_ly.roughU, mat_ly.roughV)
         var fr_ly = Frame.from_z(Vec3f(vn[0], vn[1], vn[2]))
         var tx_ly = Vec3f(fr_ly.x.x, fr_ly.x.y, fr_ly.x.z)
         var ty_ly = Vec3f(fr_ly.y.x, fr_ly.y.y, fr_ly.y.z)
@@ -1014,13 +963,18 @@ def _lobe_eval[want_pdfs: Bool = True](
         var wi_ly = Vec3f(dot(dir_to_other, tx_ly), dot(dir_to_other, ty_ly), dot(dir_to_other, vn))
         var rad_ly = not c.adjoint
         var R_ly = rgb_to_spectral_sample(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, c.alb.r, c.alb.g, c.alb.b, wavelengths)
-        var f_ly = layered_f(wo_ly, wi_ly, R_ly, ior_ly, alpha_ly, rad_ly, mat_ly.emission.g)
+        var f_ly = layered_f[True](wo_ly, wi_ly, R_ly, ior_ly, alpha_ly, rad_ly, mat_ly.emission.g, ab_ly) if cond_ly \
+            else layered_f(wo_ly, wi_ly, R_ly, ior_ly, alpha_ly, rad_ly, mat_ly.emission.g)
         var cos_ly = abs(wi_ly.z)
         var fwd_ly = Float32(0)
         var rev_ly = Float32(0)
         comptime if want_pdfs:
-            fwd_ly = layered_pdf(wo_ly, wi_ly, ior_ly, alpha_ly, rad_ly)
-            rev_ly = layered_pdf(wi_ly, wo_ly, ior_ly, alpha_ly, not rad_ly)
+            if cond_ly:
+                fwd_ly = layered_pdf[True](wo_ly, wi_ly, ior_ly, alpha_ly, rad_ly, ab_ly)
+                rev_ly = layered_pdf[True](wi_ly, wo_ly, ior_ly, alpha_ly, not rad_ly, ab_ly)
+            else:
+                fwd_ly = layered_pdf(wo_ly, wi_ly, ior_ly, alpha_ly, rad_ly)
+                rev_ly = layered_pdf(wi_ly, wo_ly, ior_ly, alpha_ly, not rad_ly)
         return LobeEval(f_ly * cos_ly, cos_ly, fwd_ly, rev_ly, True)
     if c.kind == LobeKind.bssrdf:
         var cos_x = abs(dot(dir_to_other, vn))
@@ -1317,8 +1271,10 @@ def _lobe_sample(
         var ty = Vec3f(fr.y.x, fr.y.y, fr.y.z)
         var wo_l = Vec3f(dot(vwo, tx), dot(vwo, ty), dot(vwo, vn))
         var R = rgb_to_spectral_sample(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, c.alb.r, c.alb.g, c.alb.b, wavelengths)
-        var bs = layered_sample(wo_l, uc, u0, u1, R, mat_ly.emission.r,
-                                max(mat_ly.roughU, mat_ly.roughV), not c.adjoint, mat_ly.emission.g)
+        var bs = layered_sample[True](wo_l, uc, u0, u1, R, mat_ly.emission.r, mat_ly.coat_alpha(), not c.adjoint,
+                                      mat_ly.emission.g, max(mat_ly.roughU, mat_ly.roughV)) \
+            if mat_ly.type == MatKind.coated_conductor \
+            else layered_sample(wo_l, uc, u0, u1, R, mat_ly.emission.r, mat_ly.coat_alpha(), not c.adjoint, mat_ly.emission.g)
         if not bs.valid or bs.pdf <= Float32(0):
             return _lobe_sample_invalid()
         var wi = tx * bs.wi.x + ty * bs.wi.y + vn * bs.wi.z

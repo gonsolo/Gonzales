@@ -17,7 +17,7 @@ from .media import Medium, MediumInterface, Grid, NvdbGrid
 from .shadow_media import shadow_transmittance
 from .curves import Curve, curve_at, curve_piece_endpoints, _curve_perp_axis, curve_hit_normal
 from .layered import layered_f, layered_sample, layered_pdf, diel_f, diel_pdf, diel_sample
-from .bxdf import BSDF, LobeSample, BxDFSample, GeomContext, SobolSamples8, BxDFFlags, bxdf_is_delta, bxdf_sample_coated_conductor, bxdf_sample_dielectric, bxdf_sample_thin_dielectric, bxdf_eval_diffuse, bxdf_pdf_diffuse, bxdf_sample_diffuse_transmit, bxdf_eval_conductor_ggx, ggx_albedo, bxdf_pdf_conductor_ggx, _nee_weight_hair, _nee_weight_simple_spectral, LobeTables
+from .bxdf import BSDF, LobeSample, BxDFSample, GeomContext, SobolSamples8, BxDFFlags, bxdf_sample_dielectric, bxdf_sample_thin_dielectric, bxdf_eval_diffuse, bxdf_pdf_diffuse, bxdf_sample_diffuse_transmit, bxdf_eval_conductor_ggx, ggx_albedo, bxdf_pdf_conductor_ggx, _nee_weight_hair, _nee_weight_simple_spectral, LobeTables
 from .rng import PCG32
 from .footprint import CameraFootprint, UVFootprint, TriWorld, tri_world, hit_uv_footprint
 from .bvh import BVH2Node, BVH4, SceneView, any_hit_dispatch, traverse_dispatch, HairLobeConstants, _hair_precompute, _hair_sample_dir_u, curve_offset_eps, LightSample, _sample_distant_light_nee, _sample_point_light_nee, _sample_sphere_light_nee, _sample_infinite_light_nee, _sample_infinite_light_textured, _equal_area_sphere_to_square
@@ -2197,12 +2197,6 @@ def _lobe_nee_one[enqueue_shadow: Bool](
 
 
 @always_inline
-def _ggx_bsdf(n: Vec3f, wo: Vec3f, f0: RGB, alpha: Float32) -> BSDF:
-    """Isotropic GGX for NEE: what an anisotropic or coated conductor is lit through."""
-    return BSDF(LobeKind.ggx, True, False, n, wo, f0, Int32(-1), alpha, Float32(0), Int32(-1), Float32(0), Float32(0), True, False)
-
-
-@always_inline
 def shade_conductor[use_gpu: Bool, enqueue_shadow: Bool](
     path_ptr: Pointer[PathState, MutUntrackedOrigin],
     inter: Intersection,
@@ -2244,8 +2238,10 @@ def shade_conductor[use_gpu: Bool, enqueue_shadow: Bool](
     var hit_point = offset_point(ray_org + ray_dir * inter.tHit, geo_normal)
     var wo = Vec3f(-ray_dir[0], -ray_dir[1], -ray_dir[2])
     var alpha = max(max(mat_eff.roughU, mat_eff.roughV), Float32(0.0001))
-    var bsdf = _ggx_bsdf(normal, wo, mat_eff.albedo, alpha)
-    bsdf.is_delta = alpha <= Float32(0.001)
+    var coated = mat.type == MatKind.coated_conductor   # pbrt's layered coat over this metal
+    var bsdf = BSDF(LobeKind.layered if coated else LobeKind.ggx, True, not coated and alpha <= Float32(0.001), normal, wo,
+                    mat_eff.albedo, Int32(inter.primId.materialIndex) if coated else Int32(-1), Float32(0) if coated else alpha,
+                    Float32(0), Int32(-1), Float32(0), Float32(0), True, False)
     var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
     if not bsdf.is_delta:
         _lobe_nee[enqueue_shadow](path_ptr, ctx, bsdf, hit_point, pcg)
@@ -2360,60 +2356,6 @@ def shade_measured[use_gpu: Bool, enqueue_shadow: Bool](
     var s = bsdf.sample(Float32(0), pcg.next_float(), pcg.next_float(), Float32(0),
                         LobeTables(ctx.materials, ctx.curves, ctx.measured_brdfs, ctx.spectral), path_ptr[].wavelengths)
     _lobe_bounce[True](path_ptr, ctx, s, hit_point, hit_normal, RGB(Float32(0)), pcg)
-
-
-# CoatedConductor: dielectric clearcoat over GGX conductor.
-# Schlick Fresnel at the air/coat interface: F_schlick(cos_theta, 0, 1, ior)
-# selects between coat specular reflection (F) and conducting GGX layer (1-F).
-# This is an energy-conserving two-lobe approximation of pbrt's LayeredBxDF.
-@always_inline
-def shade_coated_conductor[use_gpu: Bool, enqueue_shadow: Bool](
-    path_ptr: Pointer[PathState, MutUntrackedOrigin],
-    inter: Intersection,
-    ctx: ShadeContext,
-    mat: Material,
-):
-    # No shading-normal interpolation here (unlike conductor) — matches the
-    # pre-existing coated_conductor behavior of using the flat geometric
-    # normal (which, for a sphere, IS already the exact shading normal).
-    var (ok, _, normal, ray_dir, ray_org, _, _, _, _) = _hit_geom(path_ptr, inter, ctx.meshes, ctx.lights.spheres, instances=ctx.instances, curves=ctx.curves)
-    if not ok:
-        path_ptr[].active = 0
-        return
-    var hit_point = offset_point(ray_org + ray_dir * inter.tHit, normal)
-
-    var ior = mat.emission.r if mat.emission.r > Float32(1.0) else Float32(1.5)
-    var wo = Vec3f(-ray_dir[0], -ray_dir[1], -ray_dir[2])
-    # Frisvad frame — isotropic GGX only (single alpha), no anisotropy alignment needed.
-    var frame = Frame.from_z(Vec3f(normal[0], normal[1], normal[2]))
-    var tangent   = Vec3f(frame.x.x, frame.x.y, frame.x.z)
-    var bitangent = Vec3f(frame.y.x, frame.y.y, frame.y.z)
-    var gc = GeomContext(normal, normal, hit_point, wo, tangent, bitangent,
-        RGB(Float32(0.0)), Float32(0.0))
-
-    var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
-    var bs = bxdf_sample_coated_conductor(gc, mat, ior, pcg.next_float(), pcg.next_float(), pcg.next_float())
-    if bs.is_valid != Int8(0) and not bxdf_is_delta(bs.flags):
-        # Approximation (matches bdpt_*.mojo/sppm.mojo's own coated_conductor
-        # connection/gather treatment): NEE reuses conductor's own GGX eval/
-        # F0, ignoring the coat's own (1-f_coat) attenuation and its separate
-        # luma-Fresnel blend. alpha = (roughU+roughV)/2, matching
-        # bxdf_sample_coated_conductor's own internal averaging.
-        var alpha_cc = (max(mat.roughU, Float32(0.0001)) + max(mat.roughV, Float32(0.0001))) * Float32(0.5)
-        _lobe_nee[enqueue_shadow](path_ptr, ctx, _ggx_bsdf(normal, wo, mat.albedo, alpha_cc), hit_point, pcg)
-        path_ptr[].pcgState = pcg.state
-        var org_cc = spawn_origin(hit_point, normal, bs.wi)
-        path_ptr[].ray = Ray(Point3f(org_cc[0], org_cc[1], org_cc[2]), Vec3f(bs.wi[0], bs.wi[1], bs.wi[2]))
-        if path_ptr[].bounce == 0 or path_ptr[].specularBounce == Int8(1):
-            path_ptr[].albedo = mat.albedo
-        path_ptr[].throughput *= _to_spec_weight(ctx, bs.f, path_ptr[].wavelengths)
-        path_ptr[].specularBounce = Int8(0)
-        path_ptr[].lastBsdfPdf = bxdf_pdf_conductor_ggx(normal, wo, bs.wi, alpha_cc)
-        path_ptr[].bounce += 1
-        var u_rr = pcg.next_float()
-        _apply_russian_roulette(path_ptr, ctx.cycles, pcg, u_rr, BOUNCE_GLOSSY)
-    else:
-        _finish_delta_bounce(path_ptr, ctx.cycles, pcg, bs, _to_spec_weight(ctx, bs.f, path_ptr[].wavelengths), hit_point, mat.albedo, geo_n=normal)
 
 
 # Mix material: randomly select one of two sub-materials using amount as probability.
@@ -2714,14 +2656,6 @@ def _apply_normal_map_sphere[use_gpu: Bool](
         return geom_normal
     return _decode_tangent_normal(ns, tangent, bitangent, geom_normal)
 
-
-# ── Geometry context builders ─────────────────────────────────────────────────
-# There's no _build_geom_context_minimal: each delta BSDF's geometry needs turned
-# out to be materially different (conductor needs a UV-gradient anisotropy tangent
-# unavailable here; coated_conductor skips shading-normal interpolation; dielectric/
-# thin_dielectric need the raw pre-faceforward normal for entering/exiting), so
-# shade_conductor/shade_coated_conductor build their GeomContext inline instead of
-# sharing one minimal builder.
 
 # Apply normal + bump maps to an already-interpolated shading normal.
 #
@@ -5246,10 +5180,8 @@ def _shade_dispatch[use_gpu: Bool, enqueue_shadow: Bool](
         shade_diffuse[use_gpu, enqueue_shadow](path_ptr, inter, ctx, mat, guide_write, restir_io, pixel_idx, sms_io)
     # Delta BSDFs (dielectric variants) need only triangle geometry — no NEE,
     # textures, or Sobol. Passing ctx.meshes directly keeps GPU kernel
-    # argument counts minimal. Conductor/coated_conductor CAN be rough (not
-    # delta), so they now take full ctx for NEE — see shade_conductor's
-    # own docstring/_shade_conductor_nee.
-    elif mat.type == MatKind.conductor:
+    # argument counts minimal.
+    elif mat.type == MatKind.conductor or mat.type == MatKind.coated_conductor:
         shade_conductor[use_gpu, enqueue_shadow](path_ptr, inter, ctx, mat)
     elif mat.type == MatKind.dielectric:
         shade_dielectric[False, enqueue_shadow](path_ptr, inter, ctx, mat)
@@ -5257,8 +5189,6 @@ def _shade_dispatch[use_gpu: Bool, enqueue_shadow: Bool](
         shade_coated_diffuse[use_gpu, enqueue_shadow](path_ptr, inter, ctx, mat)
     elif mat.type == MatKind.diffuse_transmit:
         shade_diffuse_transmission[use_gpu, enqueue_shadow](path_ptr, inter, ctx)
-    elif mat.type == MatKind.coated_conductor:
-        shade_coated_conductor[use_gpu, enqueue_shadow](path_ptr, inter, ctx, mat)
     elif mat.type == MatKind.mix:
         shade_mix[use_gpu, enqueue_shadow](path_ptr, inter, ctx, mat)
     elif mat.type == MatKind.thin_dielectric:
