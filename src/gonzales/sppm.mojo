@@ -19,7 +19,7 @@ from .lights import area_light_pick_triangle, AreaLight
 from .curves import Curve, curve_at, curve_piece_endpoints, _curve_perp_axis
 from .bssrdf import dipole_rd, dipole_max_radius
 from .bvh import traverse_dispatch, any_hit_dispatch
-from .bvh import SceneView, curve_radius, _scene_bounding_sphere, _sample_disk_perpendicular, _sample_infinite_light_dir, _eval_infinite_light_and_pdf, _hair_precompute, curve_offset_eps, LightSample, _sample_distant_light_nee, _sample_point_light_nee, _sample_sphere_light_nee, _sample_infinite_light_nee, light_path_pick
+from .bvh import SceneView, curve_radius, _scene_bounding_sphere, _sample_disk_perpendicular, _sample_infinite_light_dir, _eval_infinite_light_and_pdf, _hair_precompute, LightSample, _sample_distant_light_nee, _sample_point_light_nee, _sample_sphere_light_nee, _sample_infinite_light_nee, light_path_pick
 from .vcm_mis import mis_policy_sole
 from .bxdf import ggx_lambda, dielectric_interface, bxdf_sample_dielectric, bxdf_sample_thin_dielectric, BxDFFlags, GeomContext, bxdf_sample_conductor, BSDF, LobeTables
 from .surface import surface_hit
@@ -2178,16 +2178,9 @@ def _sppm_nee_weight(
 
 @always_inline
 def _sppm_vp_shadow_eps(vp: SPPMPixel, ref sd: SceneView, wo: Vec3f) -> Float32:
-    """Shadow-ray self-intersection offset for a stored SPPM visible point.
-    Hair vertices need the same curve-radius-scaled epsilon as the ray-bounce
-    offsets in shading.mojo/bdpt_*.mojo/sppm.mojo's own photon pass (see
-    bvh.mojo's curve_offset_eps) -- the fixed 0.0001 that works fine for
-    triangle/sphere hits was too coarse relative to a curve's own radius.
-    Triangle/sphere-hit VPs are unaffected, unchanged fixed epsilon."""
+    """Shadow-ray self-intersection offset for a stored SPPM visible point: none on hair, as in shade_hair."""
     if vp.mat_kind == LobeKind.hair:
-        var mat_h = sd.materials[unsafe_offset=Int(vp.mat_idx)]
-        var hc = _hair_precompute(mat_h, sd.curves, Int(vp.hair_curve_idx), vp.hair_v, vp.hair_h, wo)
-        return curve_offset_eps(hc.radius)
+        return Float32(0)   # from the hit itself, as shade_hair: an offset origin let the strand shadow its own light
     return offset_eps(vp.pos.x, vp.pos.y, vp.pos.z)
 
 @always_inline
