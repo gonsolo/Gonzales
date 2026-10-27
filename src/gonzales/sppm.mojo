@@ -2292,7 +2292,9 @@ def _sppm_nee_one(
     # diffuse_transmit lobe changed the furnace by EXACTLY nothing at first:
     # the evaluator returned the right value and visibility threw it away.
     # One-sided lobes only ever see cos > 0, so this is a no-op for them.
-    var two_sided_vp = vp.mat_kind == LobeKind.diffuse_transmit or vp.mat_kind == LobeKind.rough_dielectric
+    # Lobes that transmit see lights on both sides; their shadow rays leave from the light's side.
+    var two_sided_vp = vp.mat_kind == LobeKind.diffuse_transmit or vp.mat_kind == LobeKind.rough_dielectric \
+        or vp.mat_kind == LobeKind.hair
     var shadow_org_back = vp.pos + vp.geo_normal * (-shadow_eps)
 
     var n_area = Int(sd.areaLightCount)
@@ -2313,14 +2315,15 @@ def _sppm_nee_one(
             # phase function replaces the BRDF below.
             var cos_surface = Float32(1.0) if is_vol else dot(vn, wi)
             var cos_light = -dot(ln, wi)
-            if cos_surface > Float32(0.0) and cos_light > Float32(0.0):
+            if (cos_surface > Float32(0.0) or two_sided_vp) and cos_light > Float32(0.0):
                 # Shadow ray, offset from both ends to avoid self-intersection.
-                var tr_a = _sppm_shadow(vp, sd, shadow_org, wi, dist * Float32(0.999), pcg)
+                var org_a = shadow_org_back if (two_sided_vp and cos_surface < Float32(0)) else shadow_org
+                var tr_a = _sppm_shadow(vp, sd, org_a, wi, dist * Float32(0.999), pcg)
                 if not tr_a.is_black():
                     # pdf_area = 1/(n_area * total_area) — uniform-over-all-lights
                     # assumption, same as the emission-sampling flux scale factor.
                     var inv_pdf_area = Float32(n_area) * al.total_area
-                    var geom = cos_surface * cos_light / dist2 * inv_pdf_area
+                    var geom = cos_light / dist2 * inv_pdf_area
                     if is_vol:
                         # Isotropic phase (albedo/4pi), matching the photon
                         # gather's own volume-VP convention.
@@ -2329,15 +2332,12 @@ def _sppm_nee_one(
                                       * spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, al.emission.r, al.emission.g, al.emission.b, vp.wavelengths)
                                       * geom * tr_a)
                     else:
-                        # The vertex's own BSDF, bare f: the surface cosine is already in `geom`.
+                        # The lobe's own f*cos: its cosine is hair's fibre cosine, not the curve normal's.
                         var le_vp = (BSDF(vp.mat_kind, True, False, vn, wo, vp.alb,
                                     vp.mat_idx, _vp_base_alpha(vp.alpha), Float32(0), vp.hair_curve_idx,
                                     vp.hair_h, vp.hair_v, True, False)).f[want_pdfs=False](wi, LobeTables(sd.materials, sd.curves, sd.measuredBrdfs, sd.spectral), vp.wavelengths)
-                        var f_spec = (le_vp.f_cos * (Float32(1.0) / le_vp.cos_used)
-                                      if le_vp.cos_used > Float32(1e-6)
-                                      else SpectralSample(Float32(0.0)))
                         var light_spec = rgb_illuminant_to_spectral_sample(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, al.emission.r, al.emission.g, al.emission.b, vp.wavelengths)
-                        vps[unsafe_offset=i].ld += f_spec * light_spec * geom * tr_a
+                        vps[unsafe_offset=i].ld += le_vp.f_cos * light_spec * geom * tr_a
 
     # Distant/point/sphere/infinite NEE through the Light interface and the BSDF (_sppm_nee_weight).
     # distant/point/sphere via the shared sampler -- pure loop collapse,
