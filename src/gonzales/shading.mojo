@@ -16,7 +16,7 @@ from .portal_light import portal_frame, portal_ray_crosses
 from .media import Medium, MediumInterface, Grid, NvdbGrid
 from .shadow_media import shadow_transmittance
 from .curves import Curve, curve_at, curve_piece_endpoints, _curve_perp_axis, curve_hit_normal
-from .layered import layered_f, layered_sample, layered_pdf, diel_f, diel_pdf, diel_sample
+from .layered import diel_f, diel_pdf, diel_sample
 from .bxdf import BSDF, HairBSDF, NeeLobe, LobeSample, BxDFSample, GeomContext, SobolSamples8, BxDFFlags, bxdf_sample_dielectric, bxdf_sample_thin_dielectric, bxdf_eval_diffuse, bxdf_pdf_diffuse, bxdf_sample_diffuse_transmit, bxdf_eval_conductor_ggx, ggx_albedo, bxdf_pdf_conductor_ggx, _nee_weight_simple_spectral, LobeTables
 from .rng import PCG32
 from .footprint import CameraFootprint, UVFootprint, TriWorld, tri_world, hit_uv_footprint
@@ -1549,94 +1549,19 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool, defer_only: Bool =
         path_ptr[].albedo = alb
 
     var ior = mat.emission.r            # coat IOR (eta_coat/eta_air), set at parse
-    var thickness = mat.emission.g      # coat "thickness", likewise
     var coat_alpha = max(mat.roughU, mat.roughV)
     var wo = Vec3f(-ray_dir[0], -ray_dir[1], -ray_dir[2])  # toward viewer
-
-    # pbrt's LayeredBxDF (layered.mojo), in the shading frame. It replaced a
-    # coat walk whose rough-coat transmission was an analytic approximation:
-    # exact for a smooth coat, +14-16% on the base light through a rough one
-    # (barcelona-pavilion-day's travertine floors lit the ceiling 7% bright).
-    var frame = Frame.from_z(Vec3f(normal[0], normal[1], normal[2]))
-    var tx = Vec3f(frame.x.x, frame.x.y, frame.x.z)
-    var ty = Vec3f(frame.y.x, frame.y.y, frame.y.z)
-    var wo_l = Vec3f(dot(wo, tx), dot(wo, ty), dot(wo, normal))
     if mat.emission.b > Float32(0.5):
         _shade_principled[enqueue_shadow, defer_only](path_ptr, ctx, mat, inter, alb, normal, geo_normal, hit_point, wo,
                                                       ior, coat_alpha, pcg)
         return
-    var R = _to_spec_refl(ctx, alb, path_ptr[].wavelengths)
-
-    # NEE: every light type through the same layered f, MIS'd against the
-    # layered pdf (pbrt's PathIntegrator: power heuristic, NEE vs BSDF).
-    var ls_area = _sample_area_light_nee(ctx, hit_point, pcg)
-    _layered_nee[enqueue_shadow, defer_only](path_ptr, ctx, hit_point, ls_area, ls_area.dist * Float32(0.9999), wo_l, tx, ty, normal, R, ior, coat_alpha, thickness)
-    for li in range(_nee_simple_light_count(ctx)):
-        var res = _nee_sample_simple_light(ctx, li, hit_point, pcg)
-        var ls = res[0].copy()
-        _layered_nee[enqueue_shadow, defer_only](path_ptr, ctx, hit_point, ls, res[1], wo_l, tx, ty, normal, R, ior, coat_alpha, thickness)
-    for inf_i in range(ctx.lights.infinite_count):
-        var ls_inf = _sample_infinite_light_nee(ctx.lights.infinite_lights[unsafe_offset=inf_i], Point2f(pcg.next_float(), pcg.next_float()))
-        _layered_nee[enqueue_shadow, defer_only](path_ptr, ctx, hit_point, ls_inf, ls_inf.dist, wo_l, tx, ty, normal, R, ior, coat_alpha, thickness)
-
-    # Continue with a layered sample. Its pdf is only proportional (pbrt's
-    # pdfIsProportional): the throughput uses it, MIS uses layered_pdf.
-    var bs = layered_sample(wo_l, pcg.next_float(), pcg.next_float(), pcg.next_float(), R, ior, coat_alpha, True, thickness)
-    if not bs.valid or bs.pdf <= Float32(0.0):
-        path_ptr[].active = 0
-        path_ptr[].pcgState = pcg.state
-        return
-    var wi = tx * bs.wi.x + ty * bs.wi.y + normal * bs.wi.z
-    var org = spawn_origin(hit_point, geo_normal, wi)
-    path_ptr[].ray = Ray(Point3f(org[0], org[1], org[2]), Vec3f(wi[0], wi[1], wi[2]))
-    path_ptr[].throughput *= bs.f * (abs(bs.wi.z) / bs.pdf)
-    if bs.specular:
-        path_ptr[].specularBounce = Int8(1)
-        path_ptr[].lastBsdfPdf = Float32(0.0)
-    else:
-        path_ptr[].specularBounce = Int8(0)
-        path_ptr[].lastBsdfPdf = layered_pdf(wo_l, bs.wi, ior, coat_alpha, True)
-    path_ptr[].bounce += 1
-
-    var u_rr = pcg.next_float()
-    _apply_russian_roulette(path_ptr, ctx.cycles, pcg, u_rr, BOUNCE_GLOSSY if bs.specular else BOUNCE_DIFFUSE)
-
-
-@always_inline
-def _layered_nee[enqueue_shadow: Bool, defer_only: Bool = False](
-    path_ptr: Pointer[PathState, MutUntrackedOrigin],
-    ctx: ShadeContext,
-    hit_point: Vec3f,
-    ls: LightSample,
-    tmax: Float32,
-    wo_l: Vec3f, tx: Vec3f, ty: Vec3f, n: Vec3f,
-    R: SpectralSample, ior: Float32, alpha: Float32, thickness: Float32,
-):
-    """One NEE sample against the layered coateddiffuse BSDF."""
-    if not ls.valid:
-        return
-    var wi_l = Vec3f(dot(ls.wi, tx), dot(ls.wi, ty), dot(ls.wi, n))
-    if wi_l.z * wo_l.z <= Float32(0.0):
-        return
-    if not ls.is_delta and ls.pdf <= Float32(0.0):
-        return
-    # An inline shadow test first: a blocked sample needs neither of the two stochastic layered evaluations.
-    var inline_shadow = False
-    comptime if not defer_only:
-        inline_shadow = _shadow_inline(ctx, null_guide())
-        if inline_shadow and _shadow_blocked(ctx, hit_point, ls.wi, tmax):
-            return
-    var f = layered_f(wo_l, wi_l, R, ior, alpha, True, thickness)
-    if f.is_black():
-        return
-    var w = abs(wi_l.z)
-    if not ls.is_delta:
-        w *= power_heuristic(ls.pdf, layered_pdf(wo_l, wi_l, ior, alpha, True)) / ls.pdf
-    var contrib = path_ptr[].throughput * f * _to_spec_illum(ctx, ls.Li, path_ptr[].wavelengths) * w
-    if inline_shadow:
-        path_ptr[].estimate += _clamped(ctx, contrib, Int(path_ptr[].bounce))
-    else:
-        _shadow_contribute[enqueue_shadow, defer_only](path_ptr, ctx, hit_point, ls.wi, tmax, contrib)
+    # pbrt's LayeredBxDF through the BSDF. param forces the coat alpha: `mat` may be Filter-Glossy widened.
+    var bsdf = BSDF(LobeKind.layered, True, False, normal, wo, alb, Int32(inter.primId.materialIndex), coat_alpha,
+                    Float32(0), Int32(-1), Float32(0), Float32(0), True, False)
+    _lobe_nee[enqueue_shadow, defer_only](path_ptr, ctx, bsdf, hit_point, pcg)
+    var s = bsdf.sample[want_rev=False](pcg.next_float(), pcg.next_float(), pcg.next_float(), Float32(0),
+                                        LobeTables(ctx.materials, ctx.curves, ctx.measured_brdfs, ctx.spectral), path_ptr[].wavelengths)
+    _lobe_bounce[False](path_ptr, ctx, s, hit_point, geo_normal, alb, pcg, diffuse=True)
 
 
 comptime RR_THROUGHPUT_CLAMP: Float32 = 32.0
@@ -2149,7 +2074,7 @@ def _nee_loop_simple[enqueue_shadow: Bool, defer_only: Bool = False](
             var contrib = path_ptr[].throughput * w
             _shadow_contribute[enqueue_shadow, defer_only](path_ptr, ctx, hit_point, ls.wi, tmax, contrib, guide_write)
 
-def _lobe_nee[enqueue_shadow: Bool](
+def _lobe_nee[enqueue_shadow: Bool, defer_only: Bool = False](
     path_ptr: Pointer[PathState, MutUntrackedOrigin],
     ctx: ShadeContext,
     bsdf: BSDF,
@@ -2158,11 +2083,12 @@ def _lobe_nee[enqueue_shadow: Bool](
 ):
     """NEE through a BSDF: one area-light sample, every simple light, every environment."""
     var ls_area = _sample_area_light_nee(ctx, hit_point, pcg)
-    _lobe_nee_with[BSDF, enqueue_shadow](path_ptr, ctx, bsdf, hit_point, ls_area, Point2f(Float32(0), Float32(0)), False, pcg)
+    _lobe_nee_with[BSDF, enqueue_shadow, defer_only](path_ptr, ctx, bsdf, hit_point, ls_area, Point2f(Float32(0), Float32(0)),
+                                                     False, pcg)
 
 
 @always_inline
-def _lobe_nee_with[L: NeeLobe, enqueue_shadow: Bool](
+def _lobe_nee_with[L: NeeLobe, enqueue_shadow: Bool, defer_only: Bool = False](
     path_ptr: Pointer[PathState, MutUntrackedOrigin],
     ctx: ShadeContext,
     bsdf: L,
@@ -2174,18 +2100,18 @@ def _lobe_nee_with[L: NeeLobe, enqueue_shadow: Bool](
 ):
     """_lobe_nee with the area-light sample drawn, and the first environment's numbers when `has_u_env` (Sobol)."""
     var tab = LobeTables(ctx.materials, ctx.curves, ctx.measured_brdfs, ctx.spectral)
-    _lobe_nee_one[L, enqueue_shadow](path_ptr, ctx, bsdf, tab, hit_point, ls_area, ls_area.dist * Float32(0.9999))
+    _lobe_nee_one[L, enqueue_shadow, defer_only](path_ptr, ctx, bsdf, tab, hit_point, ls_area, ls_area.dist * Float32(0.9999))
     for li in range(_nee_simple_light_count(ctx)):
         var res = _nee_sample_simple_light(ctx, li, hit_point, pcg)
-        _lobe_nee_one[L, enqueue_shadow](path_ptr, ctx, bsdf, tab, hit_point, res[0].copy(), res[1])
+        _lobe_nee_one[L, enqueue_shadow, defer_only](path_ptr, ctx, bsdf, tab, hit_point, res[0].copy(), res[1])
     for inf_i in range(ctx.lights.infinite_count):
         var u = u_env if inf_i == 0 and has_u_env else Point2f(pcg.next_float(), pcg.next_float())
         var ls_e = _sample_infinite_light_nee(ctx.lights.infinite_lights[unsafe_offset=inf_i], u)
-        _lobe_nee_one[L, enqueue_shadow](path_ptr, ctx, bsdf, tab, hit_point, ls_e, ls_e.dist)
+        _lobe_nee_one[L, enqueue_shadow, defer_only](path_ptr, ctx, bsdf, tab, hit_point, ls_e, ls_e.dist)
 
 
 @always_inline
-def _lobe_nee_one[L: NeeLobe, enqueue_shadow: Bool](
+def _lobe_nee_one[L: NeeLobe, enqueue_shadow: Bool, defer_only: Bool = False](
     path_ptr: Pointer[PathState, MutUntrackedOrigin],
     ctx: ShadeContext,
     bsdf: L,
@@ -2194,9 +2120,22 @@ def _lobe_nee_one[L: NeeLobe, enqueue_shadow: Bool](
     ls: LightSample,
     tmax: Float32,
 ):
+    if not bsdf.faces(ls):
+        return
+    # A costly lobe tests visibility first: a blocked sample then needs no evaluation.
+    var inline_shadow = False
+    comptime if not defer_only:
+        if bsdf.costly():
+            inline_shadow = _shadow_inline(ctx, null_guide())
+            if inline_shadow and _shadow_blocked(ctx, hit_point, ls.wi, tmax):
+                return
     var w = bsdf.nee_weight(ls, tab, path_ptr[].wavelengths)
-    if not w.is_black():
-        _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, ls.wi, tmax, path_ptr[].throughput * w)
+    if w.is_black():
+        return
+    if inline_shadow:
+        path_ptr[].estimate += _clamped(ctx, path_ptr[].throughput * w, Int(path_ptr[].bounce))
+    else:
+        _shadow_contribute[enqueue_shadow, defer_only](path_ptr, ctx, hit_point, ls.wi, tmax, path_ptr[].throughput * w)
 
 
 @always_inline
@@ -2263,6 +2202,7 @@ def _lobe_bounce[aov_from_f: Bool](
     albedo: RGB,
     mut pcg: PCG32,
     curve_eps: Float32 = Float32(0),
+    diffuse: Bool = False,
 ):
     """Continue a path along a BSDF sample; `aov_from_f` takes the albedo AOV from f instead of `albedo`.
     A curve hit passes its offset `curve_eps`: the ray leaves along geo_n to whichever side wi points."""
@@ -2293,7 +2233,9 @@ def _lobe_bounce[aov_from_f: Bool](
         path_ptr[].lastBsdfPdf = s.pdf_fwd
     path_ptr[].bounce += 1
     var u_rr = pcg.next_float()
-    _apply_russian_roulette(path_ptr, ctx.cycles, pcg, u_rr, BOUNCE_TRANSMIT if s.transmit else BOUNCE_GLOSSY)
+    # Cycles' bounce kinds: a delta event is glossy, a non-delta one diffuse when the caller says so.
+    var kind = BOUNCE_TRANSMIT if s.transmit else (BOUNCE_DIFFUSE if diffuse and not s.is_delta else BOUNCE_GLOSSY)
+    _apply_russian_roulette(path_ptr, ctx.cycles, pcg, u_rr, kind)
 
 
 # ── Measured (tabulated Dupuy & Jakob BxDF) ──────────────────────────────────

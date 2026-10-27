@@ -762,6 +762,8 @@ struct LobeTables(TrivialRegisterPassable):
 trait NeeLobe(TrivialRegisterPassable):
     """What light sampling asks of a shading point: a light sample's contribution, f*cos*Li/pdf times its MIS weight."""
     def nee_weight(self, ls: LightSample, tab: LobeTables, wl: SampledWavelengths) -> SpectralSample: ...
+    def faces(self, ls: LightSample) -> Bool: ...      # the light sample can contribute at all
+    def costly(self) -> Bool: ...                      # evaluating costs more than a shadow ray
 
 
 @fieldwise_init
@@ -832,6 +834,15 @@ struct BSDF(NeeLobe, TrivialRegisterPassable):
         return self.nee_weight_mis(ls, tab, wl, mis_policy_power())
 
     @always_inline
+    def faces(self, ls: LightSample) -> Bool:
+        return _nee_faces(ls, self)
+
+    @always_inline
+    def costly(self) -> Bool:
+        """The layered lobe's f and pdf are random walks."""
+        return self.kind == LobeKind.layered
+
+    @always_inline
     def nee_weight_mis(self, ls: LightSample, tab: LobeTables, wl: SampledWavelengths, mis: MisPolicy) -> SpectralSample:
         """nee_weight under another integrator's MIS policy."""
         var s = tab.spectral
@@ -849,6 +860,14 @@ struct HairBSDF(NeeLobe, TrivialRegisterPassable):
     def at(bsdf: BSDF, mat: Material, tab: LobeTables) -> HairBSDF:
         """`mat` as the caller shades it, e.g. after Filter Glossy widened its lobes."""
         return HairBSDF(bsdf, _hair_precompute(mat, tab.curves, Int(bsdf.hair_curve_idx), bsdf.hair_v, bsdf.hair_h, bsdf.wo))
+
+    @always_inline
+    def faces(self, ls: LightSample) -> Bool:
+        return _nee_faces(ls, self.bsdf)
+
+    @always_inline
+    def costly(self) -> Bool:
+        return False
 
     @always_inline
     def nee_weight(self, ls: LightSample, tab: LobeTables, wl: SampledWavelengths) -> SpectralSample:
@@ -926,6 +945,25 @@ def _lobe_scoped(c: BSDF) -> Bool:
             or c.kind == LobeKind.hair or c.kind == LobeKind.measured
             or c.kind == LobeKind.diffuse_transmit
             or c.kind == LobeKind.rough_dielectric)
+
+
+@always_inline
+def _layered_pdfs[want_rev: Bool](c: BSDF, mat_ly: Material, wo_l: Vec3f, wi_l: Vec3f, alpha: Float32) -> Tuple[Float32, Float32]:
+    """A layered lobe's densities toward wi_l and, when `want_rev`, back toward wo_l; local frame."""
+    var ior = mat_ly.emission.r
+    var rad = not c.adjoint
+    var ab = max(mat_ly.roughU, mat_ly.roughV)
+    var fwd: Float32
+    var rev = Float32(0)
+    if mat_ly.type == MatKind.coated_conductor:
+        fwd = layered_pdf[True](wo_l, wi_l, ior, alpha, rad, ab)
+        comptime if want_rev:
+            rev = layered_pdf[True](wi_l, wo_l, ior, alpha, not rad, ab)
+    else:
+        fwd = layered_pdf(wo_l, wi_l, ior, alpha, rad)
+        comptime if want_rev:
+            rev = layered_pdf(wi_l, wo_l, ior, alpha, not rad)
+    return (fwd, rev)
 
 
 @always_inline
@@ -1042,14 +1080,9 @@ def _lobe_eval[want_pdfs: Bool = True, want_rev: Bool = True](
         var fwd_ly = Float32(0)
         var rev_ly = Float32(0)
         comptime if want_pdfs:
-            if cond_ly:
-                fwd_ly = layered_pdf[True](wo_ly, wi_ly, ior_ly, alpha_ly, rad_ly, ab_ly)
-                comptime if want_rev:
-                    rev_ly = layered_pdf[True](wi_ly, wo_ly, ior_ly, alpha_ly, not rad_ly, ab_ly)
-            else:
-                fwd_ly = layered_pdf(wo_ly, wi_ly, ior_ly, alpha_ly, rad_ly)
-                comptime if want_rev:
-                    rev_ly = layered_pdf(wi_ly, wo_ly, ior_ly, alpha_ly, not rad_ly)
+            var pd = _layered_pdfs[want_rev](c, mat_ly, wo_ly, wi_ly, alpha_ly)
+            fwd_ly = pd[0]
+            rev_ly = pd[1]
         return LobeEval(f_ly * cos_ly, cos_ly, fwd_ly, rev_ly, True)
     if c.kind == LobeKind.bssrdf:
         var cos_x = abs(dot(dir_to_other, vn))
@@ -1352,10 +1385,11 @@ def _lobe_sample[want_rev: Bool = True](
         var ty = Vec3f(fr.y.x, fr.y.y, fr.y.z)
         var wo_l = Vec3f(dot(vwo, tx), dot(vwo, ty), dot(vwo, vn))
         var R = rgb_to_spectral_sample(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, c.alb.r, c.alb.g, c.alb.b, wavelengths)
-        var bs = layered_sample[True](wo_l, uc, u0, u1, R, mat_ly.emission.r, mat_ly.coat_alpha(), not c.adjoint,
+        var alpha_s = c.param if c.param > Float32(0) else mat_ly.coat_alpha()   # as _lobe_eval: param>0 forces the top alpha
+        var bs = layered_sample[True](wo_l, uc, u0, u1, R, mat_ly.emission.r, alpha_s, not c.adjoint,
                                       mat_ly.emission.g, max(mat_ly.roughU, mat_ly.roughV)) \
             if mat_ly.type == MatKind.coated_conductor \
-            else layered_sample(wo_l, uc, u0, u1, R, mat_ly.emission.r, mat_ly.coat_alpha(), not c.adjoint, mat_ly.emission.g)
+            else layered_sample(wo_l, uc, u0, u1, R, mat_ly.emission.r, alpha_s, not c.adjoint, mat_ly.emission.g)
         if not bs.valid or bs.pdf <= Float32(0):
             return _lobe_sample_invalid()
         var wi = tx * bs.wi.x + ty * bs.wi.y + vn * bs.wi.z
@@ -1363,9 +1397,9 @@ def _lobe_sample[want_rev: Bool = True](
         var w = bs.f * (cos_out / bs.pdf)
         if bs.specular:
             return LobeSample(True, wi, w, True, Float32(0), Float32(0), cos_out, _lobe_scoped(c), False)
-        var le = _lobe_eval[want_pdfs=True, want_rev=want_rev](c, wi, tab, spectral_coeffs, spectral_res,
-            spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, wavelengths)
-        return LobeSample(True, wi, w, False, le.pdf_fwd, le.pdf_rev, cos_out, _lobe_scoped(c), False)
+        # The densities only: f here is the walk's own estimate, and a second layered_f would be thrown away.
+        var (fwd, rev) = _layered_pdfs[want_rev](c, mat_ly, wo_l, bs.wi, alpha_s)
+        return LobeSample(True, wi, w, False, fwd, rev, cos_out, _lobe_scoped(c), False)
 
     var bounce_n = vn
     if c.kind == LobeKind.lambertian:
@@ -1498,7 +1532,7 @@ def _nee_weight_lobe(
 @always_inline
 def _nee_faces(ls: LightSample, c: BSDF) -> Bool:
     """A valid light sample the lobe can see: opaque lobes reject one behind the normal, two-sided ones do not."""
-    if not ls.valid:
+    if not ls.valid or (not ls.is_delta and ls.pdf <= Float32(0)):
         return False
     var cos_s = dot(c.n, ls.wi)
     var two_sided = c.kind == LobeKind.diffuse_transmit or c.kind == LobeKind.hair
