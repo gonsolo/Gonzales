@@ -17,7 +17,7 @@ from .media import Medium, MediumInterface, Grid, NvdbGrid
 from .shadow_media import shadow_transmittance
 from .curves import Curve, curve_at, curve_piece_endpoints, _curve_perp_axis, curve_hit_normal
 from .layered import layered_f, layered_sample, layered_pdf, diel_f, diel_pdf, diel_sample
-from .bxdf import BSDF, BxDFSample, GeomContext, SobolSamples8, BxDFFlags, bxdf_is_delta, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_sample_dielectric, bxdf_sample_thin_dielectric, bxdf_eval_diffuse, bxdf_pdf_diffuse, bxdf_sample_diffuse_transmit, bxdf_eval_conductor_ggx, ggx_albedo, bxdf_pdf_conductor_ggx, _nee_weight_hair, _nee_weight_simple_spectral, LobeTables
+from .bxdf import BSDF, LobeSample, BxDFSample, GeomContext, SobolSamples8, BxDFFlags, bxdf_is_delta, bxdf_sample_coated_conductor, bxdf_sample_dielectric, bxdf_sample_thin_dielectric, bxdf_eval_diffuse, bxdf_pdf_diffuse, bxdf_sample_diffuse_transmit, bxdf_eval_conductor_ggx, ggx_albedo, bxdf_pdf_conductor_ggx, _nee_weight_hair, _nee_weight_simple_spectral, LobeTables
 from .rng import PCG32
 from .footprint import CameraFootprint, UVFootprint, TriWorld, tri_world, hit_uv_footprint
 from .bvh import BVH2Node, BVH4, SceneView, any_hit_dispatch, traverse_dispatch, HairLobeConstants, _hair_precompute, _hair_sample_dir_u, curve_offset_eps, LightSample, _sample_distant_light_nee, _sample_point_light_nee, _sample_sphere_light_nee, _sample_infinite_light_nee, _sample_infinite_light_textured, _equal_area_sphere_to_square
@@ -2221,107 +2221,76 @@ def shade_conductor[use_gpu: Bool, enqueue_shadow: Bool](
         path_ptr[].active = 0
         return
 
-    var normal: Vec3f
-    var tangent: Vec3f
-    var bitangent: Vec3f
-    var alpha_x: Float32
-    var alpha_y: Float32
-
-    if is_sphere:
-        # Analytic sphere: exact normal IS the shading normal (no
-        # interpolation), no UV space to drive a roughness texture or an
-        # anisotropy-aligned tangent -- arbitrary Frisvad frame, same
-        # isotropic fallback the triangle path uses when it has no UVs.
-        normal = geo_normal
-        alpha_x = max(mat_eff.roughU, Float32(0.0001))
-        alpha_y = max(mat_eff.roughV, Float32(0.0001))
-        var frame0 = Frame.from_z(Vec3f(normal[0], normal[1], normal[2]))
-        tangent = Vec3f(frame0.x.x, frame0.x.y, frame0.x.z)
-        bitangent = Vec3f(frame0.y.x, frame0.y.y, frame0.y.z)
-    else:
+    var normal = geo_normal
+    if not is_sphere:
         if mat_eff.rough_tex_idx >= Int32(0) and mesh_has_uvs(mesh):
             var bw0 = Float32(1.0) - inter.u - inter.v
-            var uv_u = bw0*mesh_uv(mesh, v0)[0]   + inter.u*mesh_uv(mesh, v1)[0]   + inter.v*mesh_uv(mesh, v2)[0]
+            var uv_u = bw0*mesh_uv(mesh, v0)[0] + inter.u*mesh_uv(mesh, v1)[0] + inter.v*mesh_uv(mesh, v2)[0]
             var uv_v = bw0*mesh_uv(mesh, v0)[1] + inter.u*mesh_uv(mesh, v1)[1] + inter.v*mesh_uv(mesh, v2)[1]
             var found = False
             var rtex = sample_texture[use_gpu](Int(mat_eff.rough_tex_idx), uv_u, uv_v, True, Float32(0.0),
                 ctx.tex_filenames, ctx.textures, ctx.n_textures, found)
             if found:
-                # Perceptual roughness -> GGX alpha (remaproughness=true default,
-                # matching the scalar-float "roughness" param's own sqrt() remap
-                # in material_builder.mojo -- not threading the remaproughness
-                # bool through the texture path since every scene seen so far
-                # uses the default).
+                # Perceptual roughness -> GGX alpha, the default remaproughness=true.
                 var r = sqrt(max(rtex.luma(), Float32(0.0)))
                 mat_eff.roughU = r
                 mat_eff.roughV = r
-
-        var p0 = mesh_pos(mesh, v0)
-        var p1 = mesh_pos(mesh, v1)
-        var p2 = mesh_pos(mesh, v2)
-
-        # Use interpolated shading normal for smooth specular reflections
         normal = _shading_normal(mesh, v0, v1, v2, inter.u, inter.v, geo_normal)
         var (tri_co, fp_co) = _pt_hit_footprint(path_ptr, mat, ctx.cam_fp, ctx.instances, mesh, v0, v1, v2, inter, ray_org, ray_dir, ctx.textures, ctx.n_textures)
         normal = _apply_surface_maps[use_gpu](mat_eff, v0, v1, v2, mesh, inter, normal, geo_normal,
             tri_co, fp_co, ctx.tex_filenames, ctx.textures, ctx.n_textures)
-        normal = face_toward(normal, -ray_dir)   # before the tangent frame below
-
-        # roughU/V already hold the resolved GGX alpha — no squaring here.
-        alpha_x = max(mat_eff.roughU, Float32(0.0001))
-        alpha_y = max(mat_eff.roughV, Float32(0.0001))
-
-        # Anisotropy tangent frame: UV-gradient (aligned to texture space) when the
-        # mesh has UVs and the material is anisotropic; else an arbitrary Frisvad
-        # frame (isotropic GGX / perfect mirror don't care about tangent direction).
-        if mesh_has_uvs(mesh) and alpha_x != alpha_y:
-            var dp1 = p1 - p0; var dp2 = p2 - p0
-            var u0f = mesh_uv(mesh, v0)[0]; var v0f = mesh_uv(mesh, v0)[1]
-            var u1f = mesh_uv(mesh, v1)[0]; var v1f = mesh_uv(mesh, v1)[1]
-            var u2f = mesh_uv(mesh, v2)[0]; var v2f = mesh_uv(mesh, v2)[1]
-            var du1 = u1f - u0f; var dv1 = v1f - v0f
-            var du2 = u2f - u0f; var dv2 = v2f - v0f
-            var det = du1 * dv2 - du2 * dv1
-            if det != Float32(0.0):
-                var inv_det = Float32(1.0) / det
-                tangent = (dp1 * dv2 - dp2 * dv1) * inv_det
-                var tlen = dot(tangent, tangent)
-                if tlen > Float32(0.0): tangent = tangent * (Float32(1.0) / sqrt(tlen))
-                bitangent = cross(normal, tangent)
-                var blen = dot(bitangent, bitangent)
-                if blen > Float32(0.0): bitangent = bitangent * (Float32(1.0) / sqrt(blen))
-            else:
-                var frame = Frame.from_z(Vec3f(normal[0], normal[1], normal[2]))
-                tangent = Vec3f(frame.x.x, frame.x.y, frame.x.z)
-                bitangent = Vec3f(frame.y.x, frame.y.y, frame.y.z)
-        else:
-            var frame = Frame.from_z(Vec3f(normal[0], normal[1], normal[2]))
-            tangent = Vec3f(frame.x.x, frame.x.y, frame.x.z)
-            bitangent = Vec3f(frame.y.x, frame.y.y, frame.y.z)
+        normal = face_toward(normal, -ray_dir)
 
     var hit_point = offset_point(ray_org + ray_dir * inter.tHit, geo_normal)
     var wo = Vec3f(-ray_dir[0], -ray_dir[1], -ray_dir[2])
-    var gc = GeomContext(normal, geo_normal, hit_point, wo, tangent, bitangent,
-        RGB(Float32(0.0)), Float32(0.0))
-
+    var alpha = max(max(mat_eff.roughU, mat_eff.roughV), Float32(0.0001))
+    var bsdf = _ggx_bsdf(normal, wo, mat_eff.albedo, alpha)
+    bsdf.is_delta = alpha <= Float32(0.001)
     var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
-    var bs = bxdf_sample_conductor(gc, mat_eff, pcg.next_float(), pcg.next_float())
-    if bs.is_valid != Int8(0) and not bxdf_is_delta(bs.flags):
-        var alpha_iso = max(alpha_x, alpha_y)
-        _lobe_nee[enqueue_shadow](path_ptr, ctx, _ggx_bsdf(normal, wo, mat_eff.albedo, alpha_iso), hit_point, pcg)
+    if not bsdf.is_delta:
+        _lobe_nee[enqueue_shadow](path_ptr, ctx, bsdf, hit_point, pcg)
+    var s = bsdf.sample(pcg.next_float(), pcg.next_float(), pcg.next_float(), Float32(0),
+                        LobeTables(ctx.materials, ctx.curves, ctx.measured_brdfs, ctx.spectral), path_ptr[].wavelengths)
+    _lobe_bounce[False](path_ptr, ctx, s, hit_point, geo_normal, mat_eff.albedo, pcg)
+
+
+@always_inline
+def _lobe_bounce[aov_from_f: Bool](
+    path_ptr: Pointer[PathState, MutUntrackedOrigin],
+    ctx: ShadeContext,
+    s: LobeSample,
+    hit_point: Vec3f,
+    geo_n: Vec3f,
+    albedo: RGB,
+    mut pcg: PCG32,
+):
+    """Continue a reflected path along a BSDF sample; `aov_from_f` takes the albedo AOV from f instead of `albedo`."""
+    if not s.valid:
+        path_ptr[].active = 0
         path_ptr[].pcgState = pcg.state
-        var org_c = spawn_origin(hit_point, geo_normal, bs.wi)
-        path_ptr[].ray = Ray(Point3f(org_c[0], org_c[1], org_c[2]), Vec3f(bs.wi[0], bs.wi[1], bs.wi[2]))
-        if path_ptr[].bounce == 0 or path_ptr[].specularBounce == Int8(1):
-            path_ptr[].albedo = mat_eff.albedo
-        path_ptr[].throughput *= _to_spec_weight(ctx, bs.f, path_ptr[].wavelengths)
-        path_ptr[].specularBounce = Int8(0)
-        path_ptr[].lastBsdfPdf = bxdf_pdf_conductor_ggx(normal, wo, bs.wi, alpha_iso)
-        path_ptr[].bounce += 1
-        var u_rr = pcg.next_float()
-        _apply_russian_roulette(path_ptr, ctx.cycles, pcg, u_rr, BOUNCE_GLOSSY)
+        return
+    var org = spawn_origin(hit_point, geo_n, s.wi)
+    path_ptr[].ray = Ray(Point3f(org[0], org[1], org[2]), Vec3f(s.wi[0], s.wi[1], s.wi[2]))
+    if path_ptr[].bounce == 0 or path_ptr[].specularBounce == Int8(1):
+        comptime if aov_from_f:
+            var (ar, ag, ab) = spectral_sample_to_rgb(
+                ctx.spectral.coeffs, ctx.spectral.res, ctx.spectral.cie_x,
+                ctx.spectral.cie_y, ctx.spectral.cie_z, ctx.spectral.d65,
+                s.weight * (s.pdf_fwd / s.cos_out), path_ptr[].wavelengths)
+            path_ptr[].albedo = RGB(max(ar, Float32(0.0)), max(ag, Float32(0.0)), max(ab, Float32(0.0)))
+        else:
+            path_ptr[].albedo = albedo
+    path_ptr[].throughput *= s.weight
+    if s.is_delta:
+        path_ptr[].specularBounce = Int8(1)
+        path_ptr[].lastBsdfPdf = Float32(0.0)
+        path_ptr[].ns_spec = min(path_ptr[].ns_spec + Int8(1), Int8(100))
     else:
-        _finish_delta_bounce(path_ptr, ctx.cycles, pcg, bs, _to_spec_weight(ctx, bs.f, path_ptr[].wavelengths), hit_point, mat_eff.albedo, geo_n=geo_normal)
+        path_ptr[].specularBounce = Int8(0)
+        path_ptr[].lastBsdfPdf = s.pdf_fwd
+    path_ptr[].bounce += 1
+    var u_rr = pcg.next_float()
+    _apply_russian_roulette(path_ptr, ctx.cycles, pcg, u_rr, BOUNCE_GLOSSY)
 
 
 # ── Measured (tabulated Dupuy & Jakob BxDF) ──────────────────────────────────
@@ -2390,25 +2359,7 @@ def shade_measured[use_gpu: Bool, enqueue_shadow: Bool](
 
     var s = bsdf.sample(Float32(0), pcg.next_float(), pcg.next_float(), Float32(0),
                         LobeTables(ctx.materials, ctx.curves, ctx.measured_brdfs, ctx.spectral), path_ptr[].wavelengths)
-    path_ptr[].pcgState = pcg.state
-    if not s.valid:
-        path_ptr[].active = 0
-        return
-    var org_m = spawn_origin(hit_point, hit_normal, s.wi)
-    path_ptr[].ray = Ray(Point3f(org_m[0], org_m[1], org_m[2]), Vec3f(s.wi[0], s.wi[1], s.wi[2]))
-    if path_ptr[].bounce == 0 or path_ptr[].specularBounce == Int8(1):
-        # Denoiser AOV: f, the one place measured transport leaves spectral
-        var (ar, ag, ab) = spectral_sample_to_rgb(
-            ctx.spectral.coeffs, ctx.spectral.res, ctx.spectral.cie_x,
-            ctx.spectral.cie_y, ctx.spectral.cie_z, ctx.spectral.d65,
-            s.weight * (s.pdf_fwd / s.cos_out), path_ptr[].wavelengths)
-        path_ptr[].albedo = RGB(max(ar, Float32(0.0)), max(ag, Float32(0.0)), max(ab, Float32(0.0)))
-    path_ptr[].throughput *= s.weight
-    path_ptr[].specularBounce = Int8(0)
-    path_ptr[].lastBsdfPdf = s.pdf_fwd
-    path_ptr[].bounce += 1
-    var u_rr = pcg.next_float()
-    _apply_russian_roulette(path_ptr, ctx.cycles, pcg, u_rr, BOUNCE_GLOSSY)
+    _lobe_bounce[True](path_ptr, ctx, s, hit_point, hit_normal, RGB(Float32(0)), pcg)
 
 
 # CoatedConductor: dielectric clearcoat over GGX conductor.
