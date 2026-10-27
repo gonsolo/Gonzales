@@ -1293,13 +1293,18 @@ def _lobe_sample(
         var tx_m = Vec3f(fr_m.x.x, fr_m.x.y, fr_m.x.z)
         var ty_m = Vec3f(fr_m.y.x, fr_m.y.y, fr_m.y.z)
         var wo_l = Vec3f(dot(vwo, tx_m), dot(vwo, ty_m), dot(vwo, vn))
-        var (wi_l, _f_m, pdf_m, ok_m) = bxdf_sample_measured(mb, wo_l, u0, u1, wavelengths, spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65)
+        var (wi_l, f_m, pdf_m, ok_m) = bxdf_sample_measured(mb, wo_l, u0, u1, wavelengths, spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65)
         if not ok_m or pdf_m <= Float32(0):
             return _lobe_sample_invalid()
         var wi_m = tx_m * wi_l[0] + ty_m * wi_l[1] + vn * wi_l[2]
         wi_m = wi_m * (Float32(1) / sqrt(max(dot(wi_m, wi_m), Float32(1e-20))))
         if dot(wi_m, vn) <= Float32(0):
             return _lobe_sample_invalid()
+        var cos_m = abs(dot(wi_m, vn))
+        if not c.adjoint:   # the sampler's f is already f(wo, wi)
+            var wi_lm = Vec3f(dot(wi_m, tx_m), dot(wi_m, ty_m), dot(wi_m, vn))
+            return LobeSample(True, wi_m, f_m * (cos_m / pdf_m), False, pdf_m, bxdf_pdf_measured(mb, wi_lm, wo_l), cos_m,
+                              _lobe_scoped(c))
         var le_m = _lobe_eval[want_pdfs=True](c, wi_m, tab, spectral_coeffs, spectral_res,
             spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, wavelengths)
         return LobeSample(True, wi_m, le_m.f_cos * (Float32(1) / pdf_m), False,

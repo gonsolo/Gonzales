@@ -18,7 +18,6 @@ from .shadow_media import shadow_transmittance
 from .curves import Curve, curve_at, curve_piece_endpoints, _curve_perp_axis, curve_hit_normal
 from .layered import layered_f, layered_sample, layered_pdf, diel_f, diel_pdf, diel_sample
 from .bxdf import BSDF, BxDFSample, GeomContext, SobolSamples8, BxDFFlags, bxdf_is_delta, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_sample_dielectric, bxdf_sample_thin_dielectric, bxdf_eval_diffuse, bxdf_pdf_diffuse, bxdf_sample_diffuse_transmit, bxdf_eval_conductor_ggx, ggx_albedo, bxdf_pdf_conductor_ggx, _nee_weight_hair, _nee_weight_simple_spectral, LobeTables
-from .measured_bxdf_eval import bxdf_sample_measured, bxdf_pdf_measured
 from .rng import PCG32
 from .footprint import CameraFootprint, UVFootprint, TriWorld, tri_world, hit_uv_footprint
 from .bvh import BVH2Node, BVH4, SceneView, any_hit_dispatch, traverse_dispatch, HairLobeConstants, _hair_precompute, _hair_sample_dir_u, curve_offset_eps, LightSample, _sample_distant_light_nee, _sample_point_light_nee, _sample_sphere_light_nee, _sample_infinite_light_nee, _sample_infinite_light_textured, _equal_area_sphere_to_square
@@ -2368,16 +2367,11 @@ def shade_measured[use_gpu: Bool, enqueue_shadow: Bool](
     var hit_point = offset_point(ray_org + ray_dir * inter.tHit, hit_normal)
     var wo = Vec3f(-ray_dir[0], -ray_dir[1], -ray_dir[2])
 
-    var frame = Frame.from_z(Vec3f(normal[0], normal[1], normal[2]))
-    var tangent = Vec3f(frame.x.x, frame.x.y, frame.x.z)
-    var bitangent = Vec3f(frame.y.x, frame.y.y, frame.y.z)
-
     if mat.measured_idx < Int32(0):
         # Load failure fallback (see material_builder.mojo) -- render as flat
         # black rather than dereferencing a nonexistent measured_brdfs entry.
         path_ptr[].active = 0
         return
-    var mb = ctx.measured_brdfs[unsafe_offset=Int(mat.measured_idx)]
 
     var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
 
@@ -2394,46 +2388,24 @@ def shade_measured[use_gpu: Bool, enqueue_shadow: Bool](
                     Float32(0), Int32(-1), Float32(0), Float32(0), True, False)
     _lobe_nee[enqueue_shadow](path_ptr, ctx, bsdf, hit_point, pcg)
 
-    var wo_l = Vec3f(dot(wo, tangent), dot(wo, bitangent), dot(wo, normal))
-    var (wi_l, f, pdf, valid) = bxdf_sample_measured(mb, wo_l, pcg.next_float(), pcg.next_float(), path_ptr[].wavelengths, ctx.spectral.coeffs, ctx.spectral.res, ctx.spectral.cie_x, ctx.spectral.cie_y, ctx.spectral.cie_z, ctx.spectral.d65)
+    var s = bsdf.sample(Float32(0), pcg.next_float(), pcg.next_float(), Float32(0),
+                        LobeTables(ctx.materials, ctx.curves, ctx.measured_brdfs, ctx.spectral), path_ptr[].wavelengths)
     path_ptr[].pcgState = pcg.state
-
-    if not valid or pdf <= Float32(0.0):
+    if not s.valid:
         path_ptr[].active = 0
         return
-
-    var wi = tangent * wi_l[0] + bitangent * wi_l[1] + normal * wi_l[2]
-    var wilen = dot(wi, wi)
-    if wilen > Float32(0.0):
-        wi = wi * (Float32(1.0) / sqrt(wilen))
-    var cos_wi = dot(wi, normal)
-    if cos_wi <= Float32(0.0):
-        path_ptr[].active = 0
-        return
-
-    var org_m = spawn_origin(hit_point, hit_normal, wi)
-    path_ptr[].ray = Ray(Point3f(org_m[0], org_m[1], org_m[2]), Vec3f(wi[0], wi[1], wi[2]))
+    var org_m = spawn_origin(hit_point, hit_normal, s.wi)
+    path_ptr[].ray = Ray(Point3f(org_m[0], org_m[1], org_m[2]), Vec3f(s.wi[0], s.wi[1], s.wi[2]))
     if path_ptr[].bounce == 0 or path_ptr[].specularBounce == Int8(1):
-        # Denoiser AOV only -- albedo is a colour-space quantity, so the RGB
-        # conversion is legitimate here (and only here). Transport stays
-        # spectral below.
+        # Denoiser AOV: f, the one place measured transport leaves spectral
         var (ar, ag, ab) = spectral_sample_to_rgb(
             ctx.spectral.coeffs, ctx.spectral.res, ctx.spectral.cie_x,
             ctx.spectral.cie_y, ctx.spectral.cie_z, ctx.spectral.d65,
-            f, path_ptr[].wavelengths)
+            s.weight * (s.pdf_fwd / s.cos_out), path_ptr[].wavelengths)
         path_ptr[].albedo = RGB(max(ar, Float32(0.0)), max(ag, Float32(0.0)), max(ab, Float32(0.0)))
-    # General non-delta BxDFSample convention (f already includes the
-    # measured BRDF's own 1/AbsCosTheta(wi) term, matching pbrt's own fr —
-    # this cos_wi is the separate Monte-Carlo importance-sampling weight,
-    # not a duplicate of that internal term; no analytic cancellation exists
-    # for a tabulated BxDF the way there is for VNDF-sampled GGX conductor).
-    #
-    # `f` is already spectral; it used to arrive as RGB and be re-upsampled
-    # via _to_spec_refl, which clamped to [0,1] and re-smoothed the spectrum,
-    # destroying saturation and iridescence. See bxdf_sample_measured.
-    path_ptr[].throughput *= f * (cos_wi / pdf)
+    path_ptr[].throughput *= s.weight
     path_ptr[].specularBounce = Int8(0)
-    path_ptr[].lastBsdfPdf = bxdf_pdf_measured(mb, wo_l, wi_l)
+    path_ptr[].lastBsdfPdf = s.pdf_fwd
     path_ptr[].bounce += 1
     var u_rr = pcg.next_float()
     _apply_russian_roulette(path_ptr, ctx.cycles, pcg, u_rr, BOUNCE_GLOSSY)
