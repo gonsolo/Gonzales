@@ -105,6 +105,8 @@ struct VcmGpu(Movable):
     var shadow_valid: DeviceBuffer[DType.uint8]
     var shadow_seg_med: DeviceBuffer[DType.uint8]
     var shadow_scratch: DeviceBuffer[DType.uint8]
+    var mnee_stats: DeviceBuffer[DType.int32]    # pass 0's MNEE probes and glass hits
+    var mnee_off: Bool                           # glass on under 5% of them: MNEE costs more than it adds
 
     def __init__(
         out self, handle: Pointer[GpuSceneHandle, MutUntrackedOrigin], psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin],
@@ -172,6 +174,9 @@ struct VcmGpu(Movable):
         self.c2r = ctx.enqueue_create_buffer[DType.uint8](9 * size_of[Float32]())
         self.wavefront = wavefront
         self.shadow_batch = False
+        self.mnee_stats = ctx.enqueue_create_buffer[DType.int32](2)
+        self.mnee_stats.enqueue_fill(Int32(0))
+        self.mnee_off = False
         var n_l = self.n_light_paths if wavefront else 0
         var n_c = self.n_pix if wavefront else 0
         var n_s = self.n_pix * _BDPT_MAX_VERTS if wavefront else 0
@@ -224,6 +229,10 @@ struct VcmGpu(Movable):
     def _begin_pass(mut self, psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin], si: Int) raises -> VcmPass:
         """Pass `si`'s constants. The merge radius shrinks with si (vcm_merge_radius)."""
         var gsd = self.handle[].scene_descriptor()
+        if self.mnee_off:
+            gsd.hasGlass = Int32(0)   # MNEE and its MIS terms on both subpaths, together
+        elif si == 0:
+            gsd.vcmMneeStats = Pointer[Int32, MutUntrackedOrigin](unsafe_from_address=Int(self.mnee_stats.unsafe_ptr()))
         var radius_i = vcm_merge_radius(self.scene_radius, si)
         # The footprint radius shrinks on the global schedule; 0 (--vcm-no-footprint) is the fixed global radius.
         var radius_0 = vcm_merge_radius(self.scene_radius, 0)
@@ -310,6 +319,15 @@ struct VcmGpu(Movable):
                 self.vcm_lambda = b_sum / s_sum if s_sum > Float32(0) else Float32(0)
             if verbose:
                 print("VCM (GPU): budget lambda " + String(self.vcm_lambda))
+        if p.si == 0 and p.gsd.hasGlass != Int32(0):
+            # The path tracer's rule (shading.mojo's _mnee_area_light_contribute), once per render.
+            with self.mnee_stats.map_to_host() as st:
+                var probes = Int(st.unsafe_ptr()[unsafe_offset=0])
+                var glass = Int(st.unsafe_ptr()[unsafe_offset=1])
+                self.mnee_off = probes > 0 and glass * 20 < probes
+                if self.mnee_off:
+                    print("VCM (GPU): MNEE off: glass on " + String(Float64(glass) * 100.0 / Float64(probes))
+                          + " % of probes")
 
     def run_pass(mut self, psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin], si: Int,
                  film: Pointer[Float32, MutUntrackedOrigin], albedo: Pointer[Float32, MutUntrackedOrigin],

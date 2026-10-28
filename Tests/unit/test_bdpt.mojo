@@ -127,6 +127,7 @@ def _dummy_sd() -> SceneView:
         Pointer[NormalSlopeMap, MutUntrackedOrigin].unsafe_dangling(),
         Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(), Float32(0), Float32(1), Int32(9),
         Float32(0), Float32(0), Float32(0), Float32(0), Float32(0),
+        Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),   # vcmMneeStats
         CameraFootprint.none(),
         Int64(0),   # sphereLightCount
         Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),   # lightPickCdf
@@ -347,6 +348,7 @@ def test_bdpt_connect_to_cache_sums_one_paired_light_path() raises:
         Pointer[NormalSlopeMap, MutUntrackedOrigin].unsafe_dangling(),
         Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(), Float32(0), Float32(1), Int32(9),
         Float32(0), Float32(0), Float32(0), Float32(0), Float32(0),
+        Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),   # vcmMneeStats
         CameraFootprint.none(),
         Int64(0),   # sphereLightCount
         Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),   # lightPickCdf

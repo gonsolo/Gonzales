@@ -136,6 +136,7 @@ def _build_scene() -> SceneView:
         Pointer[NormalSlopeMap, MutUntrackedOrigin].unsafe_dangling(),
         Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(), Float32(0), Float32(1), Int32(9),
         Float32(0), Float32(0), Float32(0), Float32(0), Float32(0),
+        Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),   # vcmMneeStats
         CameraFootprint.none(),
         Int64(0),   # sphereLightCount
         Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),   # lightPickCdf

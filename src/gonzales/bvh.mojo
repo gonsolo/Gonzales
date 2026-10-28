@@ -274,6 +274,8 @@ struct SceneView(TrivialRegisterPassable, DevicePassable):
     var vcmCamZ:        Float32
     var vcmFootprint:   Float32
     var vcmMergeR:      Float32
+    # VCM pass 0 counts MNEE probes and their glass hits here, to switch MNEE off where glass is rare.
+    var vcmMneeStats:   Pointer[Int32, MutUntrackedOrigin]
     # pbrt's texture/bump footprint camera data (footprint.mojo); none() =
     # every map at LOD 0 with pbrt's fixed bump step.
     var camFp:          CameraFootprint

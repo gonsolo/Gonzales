@@ -4521,6 +4521,7 @@ def mojo_parsed_scene_descriptor(
     sd[unsafe_offset=0].vcmCamX = Float32(0); sd[unsafe_offset=0].vcmCamY = Float32(0); sd[unsafe_offset=0].vcmCamZ = Float32(0)
     sd[unsafe_offset=0].vcmFootprint     = Float32(0)   # CPU VCM: one global radius
     sd[unsafe_offset=0].vcmMergeR        = Float32(0)
+    sd[unsafe_offset=0].vcmMneeStats     = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling()
     sd[unsafe_offset=0].camFp            = camera_footprint(psc[unsafe_offset=0].raster_to_camera,
         psc[unsafe_offset=0].camera_to_world, Int(psc[unsafe_offset=0].film_w), Int(psc[unsafe_offset=0].film_h),
         Int(psc[unsafe_offset=0].samples_per_pixel))
