@@ -10,7 +10,7 @@ from std.sys.info import align_of
 # threshold at each call site.
 @always_inline
 def _is_real_ptr[T: AnyType, O: Origin[mut=True]](ptr: Pointer[T, O]) -> Bool:
-    return Int(ptr) > align_of[T]()
+    return UInt(Int(ptr)) > UInt(align_of[T]())   # unsigned: Level Zero device addresses have the top bit set
 
 # ── Math constants ─────────────────────────────────────────────────────────────
 # Stored as Float32 aliases so every formula reads like the paper it came from.

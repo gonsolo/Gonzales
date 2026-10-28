@@ -248,7 +248,7 @@ def _emitter_face_normal(
     instances: Pointer[Instance, MutUntrackedOrigin] = Pointer[Instance, MutUntrackedOrigin].unsafe_dangling(),
 ) -> Vec3f:
     var gn = cross(p1 - p0, p2 - p0)
-    if Int(mesh.normals) <= 4:
+    if not _is_real_ptr(mesh.normals):
         return gn
     var w0 = Float32(1.0) - bu - bv
     var n0 = mesh_normal(mesh, v0)
@@ -380,7 +380,7 @@ def _interp_vertex_normal(
     space and NOT flipped toward anything; the zero vector when the mesh has
     no normals. pbrt treats this N as the surface's outward direction and
     flips the geometric normal to agree with it -- see shade_dielectric."""
-    if Int(mesh.normals) <= 4:
+    if not _is_real_ptr(mesh.normals):
         return Vec3f(Float32(0.0))
     var w0 = Float32(1.0) - bu - bv
     var n0 = mesh_normal(mesh, v0)
@@ -717,7 +717,7 @@ def _tex_lookup[use_gpu: Bool](
                        mat.tex_bias.g + mat.tex_scale.g * t.g,
                        mat.tex_bias.b + mat.tex_scale.b * t.b)
     comptime if not use_gpu:
-        if ti >= 0 and n_textures == 0 and Int(tex_filenames) > 8:
+        if ti >= 0 and n_textures == 0 and _is_real_ptr(tex_filenames):
             var filename = tex_filenames[unsafe_offset=ti]
             if Int(filename) > 1 and has_uvs:
                 var w0 = Float32(1.0) - inter.u - inter.v
@@ -3232,7 +3232,7 @@ def _sms_vertex_from_hit(
         return (sms_vertex_sphere(hit_pt, center, sph.radius, eta, nmap, ior), True)
     elif inter.primId.type == Int8(0):
         var (mesh, v0, v1, v2, _) = _get_tri_verts(inter, ctx.meshes)
-        if Int(mesh.normals) > 4 and inter.primId.instanceIdx < Int32(0):
+        if _is_real_ptr(mesh.normals) and inter.primId.instanceIdx < Int32(0):
             # A smooth mesh: curved, walked on its interpolated normal (sms.mojo's sms_mesh_frame).
             var ns = _interp_vertex_normal(mesh, v0, v1, v2, inter.u, inter.v)
             var eta_m = ior if dot(ns, shadow_dir) <= Float32(0.0) else (Float32(1.0) / ior)

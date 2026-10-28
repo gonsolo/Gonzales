@@ -34,7 +34,7 @@
 
 from std.collections import Array
 from std.math import sqrt, abs, max, min, cos, sin, acos
-from .geometry import dot, cross, Frame, Vec3f, Point3f, _atan2f, PI, TWO_PI
+from .geometry import dot, cross, Frame, Vec3f, Point3f, _atan2f, PI, TWO_PI, _is_real_ptr
 from .materials import fr_dielectric
 from .render_state import NormalSlopeMap, normal_slope_map_none
 from .primitives import Ray, Intersection, PrimId, TriangleMesh, Instance, Sphere, mesh_vi, mesh_pos, mesh_normal
@@ -616,7 +616,7 @@ def sms_mesh_frame(
     """(point, interpolated normal N, orthonormal triangle tangents, dN/ds along each, ok, triangle) at (bu, bv)."""
     var m = meshes[unsafe_offset=mi]
     var z = Vec3f(Float32(0.0))
-    if Int(m.normals) <= 4:
+    if not _is_real_ptr(m.normals):
         return (z, z, z, z, z, z, False, Int32(-1))
     var v0 = Int(mesh_vi(m, tri_base)); var v1 = Int(mesh_vi(m, tri_base + 1)); var v2 = Int(mesh_vi(m, tri_base + 2))
     var p0 = mesh_pos(m, v0)

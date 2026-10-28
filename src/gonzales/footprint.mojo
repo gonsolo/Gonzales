@@ -12,7 +12,7 @@
 # Both are scaled by max(1/8, 1/sqrt(spp)): the filter width a sample needs is
 # the sample spacing, not the whole pixel.
 from std.math import sqrt, abs, max, min
-from .geometry import Vec3f, Point3f, dot, cross
+from .geometry import Vec3f, Point3f, dot, cross, _is_real_ptr
 from .primitives import TriangleMesh, Instance, mesh_uv, mesh_has_uvs, mesh_normal
 from .primitives import mesh_pos
 from .transform import Mat4, transform_normal
@@ -72,7 +72,7 @@ def tri_world(
     var p2 = mesh_pos(mesh, v2)
     var z = Vec3f(Float32(0), Float32(0), Float32(0))
     var n0 = z; var n1 = z; var n2 = z
-    var has_n = Int(mesh.normals) > 4
+    var has_n = _is_real_ptr(mesh.normals)
     if has_n:
         n0 = mesh_normal(mesh, v0)
         n1 = mesh_normal(mesh, v1)

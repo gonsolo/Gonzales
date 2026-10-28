@@ -259,7 +259,7 @@ def _shading_normal_at(
     var gl = dot(gn, gn)
     if gl > Float32(0.0): gn = gn * (Float32(1.0) / sqrt(gl))
     # No per-vertex normals → flat normal (sentinel addr <= 4, see GPU-nullable convention).
-    if Int(m.normals) <= 4:
+    if not _is_real_ptr(m.normals):
         return gn
     var w0 = Float32(1.0) - inter.u - inter.v
     var n0 = mesh_normal(m, v0)
@@ -640,7 +640,7 @@ def sample_area_light_point(
     var lnl = dot(ln, ln)
     if lnl > Float32(0): ln = ln*(Float32(1)/sqrt(lnl))
     # Use shading normals when provided — they give the correct emission hemisphere.
-    if Int(lmesh.normals) > 4:
+    if _is_real_ptr(lmesh.normals):
         var sn0 = mesh_normal(lmesh, lv0)
         var sn1 = mesh_normal(lmesh, lv1)
         var sn2 = mesh_normal(lmesh, lv2)

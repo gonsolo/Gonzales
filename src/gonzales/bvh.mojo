@@ -1388,7 +1388,7 @@ def _traverse_blas_wide(
         if cref < Int32(0):
             var first_tri = Int(cref & Int32(0x7FFFFFF)) * per_leaf
             for j in range(Int((cref >> Int32(27)) & Int32(0xF)) * per_leaf):
-                if Int(cnt) > 4: cnt[unsafe_offset=5] += Int32(1)
+                if _is_real_ptr(cnt): cnt[unsafe_offset=5] += Int32(1)
                 var h = _mesh_tri_hit(mesh, mesh_idx, (first_tri + j) * 3, ray_org, ray_dir, localTHit)
                 if h[0]:
                     localTHit = h[1]; bestU = h[2]; bestV = h[3]
@@ -1397,7 +1397,7 @@ def _traverse_blas_wide(
                     if first_hit:
                         return (True, localTHit, bestU, bestV, hitTri)
         else:
-            if Int(cnt) > 4: cnt[unsafe_offset=4] += Int32(1)
+            if _is_real_ptr(cnt): cnt[unsafe_offset=4] += Int32(1)
             sp = _wide_push_hits(nw, Int(cref), rdir, ray_org, nx, ny, nz, localTHit, stk, sp)
     return (hasHit, localTHit, bestU, bestV, hitTri)
 
@@ -1466,7 +1466,7 @@ def _traverse_blas_triangles[wide_on: Bool = True](
                         continue
                     mesh_idx = Int(prim.id1)
                     base_vidx = Int(prim.id2)
-                if Int(cnt) > 4: cnt[unsafe_offset=5] += Int32(1)
+                if _is_real_ptr(cnt): cnt[unsafe_offset=5] += Int32(1)
                 var h = _mesh_tri_hit(meshes[unsafe_offset=mesh_idx], mesh_idx, base_vidx, ray_org, ray_dir, localTHit)
                 if h[0]:
                     localTHit = h[1]
@@ -1484,7 +1484,7 @@ def _traverse_blas_triangles[wide_on: Bool = True](
         else:
             var leftIdx = current + 1
             var rightIdx = Int(node.offset)
-            if Int(cnt) > 4: cnt[unsafe_offset=4] += Int32(1)
+            if _is_real_ptr(cnt): cnt[unsafe_offset=4] += Int32(1)
             var leftNode = blasNodes[unsafe_offset=leftIdx]
             var rightNode = blasNodes[unsafe_offset=rightIdx]
             var leftHit = intersect_aabb(
@@ -1544,13 +1544,13 @@ def _traverse_instance[wide_on: Bool = True](
     var (o_org, o_dir) = _transform_ray_to_instance_space(inst.world_to_obj(), ray_org, ray_dir)
     var blas_nodes = blasNodesArr[unsafe_offset=Int(inst.blasIdx)]
     var blas_prim_ids = blasPrimIdsArr[unsafe_offset=Int(inst.blasIdx)]
-    if Int(cnt) > 4: cnt[unsafe_offset=3] += Int32(1)
+    if _is_real_ptr(cnt): cnt[unsafe_offset=3] += Int32(1)
     var sub = _traverse_blas_triangles[wide_on](blas_nodes, blas_prim_ids, meshes, o_org, o_dir, tMax, cnt, first_hit)
     var hit = sub[0]
     var t = sub[1]; var u = sub[2]; var v = sub[3]
     var hit_prim = sub[4]
     var rec = blas_prim_ids[unsafe_offset=0]
-    if rec.type == Int8(7) and rec.id2 > Int64(0) and Int(curves) > 4 and not (first_hit and hit):
+    if rec.type == Int8(7) and rec.id2 > Int64(0) and _is_real_ptr(curves) and not (first_hit and hit):
         var cs = _traverse_blas_curves(blasNodesArr[unsafe_offset=Int(rec.id2)], blasPrimIdsArr[unsafe_offset=Int(rec.id2)],
                                        curves, o_org, o_dir, t)
         if cs[0]:
@@ -1651,7 +1651,7 @@ def _traverse_instances[wide_on: Bool = True](
     each one's BLAS. Returns the nearest (hit, tHit, u, v, primId). Shared by every top-level traversal.
     Returns hit=False without dereferencing anything if a caller passed no instance data."""
     var hitPrim = PrimId(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
-    if Int(instances) <= 4 or Int(blasNodesArr) <= 4 or Int(blasPrimIdsArr) <= 4:
+    if not _is_real_ptr(instances) or not _is_real_ptr(blasNodesArr) or not _is_real_ptr(blasPrimIdsArr):
         return (False, tMax, Float32(0), Float32(0), hitPrim)
     var nodes = blasNodesArr[unsafe_offset=Int(prim.id1)]
     var rdir = Vec3f(Float32(1.0) / ray_dir[0], Float32(1.0) / ray_dir[1], Float32(1.0) / ray_dir[2])
@@ -1684,7 +1684,7 @@ def _traverse_instances[wide_on: Bool = True](
                         cand[unsafe_offset=n_cand] = _wide_pack((cref & Int32(0x7FFFFFF)) + Int32(j), t_in)
                         n_cand += 1
                 else:
-                    if Int(cnt) > 4: cnt[unsafe_offset=2] += Int32(1)
+                    if _is_real_ptr(cnt): cnt[unsafe_offset=2] += Int32(1)
                     sp = _wide_push_hits(nw, Int(cref), rdir, org, nearXIsMin, nearYIsMin, nearZIsMin, localTHit, stk, sp)
             for k in range(n_cand):
                 var (inst_idx, t_c) = _wide_unpack(cand[unsafe_offset=k])
@@ -1721,7 +1721,7 @@ def _traverse_instances[wide_on: Bool = True](
         else:
             var leftIdx = current + 1
             var rightIdx = Int(node.offset)
-            if Int(cnt) > 4: cnt[unsafe_offset=2] += Int32(1)
+            if _is_real_ptr(cnt): cnt[unsafe_offset=2] += Int32(1)
             var leftNode = nodes[unsafe_offset=leftIdx]
             var rightNode = nodes[unsafe_offset=rightIdx]
             var leftHit = intersect_aabb(leftNode.min, leftNode.max, rdir, org, nearXIsMin, nearYIsMin, nearZIsMin, localTHit)
@@ -2389,7 +2389,7 @@ struct BVH4(TrivialRegisterPassable):
         return Self(Pointer[BVH4Node, MutUntrackedOrigin].unsafe_dangling(), Pointer[Float32, MutUntrackedOrigin].unsafe_dangling())
 
     def is_real(self) -> Bool:
-        return Int(self.nodes) > 16
+        return _is_real_ptr(self.nodes)
 
 
 def _bvh2_area(n: BVH2Node) -> Float32:

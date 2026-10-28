@@ -1,6 +1,7 @@
 from .materials import Material
 from .render_state import GpuTexture
 from .os_thread import OsThread, ThreadArg
+from .geometry import _is_real_ptr
 from max.algorithm import parallelize
 from std.atomic import Atomic
 from std.ffi import external_call
@@ -387,7 +388,7 @@ def decode_host_textures(
     var next_tex = unsafe_alloc[Int32](1)
     next_tex[unsafe_offset=0] = Int32(0)
 
-    var have_prefetch = Int(prefetch) > 8 and prefetch[unsafe_offset=0].n > 0
+    var have_prefetch = _is_real_ptr(prefetch) and prefetch[unsafe_offset=0].n > 0
 
     def decode_worker(_worker_idx: Int) {imm}:
         while True:

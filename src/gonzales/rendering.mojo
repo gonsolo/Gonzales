@@ -4,7 +4,7 @@ from max.algorithm import parallelize
 from std.atomic import Atomic
 from std.sys import prefetch
 from std.sys.info import num_performance_cores
-from .geometry import RGB, Vec3f, INV_FOUR_PI
+from .geometry import RGB, Vec3f, INV_FOUR_PI, _is_real_ptr
 from .render_state import PathState, MIN_RAY_PDF_NONE, SssWalk, TileResult
 from .progress import Progress
 from .primitives import sphere_outward_normal, Intersection, TriangleMesh, mesh_vi
@@ -52,9 +52,9 @@ def _prefetch_hit_vertices(inter: Intersection, meshes: Pointer[TriangleMesh, Mu
         comptime for k in range(3):
             var v = Int(mesh_vi(m, bv + k))
             prefetch(m.points.unsafe_offset((v >> 8) * 390 + 6 + (v & 255) * 3 // 2 if m.quads == Int32(2) else v * 4))
-            if Int(m.uvs) > 4:
+            if _is_real_ptr(m.uvs):
                 prefetch(m.uvs.unsafe_offset(v * 2))
-            if Int(m.normals) > 4:
+            if _is_real_ptr(m.normals):
                 prefetch(m.normals.unsafe_offset(v))
 
 

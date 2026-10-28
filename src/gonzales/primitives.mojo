@@ -380,7 +380,7 @@ def mesh_uv(mesh: TriangleMesh, v: Int) -> Tuple[Float32, Float32]:
 
 @always_inline
 def mesh_has_uvs(mesh: TriangleMesh) -> Bool:
-    return mesh.uv_corners != Int32(0) or Int(mesh.uvs) > 4
+    return mesh.uv_corners != Int32(0) or _is_real_ptr(mesh.uvs)
 
 
 @always_inline

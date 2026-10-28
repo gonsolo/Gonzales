@@ -4376,18 +4376,18 @@ def mojo_parsed_free(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin]):
         # .unsafe_free() directly.
         for mi in range(Int(psc[unsafe_offset=0].measured_count)):
             var mb = psc[unsafe_offset=0].measured_brdfs[unsafe_offset=mi]
-            if Int(mb.theta_i) > 4: mb.theta_i.unsafe_free()
-            if Int(mb.phi_i) > 4: mb.phi_i.unsafe_free()
-            if Int(mb.wavelengths) > 4: mb.wavelengths.unsafe_free()
-            if Int(mb.ndf_data) > 4: mb.ndf_data.unsafe_free()
-            if Int(mb.sigma_data) > 4: mb.sigma_data.unsafe_free()
-            if Int(mb.vndf_data) > 4: mb.vndf_data.unsafe_free()
-            if Int(mb.vndf_marg) > 4: mb.vndf_marg.unsafe_free()
-            if Int(mb.vndf_cond) > 4: mb.vndf_cond.unsafe_free()
-            if Int(mb.lum_data) > 4: mb.lum_data.unsafe_free()
-            if Int(mb.lum_marg) > 4: mb.lum_marg.unsafe_free()
-            if Int(mb.lum_cond) > 4: mb.lum_cond.unsafe_free()
-            if Int(mb.spectra_data) > 4: mb.spectra_data.unsafe_free()
+            if _is_real_ptr(mb.theta_i): mb.theta_i.unsafe_free()
+            if _is_real_ptr(mb.phi_i): mb.phi_i.unsafe_free()
+            if _is_real_ptr(mb.wavelengths): mb.wavelengths.unsafe_free()
+            if _is_real_ptr(mb.ndf_data): mb.ndf_data.unsafe_free()
+            if _is_real_ptr(mb.sigma_data): mb.sigma_data.unsafe_free()
+            if _is_real_ptr(mb.vndf_data): mb.vndf_data.unsafe_free()
+            if _is_real_ptr(mb.vndf_marg): mb.vndf_marg.unsafe_free()
+            if _is_real_ptr(mb.vndf_cond): mb.vndf_cond.unsafe_free()
+            if _is_real_ptr(mb.lum_data): mb.lum_data.unsafe_free()
+            if _is_real_ptr(mb.lum_marg): mb.lum_marg.unsafe_free()
+            if _is_real_ptr(mb.lum_cond): mb.lum_cond.unsafe_free()
+            if _is_real_ptr(mb.spectra_data): mb.spectra_data.unsafe_free()
         psc[unsafe_offset=0].measured_brdfs.unsafe_free()
     if psc[unsafe_offset=0].grid_count > 0:
         for gi in range(Int(psc[unsafe_offset=0].grid_count)):
