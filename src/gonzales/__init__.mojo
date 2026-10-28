@@ -1,5 +1,6 @@
 from std.ffi import external_call
 from std.sys import argv, exit
+from std.sys.info import _accelerator_arch
 from std.time import perf_counter_ns
 from std.os import getenv, setenv
 from std.memory.alloc import unsafe_alloc
@@ -158,7 +159,7 @@ def main() raises:
     var use_vulkan_rt_shade = False
     var rt_hardware = False
     var bake = False
-    var use_vcm_wavefront = False
+    var use_vcm_wavefront = "intel" in _accelerator_arch()   # B580: the staged VCM runs the bathroom in half the time
     var use_restir = False  # docs/A2_restir_migration_plan.md Phase 2/3: ReSTIR DI
                              # (area-light NEE only, primary bounce), CPU + GPU batch
     var use_restir_gi = False  # Phase 4: ReSTIR GI, one-bounce reconnection, scoped to
