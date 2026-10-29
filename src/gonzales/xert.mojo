@@ -11,6 +11,20 @@ def xert_build_blas(tri_verts: Pointer[Float32, MutUntrackedOrigin], n_tris: Int
     return external_call["xert_build_blas", Pointer[UInt8, MutUntrackedOrigin],
         Pointer[Float32, MutUntrackedOrigin], Int64, Pointer[Int64, MutUntrackedOrigin]](tri_verts, n_tris, out_size)
 
+def xert_build_blas_geoms(n_geoms: Int32, tri_verts: Pointer[Pointer[Float32, MutUntrackedOrigin], MutUntrackedOrigin],
+                          n_tris: Pointer[Int64, MutUntrackedOrigin], out_size: Pointer[Int64, MutUntrackedOrigin],
+                          bounds: Pointer[Float32, MutUntrackedOrigin]) -> Pointer[UInt8, MutUntrackedOrigin]:
+    return external_call["xert_build_blas_geoms", Pointer[UInt8, MutUntrackedOrigin], Int32,
+        Pointer[Pointer[Float32, MutUntrackedOrigin], MutUntrackedOrigin], Pointer[Int64, MutUntrackedOrigin],
+        Pointer[Int64, MutUntrackedOrigin], Pointer[Float32, MutUntrackedOrigin]](n_geoms, tri_verts, n_tris, out_size, bounds)
+
+def xert_build_tlas(n_inst: Int64, xf: Pointer[Float32, MutUntrackedOrigin], blas_of: Pointer[Int32, MutUntrackedOrigin],
+                    blas_addr: Pointer[UInt64, MutUntrackedOrigin], blas_bounds: Pointer[Float32, MutUntrackedOrigin],
+                    out_size: Pointer[Int64, MutUntrackedOrigin]) -> Pointer[UInt8, MutUntrackedOrigin]:
+    return external_call["xert_build_tlas", Pointer[UInt8, MutUntrackedOrigin], Int64, Pointer[Float32, MutUntrackedOrigin],
+        Pointer[Int32, MutUntrackedOrigin], Pointer[UInt64, MutUntrackedOrigin], Pointer[Float32, MutUntrackedOrigin],
+        Pointer[Int64, MutUntrackedOrigin]](n_inst, xf, blas_of, blas_addr, blas_bounds, out_size)
+
 def xert_alignment() -> Int64:
     return external_call["xert_alignment", Int64]()
 
@@ -33,13 +47,16 @@ struct XeRayDesc(TrivialRegisterPassable):
     var mask: UInt32
     var flags: UInt32
 
-# One hit of xert_trace: t = -1 and prim = -1 on a miss; u, v weight the triangle's second and third vertex.
+# One hit of xert_trace: t = -1 and prim = -1 on a miss; u, v weight the triangle's second and third vertex; geom is the
+# geometry within the bottom-level structure, inst the instance (its user id) when tracing a top-level structure.
 @fieldwise_init
 struct XeHit(TrivialRegisterPassable):
     var t: Float32
     var u: Float32
     var v: Float32
     var prim: Int32
+    var geom: Int32
+    var inst: Int32
 
 # The closest (or with XERT_ANY_HIT any) hit in [tmin, tmax].
 @always_inline
@@ -50,10 +67,12 @@ def xert_trace(accel: MutPointer[UInt8, MutAnyOrigin], ray: XeRayDesc) -> XeHit:
             Pointer(to=desc), accel.unsafe_address_space_cast[AddressSpace.GLOBAL]())
         external_call["intel_ray_query_start_traversal", NoneType](q)
         external_call["intel_ray_query_sync", NoneType](q)
-        var hit = XeHit(-1, 0, 0, -1)
+        var hit = XeHit(-1, 0, 0, -1, -1, -1)
         if external_call["intel_has_committed_hit", Bool](q):
             hit.t = external_call["intel_get_hit_distance", Float32](q, UInt32(0))
             hit.prim = Int32(external_call["intel_get_hit_primitive_id", UInt32](q, UInt32(0)))
+            hit.geom = Int32(external_call["intel_get_hit_geometry_id", UInt32](q, UInt32(0)))
+            hit.inst = Int32(external_call["intel_get_hit_instance_user_id", UInt32](q, UInt32(0)))
             var uv = SIMD[DType.float32, 2](0)
             external_call["intel_get_hit_barycentrics", NoneType](Pointer(to=uv), q, UInt32(0))   # struct return: sret first
             hit.u = uv[0]
@@ -61,7 +80,7 @@ def xert_trace(accel: MutPointer[UInt8, MutAnyOrigin], ray: XeRayDesc) -> XeHit:
         external_call["intel_ray_query_abandon", NoneType](q)
         return hit
     else:
-        return XeHit(-1, 0, 0, -1)
+        return XeHit(-1, 0, 0, -1, -1, -1)
 
 # The rtcore_trace layout: rays are 8 floats (ox oy oz t_min dx dy dz t_max), results 8 words (t u v hit word, 4 unused)
 # with the hit word XERT_MISS or the primitive id.
@@ -79,3 +98,27 @@ def xert_trace_rays_gpu(accel: MutPointer[UInt8, MutAnyOrigin], rays: MutPointer
     o[unsafe_offset=1] = bitcast[DType.uint32](hit.u)
     o[unsafe_offset=2] = bitcast[DType.uint32](hit.v)
     o[unsafe_offset=3] = XERT_MISS if hit.prim < 0 else UInt32(hit.prim)
+
+# The interop layout of vulkaninterop_unpack_results_kernel: t u v, -1, mesh (or n_meshes + instance), triangle, hit flag,
+# mesh within the instance's template. Instance ord_inst holds the ordinary meshes, its geometry g is mesh ord_mesh[g].
+def xert_trace_interop_gpu(accel: MutPointer[UInt8, MutAnyOrigin], rays: MutPointer[Float32, MutAnyOrigin],
+                           results: MutPointer[UInt32, MutAnyOrigin], n: Int64, flags: UInt32, n_meshes: Int64,
+                           ord_inst: Int64, ord_mesh: MutPointer[Int32, MutAnyOrigin]):
+    var i = global_idx.x
+    if i >= Int(n):
+        return
+    var r = rays.unsafe_load[width=8](8 * i)
+    var hit = xert_trace(accel, XeRayDesc(r[0], r[1], r[2], r[4], r[5], r[6], r[3], r[7], 0xFF, flags))
+    var o = results.unsafe_offset(8 * i)
+    if hit.prim < 0:
+        o[unsafe_offset=6] = 0
+        return
+    var ordinary = Int(hit.inst) == Int(ord_inst)
+    o[unsafe_offset=0] = bitcast[DType.uint32](hit.t)
+    o[unsafe_offset=1] = bitcast[DType.uint32](hit.u)
+    o[unsafe_offset=2] = bitcast[DType.uint32](hit.v)
+    o[unsafe_offset=3] = UInt32(0xFFFFFFFF)
+    o[unsafe_offset=4] = UInt32(ord_mesh[unsafe_offset=Int(hit.geom)]) if ordinary else UInt32(Int(n_meshes) + Int(hit.inst))
+    o[unsafe_offset=5] = UInt32(hit.prim)
+    o[unsafe_offset=6] = 1
+    o[unsafe_offset=7] = 0 if ordinary else UInt32(hit.geom)

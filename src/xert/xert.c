@@ -57,7 +57,7 @@ int64_t xert_alignment(void) { return xert_init() ? ze.alignment : 0; }
 
 void xert_free(void* p) { free(p); }
 
-static void* xert_build(const ze_rtas_builder_geometry_info_ext_t** geoms, uint32_t n_geoms, int64_t* out_size) {
+static void* xert_build(const ze_rtas_builder_geometry_info_ext_t** geoms, uint32_t n_geoms, int64_t* out_size, float* box) {
   ze_rtas_builder_build_op_ext_desc_t op = {ZE_STRUCTURE_TYPE_RTAS_BUILDER_BUILD_OP_EXT_DESC};
   op.rtasFormat = ze.format;
   op.buildQuality = ZE_RTAS_BUILDER_BUILD_QUALITY_HINT_EXT_HIGH;
@@ -88,27 +88,70 @@ static void* xert_build(const ze_rtas_builder_geometry_info_ext_t** geoms, uint3
     return NULL;
   }
   *out_size = (int64_t)used;
+  memcpy(box, &bounds, sizeof(bounds));
+  return rtas;
+}
+
+void* xert_build_blas_geoms(int32_t n_geoms, const float* const* tri_verts, const int64_t* n_tris, int64_t* out_size,
+                            float* bounds) {
+  if (!xert_init() || n_geoms <= 0)
+    return NULL;
+  ze_rtas_builder_triangles_geometry_info_ext_t* meshes = calloc(n_geoms, sizeof(*meshes));
+  const ze_rtas_builder_geometry_info_ext_t** geoms = malloc(n_geoms * sizeof(*geoms));
+  int64_t max_tris = 0;
+  for (int32_t g = 0; g < n_geoms; g++)
+    max_tris = n_tris[g] > max_tris ? n_tris[g] : max_tris;
+  // Every geometry is unindexed, so they share one index buffer.
+  ze_rtas_triangle_indices_uint32_ext_t* tris = malloc((max_tris > 0 ? max_tris : 1) * sizeof(*tris));
+  for (int64_t i = 0; i < max_tris; i++)
+    tris[i] = (ze_rtas_triangle_indices_uint32_ext_t){3 * i, 3 * i + 1, 3 * i + 2};
+  for (int32_t g = 0; g < n_geoms; g++) {
+    ze_rtas_builder_triangles_geometry_info_ext_t* m = &meshes[g];
+    m->geometryType = ZE_RTAS_BUILDER_GEOMETRY_TYPE_EXT_TRIANGLES;
+    m->geometryMask = 0xFF;
+    m->triangleFormat = ZE_RTAS_BUILDER_INPUT_DATA_FORMAT_EXT_TRIANGLE_INDICES_UINT32;
+    m->triangleCount = (uint32_t)n_tris[g];
+    m->triangleStride = sizeof(*tris);
+    m->pTriangleBuffer = tris;
+    m->vertexFormat = ZE_RTAS_BUILDER_INPUT_DATA_FORMAT_EXT_FLOAT3;
+    m->vertexCount = (uint32_t)(3 * n_tris[g]);
+    m->vertexStride = 3 * sizeof(float);
+    m->pVertexBuffer = (void*)tri_verts[g];
+    geoms[g] = (const ze_rtas_builder_geometry_info_ext_t*)m;
+  }
+  void* rtas = xert_build(geoms, n_geoms, out_size, bounds);
+  free(tris);
+  free(geoms);
+  free(meshes);
   return rtas;
 }
 
 void* xert_build_blas(const float* tri_verts, int64_t n_tris, int64_t* out_size) {
-  if (!xert_init() || n_tris <= 0 || n_tris > UINT32_MAX / 3)
+  float bounds[6];
+  return xert_build_blas_geoms(1, &tri_verts, &n_tris, out_size, bounds);
+}
+
+void* xert_build_tlas(int64_t n_inst, const float* xf, const int32_t* blas_of, const uint64_t* blas_addr,
+                      const float* blas_bounds, int64_t* out_size) {
+  if (!xert_init() || n_inst <= 0 || n_inst > UINT32_MAX)
     return NULL;
-  ze_rtas_triangle_indices_uint32_ext_t* tris = malloc(n_tris * sizeof(*tris));
-  for (int64_t i = 0; i < n_tris; i++)
-    tris[i] = (ze_rtas_triangle_indices_uint32_ext_t){3 * i, 3 * i + 1, 3 * i + 2};
-  ze_rtas_builder_triangles_geometry_info_ext_t mesh = {ZE_RTAS_BUILDER_GEOMETRY_TYPE_EXT_TRIANGLES};
-  mesh.geometryMask = 0xFF;
-  mesh.triangleFormat = ZE_RTAS_BUILDER_INPUT_DATA_FORMAT_EXT_TRIANGLE_INDICES_UINT32;
-  mesh.triangleCount = (uint32_t)n_tris;
-  mesh.triangleStride = sizeof(*tris);
-  mesh.pTriangleBuffer = tris;
-  mesh.vertexFormat = ZE_RTAS_BUILDER_INPUT_DATA_FORMAT_EXT_FLOAT3;
-  mesh.vertexCount = (uint32_t)(3 * n_tris);
-  mesh.vertexStride = 3 * sizeof(float);
-  mesh.pVertexBuffer = (void*)tri_verts;
-  const ze_rtas_builder_geometry_info_ext_t* geoms[1] = {(const ze_rtas_builder_geometry_info_ext_t*)&mesh};
-  void* rtas = xert_build(geoms, 1, out_size);
-  free(tris);
+  ze_rtas_builder_instance_geometry_info_ext_t* inst = calloc(n_inst, sizeof(*inst));
+  const ze_rtas_builder_geometry_info_ext_t** geoms = malloc(n_inst * sizeof(*geoms));
+  for (int64_t k = 0; k < n_inst; k++) {
+    ze_rtas_builder_instance_geometry_info_ext_t* g = &inst[k];
+    int32_t b = blas_of[k];
+    g->geometryType = ZE_RTAS_BUILDER_GEOMETRY_TYPE_EXT_INSTANCE;
+    g->geometryMask = 0xFF;
+    g->transformFormat = ZE_RTAS_BUILDER_INPUT_DATA_FORMAT_EXT_FLOAT3X4_COLUMN_MAJOR;
+    g->instanceUserID = (uint32_t)k;
+    g->pTransform = (void*)(xf + 12 * k);
+    g->pBounds = (ze_rtas_aabb_ext_t*)(blas_bounds + 6 * b);
+    g->pAccelerationStructure = (void*)blas_addr[b];
+    geoms[k] = (const ze_rtas_builder_geometry_info_ext_t*)g;
+  }
+  float bounds[6];
+  void* rtas = xert_build(geoms, (uint32_t)n_inst, out_size, bounds);
+  free(geoms);
+  free(inst);
   return rtas;
 }
