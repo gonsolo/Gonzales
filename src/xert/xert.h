@@ -44,6 +44,10 @@ int32_t xert_alpha(void);
 // structure one after the other, the first leaf of each structure, the structure of each instance and the materials (shadow
 // rays pass interface curves). All 0: no curves.
 void xert_set_curves(uint64_t curves, uint64_t leaves, uint64_t leaf_base, uint64_t inst_blas, uint64_t materials);
+// Instances from user id base on are pieces of a split template: records[2 * (id - base)] is the instance record, the next
+// int32 the piece's first triangle.
+void xert_set_pieces(uint64_t records, int64_t base);
+// 0-4: the tables of xert_set_curves, 5-6: those of xert_set_pieces.
 uint64_t xert_curve_table(int32_t which);
 
 // Hit counts while profiling, n device words, one per instance (the ordinary geometry's last); 0 = off.

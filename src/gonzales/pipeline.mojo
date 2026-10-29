@@ -33,7 +33,7 @@ from .restir_gi import GIReservoir, gi_reservoir_init, GIReservoirIO, gi_reservo
 from .restir_sms import SMSReservoir, sms_reservoir_init, SMSReservoirIO, sms_reservoir_io_null
 from .restir_vol import VolReservoir, vol_reservoir_init, vol_reservoir_io_null
 from .gpu import gpu_render_sample, gpu_render_wavefront, gpu_adaptive_update, gpu_mnee_adapt, gpu_download_albedo, gpu_clear_film, gpu_clear_restir, gpu_clear_restir_vol
-from .gpu_scene import GpuSceneHandle, heat_fill, mesh_host_bytes, xert_heat, xert_mesh_blas, WAVEFRONT_BATCH, gpu_available, gpu_upload_scene, gpu_alloc_pixel_buffers, gpu_free_scene, gpu_ptex_begin, gpu_ptex_finish, gpu_ptex_withhold, gpu_ptex_withheld, gpu_ptex_redo_upload, gpu_ptex_stream_start, gpu_ptex_poll, gpu_ptex_stream_finish, gpu_ptex_make_room, gpu_set_curve_bvh_dev, typed_ptr
+from .gpu_scene import GpuSceneHandle, XertPieces, heat_fill, mesh_host_bytes, xert_heat, xert_mesh_blas, WAVEFRONT_BATCH, gpu_available, gpu_upload_scene, gpu_alloc_pixel_buffers, gpu_free_scene, gpu_ptex_begin, gpu_ptex_finish, gpu_ptex_withhold, gpu_ptex_withheld, gpu_ptex_redo_upload, gpu_ptex_stream_start, gpu_ptex_poll, gpu_ptex_stream_finish, gpu_ptex_make_room, gpu_set_curve_bvh_dev, typed_ptr
 from .gpu_denoise import gpu_atrous_denoise
 from .gpu_wavefront import gpu_gen_aux_buffers
 from .viewer import CameraState, viewer_create, viewer_update_framebuffer, viewer_should_close, viewer_poll_events, viewer_get_camera_state, viewer_set_camera_state, viewer_destroy, viewer_denoise_enabled, viewer_monitor_size, build_camera_to_world
@@ -42,7 +42,7 @@ from .vulkanrt import vulkanrt_build_scene, vulkanrt_destroy_scene
 from .curve_bvh import CurveBvhDev, gpu_build_curve_bvh, _leaf_range
 from .optixcurves import gpu_build_optix_curves, oxc_active, oxc_bytes, oxc_destroy, oxc_set_active
 from .rt_build import rt_build_blas, rt_build_tlas, rt_patch_ids, RtTlas, _fbits
-from .xert import xert_alignment, xert_build_blas_geoms, xert_build_tlas, xert_curve_table, xert_free, xert_heat_path, xert_heat_save, xert_set_curves, xert_set_heat, xert_set_scene
+from .xert import xert_alignment, xert_build_blas_geoms, xert_build_tlas, xert_curve_table, xert_free, xert_heat_path, xert_heat_save, xert_set_curves, xert_set_heat, xert_set_pieces, xert_set_scene
 from .rt_cache import rt_cache_load, rt_cache_save, RtCacheTlas
 from .scene_cache import scene_cache_variant
 from max.algorithm import parallelize
@@ -1114,20 +1114,20 @@ def _rt_curve_clusters(handle: Pointer[GpuSceneHandle, MutUntrackedOrigin], psc:
 # GONZALES_XERT_VRAM_MB: that many MiB of BLASes. Unset: the BLASes and the host-memory mesh arrays (mesh_host_kb) share
 # what the card has free after the instances and GONZALES_XERT_RESERVE_MB (later buffers and kernel stacks); move_mesh
 # then marks the meshes to copy to the card.
-def _xert_placement(ctx: DeviceContext, psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin], sizes: List[Int], align: Int,
-                    mesh_host_kb: Int, mut move_mesh: List[Bool]) raises -> List[Bool]:
+def _xert_placement(ctx: DeviceContext, psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin], ref pieces: XertPieces, sizes: List[Int],
+                    align: Int, mesh_host_kb: Int, mut move_mesh: List[Bool]) raises -> List[Bool]:
     var n_blas = len(sizes)
     var nt = Int(psc[unsafe_offset=0].blas_count)
-    var n_inst = Int(psc[unsafe_offset=0].instance_count) + n_blas - nt
+    var n_inst = Int(psc[unsafe_offset=0].instance_count) + n_blas - len(pieces.tmpl) - nt + len(pieces.entry_rec)
     var heat = List[Float64]()
-    var profiled = xert_heat(psc[], n_blas, heat)
+    var profiled = xert_heat(psc[], pieces, n_blas, heat)
     var bytes = List[Int]()
     var hits = 0.0
     for b in range(n_blas):
         bytes.append((sizes[b] + align - 1) // align * align)
         hits += heat[b]
     var mesh_blas = List[Int]()
-    _ = xert_mesh_blas(psc[], mesh_blas)
+    _ = xert_mesh_blas(psc[], pieces, mesh_blas)
     var auto = getenv("GONZALES_XERT_VRAM_MB") == ""
     var budget = 0
     if auto:
@@ -1135,6 +1135,11 @@ def _xert_placement(ctx: DeviceContext, psc: Pointer[ParsedScene_Mojo, MutUntrac
         budget = Int(ctx.get_memory_info()[0]) - 145 * n_inst - reserve * 1048576
         for b in range(n_blas):     # the mesh arrays of BLAS b are item n_blas + b
             heat.append(heat[b]); bytes.append(0)
+        var n_base = n_blas - len(pieces.tmpl)
+        for p in range(len(pieces.tmpl)):   # a cut mesh's arrays serve all its pieces
+            var p0 = pieces.of_mesh[pieces.mesh[p]] if pieces.mesh[p] >= 0 else p
+            if p0 != p:
+                heat[n_blas + n_base + p0] += heat[n_blas + n_base + p]; heat[n_blas + n_base + p] = 0
         for i in range(Int(psc[unsafe_offset=0].mesh_count)):
             if mesh_blas[i] >= 0:
                 bytes[n_blas + mesh_blas[i]] += mesh_host_bytes(psc[], i, mesh_host_kb)
@@ -1158,7 +1163,7 @@ def _xert_placement(ctx: DeviceContext, psc: Pointer[ParsedScene_Mojo, MutUntrac
         elif hot < 0 or heat[b] > heat[hot]:
             hot = b
         if auto and placed[n_blas + b]:
-            mesh_used += bytes[n_blas + b]; mesh_held += heat[b]
+            mesh_used += bytes[n_blas + b]; mesh_held += heat[n_blas + b]
     move_mesh = List[Bool](length=max(Int(psc[unsafe_offset=0].mesh_count), 1), fill=False)
     if auto:
         for i in range(Int(psc[unsafe_offset=0].mesh_count)):
@@ -1175,9 +1180,14 @@ def _xert_placement(ctx: DeviceContext, psc: Pointer[ParsedScene_Mojo, MutUntrac
     return on_dev^
 
 
+def _xert_in_piece(ref pieces: XertPieces, p: Int, mesh: Int) -> Bool:
+    return pieces.mesh[p] == mesh if pieces.mesh[p] >= 0 else pieces.of_mesh[mesh] == p
+
+
 # Intel Xe2: the driver builds one BLAS per template, one per ordinary mesh and one over the ordinary curves, a geometry per
-# indexed mesh and one of procedural primitives for the curve leaves; then the TLAS over the instances (user id = instance)
-# and, last, the identity instances of the ordinary BLASes. Returns the TLAS's device address (0 on failure), the first
+# indexed mesh and one of procedural primitives for the curve leaves, and one per piece of a split template (XertPieces);
+# then the TLAS over the instances (user id = instance), the identity instances of the ordinary BLASes and, last, the piece
+# instances. Returns the TLAS's device address (0 on failure), the first
 # ordinary instance and the device table of their meshes; the curve tables go to xert_set_curves.
 def _xert_attach(ctx: DeviceContext, psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin], curves: Int, materials: Int, mesh_host_kb: Int,
                  mut move_mesh: List[Bool], mut bufs: List[DeviceBuffer[DType.uint8]], mut host_bufs: List[HostBuffer[DType.uint8]]) raises -> Tuple[UInt64, Int64, UInt64]:
@@ -1199,7 +1209,11 @@ def _xert_attach(ctx: DeviceContext, psc: Pointer[ParsedScene_Mojo, MutUntracked
         if psc[unsafe_offset=0].prim_ids[unsafe_offset=j].type == Int8(5):
             ord_curves.append(psc[unsafe_offset=0].prim_ids[unsafe_offset=j])
     var n_ord = len(ord) + Int(len(ord_curves) > 0)
-    var n_blas = nt + n_ord
+    var pieces = XertPieces(psc[])
+    var n_base = nt + n_ord
+    var n_blas = n_base + len(pieces.tmpl)
+    if len(pieces.tmpl) > 0:
+        print("RT hardware (Intel):", len(pieces.tmpl), "pieces of large templates,", len(pieces.entry_rec), "piece instances")
     var leaves = List[PrimId]()
     var leaf_base = List[Int32]()
     var blas = List[Pointer[UInt8, MutUntrackedOrigin]]()
@@ -1207,10 +1221,11 @@ def _xert_attach(ctx: DeviceContext, psc: Pointer[ParsedScene_Mojo, MutUntracked
     var bounds = unsafe_alloc[Float32](6 * max(n_blas, 1))
     for b in range(n_blas):
         var ms = List[Int]()
-        if b < nt:
-            for i in range(Int(psc[unsafe_offset=0].template_mesh_start[unsafe_offset=b]), Int(psc[unsafe_offset=0].template_mesh_end[unsafe_offset=b])):
+        var t = b if b < nt and not pieces.split(b) else (pieces.tmpl[b - n_base] if b >= n_base else -1)
+        if t >= 0:
+            for i in range(Int(psc[unsafe_offset=0].template_mesh_start[unsafe_offset=t]), Int(psc[unsafe_offset=0].template_mesh_end[unsafe_offset=t])):
                 ms.append(i)
-        elif b - nt < len(ord):
+        elif b >= nt and b - nt < len(ord):
             ms.append(Int(ord[b - nt]))
         leaf_base.append(Int32(len(leaves)))
         if b < nt:
@@ -1219,7 +1234,7 @@ def _xert_attach(ctx: DeviceContext, psc: Pointer[ParsedScene_Mojo, MutUntracked
                 var cb = Int(rec.id2)
                 for j in range(Int(psc[unsafe_offset=0].blas_primid_counts[unsafe_offset=cb])):
                     leaves.append(psc[unsafe_offset=0].blas_primids_arr[unsafe_offset=cb][unsafe_offset=j])
-        elif b - nt == len(ord):
+        elif b - nt == len(ord) and b < n_base:
             for c in ord_curves:
                 leaves.append(c)
         var n_procs = len(leaves) - Int(leaf_base[b])
@@ -1242,24 +1257,34 @@ def _xert_attach(ctx: DeviceContext, psc: Pointer[ParsedScene_Mojo, MutUntracked
         var tris = unsafe_alloc[Pointer[UInt32, MutUntrackedOrigin]](max(len(ms), 1))
         var n_verts = unsafe_alloc[Int64](max(len(ms), 1))
         var n_tris = unsafe_alloc[Int64](max(len(ms), 1))
+        var cut = b >= n_base and pieces.mesh[b - n_base] >= 0
         for g in range(len(ms)):
+            if b >= n_base and not _xert_in_piece(pieces, b - n_base, ms[g]):   # another piece's: an empty geometry keeps the ids
+                verts[unsafe_offset=g] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling()
+                tris[unsafe_offset=g] = Pointer[UInt32, MutUntrackedOrigin].unsafe_dangling()
+                n_verts[unsafe_offset=g] = 0; n_tris[unsafe_offset=g] = 0
+                continue
             var mesh = psc[unsafe_offset=0].meshes[unsafe_offset=ms[g]]
             var nv = Int(psc[unsafe_offset=0].mesh_n_verts[unsafe_offset=ms[g]])
             var n = Int(psc[unsafe_offset=0].mesh_n_tris[unsafe_offset=ms[g]])
+            var t0 = pieces.lo[b - n_base] if cut else 0
+            if cut:
+                n = pieces.hi[b - n_base] - t0
             var v = unsafe_alloc[Float32](3 * max(nv, 1))
             for k in range(nv):
                 var p = mesh_pos(mesh, k)
                 v[unsafe_offset=3 * k] = p.x; v[unsafe_offset=3 * k + 1] = p.y; v[unsafe_offset=3 * k + 2] = p.z
             var t = unsafe_alloc[UInt32](3 * max(n, 1))
             for k in range(3 * n):
-                t[unsafe_offset=k] = UInt32(mesh_vi(mesh, k))
+                t[unsafe_offset=k] = UInt32(mesh_vi(mesh, 3 * t0 + k))
             verts[unsafe_offset=g] = v; tris[unsafe_offset=g] = t
             n_verts[unsafe_offset=g] = Int64(nv); n_tris[unsafe_offset=g] = Int64(n)
         var size = Int64(0)
         var r = xert_build_blas_geoms(Int32(len(ms)), verts, n_verts, tris, n_tris, Int64(n_procs), proc_bounds,
                                       Pointer(to=size).unsafe_origin_cast[MutUntrackedOrigin](), bounds.unsafe_offset(6 * b))
         for g in range(len(ms)):
-            verts[unsafe_offset=g].unsafe_free(); tris[unsafe_offset=g].unsafe_free()
+            if b < n_base or _xert_in_piece(pieces, b - n_base, ms[g]):
+                verts[unsafe_offset=g].unsafe_free(); tris[unsafe_offset=g].unsafe_free()
         verts.unsafe_free(); tris.unsafe_free(); n_verts.unsafe_free(); n_tris.unsafe_free(); proc_bounds.unsafe_free()
         if Int(r) == 0:
             print("RT hardware: the Intel builder failed on structure", b, "of", n_blas)
@@ -1268,7 +1293,7 @@ def _xert_attach(ctx: DeviceContext, psc: Pointer[ParsedScene_Mojo, MutUntracked
             bounds.unsafe_free()
             return fail
         blas.append(r); sizes.append(Int(size))
-    var on_dev = _xert_placement(ctx, psc, sizes, align, mesh_host_kb, move_mesh)
+    var on_dev = _xert_placement(ctx, psc, pieces, sizes, align, mesh_host_kb, move_mesh)
     var offsets = List[Int](length=max(n_blas, 1), fill=0)
     var dev_total = 0
     var host_total = 0
@@ -1297,7 +1322,7 @@ def _xert_attach(ctx: DeviceContext, psc: Pointer[ParsedScene_Mojo, MutUntracked
     for b in range(n_blas):
         if sizes[b] > 0: xert_free(blas[b])
     # Instances store world-to-object rows; the builder takes object-to-world columns.
-    var n_inst = ni + n_ord
+    var n_inst = ni + n_ord + len(pieces.entry_rec)
     var xf = unsafe_alloc[Float32](12 * max(n_inst, 1))
     var blas_of = unsafe_alloc[Int32](max(n_inst, 1))
     for k in range(ni):
@@ -1320,6 +1345,12 @@ def _xert_attach(ctx: DeviceContext, psc: Pointer[ParsedScene_Mojo, MutUntracked
         for q in range(12):
             xf[unsafe_offset=12 * (ni + c) + q] = Float32(1) if q == 0 or q == 4 or q == 8 else Float32(0)
         blas_of[unsafe_offset=ni + c] = Int32(nt + c) if sizes[nt + c] > 0 else Int32(-1)
+    for j in range(len(pieces.entry_rec)):
+        var u = ni + n_ord + j
+        var p = n_base + pieces.entry_piece[j]
+        for q in range(12):
+            xf[unsafe_offset=12 * u + q] = xf[unsafe_offset=12 * Int(pieces.entry_rec[j]) + q]
+        blas_of[unsafe_offset=u] = Int32(p) if sizes[p] > 0 else Int32(-1)
     var tlas_size = Int64(0)
     var tlas = xert_build_tlas(Int64(n_inst), xf, blas_of, addr, bounds, Pointer(to=tlas_size).unsafe_origin_cast[MutUntrackedOrigin]())
     xf.unsafe_free(); addr.unsafe_free(); bounds.unsafe_free()
@@ -1338,6 +1369,15 @@ def _xert_attach(ctx: DeviceContext, psc: Pointer[ParsedScene_Mojo, MutUntracked
     else:
         xert_set_curves(0, 0, 0, 0, 0)
     blas_of.unsafe_free()
+    var piece_tab = List[Int32]()
+    for j in range(len(pieces.entry_rec)):
+        piece_tab.append(pieces.entry_rec[j]); piece_tab.append(Int32(pieces.lo[pieces.entry_piece[j]]))
+    var piece_buf = ctx.enqueue_create_buffer[DType.uint8](4 * max(len(piece_tab), 1))
+    if len(piece_tab) > 0:
+        ctx.enqueue_copy(piece_buf, piece_tab.unsafe_ptr().unsafe_bitcast[UInt8]())
+        ctx.synchronize()
+    xert_set_pieces(UInt64(Int(piece_buf.unsafe_ptr())), Int64(ni + n_ord))
+    bufs.append(piece_buf^)
     if Int(tlas) == 0:
         print("RT hardware: the Intel builder failed on the instances")
         return fail

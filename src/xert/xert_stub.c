@@ -38,7 +38,7 @@ int64_t xert_scene_n_meshes(void) { return scene.n_meshes; }
 int32_t xert_shadow_slots(void) { return scene.shadow_slots; }
 int32_t xert_alpha(void) { return scene.alpha; }
 
-static uint64_t curve_tables[5];
+static uint64_t curve_tables[7] = {0, 0, 0, 0, 0, 0, INT32_MAX};
 
 void xert_set_curves(uint64_t curves, uint64_t leaves, uint64_t leaf_base, uint64_t inst_blas, uint64_t materials) {
   curve_tables[0] = curves;
@@ -48,7 +48,12 @@ void xert_set_curves(uint64_t curves, uint64_t leaves, uint64_t leaf_base, uint6
   curve_tables[4] = materials;
 }
 
-uint64_t xert_curve_table(int32_t which) { return which >= 0 && which < 5 ? curve_tables[which] : 0; }
+void xert_set_pieces(uint64_t records, int64_t base) {
+  curve_tables[5] = records;
+  curve_tables[6] = (uint64_t)base;
+}
+
+uint64_t xert_curve_table(int32_t which) { return which >= 0 && which < 7 ? curve_tables[which] : 0; }
 
 static struct {
   uint64_t counts;

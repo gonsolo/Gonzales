@@ -1125,9 +1125,129 @@ def _mesh_bytes(ref s: ParsedScene_Mojo, i: Int) -> Int:
                 + (0 if quads != Int32(0) else Int(s.mesh_n_tris[unsafe_offset=i]) * 3)
                 + Int(s.mesh_uv_n_verts[unsafe_offset=i]) * 2 + Int(s.mesh_nrm_n_verts[unsafe_offset=i]))
 
+# Intel Xe2: a template of a few instances, over 16 pieces' worth of triangles and without curves, is built as pieces so heat
+# placement can keep its visible part on the card (smaller ones fit whole; pieces' boxes overlap and slow traversal): triangle ranges lo ..< hi of each big mesh, median splits of the centres
+# of the other meshes. Piece instance j is piece entry_piece[j] of instance record entry_rec[j]; the pieces of template t
+# are first[t] ..< first[t + 1].
+comptime XERT_PIECE_TRIS = 1 << 20
+
+struct XertPieces(Movable):
+    var of_mesh: List[Int]      # the piece of each mesh (a big one's first range), -1: none
+    var tmpl: List[Int]
+    var mesh: List[Int]         # the big mesh a range piece cuts, -1: a piece of whole meshes
+    var lo: List[Int]
+    var hi: List[Int]
+    var first: List[Int]
+    var entry_rec: List[Int32]
+    var entry_piece: List[Int]
+
+    def __init__(out self, ref s: ParsedScene_Mojo):
+        var nt = Int(s.blas_count)
+        self.of_mesh = List[Int](length=max(Int(s.mesh_count), 1), fill=-1)
+        self.tmpl = List[Int]()
+        self.mesh = List[Int]()
+        self.lo = List[Int]()
+        self.hi = List[Int]()
+        self.first = List[Int](length=nt + 1, fill=0)
+        self.entry_rec = List[Int32]()
+        self.entry_piece = List[Int]()
+        var n_inst = List[Int](length=max(nt, 1), fill=0)
+        for k in range(Int(s.instance_count)):
+            var b = Int(s.instances[unsafe_offset=k].blasIdx)
+            if b >= 0 and b < nt:
+                n_inst[b] += 1
+        for t in range(nt):
+            self.first[t] = len(self.tmpl)
+            var m0 = Int(s.template_mesh_start[unsafe_offset=t])
+            var m1 = Int(s.template_mesh_end[unsafe_offset=t])
+            var tris = 0
+            for i in range(m0, m1):
+                tris += Int(s.mesh_n_tris[unsafe_offset=i])
+            var rec = s.blas_primids_arr[unsafe_offset=t][unsafe_offset=0]
+            var curves = Int(s.blas_primid_counts[unsafe_offset=t]) > 0 and rec.type == Int8(7) and rec.id2 > Int64(0)
+            if n_inst[t] == 0 or n_inst[t] > 4 or tris <= 16 * XERT_PIECE_TRIS or curves:
+                continue
+            var rest = 0
+            for i in range(m0, m1):
+                var n = Int(s.mesh_n_tris[unsafe_offset=i])
+                if n <= XERT_PIECE_TRIS:
+                    rest += n
+                    continue
+                var k = ceildiv(n, XERT_PIECE_TRIS)
+                self.of_mesh[i] = len(self.tmpl)
+                for r in range(k):
+                    self._add(t, i, r * n // k, (r + 1) * n // k)
+            if rest > 0:
+                self._split(s, t, m0, m1)
+        self.first[nt] = len(self.tmpl)
+        if len(self.tmpl) > 0:
+            for k in range(Int(s.instance_count)):
+                var b = Int(s.instances[unsafe_offset=k].blasIdx)
+                if b >= 0 and b < nt:
+                    for p in range(self.first[b], self.first[b + 1]):
+                        self.entry_rec.append(Int32(k)); self.entry_piece.append(p)
+
+    def _add(mut self, t: Int, mesh: Int, lo: Int, hi: Int):
+        self.tmpl.append(t); self.mesh.append(mesh); self.lo.append(lo); self.hi.append(hi)
+
+    def split(self, t: Int) -> Bool:
+        return self.first[t + 1] > self.first[t]
+
+    def _split(mut self, ref s: ParsedScene_Mojo, t: Int, m0: Int, m1: Int):
+        var cen = List[Float32](length=3 * (m1 - m0), fill=0)
+        var idx = List[Int]()
+        for i in range(m0, m1):
+            if Int(s.mesh_n_tris[unsafe_offset=i]) > XERT_PIECE_TRIS:
+                continue
+            var mesh = s.meshes[unsafe_offset=i]
+            var lo = SIMD[DType.float32, 4](1e30)
+            var hi = SIMD[DType.float32, 4](-1e30)
+            for v in range(Int(s.mesh_n_verts[unsafe_offset=i])):
+                var q = mesh_pos(mesh, v)
+                var w = SIMD[DType.float32, 4](q.x, q.y, q.z, 0)
+                lo = min(lo, w); hi = max(hi, w)
+            for a in range(3):
+                cen[3 * (i - m0) + a] = 0.5 * (lo[a] + hi[a])
+            idx.append(i)
+        var todo: List[Tuple[Int, Int]] = [(0, len(idx))]
+        while len(todo) > 0:
+            var r = todo.pop()
+            var a = r[0]
+            var b = r[1]
+            var tris = 0
+            var lo = SIMD[DType.float32, 4](1e30)
+            var hi = SIMD[DType.float32, 4](-1e30)
+            for j in range(a, b):
+                tris += Int(s.mesh_n_tris[unsafe_offset=idx[j]])
+                var c = 3 * (idx[j] - m0)
+                var w = SIMD[DType.float32, 4](cen[c], cen[c + 1], cen[c + 2], 0)
+                lo = min(lo, w); hi = max(hi, w)
+            if tris <= XERT_PIECE_TRIS or b - a < 2:
+                for j in range(a, b):
+                    self.of_mesh[idx[j]] = len(self.tmpl)
+                self._add(t, -1, 0, 0)
+                continue
+            var e = hi - lo
+            var axis = 0 if e[0] >= e[1] and e[0] >= e[2] else (1 if e[1] >= e[2] else 2)
+            var keys = List[UInt64]()
+            for j in range(a, b):
+                var bits = bitcast[DType.uint32](cen[3 * (idx[j] - m0) + axis])
+                bits = ~bits if bits >> 31 != 0 else bits | 0x80000000    # float order as integers
+                keys.append((UInt64(bits) << 32) | UInt64(idx[j] - m0))
+            sort(Span(keys))
+            var m = a
+            var acc = 0
+            for j in range(a, b):
+                idx[j] = m0 + Int(keys[j - a] & 0xFFFFFFFF)
+                acc += Int(s.mesh_n_tris[unsafe_offset=idx[j]])
+                if acc <= tris // 2:
+                    m = j + 1
+            m = min(max(m, a + 1), b - 1)
+            todo.append((a, m)); todo.append((m, b))
+
 # The Intel BLAS of each mesh: its template, else nt + its place among the ordinary meshes (-1: empty). The ordinary curves,
-# if any, have the BLAS after the last ordinary mesh.
-def xert_mesh_blas(ref s: ParsedScene_Mojo, mut of: List[Int]) -> Int:
+# if any, have the BLAS after the last ordinary mesh, the template pieces the BLASes after those.
+def xert_mesh_blas(ref s: ParsedScene_Mojo, ref pieces: XertPieces, mut of: List[Int]) -> Int:
     var nm = Int(s.mesh_count)
     var nt = Int(s.blas_count)
     of = List[Int](length=max(nm, 1), fill=-1)
@@ -1143,11 +1263,14 @@ def xert_mesh_blas(ref s: ParsedScene_Mojo, mut of: List[Int]) -> Int:
         if s.prim_ids[unsafe_offset=j].type == Int8(5):
             n_blas += 1
             break
-    return n_blas
+    for i in range(nm):
+        if pieces.of_mesh[i] >= 0:
+            of[i] = n_blas + pieces.of_mesh[i]
+    return n_blas + len(pieces.tmpl)
 
 # Hits per Intel BLAS from the per-instance counts in xert_heat_path() (written by a run without that file; the ordinary
-# BLASes' identity instances follow the scene's), else instance counts. True when profiled.
-def xert_heat(ref s: ParsedScene_Mojo, n_blas: Int, mut heat: List[Float64]) raises -> Bool:
+# BLASes' identity instances follow the scene's, the template pieces' those), else instance counts. True when profiled.
+def xert_heat(ref s: ParsedScene_Mojo, ref pieces: XertPieces, n_blas: Int, mut heat: List[Float64]) raises -> Bool:
     var nt = Int(s.blas_count)
     var ni = Int(s.instance_count)
     var path = xert_heat_path()
@@ -1155,15 +1278,19 @@ def xert_heat(ref s: ParsedScene_Mojo, n_blas: Int, mut heat: List[Float64]) rai
     if path != "" and exists(path):
         with open(path, "r") as f:
             counts = f.read_bytes()
-    var profiled = len(counts) == 4 * (ni + n_blas - nt)
+    var n_base = n_blas - len(pieces.tmpl)
+    var n_users = ni + n_base - nt
+    var profiled = len(counts) == 4 * (n_users + len(pieces.entry_rec))
     var cp = counts.unsafe_ptr().unsafe_bitcast[UInt32]()
     heat = List[Float64](length=max(n_blas, 1), fill=0)
     for k in range(ni):
         var b = Int(s.instances[unsafe_offset=k].blasIdx)
         if b >= 0 and b < nt:
             heat[b] += Float64(cp[unsafe_offset=k]) if profiled else 1.0
-    for b in range(nt, n_blas):
+    for b in range(nt, n_base):
         heat[b] += Float64(cp[unsafe_offset=ni + b - nt]) if profiled else 1.0
+    for j in range(len(pieces.entry_rec)):
+        heat[n_base + pieces.entry_piece[j]] += Float64(cp[unsafe_offset=n_users + j]) if profiled else 1.0
     return profiled
 
 # Greedy fill of budget bytes with the items of most heat per byte, marked in placed; returns the heat they hold.
@@ -1191,9 +1318,10 @@ def _meshes_on_device(ref s: ParsedScene_Mojo, host_kb: Int) raises -> List[Bool
     if host_kb == 0 or getenv("GONZALES_MESH_VRAM_MB") == "":
         return keep^
     var blas_of = List[Int]()
-    var n_blas = xert_mesh_blas(s, blas_of)
+    var pieces = XertPieces(s)
+    var n_blas = xert_mesh_blas(s, pieces, blas_of)
     var heat = List[Float64]()
-    _ = xert_heat(s, n_blas, heat)
+    _ = xert_heat(s, pieces, n_blas, heat)
     var bytes = List[Int](length=max(n_blas, 1), fill=0)
     for i in range(nm):
         if blas_of[i] >= 0:

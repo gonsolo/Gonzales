@@ -79,7 +79,7 @@ int64_t xert_scene_n_meshes(void) { return scene.n_meshes; }
 int32_t xert_shadow_slots(void) { return scene.shadow_slots; }
 int32_t xert_alpha(void) { return scene.alpha; }
 
-static uint64_t curve_tables[5];
+static uint64_t curve_tables[7] = {0, 0, 0, 0, 0, 0, INT32_MAX};
 
 void xert_set_curves(uint64_t curves, uint64_t leaves, uint64_t leaf_base, uint64_t inst_blas, uint64_t materials) {
   curve_tables[0] = curves;
@@ -89,7 +89,12 @@ void xert_set_curves(uint64_t curves, uint64_t leaves, uint64_t leaf_base, uint6
   curve_tables[4] = materials;
 }
 
-uint64_t xert_curve_table(int32_t which) { return which >= 0 && which < 5 ? curve_tables[which] : 0; }
+void xert_set_pieces(uint64_t records, int64_t base) {
+  curve_tables[5] = records;
+  curve_tables[6] = (uint64_t)base;
+}
+
+uint64_t xert_curve_table(int32_t which) { return which >= 0 && which < 7 ? curve_tables[which] : 0; }
 
 static struct {
   uint64_t counts;
@@ -168,6 +173,10 @@ void* xert_build_blas_geoms(int32_t n_geoms, const float* const* verts, const in
     ze_rtas_builder_triangles_geometry_info_ext_t* m = &meshes[g];
     m->geometryType = ZE_RTAS_BUILDER_GEOMETRY_TYPE_EXT_TRIANGLES;
     m->geometryMask = 0xFF;
+    if (n_tris[g] == 0) {   // a mesh of the template outside this piece keeps its geometry id
+      geoms[g] = NULL;
+      continue;
+    }
     m->triangleFormat = ZE_RTAS_BUILDER_INPUT_DATA_FORMAT_EXT_TRIANGLE_INDICES_UINT32;
     m->triangleCount = (uint32_t)n_tris[g];
     m->triangleStride = 3 * sizeof(uint32_t);
