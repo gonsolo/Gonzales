@@ -1345,9 +1345,20 @@ def gpu_upload_scene(
             var walk_bvh = WalkBvhBuffers.upload(ctx, s)
             ctx.synchronize()
             _gpu_free_log("bvh+blas")
-            var instances_gpu_buf = _gpu_upload_array[Instance](ctx, s.instances, 1 if instances_external else Int(s.instance_count))
+            # Intel: more than 1 GiB of instance records (the unculled island: 2.4 GB) stays in host memory, read once a hit.
+            var n_inst = Int(s.instance_count)
+            var inst_host = not instances_external and xert_alignment() > 0 and n_inst * size_of[Instance]() > 1 << 30
+            var instances_gpu_buf = _gpu_upload_array[Instance](ctx, s.instances, 1 if instances_external or inst_host else n_inst)
             var host_plan = _host_plan(ctx, s, n_pixels)
             var meshes = MeshBuffers.upload(ctx, s, host_plan[0])
+            var instances_ext = 0
+            if inst_host:
+                var hb = ctx.enqueue_create_host_buffer[DType.uint8](n_inst * size_of[Instance]())
+                ctx.synchronize()
+                instances_ext = Int(hb.unsafe_ptr())
+                unsafe_memcpy(dest=Pointer[Instance, MutUntrackedOrigin](unsafe_from_address=instances_ext), src=s.instances, count=n_inst)
+                meshes.host_bufs.append(hb^)
+                print("GPU: instance records in host memory,", n_inst * size_of[Instance]() // 1048576, "MiB")
             ctx.synchronize()
             _gpu_free_log("meshes")
             # >= 1 elem to avoid a zero-size buffer
@@ -1426,7 +1437,7 @@ def gpu_upload_scene(
                 walk_bvh=walk_bvh^,
                 instances_buf=instances_gpu_buf^,
                 n_instances=Int(s.instance_count),
-                instances_ext=0,
+                instances_ext=instances_ext,
                 meshes=meshes^,
                 materials_buf=mat_buf^,
                 material_count=Int(s.material_count),
