@@ -2513,7 +2513,20 @@ def parse_and_render(
         var instance_base_mesh_buf_opt: Optional[DeviceBuffer[DType.uint8]] = None
         var n_meshes_vk = 0
         var max_rays_vk = Int64(n_pixels) * Int64(WAVEFRONT_BATCH)
-        if use_vk:
+        var rtb = _RtBufs()
+        if use_vk and xert_alignment() > 0:   # Intel Xe2: the interactive renderer's and the sessions' setup
+            try:
+                rtb = _rt_wavefront_setup(handle, psc, Int(max_rays_vk))
+            except e:
+                print("RT hardware (Intel): setup failed:", e)
+            use_vk = rtb.on
+            interop_rays_buf_opt = rtb.rays
+            interop_results_buf_opt = rtb.results
+            mesh_material_idx_buf_opt = rtb.mesh_material_idx
+            mesh_al_idx_buf_opt = rtb.mesh_al_idx
+            instance_base_mesh_buf_opt = rtb.instance_base_mesh
+            n_meshes_vk = rtb.n_meshes
+        if use_vk and not rtb.on:
             n_meshes_vk = Int(psc[unsafe_offset=0].mesh_count)
             var vmeshes = unsafe_alloc[TriangleMesh](max(n_meshes_vk, 1))
             var point_counts = unsafe_alloc[Int64](max(n_meshes_vk, 1))
@@ -2802,7 +2815,7 @@ def parse_and_render(
                       handle[].textures.ptex_cache.cap * 3 // (1024 * 1024), "MB;", renderer.ptex_redone,
                       "sample(s) rendered again; waited", Float64(Int(renderer.ptex_seconds * 100.0)) / 100.0, "s")
                 renderer.ptex_scratch.unsafe_free(); renderer.ptex_si_of.unsafe_free()
-        if use_vk:
+        if use_vk and not rtb.on:
             var rt_hw_end = rtcore_active()
             if Int(rt_hw_end) != 0:
                 rtcore_destroy(rt_hw_end)
@@ -2812,7 +2825,11 @@ def parse_and_render(
         var albedo_gpu   = List[Float32](capacity=n_pixels * 3)
         denoised_gpu.resize(n_pixels * 3, Float32(0))
         albedo_gpu.resize(n_pixels * 3, Float32(0))
-        gpu_gen_aux_buffers(handle, psc[unsafe_offset=0].camera_to_world, Int64(n_pixels))
+        if rtb.on:
+            gpu_gen_aux_buffers(handle, psc[unsafe_offset=0].camera_to_world, Int64(n_pixels), rtb.rays, rtb.results,
+                                rtb.mesh_material_idx, rtb.mesh_al_idx, rtb.n_meshes, rtb.instance_base_mesh)
+        else:
+            gpu_gen_aux_buffers(handle, psc[unsafe_offset=0].camera_to_world, Int64(n_pixels))
         _gpu_resolve(handle, psc, denoised_gpu.unsafe_ptr(), n_pixels, spp, not no_denoise)
         # The image before denoising, for the .noisy.exr sidecar: the same
         # normalize pass without the a-trous blur (it only reads the film).
@@ -2824,7 +2841,7 @@ def parse_and_render(
         var inv_spp = Float32(1.0) / Float32(spp)
         for i in range(n_pixels * 3):
             albedo_gpu[i] *= inv_spp
-        if not own_rt_used:      # freeing the scene spins forever after an own-structure render of a large scene: leave it to process exit
+        if not own_rt_used and not rtb.on:      # freeing the scene spins forever after an own-structure render of a large scene: leave it to process exit
             gpu_free_scene(handle)
         # Normals and depth for the output layers: the same host first-hit pass every other driver uses
         # (render_aux_buffers), started before the render.
