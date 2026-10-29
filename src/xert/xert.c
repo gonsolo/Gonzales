@@ -115,16 +115,25 @@ static void* xert_build(const ze_rtas_builder_geometry_info_ext_t** geoms, uint3
   op.ppGeometries = geoms;
   op.numGeometries = n_geoms;
   ze_rtas_builder_ext_properties_t props = {ZE_STRUCTURE_TYPE_RTAS_BUILDER_EXT_PROPERTIES};
-  if (ze.zeRTASBuilderGetBuildPropertiesExt(ze.builder, &op, &props))
+  ze_result_t r = ze.zeRTASBuilderGetBuildPropertiesExt(ze.builder, &op, &props);
+  if (r != ZE_RESULT_SUCCESS) {
+    fprintf(stderr, "xert: build properties failed 0x%x for %u geometries\n", r, n_geoms);
     return NULL;
+  }
   size_t bytes = (props.rtasBufferSizeBytesMaxRequired + ze.alignment - 1) / ze.alignment * ze.alignment;
   void* rtas = aligned_alloc(ze.alignment, bytes);
   void* scratch = malloc(props.scratchBufferSizeBytes + 1);
+  if (!rtas || !scratch) {
+    fprintf(stderr, "xert: cannot allocate %zu + %zu bytes\n", bytes, (size_t)props.scratchBufferSizeBytes);
+    free(rtas);
+    free(scratch);
+    return NULL;
+  }
   ze_rtas_parallel_operation_ext_handle_t par = NULL;
   ze_rtas_aabb_ext_t bounds;
   size_t used = 0;
   // The driver dereferences the parallel operation even for a synchronous build.
-  ze_result_t r = ze.zeRTASParallelOperationCreateExt(ze.driver, &par);
+  r = ze.zeRTASParallelOperationCreateExt(ze.driver, &par);
   if (r == ZE_RESULT_SUCCESS)
     r = ze.zeRTASBuilderBuildExt(ze.builder, &op, scratch, props.scratchBufferSizeBytes, rtas, bytes, par, NULL,
                                  &bounds, &used);
