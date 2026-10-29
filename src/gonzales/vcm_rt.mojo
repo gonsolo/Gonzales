@@ -10,7 +10,7 @@ from .gpu_wavefront import (
     vulkaninterop_unpack_results_kernel, rtcore_trace_unpack_gpu, rtcore_spheres_from_rays_gpu,
     rtcore_alpha_passes, rt_no_ids, rt_no_paths, rt_no_meshes,
 )
-from .rtcore import rtcore_active, rtcore_alpha_enabled, rtcore_trace_interop
+from .hw_rt import hw_alpha, hw_rt_active, hw_trace_interop
 from .vulkaninterop import VulkanInteropRtSceneHandle, vulkaninterop_rt_trace
 from max.gpu.host._nvidia_cuda import CUDA
 from .bdpt_camera import VCMCameraPathState
@@ -91,7 +91,7 @@ def _vcm_rt_trace_paths[camera: Bool](
             state_buf.unsafe_ptr().unsafe_bitcast[VCMLightPathState]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
             rays, Int64(n_total), grid_dim=grid, block_dim=block_size)
 
-    if Int(rtcore_active()) != 0 and rt_scratch_buf:
+    if hw_rt_active() and rt_scratch_buf:
         rtcore_trace_unpack_gpu(ctx, inter_buf, sd, interop_rays_buf, interop_results_buf, rt_scratch_buf.value(),
                                 mesh_material_idx_buf, mesh_al_idx_buf, n_meshes, n_total, instance_base_mesh_buf)
         if Int(sd.sphereCount) > 0:
@@ -185,16 +185,15 @@ def vulkaninterop_rt_traverse_shadow_gpu(
         grid_dim=grid, block_dim=block_size,
     )
 
-    var cuda_stream = CUDA(ctx.stream())
-    if Int(rtcore_active()) != 0 and interop_results_buf and rt_scratch_buf and sd:
-        _ = rtcore_trace_interop(rtcore_active(), UInt64(Int(interop_rays_buf.unsafe_ptr())), UInt64(Int(interop_results_buf.value().unsafe_ptr())), Int32(count), cuda_stream)
-        if Int(rtcore_alpha_enabled()) != 0:
+    if hw_rt_active() and interop_results_buf and rt_scratch_buf and sd:
+        hw_trace_interop(ctx, Int(interop_rays_buf.unsafe_ptr()), Int(interop_results_buf.value().unsafe_ptr()), count)
+        if hw_alpha():
             var instance_base_ptr = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling()
             if instance_base_mesh_buf:
                 instance_base_ptr = instance_base_mesh_buf.value().unsafe_ptr().unsafe_bitcast[Int32]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
             rtcore_alpha_passes(ctx, interop_rays_buf, interop_results_buf.value(), rt_scratch_buf.value(), sd.value().meshes, n_meshes, instance_base_ptr, count)
     else:
-        _ = vulkaninterop_rt_trace(interop_scene, Int32(count), cuda_stream)
+        _ = vulkaninterop_rt_trace(interop_scene, Int32(count), CUDA(ctx.stream()))
 
 
 struct VcmRt(Movable):

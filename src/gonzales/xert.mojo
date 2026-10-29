@@ -1,7 +1,9 @@
 from std.ffi import external_call
+from std.math import ceildiv
 from std.memory import OpaquePointer, bitcast
 from std.sys.info import is_amd_gpu, is_apple_gpu, is_gpu, is_nvidia_gpu
 from max.gpu import global_idx
+from max.gpu.host import DeviceContext
 
 # Hardware ray tracing on Intel Xe2 (src/xert): the driver builds the acceleration structures, kernels trace them with
 # IGC's ray-query built-ins (opencl-c-intel.h, cl_intel_rt_production), linked by name from IGC's built-in library.
@@ -30,6 +32,19 @@ def xert_alignment() -> Int64:
 
 def xert_free(p: Pointer[UInt8, MutUntrackedOrigin]):
     external_call["xert_free", NoneType, Pointer[UInt8, MutUntrackedOrigin]](p)
+
+def xert_set_scene(accel: UInt64, ord_inst: Int64, ord_mesh: UInt64, n_meshes: Int64, shadow_slots: Int32, alpha: Int32):
+    external_call["xert_set_scene", NoneType, UInt64, Int64, UInt64, Int64, Int32, Int32](
+        accel, ord_inst, ord_mesh, n_meshes, shadow_slots, alpha)
+
+def xert_active() -> Bool:
+    return external_call["xert_scene_accel", UInt64]() != 0
+
+def xert_shadow_slots() -> Int:
+    return Int(external_call["xert_shadow_slots", Int32]())
+
+def xert_alpha() -> Bool:
+    return external_call["xert_alpha", Int32]() != 0
 
 comptime XERT_ANY_HIT = UInt32(0x04)   # intel_ray_flags_accept_first_hit_and_end_search
 
@@ -122,3 +137,13 @@ def xert_trace_interop_gpu(accel: MutPointer[UInt8, MutAnyOrigin], rays: MutPoin
     o[unsafe_offset=5] = UInt32(hit.prim)
     o[unsafe_offset=6] = 1
     o[unsafe_offset=7] = 0 if ordinary else UInt32(hit.geom)
+
+# Enqueues the trace of m rays (device addresses, interop layout) against the active scene; any_hit for shadow rays.
+def xert_trace_interop(ctx: DeviceContext, rays: Int, results: Int, m: Int, any_hit: Bool) raises:
+    ctx.enqueue_function[xert_trace_interop_gpu](
+        MutPointer[UInt8, MutAnyOrigin](unsafe_from_address=Int(external_call["xert_scene_accel", UInt64]())),
+        MutPointer[Float32, MutAnyOrigin](unsafe_from_address=rays), MutPointer[UInt32, MutAnyOrigin](unsafe_from_address=results),
+        Int64(m), XERT_ANY_HIT if any_hit else UInt32(0), external_call["xert_scene_n_meshes", Int64](),
+        external_call["xert_scene_ord_inst", Int64](),
+        MutPointer[Int32, MutAnyOrigin](unsafe_from_address=Int(external_call["xert_scene_ord_mesh", UInt64]())),
+        grid_dim=ceildiv(m, 256), block_dim=256)

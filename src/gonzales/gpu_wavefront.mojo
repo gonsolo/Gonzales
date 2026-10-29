@@ -17,7 +17,7 @@ from .sampling import gen_primary_ray_state, ThinLens
 from .spectrum import SpectralSample, spectral_sample_to_rgb
 from .transform import transform_normal, Mat4
 from .vulkaninterop import VulkanInteropRtSceneHandle, vulkaninterop_rt_trace
-from .rtcore import rtcore_active, rtcore_alpha_enabled, rtcore_trace, rtcore_trace_interop
+from .hw_rt import hw_alpha, hw_rt_active, hw_trace_interop, hw_trace_shadow
 from .optixcurves import oxc_active, oxc_scratch, oxc_trace_closest, oxc_trace_shadow
 from max.gpu import WARP_SIZE, barrier, block_dim, block_idx, lane_id, thread_idx
 from max.gpu.memory import AddressSpace
@@ -935,8 +935,6 @@ def rtcore_alpha_passes(
 ) raises:
     comptime block_size = 256
     var grid = ceildiv(n_total, block_size)
-    var cuda_stream = CUDA(ctx.stream())
-    var rt_hw = rtcore_active()
     var n_cap = len(scratch_buf) // 32
     var chunk = max(n_cap // 4, 1)
     var base = scratch_buf.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
@@ -967,7 +965,7 @@ def rtcore_alpha_passes(
             ctx.enqueue_function[rtcore_alpha_gather_kernel](
                 rays, rays_c, list_in.unsafe_offset(off), Int64(m), grid_dim=g, block_dim=block_size,
             )
-            _ = rtcore_trace_interop(rt_hw, UInt64(Int(rays_c)), UInt64(Int(results_c)), Int32(m), cuda_stream)
+            hw_trace_interop(ctx, Int(rays_c), Int(results_c), m)
             ctx.enqueue_function[rtcore_alpha_retest_kernel](
                 rays, rays_c, results, results_c, meshes, Int64(n_meshes), instance_base_mesh, list_in.unsafe_offset(off), Int64(m),
                 list_out, counters,
@@ -1106,13 +1104,11 @@ def rtcore_trace_unpack_gpu(
 ) raises:
     comptime block_size = 256
     var grid = ceildiv(n_total, block_size)
-    var cuda_stream = CUDA(ctx.stream())
-    var rt_hw = rtcore_active()
-    _ = rtcore_trace_interop(rt_hw, UInt64(Int(rays_buf.unsafe_ptr())), UInt64(Int(results_buf.unsafe_ptr())), Int32(n_total), cuda_stream)
+    hw_trace_interop(ctx, Int(rays_buf.unsafe_ptr()), Int(results_buf.unsafe_ptr()), n_total)
     var instance_base_mesh_ptr = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling()
     if instance_base_mesh_buf:
         instance_base_mesh_ptr = instance_base_mesh_buf.value().unsafe_ptr().unsafe_bitcast[Int32]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
-    var alpha = Int(rtcore_alpha_enabled()) != 0
+    var alpha = hw_alpha()
     if alpha:
         rtcore_alpha_passes(ctx, rays_buf, results_buf, scratch_buf, sd.meshes, n_meshes, instance_base_mesh_ptr, n_total)
     if Int(sd.curveCount) > 0:
@@ -1201,8 +1197,7 @@ def _ray_dump(ctx: DeviceContext, rays_buf: DeviceBuffer[DType.float32], results
         _ = external_call["fwrite", Int, Pointer[Float32, MutUntrackedOrigin], Int, Int, Int](host, 32, m, f)
         _ = external_call["fclose", Int32, Int](f)
     c.unsafe_free()
-    var rt = rtcore_active()
-    _ = rtcore_trace_interop(rt, UInt64(Int(rays_buf.unsafe_ptr())), UInt64(Int(results_buf.unsafe_ptr())), Int32(m), CUDA(ctx.stream()))
+    hw_trace_interop(ctx, Int(rays_buf.unsafe_ptr()), Int(results_buf.unsafe_ptr()), m)
     ctx.enqueue_copy(host, results_buf)
     ctx.synchronize()
     var nh = 0
@@ -1217,7 +1212,7 @@ def _ray_dump(ctx: DeviceContext, rays_buf: DeviceBuffer[DType.float32], results
     var total = 0.0
     for k in range(23):
         var t0 = perf_counter_ns()
-        _ = rtcore_trace(rt, UInt64(Int(rays_buf.unsafe_ptr())), UInt64(Int(results_buf.unsafe_ptr())), Int32(m), CUDA(ctx.stream()))
+        _ = hw_trace_shadow(ctx, Int(rays_buf.unsafe_ptr()), Int(results_buf.unsafe_ptr()), m)
         ctx.synchronize()
         var ms = Float64(perf_counter_ns() - t0) / 1.0e6
         if k >= 3:
@@ -1251,8 +1246,6 @@ def rtcore_closest_hit_gpu(
 ) raises -> Int:
     comptime block_size = 256
     var grid = ceildiv(n_total, block_size)
-    var cuda_stream = CUDA(ctx.stream())
-    var rt_hw = rtcore_active()
     var paths = path_buf.unsafe_ptr().unsafe_bitcast[PathState]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
     var rays = rays_buf.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
     var results = results_buf.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
@@ -1279,8 +1272,8 @@ def rtcore_closest_hit_gpu(
     var instance_base_mesh_ptr = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling()
     if instance_base_mesh_buf:
         instance_base_mesh_ptr = instance_base_mesh_buf.value().unsafe_ptr().unsafe_bitcast[Int32]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
-    _ = rtcore_trace_interop(rt_hw, UInt64(Int(rays_buf.unsafe_ptr())), UInt64(Int(results_buf.unsafe_ptr())), Int32(m), cuda_stream)
-    var alpha = Int(rtcore_alpha_enabled()) != 0
+    hw_trace_interop(ctx, Int(rays_buf.unsafe_ptr()), Int(results_buf.unsafe_ptr()), m)
+    var alpha = hw_alpha()
     if alpha:
         rtcore_alpha_passes(ctx, rays_buf, results_buf, scratch_buf, sd.meshes, n_meshes, instance_base_mesh_ptr, m)
     if Int(sd.curveCount) > 0:
@@ -1633,8 +1626,6 @@ def rtcore_sss_walk_gpu(
     are full warps and no lane waits on another's long walk; the few walks still going after SSS_RT_STEPS steps, or
     once fewer than SSS_RT_MIN remain, finish in software (sss_walk_gpu)."""
     comptime block_size = 256
-    var rt_hw = rtcore_active()
-    var cuda_stream = CUDA(ctx.stream())
     var rays = rays_buf.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
     var results = results_buf.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
     var ids_base = ids_buf.unsafe_ptr().unsafe_bitcast[Int32]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
@@ -1652,7 +1643,7 @@ def rtcore_sss_walk_gpu(
         slots[1 - a] = out_slot
         if m == 0:
             return
-        _ = rtcore_trace_interop(rt_hw, UInt64(Int(rays)), UInt64(Int(results)), Int32(m), cuda_stream)
+        hw_trace_interop(ctx, Int(rays), Int(results), m)
         ctx.enqueue_function[vulkaninterop_unpack_results_kernel](
             results, inter,
             mesh_material_idx_buf.unsafe_ptr().unsafe_bitcast[Int64]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
@@ -1685,9 +1676,7 @@ def rtcore_shadow_rays_compact_gpu(
 ) raises:
     comptime block_size = 256
     var n_tasks = n_live * SHADOW_SLOTS
-    var cuda_stream = CUDA(ctx.stream())
-    var rt_hw = rtcore_active()
-    var alpha = Int(rtcore_alpha_enabled()) != 0
+    var alpha = hw_alpha()
     var tasks = shadow_buf.unsafe_ptr().unsafe_bitcast[ShadowTask]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
     var rays = interop_rays_buf.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
     var ids_base = ids_buf.unsafe_ptr().unsafe_bitcast[Int32]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
@@ -1707,17 +1696,18 @@ def rtcore_shadow_rays_compact_gpu(
         if bench[unsafe_offset=7] != 0:
             _ray_dump(ctx, interop_rays_buf, interop_results_buf, m, "s" + String(round))
         var t0 = perf_counter_ns()
+        var converted = alpha
         if alpha:
             # Interop layout, so the alpha passes know which triangle each ray hit.
-            _ = rtcore_trace_interop(rt_hw, UInt64(Int(interop_rays_buf.unsafe_ptr())), UInt64(Int(interop_results_buf.unsafe_ptr())), Int32(m), cuda_stream)
+            hw_trace_interop(ctx, Int(interop_rays_buf.unsafe_ptr()), Int(interop_results_buf.unsafe_ptr()), m)
             rtcore_alpha_passes(ctx, interop_rays_buf, interop_results_buf, scratch_buf, sd.meshes, n_meshes, instance_base_mesh, m)
         else:
-            _ = rtcore_trace(rt_hw, UInt64(Int(interop_rays_buf.unsafe_ptr())), UInt64(Int(interop_results_buf.unsafe_ptr())), Int32(m), cuda_stream)
+            converted = hw_trace_shadow(ctx, Int(interop_rays_buf.unsafe_ptr()), Int(interop_results_buf.unsafe_ptr()), m)
         var counts = counter_buf.unsafe_ptr().unsafe_bitcast[Int32]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]().unsafe_offset(SHADOW_COUNTS)
         var lists = ids_base.unsafe_offset(3 * n_total)          # the shading kinds' list, done with by now
         ctx.enqueue_function[shadow_survivors_kernel](
             tasks, interop_results_buf.unsafe_ptr().unsafe_bitcast[UInt32]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
-            ids, sd, Int64(n_spheres), Int64(m), Int64(1 if alpha else 0), lists, counts, Int64(n_total),
+            ids, sd, Int64(n_spheres), Int64(m), Int64(1 if converted else 0), lists, counts, Int64(n_total),
             grid_dim=ceildiv(m, block_size), block_dim=block_size,
         )
         var ox = oxc_active()
@@ -1727,7 +1717,7 @@ def rtcore_shadow_rays_compact_gpu(
             if b != UInt64(0):
                 blocked = Pointer[UInt8, MutUntrackedOrigin](unsafe_from_address=Int(b))
                 for s in range(SHADOW_SLOTS):
-                    _ = oxc_trace_shadow(ox, UInt64(Int(rays)), UInt64(Int(lists)), UInt64(Int(counts)), n_total, s, b, m, cuda_stream)
+                    _ = oxc_trace_shadow(ox, UInt64(Int(rays)), UInt64(Int(lists)), UInt64(Int(counts)), n_total, s, b, m, CUDA(ctx.stream()))
         for s in range(SHADOW_SLOTS):
             ctx.enqueue_function[shadow_curves_kernel](
                 path_buf.unsafe_ptr().unsafe_bitcast[PathState]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
@@ -1802,15 +1792,13 @@ def vulkaninterop_rt_traverse_paths_gpu(
         grid_dim=grid, block_dim=block_size,
     )
 
-    var cuda_stream = CUDA(ctx.stream())
     # --rt-hardware: trace on the RT cores from a CUDA kernel (docs/rtcore/NOTES.md) instead of dispatching the Vulkan
     # ray-query shader. Same rays buffer, same Result layout.
-    var rt_hw = rtcore_active()
-    if Int(rt_hw) != 0 and rt_scratch_buf:
+    if hw_rt_active() and rt_scratch_buf:
         rtcore_trace_unpack_gpu(ctx, inter_buf, sd, interop_rays_buf, interop_results_buf, rt_scratch_buf.value(),
                                 mesh_material_idx_buf, mesh_al_idx_buf, n_meshes, n_total, instance_base_mesh_buf)
     else:
-        _ = vulkaninterop_rt_trace(interop_scene, Int32(n_total), cuda_stream)
+        _ = vulkaninterop_rt_trace(interop_scene, Int32(n_total), CUDA(ctx.stream()))
         var instance_base_mesh_ptr = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling()
         if instance_base_mesh_buf:
             instance_base_mesh_ptr = instance_base_mesh_buf.value().unsafe_ptr().unsafe_bitcast[Int32]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()

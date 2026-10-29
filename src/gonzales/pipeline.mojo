@@ -42,6 +42,7 @@ from .vulkanrt import vulkanrt_build_scene, vulkanrt_destroy_scene
 from .curve_bvh import CurveBvhDev, gpu_build_curve_bvh, _leaf_range
 from .optixcurves import gpu_build_optix_curves, oxc_active, oxc_bytes, oxc_destroy, oxc_set_active
 from .rt_build import rt_build_blas, rt_build_tlas, rt_patch_ids, RtTlas, _fbits
+from .xert import xert_alignment, xert_build_blas_geoms, xert_build_tlas, xert_free, xert_set_scene
 from .rt_cache import rt_cache_load, rt_cache_save, RtCacheTlas
 from .scene_cache import scene_cache_variant
 from max.algorithm import parallelize
@@ -1058,6 +1059,7 @@ struct _RtBufs(Movable):
     var mesh_al_idx: Optional[DeviceBuffer[DType.uint8]]
     var instance_base_mesh: Optional[DeviceBuffer[DType.uint8]]
     var n_meshes: Int
+    var xert: List[DeviceBuffer[DType.uint8]]      # Intel Xe2: the structures and the ordinary-mesh table
 
     def __init__(out self):
         self.on = False
@@ -1067,6 +1069,7 @@ struct _RtBufs(Movable):
         self.mesh_al_idx = None
         self.instance_base_mesh = None
         self.n_meshes = 0
+        self.xert = List[DeviceBuffer[DType.uint8]]()
 
 
 # The RT cores trace the triangles; the curves are OptiX curves on the RT hardware (optixcurves.mojo) when the curves are
@@ -1103,24 +1106,145 @@ def _rt_curve_clusters(handle: Pointer[GpuSceneHandle, MutUntrackedOrigin], psc:
         print("Gonzales:   curve clusters", handle[].curve_bvh.n_clusters, "in", Float64(perf_counter_ns() - t0) / 1.0e9, "s")
 
 
+# Intel Xe2: the driver builds one BLAS per template and one over the ordinary meshes, a geometry per mesh, all packed into
+# one device buffer; then the TLAS over the instances (user id = instance) and, last, the ordinary meshes' identity
+# instance. Returns the TLAS's device address (0 on failure), that last instance and the device table of its meshes.
+def _xert_attach(ctx: DeviceContext, psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin],
+                 mut bufs: List[DeviceBuffer[DType.uint8]]) raises -> Tuple[UInt64, Int64, UInt64]:
+    var fail = (UInt64(0), Int64(-1), UInt64(0))
+    var align = Int(xert_alignment())
+    var nm = Int(psc[unsafe_offset=0].mesh_count)
+    var nt = Int(psc[unsafe_offset=0].blas_count)
+    var ni = Int(psc[unsafe_offset=0].instance_count)
+    var is_template = List[Bool](length=max(nm, 1), fill=False)
+    for t in range(nt):
+        for i in range(Int(psc[unsafe_offset=0].template_mesh_start[unsafe_offset=t]), Int(psc[unsafe_offset=0].template_mesh_end[unsafe_offset=t])):
+            is_template[i] = True
+    var ord = List[Int32]()
+    for i in range(nm):
+        if not is_template[i]:
+            ord.append(Int32(i))
+    var has_ord = len(ord) > 0
+    var n_blas = nt + (1 if has_ord else 0)
+    var blas = List[Pointer[UInt8, MutUntrackedOrigin]]()
+    var sizes = List[Int]()
+    var offsets = List[Int]()
+    var bounds = unsafe_alloc[Float32](6 * max(n_blas, 1))
+    var total = 0
+    for b in range(n_blas):
+        var ms = List[Int]()
+        if b < nt:
+            for i in range(Int(psc[unsafe_offset=0].template_mesh_start[unsafe_offset=b]), Int(psc[unsafe_offset=0].template_mesh_end[unsafe_offset=b])):
+                ms.append(i)
+        else:
+            for i in ord:
+                ms.append(Int(i))
+        var geoms = unsafe_alloc[Pointer[Float32, MutUntrackedOrigin]](max(len(ms), 1))
+        var n_tris = unsafe_alloc[Int64](max(len(ms), 1))
+        for g in range(len(ms)):
+            var mesh = psc[unsafe_offset=0].meshes[unsafe_offset=ms[g]]
+            var n = Int(psc[unsafe_offset=0].mesh_n_tris[unsafe_offset=ms[g]])
+            var tv = unsafe_alloc[Float32](9 * max(n, 1))
+            for k in range(3 * n):
+                var p = mesh_pos(mesh, mesh_vi(mesh, k))
+                tv[unsafe_offset=3 * k] = p.x; tv[unsafe_offset=3 * k + 1] = p.y; tv[unsafe_offset=3 * k + 2] = p.z
+            geoms[unsafe_offset=g] = tv
+            n_tris[unsafe_offset=g] = Int64(n)
+        var size = Int64(0)
+        var r = xert_build_blas_geoms(Int32(len(ms)), geoms, n_tris, Pointer(to=size).unsafe_origin_cast[MutUntrackedOrigin](),
+                                      bounds.unsafe_offset(6 * b))
+        for g in range(len(ms)):
+            geoms[unsafe_offset=g].unsafe_free()
+        geoms.unsafe_free(); n_tris.unsafe_free()
+        if Int(r) == 0:
+            print("RT hardware: the Intel builder failed on structure", b, "of", n_blas)
+            for q in blas: xert_free(q)
+            bounds.unsafe_free()
+            return fail
+        blas.append(r); sizes.append(Int(size)); offsets.append(total)
+        total += (Int(size) + align - 1) // align * align
+    var blas_buf = ctx.enqueue_create_buffer[DType.uint8](total + align)
+    var base = Int(UInt(Int(blas_buf.unsafe_ptr())) + UInt(align - 1)) & -align
+    var pad = base - Int(blas_buf.unsafe_ptr())
+    var addr = unsafe_alloc[UInt64](max(n_blas, 1))
+    for b in range(n_blas):
+        ctx.enqueue_copy(blas_buf.create_sub_buffer[DType.uint8](pad + offsets[b], sizes[b]), blas[b])
+        addr[unsafe_offset=b] = UInt64(base + offsets[b])
+    ctx.synchronize()
+    for q in blas: xert_free(q)
+    # Instances store world-to-object rows; the builder takes object-to-world columns.
+    var n_inst = ni + (1 if has_ord else 0)
+    var xf = unsafe_alloc[Float32](12 * max(n_inst, 1))
+    var blas_of = unsafe_alloc[Int32](max(n_inst, 1))
+    for k in range(ni):
+        var ins = psc[unsafe_offset=0].instances[unsafe_offset=k]
+        var a00 = Float64(ins.c0x); var a01 = Float64(ins.c1x); var a02 = Float64(ins.c2x)
+        var a10 = Float64(ins.c0y); var a11 = Float64(ins.c1y); var a12 = Float64(ins.c2y)
+        var a20 = Float64(ins.c0z); var a21 = Float64(ins.c1z); var a22 = Float64(ins.c2z)
+        var i00 = a11 * a22 - a12 * a21; var i01 = a02 * a21 - a01 * a22; var i02 = a01 * a12 - a02 * a11
+        var i10 = a12 * a20 - a10 * a22; var i11 = a00 * a22 - a02 * a20; var i12 = a02 * a10 - a00 * a12
+        var i20 = a10 * a21 - a11 * a20; var i21 = a01 * a20 - a00 * a21; var i22 = a00 * a11 - a01 * a10
+        var inv_det = 1.0 / (a00 * i00 + a01 * i10 + a02 * i20)
+        var tx = Float64(ins.c3x); var ty = Float64(ins.c3y); var tz = Float64(ins.c3z)
+        var m: List[Float64] = [i00, i10, i20, i01, i11, i21, i02, i12, i22,
+                                -(i00 * tx + i01 * ty + i02 * tz), -(i10 * tx + i11 * ty + i12 * tz), -(i20 * tx + i21 * ty + i22 * tz)]
+        for q in range(12):
+            xf[unsafe_offset=12 * k + q] = Float32(m[q] * inv_det)
+        blas_of[unsafe_offset=k] = ins.blasIdx
+    if has_ord:
+        for q in range(12):
+            xf[unsafe_offset=12 * ni + q] = Float32(1) if q == 0 or q == 4 or q == 8 else Float32(0)
+        blas_of[unsafe_offset=ni] = Int32(nt)
+    var tlas_size = Int64(0)
+    var tlas = xert_build_tlas(Int64(n_inst), xf, blas_of, addr, bounds, Pointer(to=tlas_size).unsafe_origin_cast[MutUntrackedOrigin]())
+    xf.unsafe_free(); blas_of.unsafe_free(); addr.unsafe_free(); bounds.unsafe_free()
+    if Int(tlas) == 0:
+        print("RT hardware: the Intel builder failed on the instances")
+        return fail
+    var tlas_buf = ctx.enqueue_create_buffer[DType.uint8](Int(tlas_size) + align)
+    var tbase = Int(UInt(Int(tlas_buf.unsafe_ptr())) + UInt(align - 1)) & -align
+    ctx.enqueue_copy(tlas_buf.create_sub_buffer[DType.uint8](tbase - Int(tlas_buf.unsafe_ptr()), Int(tlas_size)), tlas)
+    var ord_buf = ctx.enqueue_create_buffer[DType.uint8](4 * max(len(ord), 1))
+    if has_ord:
+        ctx.enqueue_copy(ord_buf, ord.unsafe_ptr().unsafe_bitcast[UInt8]())
+    ctx.synchronize()
+    xert_free(tlas)
+    print("RT hardware (Intel): structures", total // 1048576, "MiB, instances", Int(tlas_size) // 1048576, "MiB")
+    var ord_addr = UInt64(Int(ord_buf.unsafe_ptr()))
+    bufs.append(blas_buf^); bufs.append(tlas_buf^); bufs.append(ord_buf^)
+    return (UInt64(tbase), Int64(ni) if has_ord else Int64(-1), ord_addr)
+
+
 def _rt_wavefront_setup(handle: Pointer[GpuSceneHandle, MutUntrackedOrigin], psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin], max_rays: Int) raises -> _RtBufs:
     var b = _RtBufs()
-    var rt_merged = _rtcore_merge(psc)
-    if not (rt_merged.valid or _rtcore_native_wanted(psc)):
+    var xe = xert_alignment() > 0
+    var xe_scene = (UInt64(0), Int64(-1), UInt64(0))
+    if xe:
+        xe_scene = _xert_attach(handle[].ctx, psc, b.xert)
+        if xe_scene[0] == 0:
+            return b^
+    else:
+        var rt_merged = _rtcore_merge(psc)
+        if not (rt_merged.valid or _rtcore_native_wanted(psc)):
+            rt_merged.release()
+            return b^
+        var rt_hw = _rtcore_attach_own(rt_merged) if rt_merged.valid else _rtcore_attach_own_native(psc)
         rt_merged.release()
-        return b^
-    var rt_hw = _rtcore_attach_own(rt_merged) if rt_merged.valid else _rtcore_attach_own_native(psc)
-    rt_merged.release()
-    if Int(rt_hw) == 0:
-        return b^
-    _share_instances(handle, rt_hw, psc)
-    rtcore_set_active(rt_hw)
+        if Int(rt_hw) == 0:
+            return b^
+        _share_instances(handle, rt_hw, psc)
+        rtcore_set_active(rt_hw)
     _rt_curve_clusters(handle, psc)
     var light_kinds = Int(psc[unsafe_offset=0].area_light_count > Int32(0)) + Int(psc[unsafe_offset=0].infinite_count > Int32(0)) + Int(psc[unsafe_offset=0].distant_count > Int32(0)) + Int(psc[unsafe_offset=0].point_count > Int32(0))
     var rt_pruned = getenv("GONZALES_RT_PRUNE") != "" and psc[unsafe_offset=0].instance_count > Int32(0)
     var usable_slots = 2 if (light_kinds >= 2 or rt_pruned) else 1
-    rtcore_set_shadow(Int32(0) if getenv("GONZALES_RTCORE_NOSHADOW") != "" else Int32(usable_slots))
-    rtcore_set_alpha(Int32(1) if _scene_has_alpha(psc) else Int32(0))
+    var shadow = Int32(0) if getenv("GONZALES_RTCORE_NOSHADOW") != "" else Int32(usable_slots)
+    var alpha = Int32(1) if _scene_has_alpha(psc) else Int32(0)
+    if xe:
+        xert_set_scene(xe_scene[0], xe_scene[1], xe_scene[2], Int64(psc[unsafe_offset=0].mesh_count), shadow, alpha)
+    else:
+        rtcore_set_shadow(shadow)
+        rtcore_set_alpha(alpha)
     var n_meshes = Int(psc[unsafe_offset=0].mesh_count)
     b.rays = handle[].ctx.enqueue_create_buffer[DType.float32](max_rays * 8)
     b.results = handle[].ctx.enqueue_create_buffer[DType.float32](max_rays * 8)

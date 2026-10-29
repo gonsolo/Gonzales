@@ -3,7 +3,7 @@ from .geometry import TERMINAL_SEGMENT_GRACE_ROUNDS
 from .materials import MatKind
 from .primitives import Intersection, Sphere
 from .render_state import PathState, ShadowTask, SuppressTask, SHADOW_SLOTS
-from .rtcore import rtcore_active, rtcore_shadow_enabled
+from .hw_rt import hw_rt_active, hw_shadow_slots
 from .restir_di import DIReservoir
 from .restir_vol import VolReservoir
 from .vulkaninterop import VulkanInteropRtSceneHandle
@@ -158,7 +158,7 @@ def _gpu_bounce_kernels(
 ) raises -> Int:
     comptime block_size = 256
     var sd = handle[].scene_descriptor()
-    var rt_compact = use_vulkan_rt and Int(rtcore_active()) != 0
+    var rt_compact = use_vulkan_rt and hw_rt_active()
     var live_paths = n
     # The CUDA traversal kernel does the max-depth marking itself, and the
     # cone growth too unless a curve pass still has to rewrite tHit.
@@ -383,8 +383,8 @@ def _gpu_bounce_kernels(
     # --rt-hardware: the shade kernels defer their shadow rays (SHADOW_SLOTS per path) and the RT cores trace them after
     # the last material kernel. Without it shadow_ptr is dangling and every shadow ray is traced inline, as before.
     _bench_stage(handle, 17 + Int(MatKind.mix))
-    var hw_shadow = use_vulkan_rt and Int(rtcore_shadow_enabled()) > 0 and Int(handle[].shadow_slots) == SHADOW_SLOTS
-    var usable_slots = Int(rtcore_shadow_enabled()) if hw_shadow else 0
+    var hw_shadow = use_vulkan_rt and hw_shadow_slots() > 0 and Int(handle[].shadow_slots) == SHADOW_SLOTS
+    var usable_slots = hw_shadow_slots() if hw_shadow else 0
     var shadow_slots = SHADOW_SLOTS if hw_shadow else 1
     # Software BVH: the diffuse and coated kernels only queue their shadow rays and sw_resolve_shadow_gpu traces them after
     # the last material kernel. Needs the task buffer (no media), no guiding/ReSTIR, and no live MNEE (its probe wants the

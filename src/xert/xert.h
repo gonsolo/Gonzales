@@ -25,6 +25,17 @@ void* xert_build_blas_geoms(int32_t n_geoms, const float* const* tri_verts, cons
 void* xert_build_tlas(int64_t n_inst, const float* xf, const int32_t* blas_of, const uint64_t* blas_addr,
                       const float* blas_bounds, int64_t* out_size);
 
+// The scene the wavefront passes trace, set once its structures are on the device: the TLAS's device address (0 = none),
+// the instance holding the ordinary meshes and the device table of their mesh numbers, the scene's mesh count, the
+// shadow slots to trace in hardware (0 = none) and whether alpha cutouts need the any-hit passes.
+void xert_set_scene(uint64_t accel, int64_t ord_inst, uint64_t ord_mesh, int64_t n_meshes, int32_t shadow_slots, int32_t alpha);
+uint64_t xert_scene_accel(void);
+int64_t xert_scene_ord_inst(void);
+uint64_t xert_scene_ord_mesh(void);
+int64_t xert_scene_n_meshes(void);
+int32_t xert_shadow_slots(void);
+int32_t xert_alpha(void);
+
 // The alignment the device needs for a structure, 0 without an Intel GPU.
 int64_t xert_alignment(void);
 

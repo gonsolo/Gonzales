@@ -14,3 +14,25 @@ void* xert_build_tlas(int64_t n_inst, const float* xf, const int32_t* blas_of, c
 int64_t xert_alignment(void) { return 0; }
 
 void xert_free(void* p) { free(p); }
+
+static struct {
+  uint64_t accel, ord_mesh;
+  int64_t ord_inst, n_meshes;
+  int32_t shadow_slots, alpha;
+} scene;
+
+void xert_set_scene(uint64_t accel, int64_t ord_inst, uint64_t ord_mesh, int64_t n_meshes, int32_t shadow_slots, int32_t alpha) {
+  scene.accel = accel;
+  scene.ord_inst = ord_inst;
+  scene.ord_mesh = ord_mesh;
+  scene.n_meshes = n_meshes;
+  scene.shadow_slots = shadow_slots;
+  scene.alpha = alpha;
+}
+
+uint64_t xert_scene_accel(void) { return scene.accel; }
+int64_t xert_scene_ord_inst(void) { return scene.ord_inst; }
+uint64_t xert_scene_ord_mesh(void) { return scene.ord_mesh; }
+int64_t xert_scene_n_meshes(void) { return scene.n_meshes; }
+int32_t xert_shadow_slots(void) { return scene.shadow_slots; }
+int32_t xert_alpha(void) { return scene.alpha; }
