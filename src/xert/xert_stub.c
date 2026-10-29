@@ -49,3 +49,16 @@ void xert_set_curves(uint64_t curves, uint64_t leaves, uint64_t leaf_base, uint6
 }
 
 uint64_t xert_curve_table(int32_t which) { return which >= 0 && which < 5 ? curve_tables[which] : 0; }
+
+static struct {
+  uint64_t counts;
+  int64_t n;
+} heat;
+
+void xert_set_heat(uint64_t counts, int64_t n) {
+  heat.counts = counts;
+  heat.n = n;
+}
+
+uint64_t xert_heat(void) { return heat.counts; }
+int64_t xert_heat_n(void) { return heat.n; }

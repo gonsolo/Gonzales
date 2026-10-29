@@ -1,6 +1,7 @@
 from .os_thread import OsThread, ThreadArg
 from std.memory.alloc import unsafe_alloc
-from std.memory import OwnedPointer, unsafe_memcpy
+from std.memory import OwnedPointer, bitcast, unsafe_memcpy
+from std.builtin.sort import sort
 from std.collections import List, Array
 from std.math import sqrt, ceil, pow
 from std.sys.info import size_of
@@ -42,7 +43,7 @@ from .vulkanrt import vulkanrt_build_scene, vulkanrt_destroy_scene
 from .curve_bvh import CurveBvhDev, gpu_build_curve_bvh, _leaf_range
 from .optixcurves import gpu_build_optix_curves, oxc_active, oxc_bytes, oxc_destroy, oxc_set_active
 from .rt_build import rt_build_blas, rt_build_tlas, rt_patch_ids, RtTlas, _fbits
-from .xert import xert_alignment, xert_build_blas_geoms, xert_build_tlas, xert_curve_table, xert_free, xert_set_curves, xert_set_scene
+from .xert import xert_alignment, xert_build_blas_geoms, xert_build_tlas, xert_curve_table, xert_free, xert_heat_save, xert_set_curves, xert_set_heat, xert_set_scene
 from .rt_cache import rt_cache_load, rt_cache_save, RtCacheTlas
 from .scene_cache import scene_cache_variant
 from max.algorithm import parallelize
@@ -51,6 +52,7 @@ from std.atomic import Atomic
 from std.sys.info import num_performance_cores
 from .rtcore import rtcore_set_gid_compact, rtcore_create_own_scene, rtcore_create_own, rtcore_set_shadow, rtcore_set_alpha, rtcore_create_scene, rtcore_set_domains, rtcore_set_instance_decode, rtcore_instance_records, RtCoreHandle, rtcore_create, rtcore_set_meshes, rtcore_set_active, rtcore_active, rtcore_destroy
 from std.os import getenv
+from std.os.path import exists
 from std.ffi import external_call
 from .outputs import _cstr
 from .vulkaninterop import (
@@ -1112,6 +1114,51 @@ def _rt_curve_clusters(handle: Pointer[GpuSceneHandle, MutUntrackedOrigin], psc:
 # and one of procedural primitives for the curve leaves, all packed into one device buffer; then the TLAS over the instances
 # (user id = instance) and, last, the ordinary geometry's identity instance. Returns the TLAS's device address (0 on
 # failure), that last instance and the device table of its meshes; the curve tables go to xert_set_curves.
+# GONZALES_XERT_VRAM_MB: the BLASes in device memory up to that many MiB, the rest in host memory, which the RT units
+# reach over PCIe; most hits per byte first, by the per-instance counts in GONZALES_XERT_HEAT (written by a run without
+# that file) or else by instance count.
+def _xert_placement(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin], nt: Int, has_ord: Bool, sizes: List[Int], align: Int) raises -> List[Bool]:
+    var n_blas = len(sizes)
+    var on_dev = List[Bool](length=max(n_blas, 1), fill=True)
+    if getenv("GONZALES_XERT_VRAM_MB") == "":
+        return on_dev^
+    var ni = Int(psc[unsafe_offset=0].instance_count)
+    var path = getenv("GONZALES_XERT_HEAT")
+    var counts = List[UInt8]()
+    if path != "" and exists(path):
+        with open(path, "r") as f:
+            counts = f.read_bytes()
+    var profiled = len(counts) == 4 * (ni + Int(has_ord))
+    var cp = counts.unsafe_ptr().unsafe_bitcast[UInt32]()
+    var heat = List[Float64](length=max(n_blas, 1), fill=0)
+    for k in range(ni):
+        var b = Int(psc[unsafe_offset=0].instances[unsafe_offset=k].blasIdx)
+        if b >= 0 and b < nt:
+            heat[b] += Float64(cp[unsafe_offset=k]) if profiled else 1.0
+    if has_ord:
+        heat[nt] += Float64(cp[unsafe_offset=ni]) if profiled else 1.0
+    # Density keys: positive float bits order as integers; the low half carries the structure.
+    var keys = List[UInt64]()
+    for b in range(n_blas):
+        var d = Float32(heat[b] / Float64(max(sizes[b], 1)) * 1048576.0)
+        keys.append((UInt64(bitcast[DType.uint32](d)) << 32) | UInt64(b))
+    sort(Span(keys))
+    var budget = atol(getenv("GONZALES_XERT_VRAM_MB")) * 1048576
+    var used = 0
+    var hits = 0.0
+    var hits_dev = 0.0
+    for j in range(n_blas - 1, -1, -1):
+        var b = Int(keys[j] & 0xFFFFFFFF)
+        var aligned = (sizes[b] + align - 1) // align * align
+        on_dev[b] = used + aligned <= budget
+        if on_dev[b]:
+            used += aligned; hits_dev += heat[b]
+        hits += heat[b]
+    print("RT hardware (Intel):", "hit counts" if profiled else "instance counts", "place", Int(100.0 * hits_dev / max(hits, 1.0)), "% in",
+          used // 1048576, "MiB of device memory")
+    return on_dev^
+
+
 def _xert_attach(ctx: DeviceContext, psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin], curves: Int, materials: Int,
                  mut bufs: List[DeviceBuffer[DType.uint8]], mut host_bufs: List[HostBuffer[DType.uint8]]) raises -> Tuple[UInt64, Int64, UInt64]:
     var fail = (UInt64(0), Int64(-1), UInt64(0))
@@ -1137,9 +1184,7 @@ def _xert_attach(ctx: DeviceContext, psc: Pointer[ParsedScene_Mojo, MutUntracked
     var leaf_base = List[Int32]()
     var blas = List[Pointer[UInt8, MutUntrackedOrigin]]()
     var sizes = List[Int]()
-    var offsets = List[Int]()
     var bounds = unsafe_alloc[Float32](6 * max(n_blas, 1))
-    var total = 0
     for b in range(n_blas):
         var ms = List[Int]()
         if b < nt:
@@ -1172,7 +1217,7 @@ def _xert_attach(ctx: DeviceContext, psc: Pointer[ParsedScene_Mojo, MutUntracked
                 proc_bounds[unsafe_offset=6 * j + q] = box[q]
         if len(ms) == 0 and n_procs == 0:
             proc_bounds.unsafe_free()
-            blas.append(Pointer[UInt8, MutUntrackedOrigin].unsafe_dangling()); sizes.append(0); offsets.append(total)
+            blas.append(Pointer[UInt8, MutUntrackedOrigin].unsafe_dangling()); sizes.append(0)
             continue
         var verts = unsafe_alloc[Pointer[Float32, MutUntrackedOrigin]](max(len(ms), 1))
         var tris = unsafe_alloc[Pointer[UInt32, MutUntrackedOrigin]](max(len(ms), 1))
@@ -1203,25 +1248,32 @@ def _xert_attach(ctx: DeviceContext, psc: Pointer[ParsedScene_Mojo, MutUntracked
                 if sizes[q] > 0: xert_free(blas[q])
             bounds.unsafe_free()
             return fail
-        blas.append(r); sizes.append(Int(size)); offsets.append(total)
-        total += (Int(size) + align - 1) // align * align
-    # GONZALES_XERT_BLAS_HOST=1: the BLASes stay in host memory and the RT units fetch them over PCIe.
-    var on_host = getenv("GONZALES_XERT_BLAS_HOST") == "1"
-    var blas_buf = ctx.enqueue_create_buffer[DType.uint8](align if on_host else total + align)
-    var blas_host = ctx.enqueue_create_host_buffer[DType.uint8](total + align if on_host else 1)
+        blas.append(r); sizes.append(Int(size))
+    var on_dev = _xert_placement(psc, nt, has_ord, sizes, align)
+    var offsets = List[Int](length=max(n_blas, 1), fill=0)
+    var dev_total = 0
+    var host_total = 0
+    for b in range(n_blas):
+        var aligned = (sizes[b] + align - 1) // align * align
+        if on_dev[b]:
+            offsets[b] = dev_total; dev_total += aligned
+        else:
+            offsets[b] = host_total; host_total += aligned
+    var blas_buf = ctx.enqueue_create_buffer[DType.uint8](dev_total + align)
+    var blas_host = ctx.enqueue_create_host_buffer[DType.uint8](host_total + align)
     ctx.synchronize()
-    var start = Int(blas_host.unsafe_ptr()) if on_host else Int(blas_buf.unsafe_ptr())
-    var base = Int(UInt(start) + UInt(align - 1)) & -align
-    var pad = base - start
+    var base = Int(UInt(Int(blas_buf.unsafe_ptr())) + UInt(align - 1)) & -align
+    var host_base = Int(UInt(Int(blas_host.unsafe_ptr())) + UInt(align - 1)) & -align
     var addr = unsafe_alloc[UInt64](max(n_blas, 1))
     for b in range(n_blas):
         addr[unsafe_offset=b] = UInt64(0)
         if sizes[b] > 0:
-            if on_host:
-                unsafe_memcpy(dest=Pointer[UInt8, MutUntrackedOrigin](unsafe_from_address=base + offsets[b]), src=blas[b], count=sizes[b])
+            if on_dev[b]:
+                ctx.enqueue_copy(blas_buf.create_sub_buffer[DType.uint8](base - Int(blas_buf.unsafe_ptr()) + offsets[b], sizes[b]), blas[b])
+                addr[unsafe_offset=b] = UInt64(base + offsets[b])
             else:
-                ctx.enqueue_copy(blas_buf.create_sub_buffer[DType.uint8](pad + offsets[b], sizes[b]), blas[b])
-            addr[unsafe_offset=b] = UInt64(base + offsets[b])
+                unsafe_memcpy(dest=Pointer[UInt8, MutUntrackedOrigin](unsafe_from_address=host_base + offsets[b]), src=blas[b], count=sizes[b])
+                addr[unsafe_offset=b] = UInt64(host_base + offsets[b])
     ctx.synchronize()
     for b in range(n_blas):
         if sizes[b] > 0: xert_free(blas[b])
@@ -1278,7 +1330,14 @@ def _xert_attach(ctx: DeviceContext, psc: Pointer[ParsedScene_Mojo, MutUntracked
         ctx.enqueue_copy(ord_buf, ord.unsafe_ptr().unsafe_bitcast[UInt8]())
     ctx.synchronize()
     xert_free(tlas)
-    print("RT hardware (Intel): structures", total // 1048576, "MiB, instances", Int(tlas_size) // 1048576, "MiB")
+    print("RT hardware (Intel): structures", dev_total // 1048576, "MiB on the device,", host_total // 1048576, "MiB in host memory, instances",
+          Int(tlas_size) // 1048576, "MiB")
+    if getenv("GONZALES_XERT_HEAT") != "" and not exists(getenv("GONZALES_XERT_HEAT")):
+        var heat_buf = ctx.enqueue_create_buffer[DType.uint8](4 * n_inst)
+        ctx.enqueue_memset(heat_buf, UInt8(0))
+        ctx.synchronize()
+        xert_set_heat(UInt64(Int(heat_buf.unsafe_ptr())), Int64(n_inst))
+        bufs.append(heat_buf^)
     var ord_addr = UInt64(Int(ord_buf.unsafe_ptr()))
     bufs.append(blas_buf^); bufs.append(tlas_buf^); bufs.append(ord_buf^)
     host_bufs.append(blas_host^)
@@ -3481,6 +3540,11 @@ def render_interactive(
             print("frame ms: render", t_render // 20000000, "denoise", t_denoise // 20000000, "sensor", t_sensor // 20000000, "present", t_present // 20000000)
             t_render = 0; t_denoise = 0; t_sensor = 0; t_present = 0
 
+    if rtb.on:
+        try:
+            xert_heat_save(handle[].ctx)
+        except e:
+            print("Gonzales: hit counts not written:", e)
     if headless and bench_warm > 0 and use_gpu and frame_count > bench_warm:
         var bf = frame_count - bench_warm
         var br = handle[].bench[unsafe_offset=0] + handle[].bench[unsafe_offset=1]

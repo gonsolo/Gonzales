@@ -46,6 +46,11 @@ int32_t xert_alpha(void);
 void xert_set_curves(uint64_t curves, uint64_t leaves, uint64_t leaf_base, uint64_t inst_blas, uint64_t materials);
 uint64_t xert_curve_table(int32_t which);
 
+// Hit counts while profiling, n device words, one per instance (the ordinary geometry's last); 0 = off.
+void xert_set_heat(uint64_t counts, int64_t n);
+uint64_t xert_heat(void);
+int64_t xert_heat_n(void);
+
 // The alignment the device needs for a structure, 0 without an Intel GPU.
 int64_t xert_alignment(void);
 

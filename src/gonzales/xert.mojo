@@ -1,9 +1,11 @@
+from std.atomic import Atomic
 from std.ffi import external_call
+from std.os import getenv
 from std.math import ceildiv, sqrt
 from std.memory import OpaquePointer, bitcast
 from std.sys.info import is_amd_gpu, is_apple_gpu, is_gpu, is_nvidia_gpu
 from max.gpu import global_idx
-from max.gpu.host import DeviceContext
+from max.gpu.host import DeviceBuffer, DeviceContext
 from .curves import Curve, curve_at, intersect_curve
 from .geometry import Vec3f
 from .bvh import _shadow_is_null_material
@@ -50,6 +52,22 @@ def xert_set_curves(curves: UInt64, leaves: UInt64, leaf_base: UInt64, inst_blas
 
 def xert_curve_table(which: Int32) -> UInt64:
     return external_call["xert_curve_table", UInt64, Int32](which)
+
+def xert_set_heat(counts: UInt64, n: Int64):
+    external_call["xert_set_heat", NoneType, UInt64, Int64](counts, n)
+
+# Writes the profiled hit counts (one UInt32 per instance) to GONZALES_XERT_HEAT.
+def xert_heat_save(ctx: DeviceContext) raises:
+    var addr = Int(external_call["xert_heat", UInt64]())
+    var n = Int(external_call["xert_heat_n", Int64]())
+    if addr == 0:
+        return
+    var counts = List[UInt8](length=4 * n, fill=0)
+    ctx.enqueue_copy(counts.unsafe_ptr(), DeviceBuffer[DType.uint8](ctx, MutPointer[UInt8, MutAnyOrigin](unsafe_from_address=addr), 4 * n, owning=False))
+    ctx.synchronize()
+    with open(getenv("GONZALES_XERT_HEAT"), "w") as f:
+        f.write_bytes(Span(counts))
+    print("RT hardware (Intel): hit counts written to", getenv("GONZALES_XERT_HEAT"))
 
 def xert_active() -> Bool:
     return external_call["xert_scene_accel", UInt64]() != 0
@@ -187,7 +205,8 @@ def xert_trace_interop_gpu(accel: MutPointer[UInt8, MutAnyOrigin], rays: MutPoin
                            results: MutPointer[UInt32, MutAnyOrigin], n: Int64, flags: UInt32, n_meshes: Int64,
                            ord_inst: Int64, ord_mesh: MutPointer[Int32, MutAnyOrigin], curves: Pointer[Curve, MutUntrackedOrigin],
                            leaves: Pointer[PrimId, MutUntrackedOrigin], leaf_base: Pointer[Int32, MutUntrackedOrigin],
-                           inst_blas: Pointer[Int32, MutUntrackedOrigin], materials: Pointer[Material, MutUntrackedOrigin]):
+                           inst_blas: Pointer[Int32, MutUntrackedOrigin], materials: Pointer[Material, MutUntrackedOrigin],
+                           heat: MutPointer[UInt32, MutAnyOrigin]):
     var i = global_idx.x
     if i >= Int(n):
         return
@@ -198,6 +217,8 @@ def xert_trace_interop_gpu(accel: MutPointer[UInt8, MutAnyOrigin], rays: MutPoin
     if hit.prim < 0:
         o[unsafe_offset=6] = 0
         return
+    if Int(heat) != 0:
+        _ = Atomic.fetch_add(heat.unsafe_offset(Int(hit.inst)), UInt32(1))
     var ordinary = Int(hit.inst) == Int(ord_inst)
     if hit.curve >= 0:
         var p = leaves[unsafe_offset=Int(hit.curve)]
@@ -232,4 +253,5 @@ def xert_trace_interop(ctx: DeviceContext, rays: Int, results: Int, m: Int, any_
         Pointer[Int32, MutUntrackedOrigin](unsafe_from_address=Int(xert_curve_table(2))),
         Pointer[Int32, MutUntrackedOrigin](unsafe_from_address=Int(xert_curve_table(3))),
         Pointer[Material, MutUntrackedOrigin](unsafe_from_address=Int(xert_curve_table(4))),
+        MutPointer[UInt32, MutAnyOrigin](unsafe_from_address=Int(external_call["xert_heat", UInt64]())),
         grid_dim=ceildiv(m, 256), block_dim=256)
