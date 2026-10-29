@@ -699,15 +699,16 @@ def _tex_lookup[use_gpu: Bool](
             pv = pw0*mesh_uv(mesh, v0)[1] + inter.u*mesh_uv(mesh, v1)[1] + inter.v*mesh_uv(mesh, v2)[1]
         var pt = _sample_ptex(ptx, Int(mesh_face(mesh, tri)), pu, pv, fp_width)
         return RGB(mat.tex_bias.r + mat.tex_scale.r * pt.r, mat.tex_bias.g + mat.tex_scale.g * pt.g, mat.tex_bias.b + mat.tex_scale.b * pt.b)
-    var has_uvs = True
-    comptime if not use_gpu:
-        has_uvs = mesh_has_uvs(mesh)
-    if ti >= 0 and ti < n_textures and has_uvs:
+    var has_uvs = mesh_has_uvs(mesh)
+    if ti >= 0 and ti < n_textures:
         var tex = textures[unsafe_offset=ti]
         if Int(tex.width) > 0:
             var w0 = Float32(1.0) - inter.u - inter.v
-            var su = w0*mesh_uv(mesh, v0)[0]   + inter.u*mesh_uv(mesh, v1)[0]   + inter.v*mesh_uv(mesh, v2)[0]
-            var tv = w0*mesh_uv(mesh, v0)[1] + inter.u*mesh_uv(mesh, v1)[1] + inter.v*mesh_uv(mesh, v2)[1]
+            var su = inter.u + inter.v   # pbrt's default triangle uv: (0,0), (1,0), (1,1)
+            var tv = inter.v
+            if has_uvs:
+                su = w0*mesh_uv(mesh, v0)[0]   + inter.u*mesh_uv(mesh, v1)[0]   + inter.v*mesh_uv(mesh, v2)[0]
+                tv = w0*mesh_uv(mesh, v0)[1] + inter.u*mesh_uv(mesh, v1)[1] + inter.v*mesh_uv(mesh, v2)[1]
             tv = Float32(1.0) - tv  # PBRT V-flip: V=0 at top
             # bias + scale*texel is pbrt's "scale"/"mix" texture graph
             # folded into the lookup (scale=1, bias=0 when absent) --

@@ -335,11 +335,10 @@ struct MeshBuffers(Movable):
             var vi_dptr = _gpu_place[Int32](ctx, vert_bufs, host_bufs, host_mesh.vertexIndices,
                                                    1 if is_quads else Int(s.mesh_n_tris[unsafe_offset=i]) * 3, kb)
             var uv_n = Int(s.mesh_uv_n_verts[unsafe_offset=i])
-            var uv_dptr: Pointer[Float32, MutUntrackedOrigin]
+            # No UVs: no pointer, so mesh_has_uvs holds on the GPU (a dummy buffer was read out of bounds).
+            var uv_dptr = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling()
             if uv_n > 0:
                 uv_dptr = _gpu_place[Float32](ctx, uv_bufs, host_bufs, host_mesh.uvs, uv_n * 2, kb)
-            else:
-                uv_dptr = _gpu_zeros_owned[Float32](ctx, uv_bufs, 1)
             var nrm_n = Int(s.mesh_nrm_n_verts[unsafe_offset=i])
             var nrm_dptr = Pointer[Float32, MutUntrackedOrigin](unsafe_from_address=1)   # "no normals"
             if nrm_n > 0:
