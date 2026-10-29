@@ -1145,11 +1145,11 @@ def _xert_placement(ctx: DeviceContext, psc: Pointer[ParsedScene_Mojo, MutUntrac
                 bytes[n_blas + mesh_blas[i]] += mesh_host_bytes(psc[], i, mesh_host_kb)
     else:
         budget = atol(getenv("GONZALES_XERT_VRAM_MB")) * 1048576
-    # A BLAS hit stands for a whole traversal, a mesh hit for a few vertex reads (island: 3000 + 1100 MiB by hand).
+    # A BLAS hit stands for a whole traversal, a mesh hit for a few vertex reads (unculled island x4 399 ms, x8 243; culled x16 +2%).
     var weighted = heat.copy()
     if auto:
         for b in range(n_blas):
-            weighted[b] *= 4.0
+            weighted[b] *= 8.0
     var placed = List[Bool]()
     _ = heat_fill(weighted, bytes, budget, placed)
     var used = 0
