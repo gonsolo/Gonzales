@@ -198,7 +198,8 @@ def xert_trace_rays_gpu(accel: MutPointer[UInt8, MutAnyOrigin], rays: MutPointer
     o[unsafe_offset=3] = XERT_MISS if hit.prim < 0 else UInt32(hit.prim)
 
 # The interop layout of vulkaninterop_unpack_results_kernel: t u v, -1, mesh (or n_meshes + instance), triangle, hit flag,
-# mesh within the instance's template. Instance ord_inst holds the ordinary meshes, its geometry g is mesh ord_mesh[g]. A
+# mesh within the instance's template. Instances from ord_inst on hold the ordinary meshes, instance ord_inst + j mesh
+# ord_mesh[j]. A
 # curve hit is written as rtcore_curve_clip_gpu writes one: t h v, instance (-1: none), curve, pieces, flag 4 (2: not
 # instanced), material.
 def xert_trace_interop_gpu(accel: MutPointer[UInt8, MutAnyOrigin], rays: MutPointer[Float32, MutAnyOrigin],
@@ -219,7 +220,7 @@ def xert_trace_interop_gpu(accel: MutPointer[UInt8, MutAnyOrigin], rays: MutPoin
         return
     if Int(heat) != 0:
         _ = Atomic.fetch_add(heat.unsafe_offset(Int(hit.inst)), UInt32(1))
-    var ordinary = Int(hit.inst) == Int(ord_inst)
+    var ordinary = ord_inst >= 0 and Int(hit.inst) >= Int(ord_inst)
     if hit.curve >= 0:
         var p = leaves[unsafe_offset=Int(hit.curve)]
         o[unsafe_offset=0] = bitcast[DType.uint32](hit.t)
@@ -235,7 +236,7 @@ def xert_trace_interop_gpu(accel: MutPointer[UInt8, MutAnyOrigin], rays: MutPoin
     o[unsafe_offset=1] = bitcast[DType.uint32](hit.u)
     o[unsafe_offset=2] = bitcast[DType.uint32](hit.v)
     o[unsafe_offset=3] = UInt32(0xFFFFFFFF)
-    o[unsafe_offset=4] = UInt32(ord_mesh[unsafe_offset=Int(hit.geom)]) if ordinary else UInt32(Int(n_meshes) + Int(hit.inst))
+    o[unsafe_offset=4] = UInt32(ord_mesh[unsafe_offset=Int(hit.inst) - Int(ord_inst)]) if ordinary else UInt32(Int(n_meshes) + Int(hit.inst))
     o[unsafe_offset=5] = UInt32(hit.prim)
     o[unsafe_offset=6] = 1
     o[unsafe_offset=7] = 0 if ordinary else UInt32(hit.geom)

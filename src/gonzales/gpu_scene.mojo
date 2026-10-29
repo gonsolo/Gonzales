@@ -14,7 +14,7 @@ from .primitives import Instance, Intersection, PrimId, Sphere, TriangleMesh, me
 from .sampling import FILTER_LUT_N, fill_filter_lut, ThinLens
 from .render_state import FilmDims, FilterParams, GpuTexture, NormalSlopeMap, PathState, ShadowTask, SHADOW_SLOTS
 from std.os import getenv
-from std.os.path import getsize
+from std.os.path import exists, getsize
 from .spectrum import SpectralHandle
 from .rtcore import rtcore_device_free, rtcore_host_register, rtcore_device_total
 from .xert import xert_alignment
@@ -27,7 +27,8 @@ from max.gpu import block_dim, block_idx, thread_idx
 from max.gpu.host import DeviceBuffer, DeviceContext, HostBuffer
 from std.ffi import external_call
 from std.math import ceildiv
-from std.memory import unsafe_memcpy
+from std.memory import bitcast, unsafe_memcpy
+from std.builtin.sort import sort
 from std.memory.alloc import unsafe_alloc
 from std.sys import has_accelerator, get_defined_int
 from std.sys.info import size_of
@@ -280,9 +281,11 @@ struct MeshBuffers(Movable):
 
         var mesh_structs_host = unsafe_alloc[TriangleMesh](max(Int(s.mesh_count), 1))
         var has_alpha = False
+        var keep = _meshes_on_device(s, host_kb)
 
         for i in range(Int(s.mesh_count)):
             var host_mesh = s.meshes[unsafe_offset=i]
+            var kb = 0 if keep[i] else host_kb
             if Int(s.mesh_n_tris[unsafe_offset=i]) == 0:
                 # Emptied by the template merge (or just empty): nothing refers to it, so it gets no buffers.
                 mesh_structs_host[unsafe_offset=i] = host_mesh
@@ -294,23 +297,23 @@ struct MeshBuffers(Movable):
             # per vertex) and shading normals (3 per vertex), each a zeroed
             # 4-byte buffer when the mesh has none.
             # points are padded to 4 floats per vertex
-            var pts_dptr = _gpu_place[Float32](ctx, points_bufs, host_bufs, host_mesh.points, mesh_points_floats(Int(s.mesh_n_verts[unsafe_offset=i]), host_mesh.quads), host_kb)
+            var pts_dptr = _gpu_place[Float32](ctx, points_bufs, host_bufs, host_mesh.points, mesh_points_floats(Int(s.mesh_n_verts[unsafe_offset=i]), host_mesh.quads), kb)
             # A quad soup has no vertex indices and one face id and material a quad (TriangleMesh.quads).
             var is_quads = host_mesh.quads != Int32(0)
             var n_per_face = Int(s.mesh_n_tris[unsafe_offset=i]) // 2 if is_quads else Int(s.mesh_n_tris[unsafe_offset=i])
-            var fi_dptr = _gpu_place[Int32](ctx, face_bufs, host_bufs, host_mesh.faceIndices, n_per_face, host_kb)
+            var fi_dptr = _gpu_place[Int32](ctx, face_bufs, host_bufs, host_mesh.faceIndices, n_per_face, kb)
             var vi_dptr = _gpu_place[Int32](ctx, vert_bufs, host_bufs, host_mesh.vertexIndices,
-                                                   1 if is_quads else Int(s.mesh_n_tris[unsafe_offset=i]) * 3, host_kb)
+                                                   1 if is_quads else Int(s.mesh_n_tris[unsafe_offset=i]) * 3, kb)
             var uv_n = Int(s.mesh_uv_n_verts[unsafe_offset=i])
             var uv_dptr: Pointer[Float32, MutUntrackedOrigin]
             if uv_n > 0:
-                uv_dptr = _gpu_place[Float32](ctx, uv_bufs, host_bufs, host_mesh.uvs, uv_n * 2, host_kb)
+                uv_dptr = _gpu_place[Float32](ctx, uv_bufs, host_bufs, host_mesh.uvs, uv_n * 2, kb)
             else:
                 uv_dptr = _gpu_zeros_owned[Float32](ctx, uv_bufs, 1)
             var nrm_n = Int(s.mesh_nrm_n_verts[unsafe_offset=i])
             var nrm_dptr = Pointer[Float32, MutUntrackedOrigin](unsafe_from_address=1)   # "no normals"
             if nrm_n > 0:
-                nrm_dptr = _gpu_place[Float32](ctx, nrm_bufs, host_bufs, host_mesh.normals, nrm_n, host_kb)   # one encoded word a vertex
+                nrm_dptr = _gpu_place[Float32](ctx, nrm_bufs, host_bufs, host_mesh.normals, nrm_n, kb)   # one encoded word a vertex
             else:
                 _ = _gpu_zeros_owned[Float32](ctx, nrm_bufs, 1)
 
@@ -335,7 +338,7 @@ struct MeshBuffers(Movable):
             mesh_structs_host[unsafe_offset=i].quads = host_mesh.quads
             if _is_real_ptr(host_mesh.materials):
                 mesh_structs_host[unsafe_offset=i].materials = _gpu_place[Int32](
-                    ctx, face_bufs, host_bufs, host_mesh.materials, n_per_face, host_kb)
+                    ctx, face_bufs, host_bufs, host_mesh.materials, n_per_face, kb)
 
         # Upload mesh struct array
         var meshes_buf = _gpu_upload_array[TriangleMesh](ctx, mesh_structs_host, Int(s.mesh_count))
@@ -1058,6 +1061,99 @@ def _gpu_place[T: AnyType](
         return dst
     return _gpu_upload_owned[T](ctx, bufs, src, count)
 
+def _mesh_bytes(ref s: ParsedScene_Mojo, i: Int) -> Int:
+    var quads = s.meshes[unsafe_offset=i].quads
+    var per_face = Int(s.mesh_n_tris[unsafe_offset=i]) // 2 if quads != Int32(0) else Int(s.mesh_n_tris[unsafe_offset=i])
+    return 4 * (mesh_points_floats(Int(s.mesh_n_verts[unsafe_offset=i]), quads) + per_face * 2
+                + (0 if quads != Int32(0) else Int(s.mesh_n_tris[unsafe_offset=i]) * 3)
+                + Int(s.mesh_uv_n_verts[unsafe_offset=i]) * 2 + Int(s.mesh_nrm_n_verts[unsafe_offset=i]))
+
+# The Intel BLAS of each mesh: its template, else nt + its place among the ordinary meshes (-1: empty). The ordinary curves,
+# if any, have the BLAS after the last ordinary mesh.
+def xert_mesh_blas(ref s: ParsedScene_Mojo, mut of: List[Int]) -> Int:
+    var nm = Int(s.mesh_count)
+    var nt = Int(s.blas_count)
+    of = List[Int](length=max(nm, 1), fill=-1)
+    for t in range(nt):
+        for i in range(Int(s.template_mesh_start[unsafe_offset=t]), Int(s.template_mesh_end[unsafe_offset=t])):
+            of[i] = t
+    var n_blas = nt
+    for i in range(nm):
+        if of[i] < 0:
+            of[i] = n_blas
+            n_blas += 1
+    for j in range(Int(s.prim_count)):
+        if s.prim_ids[unsafe_offset=j].type == Int8(5):
+            n_blas += 1
+            break
+    return n_blas
+
+# Hits per Intel BLAS from the per-instance counts in GONZALES_XERT_HEAT (written by a run without that file; the ordinary
+# BLASes' identity instances follow the scene's), else instance counts. True when profiled.
+def xert_heat(ref s: ParsedScene_Mojo, n_blas: Int, mut heat: List[Float64]) raises -> Bool:
+    var nt = Int(s.blas_count)
+    var ni = Int(s.instance_count)
+    var path = getenv("GONZALES_XERT_HEAT")
+    var counts = List[UInt8]()
+    if path != "" and exists(path):
+        with open(path, "r") as f:
+            counts = f.read_bytes()
+    var profiled = len(counts) == 4 * (ni + n_blas - nt)
+    var cp = counts.unsafe_ptr().unsafe_bitcast[UInt32]()
+    heat = List[Float64](length=max(n_blas, 1), fill=0)
+    for k in range(ni):
+        var b = Int(s.instances[unsafe_offset=k].blasIdx)
+        if b >= 0 and b < nt:
+            heat[b] += Float64(cp[unsafe_offset=k]) if profiled else 1.0
+    for b in range(nt, n_blas):
+        heat[b] += Float64(cp[unsafe_offset=ni + b - nt]) if profiled else 1.0
+    return profiled
+
+# Greedy fill of budget bytes with the items of most heat per byte, marked in placed; returns the heat they hold.
+def heat_fill(heat: List[Float64], bytes: List[Int], budget: Int, mut placed: List[Bool]) -> Float64:
+    var n = len(bytes)
+    var keys = List[UInt64]()
+    for b in range(n):
+        var d = Float32(heat[b] / Float64(max(bytes[b], 1)) * 1048576.0)
+        keys.append((UInt64(bitcast[DType.uint32](d)) << 32) | UInt64(b))    # positive float bits order as integers
+    sort(Span(keys))
+    placed = List[Bool](length=max(n, 1), fill=False)
+    var used = 0
+    var held = 0.0
+    for j in range(n - 1, -1, -1):
+        var b = Int(keys[j] & 0xFFFFFFFF)
+        if used + bytes[b] <= budget:
+            placed[b] = True; used += bytes[b]; held += heat[b]
+    return held
+
+# GONZALES_MESH_VRAM_MB: of the mesh arrays that host_kb sends to host memory, those of the BLASes with the most hits per
+# byte (xert_heat) stay on the card up to that many MiB.
+def _meshes_on_device(ref s: ParsedScene_Mojo, host_kb: Int) raises -> List[Bool]:
+    var nm = Int(s.mesh_count)
+    var keep = List[Bool](length=max(nm, 1), fill=False)
+    if host_kb == 0 or getenv("GONZALES_MESH_VRAM_MB") == "":
+        return keep^
+    var blas_of = List[Int]()
+    var n_blas = xert_mesh_blas(s, blas_of)
+    var heat = List[Float64]()
+    _ = xert_heat(s, n_blas, heat)
+    var bytes = List[Int](length=max(n_blas, 1), fill=0)
+    for i in range(nm):
+        if blas_of[i] >= 0:
+            bytes[blas_of[i]] += _mesh_bytes(s, i)
+    var placed = List[Bool]()
+    var held = heat_fill(heat, bytes, atol(getenv("GONZALES_MESH_VRAM_MB")) * 1048576, placed)
+    var used = 0
+    var total = 0.0
+    for b in range(n_blas):
+        total += heat[b]
+        if placed[b]:
+            used += bytes[b]
+    for i in range(nm):
+        keep[i] = blas_of[i] >= 0 and placed[blas_of[i]]
+    print("GPU: mesh arrays of", Int(100.0 * held / max(total, 1.0)), "% of the hits on the card,", used // 1048576, "MiB")
+    return keep^
+
 # Which arrays stay in host memory, as KB thresholds (0: none): (mesh arrays, environment-light pixels).
 # GONZALES_MESH_HOST / GONZALES_ENV_HOST force them. Unset: a pruned scene whose RT structures, mesh arrays and per-pixel buffers
 # would not fit the card moves its mesh arrays (about +10% frame time); if it still would not fit, the environment pixels as well
@@ -1095,11 +1191,7 @@ def _host_plan(ctx: DeviceContext, ref s: ParsedScene_Mojo, n_pixels: Int) raise
         rt_bytes = 30 * tris + 90 * Int(s.instance_count)
     var mesh_bytes = 0
     for i in range(Int(s.mesh_count)):
-        var quads = s.meshes[unsafe_offset=i].quads
-        var per_face = Int(s.mesh_n_tris[unsafe_offset=i]) // 2 if quads != Int32(0) else Int(s.mesh_n_tris[unsafe_offset=i])
-        mesh_bytes += 4 * (mesh_points_floats(Int(s.mesh_n_verts[unsafe_offset=i]), quads) + per_face * 2
-                           + (0 if quads != Int32(0) else Int(s.mesh_n_tris[unsafe_offset=i]) * 3)
-                           + Int(s.mesh_uv_n_verts[unsafe_offset=i]) * 2 + Int(s.mesh_nrm_n_verts[unsafe_offset=i]))
+        mesh_bytes += _mesh_bytes(s, i)
     var env_bytes = 0
     for ii in range(Int(s.infinite_count)):
         env_bytes += Int(s.infinite_lights[unsafe_offset=ii].cdf_w) * Int(s.infinite_lights[unsafe_offset=ii].cdf_h) * 6

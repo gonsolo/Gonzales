@@ -30,7 +30,7 @@ void* xert_build_tlas(int64_t n_inst, const float* xf, const int32_t* blas_of, c
                       const float* blas_bounds, int64_t* out_size);
 
 // The scene the wavefront passes trace, set once its structures are on the device: the TLAS's device address (0 = none),
-// the instance holding the ordinary meshes and the device table of their mesh numbers, the scene's mesh count, the
+// the first of the instances holding one ordinary mesh each and the device table of their mesh numbers, the scene's mesh count, the
 // shadow slots to trace in hardware (0 = none) and whether alpha cutouts need the any-hit passes.
 void xert_set_scene(uint64_t accel, int64_t ord_inst, uint64_t ord_mesh, int64_t n_meshes, int32_t shadow_slots, int32_t alpha);
 uint64_t xert_scene_accel(void);
