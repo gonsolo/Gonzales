@@ -26,6 +26,10 @@ static int xert_init(void) {
   if (ze.ready)
     return ze.ready > 0;
   ze.ready = -1;
+  // Spatial splits store triangle pairs in several leaves (Moana's BLASes 5.6 -> 9.6 GB); GONZALES_XERT_SPLITS=1 keeps them.
+  const char* splits = getenv("GONZALES_XERT_SPLITS");
+  if (!(splits && splits[0] == '1'))
+    setenv("ZE_RTAS_SPATIAL_SPLITS", "0", 0);
   void* lib = dlopen("libze_loader.so.1", RTLD_NOW | RTLD_LOCAL);
   if (!lib)
     return 0;
