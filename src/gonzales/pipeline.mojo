@@ -33,7 +33,7 @@ from .restir_gi import GIReservoir, gi_reservoir_init, GIReservoirIO, gi_reservo
 from .restir_sms import SMSReservoir, sms_reservoir_init, SMSReservoirIO, sms_reservoir_io_null
 from .restir_vol import VolReservoir, vol_reservoir_init, vol_reservoir_io_null
 from .gpu import gpu_render_sample, gpu_render_wavefront, gpu_adaptive_update, gpu_mnee_adapt, gpu_download_albedo, gpu_clear_film, gpu_clear_restir, gpu_clear_restir_vol
-from .gpu_scene import GpuSceneHandle, heat_fill, xert_heat, WAVEFRONT_BATCH, gpu_available, gpu_upload_scene, gpu_alloc_pixel_buffers, gpu_free_scene, gpu_ptex_begin, gpu_ptex_finish, gpu_ptex_withhold, gpu_ptex_withheld, gpu_ptex_redo_upload, gpu_ptex_stream_start, gpu_ptex_poll, gpu_ptex_stream_finish, gpu_ptex_make_room, gpu_set_curve_bvh_dev, typed_ptr
+from .gpu_scene import GpuSceneHandle, heat_fill, mesh_host_bytes, xert_heat, xert_mesh_blas, WAVEFRONT_BATCH, gpu_available, gpu_upload_scene, gpu_alloc_pixel_buffers, gpu_free_scene, gpu_ptex_begin, gpu_ptex_finish, gpu_ptex_withhold, gpu_ptex_withheld, gpu_ptex_redo_upload, gpu_ptex_stream_start, gpu_ptex_poll, gpu_ptex_stream_finish, gpu_ptex_make_room, gpu_set_curve_bvh_dev, typed_ptr
 from .gpu_denoise import gpu_atrous_denoise
 from .gpu_wavefront import gpu_gen_aux_buffers
 from .viewer import CameraState, viewer_create, viewer_update_framebuffer, viewer_should_close, viewer_poll_events, viewer_get_camera_state, viewer_set_camera_state, viewer_destroy, viewer_denoise_enabled, viewer_monitor_size, build_camera_to_world
@@ -42,7 +42,7 @@ from .vulkanrt import vulkanrt_build_scene, vulkanrt_destroy_scene
 from .curve_bvh import CurveBvhDev, gpu_build_curve_bvh, _leaf_range
 from .optixcurves import gpu_build_optix_curves, oxc_active, oxc_bytes, oxc_destroy, oxc_set_active
 from .rt_build import rt_build_blas, rt_build_tlas, rt_patch_ids, RtTlas, _fbits
-from .xert import xert_alignment, xert_build_blas_geoms, xert_build_tlas, xert_curve_table, xert_free, xert_heat_save, xert_set_curves, xert_set_heat, xert_set_scene
+from .xert import xert_alignment, xert_build_blas_geoms, xert_build_tlas, xert_curve_table, xert_free, xert_heat_path, xert_heat_save, xert_set_curves, xert_set_heat, xert_set_scene
 from .rt_cache import rt_cache_load, rt_cache_save, RtCacheTlas
 from .scene_cache import scene_cache_variant
 from max.algorithm import parallelize
@@ -51,7 +51,7 @@ from std.atomic import Atomic
 from std.sys.info import num_performance_cores
 from .rtcore import rtcore_set_gid_compact, rtcore_create_own_scene, rtcore_create_own, rtcore_set_shadow, rtcore_set_alpha, rtcore_create_scene, rtcore_set_domains, rtcore_set_instance_decode, rtcore_instance_records, RtCoreHandle, rtcore_create, rtcore_set_meshes, rtcore_set_active, rtcore_active, rtcore_destroy
 from std.os import getenv
-from std.os.path import exists
+from std.os.path import exists, getsize
 from std.ffi import external_call
 from .outputs import _cstr
 from .vulkaninterop import (
@@ -1109,13 +1109,16 @@ def _rt_curve_clusters(handle: Pointer[GpuSceneHandle, MutUntrackedOrigin], psc:
         print("Gonzales:   curve clusters", handle[].curve_bvh.n_clusters, "in", Float64(perf_counter_ns() - t0) / 1.0e9, "s")
 
 
-# GONZALES_XERT_VRAM_MB: the BLASes in device memory up to that many MiB, the rest in host memory, which the RT units
-# reach over PCIe; most hits per byte first, by the per-instance counts in GONZALES_XERT_HEAT (written by a run without
-# that file) or else by instance count.
-def _xert_placement(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin], sizes: List[Int], align: Int) raises -> List[Bool]:
+# Which BLASes go to device memory; the rest stay in host memory, which the RT units reach over PCIe. Most hits per byte
+# first, by the per-instance counts of xert_heat_path() (written by a run without that file) or else by instance count.
+# GONZALES_XERT_VRAM_MB: that many MiB of BLASes. Unset: the BLASes and the host-memory mesh arrays (mesh_host_kb) share
+# what the card has free after the instances and GONZALES_XERT_RESERVE_MB (later buffers and kernel stacks); move_mesh
+# then marks the meshes to copy to the card.
+def _xert_placement(ctx: DeviceContext, psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin], sizes: List[Int], align: Int,
+                    mesh_host_kb: Int, mut move_mesh: List[Bool]) raises -> List[Bool]:
     var n_blas = len(sizes)
-    if getenv("GONZALES_XERT_VRAM_MB") == "":
-        return List[Bool](length=max(n_blas, 1), fill=True)
+    var nt = Int(psc[unsafe_offset=0].blas_count)
+    var n_inst = Int(psc[unsafe_offset=0].instance_count) + n_blas - nt
     var heat = List[Float64]()
     var profiled = xert_heat(psc[], n_blas, heat)
     var bytes = List[Int]()
@@ -1123,29 +1126,61 @@ def _xert_placement(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin], sizes: L
     for b in range(n_blas):
         bytes.append((sizes[b] + align - 1) // align * align)
         hits += heat[b]
+    var mesh_blas = List[Int]()
+    _ = xert_mesh_blas(psc[], mesh_blas)
+    var auto = getenv("GONZALES_XERT_VRAM_MB") == ""
+    var budget = 0
+    if auto:
+        var reserve = atol(getenv("GONZALES_XERT_RESERVE_MB")) if getenv("GONZALES_XERT_RESERVE_MB") != "" else 2800
+        budget = Int(ctx.get_memory_info()[0]) - 145 * n_inst - reserve * 1048576
+        for b in range(n_blas):     # the mesh arrays of BLAS b are item n_blas + b
+            heat.append(heat[b]); bytes.append(0)
+        for i in range(Int(psc[unsafe_offset=0].mesh_count)):
+            if mesh_blas[i] >= 0:
+                bytes[n_blas + mesh_blas[i]] += mesh_host_bytes(psc[], i, mesh_host_kb)
+    else:
+        budget = atol(getenv("GONZALES_XERT_VRAM_MB")) * 1048576
+    # A BLAS hit stands for a whole traversal, a mesh hit for a few vertex reads (island: 3000 + 1100 MiB by hand).
+    var weighted = heat.copy()
+    if auto:
+        for b in range(n_blas):
+            weighted[b] *= 4.0
     var placed = List[Bool]()
-    var held = heat_fill(heat, bytes, atol(getenv("GONZALES_XERT_VRAM_MB")) * 1048576, placed)
+    _ = heat_fill(weighted, bytes, budget, placed)
     var used = 0
+    var mesh_used = 0
+    var held = 0.0
+    var mesh_held = 0.0
     var hot = -1
     for b in range(n_blas):
         if placed[b]:
-            used += bytes[b]
+            used += bytes[b]; held += heat[b]
         elif hot < 0 or heat[b] > heat[hot]:
             hot = b
+        if auto and placed[n_blas + b]:
+            mesh_used += bytes[n_blas + b]; mesh_held += heat[b]
+    move_mesh = List[Bool](length=max(Int(psc[unsafe_offset=0].mesh_count), 1), fill=False)
+    if auto:
+        for i in range(Int(psc[unsafe_offset=0].mesh_count)):
+            move_mesh[i] = mesh_blas[i] >= 0 and placed[n_blas + mesh_blas[i]]
+        print("RT hardware (Intel):", budget // 1048576, "MiB free for structures and mesh arrays")
     print("RT hardware (Intel):", "hit counts" if profiled else "instance counts", "place", Int(100.0 * held / max(hits, 1.0)), "% in",
-          used // 1048576, "MiB of device memory")
+          used // 1048576, "MiB of structures,", Int(100.0 * mesh_held / max(hits, 1.0)), "% in", mesh_used // 1048576, "MiB of mesh arrays")
     if hot >= 0:
         print("RT hardware (Intel): hottest in host memory: structure", hot, "of", n_blas, sizes[hot] // 1048576, "MiB,",
               Int(1000.0 * heat[hot] / max(hits, 1.0)), "per mille of the hits")
-    return placed^
+    var on_dev = List[Bool](length=max(n_blas, 1), fill=False)
+    for b in range(n_blas):
+        on_dev[b] = placed[b]
+    return on_dev^
 
 
 # Intel Xe2: the driver builds one BLAS per template, one per ordinary mesh and one over the ordinary curves, a geometry per
 # indexed mesh and one of procedural primitives for the curve leaves; then the TLAS over the instances (user id = instance)
 # and, last, the identity instances of the ordinary BLASes. Returns the TLAS's device address (0 on failure), the first
 # ordinary instance and the device table of their meshes; the curve tables go to xert_set_curves.
-def _xert_attach(ctx: DeviceContext, psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin], curves: Int, materials: Int,
-                 mut bufs: List[DeviceBuffer[DType.uint8]], mut host_bufs: List[HostBuffer[DType.uint8]]) raises -> Tuple[UInt64, Int64, UInt64]:
+def _xert_attach(ctx: DeviceContext, psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin], curves: Int, materials: Int, mesh_host_kb: Int,
+                 mut move_mesh: List[Bool], mut bufs: List[DeviceBuffer[DType.uint8]], mut host_bufs: List[HostBuffer[DType.uint8]]) raises -> Tuple[UInt64, Int64, UInt64]:
     var fail = (UInt64(0), Int64(-1), UInt64(0))
     var align = Int(xert_alignment())
     var nm = Int(psc[unsafe_offset=0].mesh_count)
@@ -1233,7 +1268,7 @@ def _xert_attach(ctx: DeviceContext, psc: Pointer[ParsedScene_Mojo, MutUntracked
             bounds.unsafe_free()
             return fail
         blas.append(r); sizes.append(Int(size))
-    var on_dev = _xert_placement(psc, sizes, align)
+    var on_dev = _xert_placement(ctx, psc, sizes, align, mesh_host_kb, move_mesh)
     var offsets = List[Int](length=max(n_blas, 1), fill=0)
     var dev_total = 0
     var host_total = 0
@@ -1318,7 +1353,8 @@ def _xert_attach(ctx: DeviceContext, psc: Pointer[ParsedScene_Mojo, MutUntracked
     xert_free(tlas)
     print("RT hardware (Intel): structures", dev_total // 1048576, "MiB on the device,", host_total // 1048576, "MiB in host memory, instances",
           Int(tlas_size) // 1048576, "MiB")
-    if getenv("GONZALES_XERT_HEAT") != "" and not exists(getenv("GONZALES_XERT_HEAT")):
+    var heat_path = xert_heat_path()
+    if heat_path != "" and (not exists(heat_path) or getsize(heat_path) != 4 * n_inst):    # none yet, or another scene's
         var heat_buf = ctx.enqueue_create_buffer[DType.uint8](4 * n_inst)
         ctx.enqueue_memset(heat_buf, UInt8(0))
         ctx.synchronize()
@@ -1336,9 +1372,13 @@ def _rt_wavefront_setup(handle: Pointer[GpuSceneHandle, MutUntrackedOrigin], psc
     var xe_scene = (UInt64(0), Int64(-1), UInt64(0))
     if xe:
         var sd = handle[].scene_descriptor()
-        xe_scene = _xert_attach(handle[].ctx, psc, Int(sd.curves), Int(sd.materials), b.xert, b.xert_host)
+        var move_mesh = List[Bool]()
+        xe_scene = _xert_attach(handle[].ctx, psc, Int(sd.curves), Int(sd.materials), handle[].meshes.host_kb, move_mesh, b.xert, b.xert_host)
         if xe_scene[0] == 0:
             return b^
+        var moved = handle[].meshes.move_to_device(handle[].ctx, psc[], move_mesh)
+        if moved > 0:
+            print("RT hardware (Intel): mesh arrays moved to the card,", moved // 1048576, "MiB")
     else:
         var rt_merged = _rtcore_merge(psc)
         if not (rt_merged.valid or _rtcore_native_wanted(psc)):

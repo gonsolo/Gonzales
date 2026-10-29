@@ -56,7 +56,14 @@ def xert_curve_table(which: Int32) -> UInt64:
 def xert_set_heat(counts: UInt64, n: Int64):
     external_call["xert_set_heat", NoneType, UInt64, Int64](counts, n)
 
-# Writes the profiled hit counts (one UInt32 per instance) to GONZALES_XERT_HEAT.
+# Per-instance hit counts: GONZALES_XERT_HEAT, else next to the scene cache ("" = none).
+def xert_heat_path() -> String:
+    var path = getenv("GONZALES_XERT_HEAT")
+    if path == "" and getenv("GONZALES_SCENE_CACHE") != "":
+        path = getenv("GONZALES_SCENE_CACHE") + ".heat"
+    return path
+
+# Writes the profiled hit counts (one UInt32 per instance) to xert_heat_path().
 def xert_heat_save(ctx: DeviceContext) raises:
     var addr = Int(external_call["xert_heat", UInt64]())
     var n = Int(external_call["xert_heat_n", Int64]())
@@ -65,9 +72,9 @@ def xert_heat_save(ctx: DeviceContext) raises:
     var counts = List[UInt8](length=4 * n, fill=0)
     ctx.enqueue_copy(counts.unsafe_ptr(), DeviceBuffer[DType.uint8](ctx, MutPointer[UInt8, MutAnyOrigin](unsafe_from_address=addr), 4 * n, owning=False))
     ctx.synchronize()
-    with open(getenv("GONZALES_XERT_HEAT"), "w") as f:
+    with open(xert_heat_path(), "w") as f:
         f.write_bytes(Span(counts))
-    print("RT hardware (Intel): hit counts written to", getenv("GONZALES_XERT_HEAT"))
+    print("RT hardware (Intel): hit counts written to", xert_heat_path())
 
 def xert_active() -> Bool:
     return external_call["xert_scene_accel", UInt64]() != 0

@@ -17,7 +17,7 @@ from std.os import getenv
 from std.os.path import exists, getsize
 from .spectrum import SpectralHandle
 from .rtcore import rtcore_device_free, rtcore_host_register, rtcore_device_total
-from .xert import xert_alignment
+from .xert import xert_alignment, xert_heat_path
 from .pbrt_parser import ParsedScene_Mojo
 from .host_textures import decode_host_textures
 from .ptex_cache import PtexCache, PTEX_QUEUE_CAP
@@ -259,6 +259,36 @@ struct MeshBuffers(Movable):
     var alpha_bufs: List[DeviceBuffer[DType.uint8]]   # one per distinct alpha mask
     var host_bufs: List[HostBuffer[DType.uint8]]      # arrays placed in host memory (_gpu_place)
     var has_alpha: Bool   # some mesh is alpha-cut (mask or constant < 1)
+    var host_kb: Int      # arrays of at least this many KB went to host memory (0: none)
+
+    # Copies the host-memory arrays of the meshes in keep to the card and points the mesh table at them; returns the bytes.
+    def move_to_device(mut self, ctx: DeviceContext, ref s: ParsedScene_Mojo, keep: List[Bool]) raises -> Int:
+        var n = self.mesh_count
+        var structs = unsafe_alloc[TriangleMesh](max(n, 1))
+        ctx.enqueue_copy(structs.unsafe_bitcast[UInt8](), self.meshes_buf)
+        ctx.synchronize()
+        var moved = 0
+        for i in range(n):
+            if not keep[i] or Int(s.mesh_n_tris[unsafe_offset=i]) == 0:
+                continue
+            var c = _mesh_array_counts(s, i)
+            ref m = structs[unsafe_offset=i]
+            if _on_host(c[0], self.host_kb):
+                m.points = _gpu_upload_owned[Float32](ctx, self.points_bufs, m.points, Int(c[0])); moved += 4 * Int(c[0])
+            if _on_host(c[1], self.host_kb):
+                m.faceIndices = _gpu_upload_owned[Int32](ctx, self.faceIndices_bufs, m.faceIndices, Int(c[1])); moved += 4 * Int(c[1])
+            if _on_host(c[2], self.host_kb):
+                m.vertexIndices = _gpu_upload_owned[Int32](ctx, self.vertexIndices_bufs, m.vertexIndices, Int(c[2])); moved += 4 * Int(c[2])
+            if _on_host(c[3], self.host_kb):
+                m.uvs = _gpu_upload_owned[Float32](ctx, self.uv_bufs, m.uvs, Int(c[3])); moved += 4 * Int(c[3])
+            if _on_host(c[4], self.host_kb):
+                m.normals = _gpu_upload_owned[Float32](ctx, self.nrm_bufs, m.normals, Int(c[4])); moved += 4 * Int(c[4])
+            if _on_host(c[5], self.host_kb):
+                m.materials = _gpu_upload_owned[Int32](ctx, self.faceIndices_bufs, m.materials, Int(c[5])); moved += 4 * Int(c[5])
+        ctx.enqueue_copy(self.meshes_buf, structs.unsafe_bitcast[UInt8]())
+        ctx.synchronize()
+        structs.unsafe_free()
+        return moved
 
     @always_inline
     def meshes_ptr(mut self) -> Pointer[TriangleMesh, MutUntrackedOrigin]:
@@ -346,7 +376,7 @@ struct MeshBuffers(Movable):
         mesh_structs_host.unsafe_free()
         return Self(meshes_buf=meshes_buf^, mesh_count=Int(s.mesh_count), points_bufs=points_bufs^,
                     faceIndices_bufs=face_bufs^, vertexIndices_bufs=vert_bufs^, uv_bufs=uv_bufs^,
-                    nrm_bufs=nrm_bufs^, alpha_bufs=alpha_bufs^, host_bufs=host_bufs^, has_alpha=has_alpha)
+                    nrm_bufs=nrm_bufs^, alpha_bufs=alpha_bufs^, host_bufs=host_bufs^, has_alpha=has_alpha, host_kb=host_kb)
 
 @fieldwise_init
 struct TextureBuffers(Movable):
@@ -1061,6 +1091,34 @@ def _gpu_place[T: AnyType](
         return dst
     return _gpu_upload_owned[T](ctx, bufs, src, count)
 
+# The 4-byte words of mesh i's arrays as MeshBuffers.upload places them: points, face indices, vertex indices, uvs,
+# normals and per-face materials (0: none).
+def _mesh_array_counts(ref s: ParsedScene_Mojo, i: Int) -> SIMD[DType.int64, 8]:
+    var quads = s.meshes[unsafe_offset=i].quads
+    var n_tris = Int(s.mesh_n_tris[unsafe_offset=i])
+    var per_face = n_tris // 2 if quads != Int32(0) else n_tris
+    var c = SIMD[DType.int64, 8](0)
+    c[0] = Int64(mesh_points_floats(Int(s.mesh_n_verts[unsafe_offset=i]), quads))
+    c[1] = Int64(per_face)
+    c[2] = Int64(1 if quads != Int32(0) else n_tris * 3)
+    c[3] = Int64(Int(s.mesh_uv_n_verts[unsafe_offset=i]) * 2)
+    c[4] = Int64(Int(s.mesh_nrm_n_verts[unsafe_offset=i]))
+    c[5] = Int64(per_face) if _is_real_ptr(s.meshes[unsafe_offset=i].materials) else Int64(0)
+    return c
+
+@always_inline
+def _on_host(words: Int64, host_kb: Int) -> Bool:
+    return host_kb > 0 and Int(words) * 4 >= host_kb * 1024
+
+# Bytes of mesh i that _gpu_place put in host memory.
+def mesh_host_bytes(ref s: ParsedScene_Mojo, i: Int, host_kb: Int) -> Int:
+    var c = _mesh_array_counts(s, i)
+    var bytes = 0
+    for k in range(6):
+        if _on_host(c[k], host_kb):
+            bytes += 4 * Int(c[k])
+    return bytes
+
 def _mesh_bytes(ref s: ParsedScene_Mojo, i: Int) -> Int:
     var quads = s.meshes[unsafe_offset=i].quads
     var per_face = Int(s.mesh_n_tris[unsafe_offset=i]) // 2 if quads != Int32(0) else Int(s.mesh_n_tris[unsafe_offset=i])
@@ -1088,12 +1146,12 @@ def xert_mesh_blas(ref s: ParsedScene_Mojo, mut of: List[Int]) -> Int:
             break
     return n_blas
 
-# Hits per Intel BLAS from the per-instance counts in GONZALES_XERT_HEAT (written by a run without that file; the ordinary
+# Hits per Intel BLAS from the per-instance counts in xert_heat_path() (written by a run without that file; the ordinary
 # BLASes' identity instances follow the scene's), else instance counts. True when profiled.
 def xert_heat(ref s: ParsedScene_Mojo, n_blas: Int, mut heat: List[Float64]) raises -> Bool:
     var nt = Int(s.blas_count)
     var ni = Int(s.instance_count)
-    var path = getenv("GONZALES_XERT_HEAT")
+    var path = xert_heat_path()
     var counts = List[UInt8]()
     if path != "" and exists(path):
         with open(path, "r") as f:
@@ -1184,18 +1242,19 @@ def _host_plan(ctx: DeviceContext, ref s: ParsedScene_Mojo, n_pixels: Int) raise
             rt_bytes = getsize(path)
     except:
         pass
-    if rt_bytes == 0:    # first run: no cache yet, estimate what the build will need
+    var intel = xert_alignment() > 0
+    if rt_bytes == 0 or intel:    # no cache yet (the cache holds NVIDIA structures): estimate what the build will need
         var tris = 0
         for i in range(Int(s.mesh_count)):
             tris += Int(s.mesh_n_tris[unsafe_offset=i])
-        rt_bytes = 30 * tris + 90 * Int(s.instance_count)
+        rt_bytes = 41 * tris + 145 * Int(s.instance_count) if intel else 30 * tris + 90 * Int(s.instance_count)
     var mesh_bytes = 0
     for i in range(Int(s.mesh_count)):
         mesh_bytes += _mesh_bytes(s, i)
     var env_bytes = 0
     for ii in range(Int(s.infinite_count)):
         env_bytes += Int(s.infinite_lights[unsafe_offset=ii].cdf_w) * Int(s.infinite_lights[unsafe_offset=ii].cdf_h) * 6
-    var total = Int(rtcore_device_total())
+    var total = Int(ctx.get_memory_info()[1]) if intel else Int(rtcore_device_total())
     if total == 0:
         return (mesh_kb, env_kb, env_down)
     var budget = total * 95 // 100
