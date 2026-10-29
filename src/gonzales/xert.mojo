@@ -1,6 +1,6 @@
 from std.ffi import external_call
 from std.memory import OpaquePointer, bitcast
-from std.sys.info import is_intel_gpu
+from std.sys.info import is_amd_gpu, is_apple_gpu, is_gpu, is_nvidia_gpu
 from max.gpu import global_idx
 
 # Hardware ray tracing on Intel Xe2 (src/xert): the driver builds the acceleration structures, kernels trace them with
@@ -61,7 +61,7 @@ struct XeHit(TrivialRegisterPassable):
 # The closest (or with XERT_ANY_HIT any) hit in [tmin, tmax].
 @always_inline
 def xert_trace(accel: MutPointer[UInt8, MutAnyOrigin], ray: XeRayDesc) -> XeHit:
-    comptime if is_intel_gpu():
+    comptime if is_gpu() and not is_nvidia_gpu() and not is_amd_gpu() and not is_apple_gpu():   # Intel: no is_intel_gpu in released Mojo
         var desc = ray
         var q = external_call["intel_ray_query_init", OpaquePointer[MutAnyOrigin]](
             Pointer(to=desc), accel.unsafe_address_space_cast[AddressSpace.GLOBAL]())
