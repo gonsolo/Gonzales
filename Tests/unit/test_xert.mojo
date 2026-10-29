@@ -3,6 +3,9 @@ from std.memory.alloc import unsafe_alloc
 from std.sys import has_accelerator
 from std.testing import assert_equal, assert_true, TestSuite
 from max.gpu.host import DeviceContext
+from gonzales.curves import Curve
+from gonzales.materials import Material
+from gonzales.primitives import PrimId
 from gonzales.xert import (
     xert_build_blas, xert_build_blas_geoms, xert_build_tlas, xert_alignment, xert_free, xert_trace_rays_gpu,
     xert_trace_interop_gpu, XERT_MISS,
@@ -89,12 +92,21 @@ def test_xert_instances() raises:
     var geoms = unsafe_alloc[Pointer[Float32, MutUntrackedOrigin]](2)
     geoms[unsafe_offset=0] = tv
     geoms[unsafe_offset=1] = tv.unsafe_offset(9)
+    var idx = unsafe_alloc[UInt32](3)
+    for k in range(3):
+        idx[unsafe_offset=k] = UInt32(k)
+    var tris = unsafe_alloc[Pointer[UInt32, MutUntrackedOrigin]](2)
+    tris[unsafe_offset=0] = idx
+    tris[unsafe_offset=1] = idx
+    var n_verts = unsafe_alloc[Int64](2)
     var n_tris = unsafe_alloc[Int64](2)
-    n_tris[unsafe_offset=0] = 1
-    n_tris[unsafe_offset=1] = 1
+    for g in range(2):
+        n_verts[unsafe_offset=g] = 3
+        n_tris[unsafe_offset=g] = 1
     var bounds = unsafe_alloc[Float32](6)
     var blas_size = Int64(0)
-    var blas = xert_build_blas_geoms(2, geoms, n_tris, Pointer(to=blas_size).unsafe_origin_cast[MutUntrackedOrigin](), bounds)
+    var blas = xert_build_blas_geoms(2, geoms, n_verts, tris, n_tris, 0, Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+                                     Pointer(to=blas_size).unsafe_origin_cast[MutUntrackedOrigin](), bounds)
     assert_true(Int(blas) != 0, "xert_build_blas_geoms failed")
     var ctx = DeviceContext()
     # The TLAS stores the BLAS's device address, which must be aligned.
@@ -140,6 +152,9 @@ def test_xert_instances() raises:
     var results = ctx.enqueue_create_buffer[DType.uint32](8 * NX * NY)
     ctx.enqueue_function[xert_trace_interop_gpu](tlas_buf.unsafe_ptr().unsafe_offset(tpad), rays.unsafe_ptr(), results.unsafe_ptr(),
                                                  Int64(NX * NY), UInt32(0), Int64(N_MESHES), Int64(2), ord_mesh.unsafe_ptr(),
+                                                 Pointer[Curve, MutUntrackedOrigin].unsafe_dangling(), Pointer[PrimId, MutUntrackedOrigin].unsafe_dangling(),
+                                                 Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(), Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
+                                                 Pointer[Material, MutUntrackedOrigin].unsafe_dangling(),
                                                  grid_dim=(NX * NY + 63) // 64, block_dim=64)
     var hits = 0; var expected = 0; var bad = 0
     with results.map_to_host() as h:
@@ -174,7 +189,7 @@ def test_xert_instances() raises:
     _ = blas_buf^
     _ = tlas_buf^
     _ = ord_mesh^
-    tv.unsafe_free(); geoms.unsafe_free(); n_tris.unsafe_free(); bounds.unsafe_free(); addr.unsafe_free(); xf.unsafe_free(); blas_of.unsafe_free()
+    tv.unsafe_free(); geoms.unsafe_free(); idx.unsafe_free(); tris.unsafe_free(); n_verts.unsafe_free(); n_tris.unsafe_free(); bounds.unsafe_free(); addr.unsafe_free(); xf.unsafe_free(); blas_of.unsafe_free()
     print("instances:", hits, "of", expected, "hits,", bad, "wrong")
     assert_true(expected > 1000, "enough rays inside")
     assert_equal(bad, 0)

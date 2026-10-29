@@ -17,7 +17,7 @@ from .sampling import gen_primary_ray_state, ThinLens
 from .spectrum import SpectralSample, spectral_sample_to_rgb
 from .transform import transform_normal, Mat4
 from .vulkaninterop import VulkanInteropRtSceneHandle, vulkaninterop_rt_trace
-from .hw_rt import hw_alpha, hw_rt_active, hw_trace_interop, hw_trace_shadow
+from .hw_rt import hw_alpha, hw_curves, hw_rt_active, hw_trace_interop, hw_trace_shadow
 from .optixcurves import oxc_active, oxc_scratch, oxc_trace_closest, oxc_trace_shadow
 from max.gpu import WARP_SIZE, barrier, block_dim, block_idx, lane_id, thread_idx
 from max.gpu.memory import AddressSpace
@@ -1111,7 +1111,7 @@ def rtcore_trace_unpack_gpu(
     var alpha = hw_alpha()
     if alpha:
         rtcore_alpha_passes(ctx, rays_buf, results_buf, scratch_buf, sd.meshes, n_meshes, instance_base_mesh_ptr, n_total)
-    if Int(sd.curveCount) > 0:
+    if Int(sd.curveCount) > 0 and not hw_curves():
         var rp = rays_buf.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
         var sp = results_buf.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
         var ox = oxc_active()
@@ -1276,7 +1276,7 @@ def rtcore_closest_hit_gpu(
     var alpha = hw_alpha()
     if alpha:
         rtcore_alpha_passes(ctx, rays_buf, results_buf, scratch_buf, sd.meshes, n_meshes, instance_base_mesh_ptr, m)
-    if Int(sd.curveCount) > 0:
+    if Int(sd.curveCount) > 0 and not hw_curves():
         var ox = oxc_active()
         if Int(ox) != 0:
             _ = oxc_trace_closest(ox, UInt64(Int(rays)), UInt64(Int(results)), m, CUDA(ctx.stream()))
@@ -1576,6 +1576,7 @@ def shadow_curves_kernel(
     slot_dp: Int64,
     cap_dp: Int64,
     blocked: Pointer[UInt8, MutUntrackedOrigin],               # the OptiX curves' verdicts per ray, else dangling
+    hw_curves_dp: Int64,                                       # the hardware trace tested the curves too
 ):
     var j = Int(block_idx.x * block_dim.x + thread_idx.x)
     if j >= Int(counts[unsafe_offset=Int(slot_dp)]):
@@ -1593,6 +1594,8 @@ def shadow_curves_kernel(
     elif _is_real_ptr(blocked):
         if blocked[unsafe_offset=i] != UInt8(0):
             return
+    elif hw_curves_dp != Int64(0):
+        pass
     elif sd.curveBvh.n_clusters > Int32(0):
         if curve_bvh_occluded(sd.curveBvh, sd.curves, sd.materials, ray, task.tmax):
             return
@@ -1721,7 +1724,7 @@ def rtcore_shadow_rays_compact_gpu(
         for s in range(SHADOW_SLOTS):
             ctx.enqueue_function[shadow_curves_kernel](
                 path_buf.unsafe_ptr().unsafe_bitcast[PathState]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
-                tasks, sd, Int64(n_spheres), ids, lists, counts, Int64(s), Int64(n_total), blocked,
+                tasks, sd, Int64(n_spheres), ids, lists, counts, Int64(s), Int64(n_total), blocked, Int64(1 if hw_curves() else 0),
                 grid_dim=ceildiv(m, CURVE_BLOCK), block_dim=CURVE_BLOCK,
             )
         if bench[unsafe_offset=3] == 2:

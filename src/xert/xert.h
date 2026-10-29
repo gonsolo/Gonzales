@@ -15,13 +15,17 @@ extern "C" {
 // NULL without an Intel GPU or on failure.
 void* xert_build_blas(const float* tri_verts, int64_t n_tris, int64_t* out_size);
 
-// The same over n_geoms meshes: geometry g has n_tris[g] triangles at tri_verts[g]; a hit reports the geometry and the
-// triangle within it. bounds receives the box (lower x y z, upper x y z).
-void* xert_build_blas_geoms(int32_t n_geoms, const float* const* tri_verts, const int64_t* n_tris, int64_t* out_size,
+// The same over n_geoms indexed meshes: geometry g has n_verts[g] vertices (3 floats) at verts[g] and n_tris[g] triangles
+// (3 vertex indices) at tris[g]; shared edges let the builder pair triangles into quads. A hit reports the geometry and
+// the triangle within it. With n_procs > 0 a last geometry holds that many procedural primitives with the boxes
+// proc_bounds (6 floats each), which a ray query reports as candidates. bounds receives the box (lower x y z, upper x y z).
+void* xert_build_blas_geoms(int32_t n_geoms, const float* const* verts, const int64_t* n_verts, const uint32_t* const* tris,
+                            const int64_t* n_tris, int64_t n_procs, const float* proc_bounds, int64_t* out_size,
                             float* bounds);
 
 // A top-level structure: instance k places bottom-level structure blas_of[k], copied to device address blas_addr[b]
-// with object-space box blas_bounds[6b], by the column-major 3x4 object-to-world transform xf[12k]. A hit reports k.
+// with object-space box blas_bounds[6b], by the column-major 3x4 object-to-world transform xf[12k]. A hit reports k;
+// blas_of[k] < 0 leaves instance k out.
 void* xert_build_tlas(int64_t n_inst, const float* xf, const int32_t* blas_of, const uint64_t* blas_addr,
                       const float* blas_bounds, int64_t* out_size);
 
@@ -35,6 +39,12 @@ uint64_t xert_scene_ord_mesh(void);
 int64_t xert_scene_n_meshes(void);
 int32_t xert_shadow_slots(void);
 int32_t xert_alpha(void);
+
+// The curves of the active scene, device addresses: the Curve array, the curve leaves (PrimId, type 5) of every bottom-level
+// structure one after the other, the first leaf of each structure, the structure of each instance and the materials (shadow
+// rays pass interface curves). All 0: no curves.
+void xert_set_curves(uint64_t curves, uint64_t leaves, uint64_t leaf_base, uint64_t inst_blas, uint64_t materials);
+uint64_t xert_curve_table(int32_t which);
 
 // The alignment the device needs for a structure, 0 without an Intel GPU.
 int64_t xert_alignment(void);

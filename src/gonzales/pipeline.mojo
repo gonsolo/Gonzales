@@ -15,7 +15,7 @@ from std.time import perf_counter_ns
 from .geometry import RGB, Point3f, Vec3f, Bounds3f, _is_real_ptr
 from .render_state import TileResult, FilmDims
 from .primitives import Ray, PrimId, TriangleMesh, Instance, mesh_vi, mesh_pos
-from .curves import CurveBvh, curve_piece_bounds
+from .curves import CurveBvh, curve_at, curve_piece_bounds
 from .postprocess import denoise, write_image, write_image_cropped
 from .transform import Mat4, matrix_invert
 from .sampling import TileSamplerParams, ThinLens, mix_bits_u64, camera_ray_from_film_xy
@@ -42,7 +42,7 @@ from .vulkanrt import vulkanrt_build_scene, vulkanrt_destroy_scene
 from .curve_bvh import CurveBvhDev, gpu_build_curve_bvh, _leaf_range
 from .optixcurves import gpu_build_optix_curves, oxc_active, oxc_bytes, oxc_destroy, oxc_set_active
 from .rt_build import rt_build_blas, rt_build_tlas, rt_patch_ids, RtTlas, _fbits
-from .xert import xert_alignment, xert_build_blas_geoms, xert_build_tlas, xert_free, xert_set_scene
+from .xert import xert_alignment, xert_build_blas_geoms, xert_build_tlas, xert_curve_table, xert_free, xert_set_curves, xert_set_scene
 from .rt_cache import rt_cache_load, rt_cache_save, RtCacheTlas
 from .scene_cache import scene_cache_variant
 from max.algorithm import parallelize
@@ -1106,10 +1106,11 @@ def _rt_curve_clusters(handle: Pointer[GpuSceneHandle, MutUntrackedOrigin], psc:
         print("Gonzales:   curve clusters", handle[].curve_bvh.n_clusters, "in", Float64(perf_counter_ns() - t0) / 1.0e9, "s")
 
 
-# Intel Xe2: the driver builds one BLAS per template and one over the ordinary meshes, a geometry per mesh, all packed into
-# one device buffer; then the TLAS over the instances (user id = instance) and, last, the ordinary meshes' identity
-# instance. Returns the TLAS's device address (0 on failure), that last instance and the device table of its meshes.
-def _xert_attach(ctx: DeviceContext, psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin],
+# Intel Xe2: the driver builds one BLAS per template and one over the ordinary meshes and curves, a geometry per indexed mesh
+# and one of procedural primitives for the curve leaves, all packed into one device buffer; then the TLAS over the instances
+# (user id = instance) and, last, the ordinary geometry's identity instance. Returns the TLAS's device address (0 on
+# failure), that last instance and the device table of its meshes; the curve tables go to xert_set_curves.
+def _xert_attach(ctx: DeviceContext, psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin], curves: Int, materials: Int,
                  mut bufs: List[DeviceBuffer[DType.uint8]]) raises -> Tuple[UInt64, Int64, UInt64]:
     var fail = (UInt64(0), Int64(-1), UInt64(0))
     var align = Int(xert_alignment())
@@ -1124,8 +1125,14 @@ def _xert_attach(ctx: DeviceContext, psc: Pointer[ParsedScene_Mojo, MutUntracked
     for i in range(nm):
         if not is_template[i]:
             ord.append(Int32(i))
-    var has_ord = len(ord) > 0
+    var ord_curves = List[PrimId]()
+    for j in range(Int(psc[unsafe_offset=0].prim_count)):
+        if psc[unsafe_offset=0].prim_ids[unsafe_offset=j].type == Int8(5):
+            ord_curves.append(psc[unsafe_offset=0].prim_ids[unsafe_offset=j])
+    var has_ord = len(ord) > 0 or len(ord_curves) > 0
     var n_blas = nt + (1 if has_ord else 0)
+    var leaves = List[PrimId]()
+    var leaf_base = List[Int32]()
     var blas = List[Pointer[UInt8, MutUntrackedOrigin]]()
     var sizes = List[Int]()
     var offsets = List[Int]()
@@ -1139,26 +1146,59 @@ def _xert_attach(ctx: DeviceContext, psc: Pointer[ParsedScene_Mojo, MutUntracked
         else:
             for i in ord:
                 ms.append(Int(i))
-        var geoms = unsafe_alloc[Pointer[Float32, MutUntrackedOrigin]](max(len(ms), 1))
+        leaf_base.append(Int32(len(leaves)))
+        if b < nt:
+            var rec = psc[unsafe_offset=0].blas_primids_arr[unsafe_offset=b][unsafe_offset=0]
+            if Int(psc[unsafe_offset=0].blas_primid_counts[unsafe_offset=b]) > 0 and rec.type == Int8(7) and rec.id2 > Int64(0):
+                var cb = Int(rec.id2)
+                for j in range(Int(psc[unsafe_offset=0].blas_primid_counts[unsafe_offset=cb])):
+                    leaves.append(psc[unsafe_offset=0].blas_primids_arr[unsafe_offset=cb][unsafe_offset=j])
+        else:
+            for c in ord_curves:
+                leaves.append(c)
+        var n_procs = len(leaves) - Int(leaf_base[b])
+        var proc_bounds = unsafe_alloc[Float32](6 * max(n_procs, 1))
+        for j in range(n_procs):
+            var leaf = leaves[Int(leaf_base[b]) + j]
+            var curve = curve_at(psc[unsafe_offset=0].curves, Int(leaf.id1))
+            var box = SIMD[DType.float32, 8](1e38, 1e38, 1e38, -1e38, -1e38, -1e38, 0, 0)
+            for piece in range(Int(leaf.id2) // 8, Int(leaf.id2) // 8 + Int(leaf.id2) % 8):
+                var pb = curve_piece_bounds(curve, piece)
+                box[0] = min(box[0], pb[0]); box[1] = min(box[1], pb[1]); box[2] = min(box[2], pb[2])
+                box[3] = max(box[3], pb[3]); box[4] = max(box[4], pb[4]); box[5] = max(box[5], pb[5])
+            for q in range(6):
+                proc_bounds[unsafe_offset=6 * j + q] = box[q]
+        if len(ms) == 0 and n_procs == 0:
+            proc_bounds.unsafe_free()
+            blas.append(Pointer[UInt8, MutUntrackedOrigin].unsafe_dangling()); sizes.append(0); offsets.append(total)
+            continue
+        var verts = unsafe_alloc[Pointer[Float32, MutUntrackedOrigin]](max(len(ms), 1))
+        var tris = unsafe_alloc[Pointer[UInt32, MutUntrackedOrigin]](max(len(ms), 1))
+        var n_verts = unsafe_alloc[Int64](max(len(ms), 1))
         var n_tris = unsafe_alloc[Int64](max(len(ms), 1))
         for g in range(len(ms)):
             var mesh = psc[unsafe_offset=0].meshes[unsafe_offset=ms[g]]
+            var nv = Int(psc[unsafe_offset=0].mesh_n_verts[unsafe_offset=ms[g]])
             var n = Int(psc[unsafe_offset=0].mesh_n_tris[unsafe_offset=ms[g]])
-            var tv = unsafe_alloc[Float32](9 * max(n, 1))
+            var v = unsafe_alloc[Float32](3 * max(nv, 1))
+            for k in range(nv):
+                var p = mesh_pos(mesh, k)
+                v[unsafe_offset=3 * k] = p.x; v[unsafe_offset=3 * k + 1] = p.y; v[unsafe_offset=3 * k + 2] = p.z
+            var t = unsafe_alloc[UInt32](3 * max(n, 1))
             for k in range(3 * n):
-                var p = mesh_pos(mesh, mesh_vi(mesh, k))
-                tv[unsafe_offset=3 * k] = p.x; tv[unsafe_offset=3 * k + 1] = p.y; tv[unsafe_offset=3 * k + 2] = p.z
-            geoms[unsafe_offset=g] = tv
-            n_tris[unsafe_offset=g] = Int64(n)
+                t[unsafe_offset=k] = UInt32(mesh_vi(mesh, k))
+            verts[unsafe_offset=g] = v; tris[unsafe_offset=g] = t
+            n_verts[unsafe_offset=g] = Int64(nv); n_tris[unsafe_offset=g] = Int64(n)
         var size = Int64(0)
-        var r = xert_build_blas_geoms(Int32(len(ms)), geoms, n_tris, Pointer(to=size).unsafe_origin_cast[MutUntrackedOrigin](),
-                                      bounds.unsafe_offset(6 * b))
+        var r = xert_build_blas_geoms(Int32(len(ms)), verts, n_verts, tris, n_tris, Int64(n_procs), proc_bounds,
+                                      Pointer(to=size).unsafe_origin_cast[MutUntrackedOrigin](), bounds.unsafe_offset(6 * b))
         for g in range(len(ms)):
-            geoms[unsafe_offset=g].unsafe_free()
-        geoms.unsafe_free(); n_tris.unsafe_free()
+            verts[unsafe_offset=g].unsafe_free(); tris[unsafe_offset=g].unsafe_free()
+        verts.unsafe_free(); tris.unsafe_free(); n_verts.unsafe_free(); n_tris.unsafe_free(); proc_bounds.unsafe_free()
         if Int(r) == 0:
             print("RT hardware: the Intel builder failed on structure", b, "of", n_blas)
-            for q in blas: xert_free(q)
+            for q in range(len(blas)):
+                if sizes[q] > 0: xert_free(blas[q])
             bounds.unsafe_free()
             return fail
         blas.append(r); sizes.append(Int(size)); offsets.append(total)
@@ -1168,10 +1208,13 @@ def _xert_attach(ctx: DeviceContext, psc: Pointer[ParsedScene_Mojo, MutUntracked
     var pad = base - Int(blas_buf.unsafe_ptr())
     var addr = unsafe_alloc[UInt64](max(n_blas, 1))
     for b in range(n_blas):
-        ctx.enqueue_copy(blas_buf.create_sub_buffer[DType.uint8](pad + offsets[b], sizes[b]), blas[b])
-        addr[unsafe_offset=b] = UInt64(base + offsets[b])
+        addr[unsafe_offset=b] = UInt64(0)
+        if sizes[b] > 0:
+            ctx.enqueue_copy(blas_buf.create_sub_buffer[DType.uint8](pad + offsets[b], sizes[b]), blas[b])
+            addr[unsafe_offset=b] = UInt64(base + offsets[b])
     ctx.synchronize()
-    for q in blas: xert_free(q)
+    for b in range(n_blas):
+        if sizes[b] > 0: xert_free(blas[b])
     # Instances store world-to-object rows; the builder takes object-to-world columns.
     var n_inst = ni + (1 if has_ord else 0)
     var xf = unsafe_alloc[Float32](12 * max(n_inst, 1))
@@ -1190,14 +1233,30 @@ def _xert_attach(ctx: DeviceContext, psc: Pointer[ParsedScene_Mojo, MutUntracked
                                 -(i00 * tx + i01 * ty + i02 * tz), -(i10 * tx + i11 * ty + i12 * tz), -(i20 * tx + i21 * ty + i22 * tz)]
         for q in range(12):
             xf[unsafe_offset=12 * k + q] = Float32(m[q] * inv_det)
-        blas_of[unsafe_offset=k] = ins.blasIdx
+        var bk = Int(ins.blasIdx)
+        blas_of[unsafe_offset=k] = Int32(bk) if bk >= 0 and bk < n_blas and sizes[bk] > 0 else Int32(-1)
     if has_ord:
         for q in range(12):
             xf[unsafe_offset=12 * ni + q] = Float32(1) if q == 0 or q == 4 or q == 8 else Float32(0)
         blas_of[unsafe_offset=ni] = Int32(nt)
     var tlas_size = Int64(0)
     var tlas = xert_build_tlas(Int64(n_inst), xf, blas_of, addr, bounds, Pointer(to=tlas_size).unsafe_origin_cast[MutUntrackedOrigin]())
-    xf.unsafe_free(); blas_of.unsafe_free(); addr.unsafe_free(); bounds.unsafe_free()
+    xf.unsafe_free(); addr.unsafe_free(); bounds.unsafe_free()
+    if len(leaves) > 0:
+        var leaf_buf = ctx.enqueue_create_buffer[DType.uint8](len(leaves) * size_of[PrimId]())
+        ctx.enqueue_copy(leaf_buf, leaves.unsafe_ptr().unsafe_bitcast[UInt8]())
+        var base_buf = ctx.enqueue_create_buffer[DType.uint8](4 * len(leaf_base))
+        ctx.enqueue_copy(base_buf, leaf_base.unsafe_ptr().unsafe_bitcast[UInt8]())
+        var inst_buf = ctx.enqueue_create_buffer[DType.uint8](4 * max(n_inst, 1))
+        ctx.enqueue_copy(inst_buf, blas_of.unsafe_bitcast[UInt8]())
+        ctx.synchronize()
+        xert_set_curves(UInt64(curves), UInt64(Int(leaf_buf.unsafe_ptr())), UInt64(Int(base_buf.unsafe_ptr())), UInt64(Int(inst_buf.unsafe_ptr())),
+                        UInt64(materials))
+        print("RT hardware (Intel): curves in the structures,", len(leaves), "leaves")
+        bufs.append(leaf_buf^); bufs.append(base_buf^); bufs.append(inst_buf^)
+    else:
+        xert_set_curves(0, 0, 0, 0, 0)
+    blas_of.unsafe_free()
     if Int(tlas) == 0:
         print("RT hardware: the Intel builder failed on the instances")
         return fail
@@ -1220,7 +1279,8 @@ def _rt_wavefront_setup(handle: Pointer[GpuSceneHandle, MutUntrackedOrigin], psc
     var xe = xert_alignment() > 0
     var xe_scene = (UInt64(0), Int64(-1), UInt64(0))
     if xe:
-        xe_scene = _xert_attach(handle[].ctx, psc, b.xert)
+        var sd = handle[].scene_descriptor()
+        xe_scene = _xert_attach(handle[].ctx, psc, Int(sd.curves), Int(sd.materials), b.xert)
         if xe_scene[0] == 0:
             return b^
     else:
@@ -1234,7 +1294,8 @@ def _rt_wavefront_setup(handle: Pointer[GpuSceneHandle, MutUntrackedOrigin], psc
             return b^
         _share_instances(handle, rt_hw, psc)
         rtcore_set_active(rt_hw)
-    _rt_curve_clusters(handle, psc)
+    if not (xe and xert_curve_table(1) != UInt64(0)):     # Intel traces the curves in its structures
+        _rt_curve_clusters(handle, psc)
     var light_kinds = Int(psc[unsafe_offset=0].area_light_count > Int32(0)) + Int(psc[unsafe_offset=0].infinite_count > Int32(0)) + Int(psc[unsafe_offset=0].distant_count > Int32(0)) + Int(psc[unsafe_offset=0].point_count > Int32(0))
     var rt_pruned = getenv("GONZALES_RT_PRUNE") != "" and psc[unsafe_offset=0].instance_count > Int32(0)
     var usable_slots = 2 if (light_kinds >= 2 or rt_pruned) else 1
