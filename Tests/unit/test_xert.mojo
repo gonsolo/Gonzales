@@ -74,9 +74,9 @@ def test_xert_quad() raises:
     assert_equal(bad, 0)
     assert_true(prims[0] > hits // 3 and prims[1] > hits // 3, "both triangles hit")
 
-# Instances: a BLAS of two meshes (the quad's two triangles) placed three times along x, at -2.5 and +2.5 as template
-# instances 0 and 1 and at 0 as instance 2 standing for the ordinary meshes 7 and 9. Every hit's interop words must name
-# the instance (n_meshes + k) or the ordinary mesh, the mesh within the template and triangle 0.
+# Instances: a BLAS of two meshes (the quad's two triangles) placed at -2.5 and +2.5 as template instances 0 and 1, and at 0
+# the ordinary meshes 7 and 9 as instances 2 and 3, a one-mesh BLAS each. Every hit's interop words must name the instance
+# (n_meshes + k) or the ordinary mesh, the mesh within the template and triangle 0.
 def test_xert_instances() raises:
     comptime if not has_accelerator():
         print("SKIP: no GPU accelerator on this machine")
@@ -103,31 +103,39 @@ def test_xert_instances() raises:
     for g in range(2):
         n_verts[unsafe_offset=g] = 3
         n_tris[unsafe_offset=g] = 1
-    var bounds = unsafe_alloc[Float32](6)
-    var blas_size = Int64(0)
-    var blas = xert_build_blas_geoms(2, geoms, n_verts, tris, n_tris, 0, Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-                                     Pointer(to=blas_size).unsafe_origin_cast[MutUntrackedOrigin](), bounds)
-    assert_true(Int(blas) != 0, "xert_build_blas_geoms failed")
+    var bounds = unsafe_alloc[Float32](18)
+    var sizes = List[Int]()
+    var ptrs = List[Pointer[UInt8, MutUntrackedOrigin]]()
+    for b in range(3):    # the template, then mesh 7 (triangle 0) and mesh 9 (triangle 1)
+        var size = Int64(0)
+        var r = xert_build_blas_geoms(Int32(2 if b == 0 else 1), geoms.unsafe_offset(max(b - 1, 0)), n_verts, tris, n_tris, 0,
+                                      Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+                                      Pointer(to=size).unsafe_origin_cast[MutUntrackedOrigin](), bounds.unsafe_offset(6 * b))
+        assert_true(Int(r) != 0, "xert_build_blas_geoms failed")
+        ptrs.append(r); sizes.append((Int(size) + align - 1) // align * align)
     var ctx = DeviceContext()
-    # The TLAS stores the BLAS's device address, which must be aligned.
-    var blas_buf = ctx.enqueue_create_buffer[DType.uint8](Int(blas_size) + align)
+    # The TLAS stores the BLASes' device addresses, which must be aligned.
+    var blas_buf = ctx.enqueue_create_buffer[DType.uint8](sizes[0] + sizes[1] + sizes[2] + align)
     var pad = (align - Int(UInt(Int(blas_buf.unsafe_ptr())) % UInt(align))) % align
+    var addr = unsafe_alloc[UInt64](3)
+    var off = pad
     with blas_buf.map_to_host() as h:
-        for k in range(Int(blas_size)):
-            h[pad + k] = blas[unsafe_offset=k]
-    xert_free(blas)
-    var addr = unsafe_alloc[UInt64](1)
-    addr[unsafe_offset=0] = UInt64(UInt(Int(blas_buf.unsafe_ptr())) + UInt(pad))
-    var xf = unsafe_alloc[Float32](36)
-    var blas_of = unsafe_alloc[Int32](3)
-    var shift: List[Float32] = [-2.5, 2.5, 0.0]
-    for k in range(3):
+        for b in range(3):
+            for k in range(sizes[b]):
+                h[off + k] = ptrs[b][unsafe_offset=k]
+            addr[unsafe_offset=b] = UInt64(UInt(Int(blas_buf.unsafe_ptr())) + UInt(off))
+            off += sizes[b]
+            xert_free(ptrs[b])
+    var xf = unsafe_alloc[Float32](48)
+    var blas_of = unsafe_alloc[Int32](4)
+    var shift: List[Float32] = [-2.5, 2.5, 0.0, 0.0]
+    for k in range(4):
         for q in range(12):
             xf[unsafe_offset=12 * k + q] = Float32(1) if q == 0 or q == 4 or q == 8 else Float32(0)
         xf[unsafe_offset=12 * k + 9] = shift[k]
-        blas_of[unsafe_offset=k] = 0
+        blas_of[unsafe_offset=k] = Int32(max(k - 1, 0))
     var tlas_size = Int64(0)
-    var tlas = xert_build_tlas(3, xf, blas_of, addr, bounds, Pointer(to=tlas_size).unsafe_origin_cast[MutUntrackedOrigin]())
+    var tlas = xert_build_tlas(4, xf, blas_of, addr, bounds, Pointer(to=tlas_size).unsafe_origin_cast[MutUntrackedOrigin]())
     assert_true(Int(tlas) != 0, "xert_build_tlas failed")
     var tlas_buf = ctx.enqueue_create_buffer[DType.uint8](Int(tlas_size) + align)
     var tpad = (align - Int(UInt(Int(tlas_buf.unsafe_ptr())) % UInt(align))) % align
@@ -150,11 +158,14 @@ def test_xert_instances() raises:
             for k in range(8):
                 h[8 * i + k] = r[k]
     var results = ctx.enqueue_create_buffer[DType.uint32](8 * NX * NY)
+    var heat = ctx.enqueue_create_buffer[DType.uint32](4)
+    heat.enqueue_fill(0)
     ctx.enqueue_function[xert_trace_interop_gpu](tlas_buf.unsafe_ptr().unsafe_offset(tpad), rays.unsafe_ptr(), results.unsafe_ptr(),
                                                  Int64(NX * NY), UInt32(0), Int64(N_MESHES), Int64(2), ord_mesh.unsafe_ptr(),
                                                  Pointer[Curve, MutUntrackedOrigin].unsafe_dangling(), Pointer[PrimId, MutUntrackedOrigin].unsafe_dangling(),
                                                  Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(), Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
                                                  Pointer[Material, MutUntrackedOrigin].unsafe_dangling(),
+                                                 heat.unsafe_ptr(),
                                                  grid_dim=(NX * NY + 63) // 64, block_dim=64)
     var hits = 0; var expected = 0; var bad = 0
     with results.map_to_host() as h:
@@ -189,6 +200,11 @@ def test_xert_instances() raises:
     _ = blas_buf^
     _ = tlas_buf^
     _ = ord_mesh^
+    var counted = 0
+    with heat.map_to_host() as h:
+        for k in range(4):
+            counted += Int(h[k])
+    assert_equal(counted, hits, "hit counts per instance")
     tv.unsafe_free(); geoms.unsafe_free(); idx.unsafe_free(); tris.unsafe_free(); n_verts.unsafe_free(); n_tris.unsafe_free(); bounds.unsafe_free(); addr.unsafe_free(); xf.unsafe_free(); blas_of.unsafe_free()
     print("instances:", hits, "of", expected, "hits,", bad, "wrong")
     assert_true(expected > 1000, "enough rays inside")
