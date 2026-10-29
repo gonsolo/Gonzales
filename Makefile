@@ -229,6 +229,19 @@ $(RTCORE_LIB): $(RTCORE_SRC) $(RTCORE_INC)/rtcore.h
 		-L$(CUDA_HOME)/lib64 -lcuda -o $(RTCORE_LIB)
 endif
 
+# Hardware ray tracing on Intel Xe2 (src/xert): the driver's acceleration structure builder, Level Zero loaded at run time.
+XERT_INC = src/xert
+XERT_LIB = $(BUILD_DIR)/libxert.so
+ifeq ($(wildcard /usr/include/level_zero/ze_api.h),)
+$(XERT_LIB): $(XERT_INC)/xert_stub.c $(XERT_INC)/xert.h
+	@mkdir -p $(BUILD_DIR)
+	gcc -O2 -Wall -fPIC -shared -I$(XERT_INC) $(XERT_INC)/xert_stub.c -o $(XERT_LIB)
+else
+$(XERT_LIB): $(XERT_INC)/xert.c $(XERT_INC)/xert.h
+	@mkdir -p $(BUILD_DIR)
+	gcc -O2 -Wall -fPIC -shared -I$(XERT_INC) $(XERT_INC)/xert.c -ldl -o $(XERT_LIB)
+endif
+
 # Curves on the RT hardware through OptiX (src/optixcurves): the programs compiled to OptiX IR and embedded in the library.
 OPTIX_HOME ?= /opt/optix
 OPTIXCURVES_INC = src/optixcurves
@@ -258,7 +271,7 @@ rt-cubin:
 GONZALES_LIB = $(BUILD_DIR)/libgonzales.so
 HYDRA_DIR = $(BUILD_DIR)/hydra
 hydra: $(HYDRA_DIR)/hdGonzales.so
-$(GONZALES_LIB): $(MOJO_SRCS) src/hdgonzales/capi.mojo pyproject.toml $(OIIO_BRIDGE_LIB) $(VIEWER_LIB) $(VULKANRT_LIB) $(VULKANINTEROP_LIB) $(RTCORE_LIB) $(OPTIXCURVES_LIB) $(NVDB_BRIDGE_LIB)
+$(GONZALES_LIB): $(MOJO_SRCS) src/hdgonzales/capi.mojo pyproject.toml $(OIIO_BRIDGE_LIB) $(VIEWER_LIB) $(VULKANRT_LIB) $(VULKANINTEROP_LIB) $(RTCORE_LIB) $(XERT_LIB) $(OPTIXCURVES_LIB) $(NVDB_BRIDGE_LIB)
 	uv run mojo build --emit shared-lib src/hdgonzales/capi.mojo -I src -o $@ $(MOJO_BUILD_FLAGS) $(MOJO_LINK_FLAGS) -Xlinker -rpath -Xlinker $(abspath $(BUILD_DIR))
 $(HYDRA_DIR)/hdGonzales.so: src/hdgonzales/hdGonzales.cpp src/hdgonzales/gonzales.h src/hdgonzales/plugInfo.json $(GONZALES_LIB)
 	@mkdir -p $(HYDRA_DIR)
@@ -294,10 +307,10 @@ else
 MOJO_BUILD_FLAGS = --target-accelerator sm_86
 endif
 MOJO_LINK_FLAGS = -Xlinker -L$(BUILD_DIR) -Xlinker -loiiobridge -Xlinker -lvulkanviewer \
-                  -Xlinker -lvulkanrt -Xlinker -lvulkaninterop -Xlinker -lrtcore -Xlinker -loptixcurves -Xlinker -lnvdbbridge \
+                  -Xlinker -lvulkanrt -Xlinker -lvulkaninterop -Xlinker -lrtcore -Xlinker -lxert -Xlinker -loptixcurves -Xlinker -lnvdbbridge \
                   -Xlinker -rpath -Xlinker $(BUILD_DIR) -Xlinker -lm
 
-$(GONZALES): $(MOJO_SRCS) pyproject.toml $(OIIO_BRIDGE_LIB) $(VIEWER_LIB) $(VULKANRT_LIB) $(VULKANINTEROP_LIB) $(RTCORE_LIB) $(OPTIXCURVES_LIB) $(NVDB_BRIDGE_LIB)
+$(GONZALES): $(MOJO_SRCS) pyproject.toml $(OIIO_BRIDGE_LIB) $(VIEWER_LIB) $(VULKANRT_LIB) $(VULKANINTEROP_LIB) $(RTCORE_LIB) $(XERT_LIB) $(OPTIXCURVES_LIB) $(NVDB_BRIDGE_LIB)
 	@mkdir -p $(BUILD_DIR)
 	uv run mojo build src/gonzales/__init__.mojo -I src -o $(GONZALES) $(MOJO_BUILD_FLAGS) $(MOJO_LINK_FLAGS)
 
@@ -358,7 +371,8 @@ GPU_ONLY_TEST_SRCS := Tests/unit/test_gpu.mojo \
                       Tests/unit/test_gpu_bvh.mojo \
                       Tests/unit/test_vulkaninterop.mojo \
                       Tests/unit/test_vulkaninterop_rt.mojo \
-                      Tests/unit/test_rtcore.mojo
+                      Tests/unit/test_rtcore.mojo \
+                      Tests/unit/test_xert.mojo
 ifeq ($(HAVE_CUDA),)
 ifdef AMD
 UNIT_TEST_SRCS := $(filter-out $(filter-out Tests/unit/test_gpu.mojo,$(GPU_ONLY_TEST_SRCS)),$(UNIT_TEST_SRCS))
@@ -497,7 +511,7 @@ unittest-amd:
 # stays readable/deterministic despite running out of order. Fails if any
 # file failed (checked after all finish, not fail-fast, so a run tells you
 # everything that broke in one pass).
-unittest: $(OIIO_BRIDGE_LIB) $(VIEWER_LIB) $(VULKANRT_LIB) $(VULKANINTEROP_LIB) $(RTCORE_LIB) $(OPTIXCURVES_LIB)
+unittest: $(OIIO_BRIDGE_LIB) $(VIEWER_LIB) $(VULKANRT_LIB) $(VULKANINTEROP_LIB) $(RTCORE_LIB) $(XERT_LIB) $(OPTIXCURVES_LIB)
 	@rm -rf build/unittest-logs && mkdir -p build/unittest-logs
 	@i=0; \
 	for f in $(UNIT_TEST_SRCS); do \
