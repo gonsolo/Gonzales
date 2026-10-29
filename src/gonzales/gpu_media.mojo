@@ -3,7 +3,7 @@ from std.utils import StaticTuple
 from .bvh import LightSample, _sample_distant_light_nee, _sample_infinite_light_nee, _sample_point_light_nee, _sample_sphere_light_nee, any_hit_bvh2_core, test_spheres, traverse_bvh2_core, traverse_bvh2_core_defer_curves, SceneView
 from .geometry import Frame, Point2f, Point3f, RGB, Vec3f, _is_real_ptr, cross, dot, point3f, vec3f
 from .lights import area_light_pick_triangle, light_sampler_sample
-from .materials import MatKind
+from .materials import MatKind, fr_dielectric
 from .media import Grid, MEDIUM_TRACK_MAX_ITERS, Medium, NvdbGrid, grid_ray_range, grid_sample_density, hg_phase, hg_sample, medium_emission_spectral, medium_grid_for, medium_nvdb_for, medium_sigma_s_spectral, medium_sigma_t_spectral, medium_transmittance_ratio_spectral, nvdb_index_ray, nvdb_majorant_at_world, nvdb_node_exit_t, nvdb_ray_range, nvdb_sample_density, sample_free_flight
 from .primitives import Intersection, PrimId, Ray, sphere_outward_normal, mesh_vi
 from .primitives import mesh_pos
@@ -42,7 +42,7 @@ def update_medium_gpu(
     if inter.hit == 0:
         return
     var mat = sd.materials[unsafe_offset=Int(inter.primId.materialIndex)]
-    if mat.medium_interface_idx < Int32(0):
+    if mat.medium_interface_idx < Int32(0) or (mat.sss_walk_interior() and inter.primId.type == Int8(0)):   # walked, not entered
         return
     var iface = sd.mediumInterfaces[unsafe_offset=Int(mat.medium_interface_idx)]
     var ray_dir = Vec3f(path_ptr[].ray.direction.x, path_ptr[].ray.direction.y, path_ptr[].ray.direction.z)
@@ -736,7 +736,26 @@ def _sss_walk_step[steps: Int = 256](
         var w = (tr if hit else al * st * tr) / max((p * pdf).reduce_add(), Float32(1e-30))
         path_ptr[].throughput *= SpectralSample(w[0], w[1], w[2], w[3])
         if hit:
-            if inter.primId.type == Int8(0) and Int32(inter.primId.id1) == walk.mesh and inter.primId.instanceIdx == walk.instance:
+            var at_exit = inter.primId.type == Int8(0) and Int32(inter.primId.id1) == walk.mesh and inter.primId.instanceIdx == walk.instance
+            var emat = sd.materials[unsafe_offset=Int(inter.primId.materialIndex)]
+            if at_exit and emat.sss_walk_interior() and walk.instance < Int32(0):   # object-space positions otherwise
+                # pbrt's subsurface boundary is a dielectric: from inside, a share F of the walk is reflected back in.
+                var m = sd.meshes[unsafe_offset=Int(inter.primId.id1)]
+                var bv = Int(inter.primId.id2)
+                var p0 = mesh_pos(m, Int(mesh_vi(m, bv)))
+                var gn = cross(mesh_pos(m, Int(mesh_vi(m, bv + 1))) - p0, mesh_pos(m, Int(mesh_vi(m, bv + 2))) - p0)
+                gn = gn * (Float32(1) / max(sqrt(dot(gn, gn)), Float32(1e-30)))
+                var cos_i = abs(dot(dir, gn))
+                if pcg.next_float() < fr_dielectric(cos_i, Float32(1) / max(emat.albedo.r, Float32(1.0001))):
+                    var on = gn if dot(dir, gn) > Float32(0) else -gn
+                    var rd = dir - on * (Float32(2) * dot(dir, on))
+                    var back = org + dir * inter.tHit - on * Float32(1e-4)
+                    ray = Ray(Point3f(back[0], back[1], back[2]), Vec3f(rd[0], rd[1], rd[2]))
+                    # The new direction is not the scatter's: its distance is sampled unguided.
+                    path_ptr[].sss.stretch = Float32(1); path_ptr[].sss.fwd_stretch = Float32(1); path_ptr[].sss.bwd_stretch = Float32(1)
+                    path_ptr[].sss.fwd_pdf = Float32(1); path_ptr[].sss.bwd_pdf = Float32(1)
+                    continue
+            if at_exit:
                 path_ptr[].sss.mesh = Int32(-1)
                 path_ptr[].sss.exiting = Int32(1)
                 path_ptr[].volume_scattered = Int8(0)       # no longer a pending segment: a later miss is a real one

@@ -1460,6 +1460,30 @@ def _sss_walk_enter(
     path_ptr[].bounce += 1
 
 
+def _sss_walk_enter_interior(
+    path_ptr: Pointer[PathState, MutUntrackedOrigin], mat: Material, inter: Intersection, hit: Vec3f, geo_normal: Vec3f,
+    wi: Vec3f,
+):
+    """Start the walk below a pbrt subsurface boundary along the refracted direction wi, with the interior's own
+    extinction and albedo (Material.sss_walk_interior). It leaves through the walk's Lambertian exit, which carries all
+    the energy out as pbrt's normalized Fresnel exit lobe does."""
+    var wl = path_ptr[].wavelengths
+    var st = mat.checker_tex1
+    var al = mat.checker_tex2
+    var out_n = face_toward(geo_normal, -wi)
+    var org = offset_point(hit, -out_n)
+    path_ptr[].ray = Ray(Point3f(org[0], org[1], org[2]), Vec3f(wi[0], wi[1], wi[2]))
+    path_ptr[].sss = SssWalk(rgb_bands_to_spectral_sample(st.r, st.g, st.b, wl), rgb_bands_to_spectral_sample(al.r, al.g, al.b, wl),
+                             mat.checker_uscale, Int32(inter.primId.id1), inter.primId.instanceIdx, Int32(0), Int32(0),
+                             hit, out_n, Float32(-1), Float32(1), Float32(1), Float32(1), Float32(0), Float32(0), Float32(0))
+    if path_ptr[].bounce == 0 or path_ptr[].specularBounce == Int8(1):
+        var mr = mat.sss_mean_refl
+        path_ptr[].albedo = mr if mr.r + mr.g + mr.b > Float32(0) else RGB(Float32(1))
+    path_ptr[].specularBounce = Int8(0)
+    path_ptr[].lastBsdfPdf = Float32(0)
+    path_ptr[].bounce += 1
+
+
 @always_inline
 def _cycles_sss_alpha(color: Float32, g: Float32, van_de_hulst: Bool) -> Float32:
     """Cycles' single-scattering albedo for a subsurface colour (subsurface_random_walk_remap): d'Eon's van de Hulst
@@ -1799,34 +1823,6 @@ def shade_dielectric[use_gpu: Bool, enqueue_shadow: Bool](
         geom_normal, ray_dir, ior, force_entering, _draw_sobol_8(path_ptr, ctx.sobol_matrices).scat1,
         path_ptr[].current_dielectric_ior, path_ptr[].previous_dielectric_ior)
     var is_reflect = (Int(bs.flags) & Int(BxDFFlags.reflect)) != 0
-    if not is_reflect:
-        # bxdf_sample_dielectric's radiance_transmit factor is eta*eta, and
-        # eta (its internal entering/exiting-relative ratio) always equals
-        # old_current_ior/new_current_ior here -- entering: eta =
-        # current_ior/ior = old/new (new_dielectric_ior becomes `ior`);
-        # exiting: eta = ior/previous_ior = old/new too, since old current_ior
-        # always equals this surface's own `ior` on an exit (it was set to
-        # `ior` by the matching entry) and new_dielectric_ior becomes the OLD
-        # previous_ior. So this reconstructs eta from the ior transition
-        # alone in both cases, no extra return value needed. See
-        # PathState.eta_scale's docstring for why RR needs this decoupled
-        # from the real throughput.
-        # new/current, NOT current/new: this has to UNDO the eta^2 the
-        # throughput just took, so it is the RECIPROCAL of that factor
-        # (pbrt's `etaScale *= Sqr(bs->eta)` with bs->eta = eta_t/eta_i,
-        # against an f that was divided by the same square). Written the
-        # other way up it compounded the compression instead: inside glass
-        # RR read 0.356 * 0.356 = 0.127 for ior 1.675 and killed ~87% of the
-        # paths that were mid-transit, which is why dambreak0's glass tank
-        # and transparent-machines rendered as flat opaque slabs under the
-        # path tracer while VCM/SPPM -- which do not run this RR -- showed
-        # the glass. It cancels over a complete enter+exit pair, so only
-        # paths still INSIDE a dielectric when RR fires were affected.
-        var eta_for_rr = new_dielectric_ior / path_ptr[].current_dielectric_ior
-        path_ptr[].eta_scale *= eta_for_rr * eta_for_rr
-    path_ptr[].current_dielectric_ior = new_dielectric_ior
-    path_ptr[].previous_dielectric_ior = new_previous_dielectric_ior
-    var hit_point = offset_point(ray_org + ray_dir * inter.tHit, normal if is_reflect else -normal)
     # ── Spatially varying subsurface reflectance ──────────────────────────
     # The interior is ONE homogeneous medium, so a textured `reflectance` has
     # to be collapsed to a mean to build it (Material.sss_mean_refl). But
@@ -1863,6 +1859,39 @@ def shade_dielectric[use_gpu: Bool, enqueue_shadow: Bool](
             path_ptr[].throughput *= rgb_bands_to_spectral_sample(
                 max(kr, Float32(0.0)), max(kg, Float32(0.0)), max(kb, Float32(0.0)),
                 path_ptr[].wavelengths)
+    if mat.sss_walk_interior() and not is_reflect and inter.primId.type == Int8(0) and \
+       (force_entering or dot(ray_dir, geom_normal) < Float32(0.0)):
+        _sss_walk_enter_interior(path_ptr, mat, inter, ray_org + ray_dir * inter.tHit, geom_normal, bs.wi)
+        path_ptr[].pcgState = pcg.state
+        return
+    if not is_reflect:
+        # bxdf_sample_dielectric's radiance_transmit factor is eta*eta, and
+        # eta (its internal entering/exiting-relative ratio) always equals
+        # old_current_ior/new_current_ior here -- entering: eta =
+        # current_ior/ior = old/new (new_dielectric_ior becomes `ior`);
+        # exiting: eta = ior/previous_ior = old/new too, since old current_ior
+        # always equals this surface's own `ior` on an exit (it was set to
+        # `ior` by the matching entry) and new_dielectric_ior becomes the OLD
+        # previous_ior. So this reconstructs eta from the ior transition
+        # alone in both cases, no extra return value needed. See
+        # PathState.eta_scale's docstring for why RR needs this decoupled
+        # from the real throughput.
+        # new/current, NOT current/new: this has to UNDO the eta^2 the
+        # throughput just took, so it is the RECIPROCAL of that factor
+        # (pbrt's `etaScale *= Sqr(bs->eta)` with bs->eta = eta_t/eta_i,
+        # against an f that was divided by the same square). Written the
+        # other way up it compounded the compression instead: inside glass
+        # RR read 0.356 * 0.356 = 0.127 for ior 1.675 and killed ~87% of the
+        # paths that were mid-transit, which is why dambreak0's glass tank
+        # and transparent-machines rendered as flat opaque slabs under the
+        # path tracer while VCM/SPPM -- which do not run this RR -- showed
+        # the glass. It cancels over a complete enter+exit pair, so only
+        # paths still INSIDE a dielectric when RR fires were affected.
+        var eta_for_rr = new_dielectric_ior / path_ptr[].current_dielectric_ior
+        path_ptr[].eta_scale *= eta_for_rr * eta_for_rr
+    path_ptr[].current_dielectric_ior = new_dielectric_ior
+    path_ptr[].previous_dielectric_ior = new_previous_dielectric_ior
+    var hit_point = offset_point(ray_org + ray_dir * inter.tHit, normal if is_reflect else -normal)
     _finish_delta_bounce(path_ptr, ctx.cycles, pcg, bs, SpectralSample(bs.f.r), hit_point, RGB(Float32(1)),
                          mat.sss_boundary == Int8(0))
 

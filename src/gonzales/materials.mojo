@@ -66,7 +66,8 @@ struct Material(TrivialRegisterPassable):
     # diffusetransmission only: which lobes the tex_idx texture drives -- 0 both, 1 reflectance only,
     # 2 transmittance only (the other lobe keeps its constant). Occupies a former padding byte.
     var dt_tex_lobes: Int8
-    # coateddiffuse only: 1 = part of the base is a Cycles-style random walk (sss_walk_* below). A former padding byte.
+    # 1 = a Cycles-style random walk: part of a coateddiffuse base, or a subsurface dielectric's interior (sss_walk_*
+    # below). A former padding byte.
     var sss_walk: Int8
     var albedo: RGB
     var emission: RGB
@@ -232,6 +233,12 @@ struct Material(TrivialRegisterPassable):
     @always_inline
     def sss_walk_van_de_hulst(self) -> Bool:
         return self.checker_tex2.b != Float32(0)
+
+    # A dielectric with sss_walk bounds a pbrt subsurface interior: checker_tex1 = extinction, checker_tex2 = single
+    # scattering albedo, checker_uscale = anisotropy.
+    @always_inline
+    def sss_walk_interior(self) -> Bool:
+        return self.type == MatKind.dielectric and self.sss_walk != Int8(0)
 
     @always_inline
     def mix_pick(self, u: Float32) -> Int:
