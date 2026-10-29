@@ -17,13 +17,14 @@ from std.os import getenv
 from std.os.path import getsize
 from .spectrum import SpectralHandle
 from .rtcore import rtcore_device_free, rtcore_host_register, rtcore_device_total
+from .xert import xert_alignment
 from .pbrt_parser import ParsedScene_Mojo
 from .host_textures import decode_host_textures
 from .ptex_cache import PtexCache, PTEX_QUEUE_CAP
 from .restir_di import DIReservoir
 from .restir_vol import VolReservoir
 from max.gpu import block_dim, block_idx, thread_idx
-from max.gpu.host import DeviceBuffer, DeviceContext
+from max.gpu.host import DeviceBuffer, DeviceContext, HostBuffer
 from std.ffi import external_call
 from std.math import ceildiv
 from std.memory import unsafe_memcpy
@@ -255,6 +256,7 @@ struct MeshBuffers(Movable):
     var uv_bufs: List[DeviceBuffer[DType.uint8]]
     var nrm_bufs: List[DeviceBuffer[DType.uint8]]
     var alpha_bufs: List[DeviceBuffer[DType.uint8]]   # one per distinct alpha mask
+    var host_bufs: List[HostBuffer[DType.uint8]]      # arrays placed in host memory (_gpu_place)
     var has_alpha: Bool   # some mesh is alpha-cut (mask or constant < 1)
 
     @always_inline
@@ -272,6 +274,7 @@ struct MeshBuffers(Movable):
         # Alpha masks are shared between meshes on the host (one per
         # file); upload each once, keyed by its host address.
         var alpha_bufs = List[DeviceBuffer[DType.uint8]]()
+        var host_bufs = List[HostBuffer[DType.uint8]]()
         var alpha_host_keys = List[Int]()
         var alpha_dev_ptrs = List[Pointer[UInt8, MutUntrackedOrigin]]()
 
@@ -291,23 +294,23 @@ struct MeshBuffers(Movable):
             # per vertex) and shading normals (3 per vertex), each a zeroed
             # 4-byte buffer when the mesh has none.
             # points are padded to 4 floats per vertex
-            var pts_dptr = _gpu_place[Float32](ctx, points_bufs, host_mesh.points, mesh_points_floats(Int(s.mesh_n_verts[unsafe_offset=i]), host_mesh.quads), host_kb)
+            var pts_dptr = _gpu_place[Float32](ctx, points_bufs, host_bufs, host_mesh.points, mesh_points_floats(Int(s.mesh_n_verts[unsafe_offset=i]), host_mesh.quads), host_kb)
             # A quad soup has no vertex indices and one face id and material a quad (TriangleMesh.quads).
             var is_quads = host_mesh.quads != Int32(0)
             var n_per_face = Int(s.mesh_n_tris[unsafe_offset=i]) // 2 if is_quads else Int(s.mesh_n_tris[unsafe_offset=i])
-            var fi_dptr = _gpu_place[Int32](ctx, face_bufs, host_mesh.faceIndices, n_per_face, host_kb)
-            var vi_dptr = _gpu_place[Int32](ctx, vert_bufs, host_mesh.vertexIndices,
+            var fi_dptr = _gpu_place[Int32](ctx, face_bufs, host_bufs, host_mesh.faceIndices, n_per_face, host_kb)
+            var vi_dptr = _gpu_place[Int32](ctx, vert_bufs, host_bufs, host_mesh.vertexIndices,
                                                    1 if is_quads else Int(s.mesh_n_tris[unsafe_offset=i]) * 3, host_kb)
             var uv_n = Int(s.mesh_uv_n_verts[unsafe_offset=i])
             var uv_dptr: Pointer[Float32, MutUntrackedOrigin]
             if uv_n > 0:
-                uv_dptr = _gpu_place[Float32](ctx, uv_bufs, host_mesh.uvs, uv_n * 2, host_kb)
+                uv_dptr = _gpu_place[Float32](ctx, uv_bufs, host_bufs, host_mesh.uvs, uv_n * 2, host_kb)
             else:
                 uv_dptr = _gpu_zeros_owned[Float32](ctx, uv_bufs, 1)
             var nrm_n = Int(s.mesh_nrm_n_verts[unsafe_offset=i])
             var nrm_dptr = Pointer[Float32, MutUntrackedOrigin](unsafe_from_address=1)   # "no normals"
             if nrm_n > 0:
-                nrm_dptr = _gpu_place[Float32](ctx, nrm_bufs, host_mesh.normals, nrm_n, host_kb)   # one encoded word a vertex
+                nrm_dptr = _gpu_place[Float32](ctx, nrm_bufs, host_bufs, host_mesh.normals, nrm_n, host_kb)   # one encoded word a vertex
             else:
                 _ = _gpu_zeros_owned[Float32](ctx, nrm_bufs, 1)
 
@@ -332,7 +335,7 @@ struct MeshBuffers(Movable):
             mesh_structs_host[unsafe_offset=i].quads = host_mesh.quads
             if _is_real_ptr(host_mesh.materials):
                 mesh_structs_host[unsafe_offset=i].materials = _gpu_place[Int32](
-                    ctx, face_bufs, host_mesh.materials, n_per_face, host_kb)
+                    ctx, face_bufs, host_bufs, host_mesh.materials, n_per_face, host_kb)
 
         # Upload mesh struct array
         var meshes_buf = _gpu_upload_array[TriangleMesh](ctx, mesh_structs_host, Int(s.mesh_count))
@@ -340,7 +343,7 @@ struct MeshBuffers(Movable):
         mesh_structs_host.unsafe_free()
         return Self(meshes_buf=meshes_buf^, mesh_count=Int(s.mesh_count), points_bufs=points_bufs^,
                     faceIndices_bufs=face_bufs^, vertexIndices_bufs=vert_bufs^, uv_bufs=uv_bufs^,
-                    nrm_bufs=nrm_bufs^, alpha_bufs=alpha_bufs^, has_alpha=has_alpha)
+                    nrm_bufs=nrm_bufs^, alpha_bufs=alpha_bufs^, host_bufs=host_bufs^, has_alpha=has_alpha)
 
 @fieldwise_init
 struct TextureBuffers(Movable):
@@ -438,6 +441,7 @@ struct LightBuffers(Movable):
     var n_light_pick: Int
     var infinite_lights_buf: DeviceBuffer[DType.uint8]  # n_infinite × sizeof(InfiniteLight) (grew when the portal fields were added, see lights.mojo)
     var il_pixels_bufs: List[DeviceBuffer[DType.uint8]] # per-light HDR pixel data on GPU
+    var il_host_bufs: List[HostBuffer[DType.uint8]]     # or in host memory (_gpu_place)
     var il_cdf_bufs: List[DeviceBuffer[DType.uint8]]    # per-light 2D CDF on GPU
     var il_w2l_bufs: List[DeviceBuffer[DType.uint8]]    # per-light world_to_light matrix on GPU
     var n_infinite_lights: Int
@@ -507,6 +511,7 @@ struct LightBuffers(Movable):
         # Upload infinite/environment lights with GPU-resident pixel/CDF data
         var il_count = Int(s.infinite_count)
         var il_pixels_bufs = List[DeviceBuffer[DType.uint8]]()
+        var il_host_bufs = List[HostBuffer[DType.uint8]]()
         var il_cdf_bufs    = List[DeviceBuffer[DType.uint8]]()
         var il_w2l_bufs    = List[DeviceBuffer[DType.uint8]]()
         var il_patched = unsafe_alloc[InfiniteLight](max(il_count, 1))
@@ -534,7 +539,7 @@ struct LightBuffers(Movable):
                 for k in range(npx):
                     half[unsafe_offset=k] = Float16(src_px[unsafe_offset=k] / down)
                 il.scale = il.scale * down
-                var half_dev = _gpu_place[Float16](ctx, il_pixels_bufs, half, npx, host_kb)
+                var half_dev = _gpu_place[Float16](ctx, il_pixels_bufs, il_host_bufs, half, npx, host_kb)
                 il.pixels_ptr = half_dev.unsafe_bitcast[Float32]()
                 il.pixels_half = Int32(1)
                 ctx.synchronize()
@@ -554,7 +559,7 @@ struct LightBuffers(Movable):
                     point_lights_buf=pl_buf^, n_point_lights=Int(s.point_count),
                     light_sampler_buf=ls_buf^, n_light_sampler=Int(s.light_sampler.n), light_sampler_bounds=Int(s.light_sampler.has_bounds),
                     light_pick_buf=lp_buf^, n_light_pick=n_pick,
-                    infinite_lights_buf=il_buf^, il_pixels_bufs=il_pixels_bufs^, il_cdf_bufs=il_cdf_bufs^,
+                    infinite_lights_buf=il_buf^, il_pixels_bufs=il_pixels_bufs^, il_host_bufs=il_host_bufs^, il_cdf_bufs=il_cdf_bufs^,
                     il_w2l_bufs=il_w2l_bufs^, n_infinite_lights=Int(s.infinite_count))
 
 @fieldwise_init
@@ -1036,13 +1041,21 @@ def _gpu_upload_owned[T: AnyType](
 def _gpu_place[T: AnyType](
     ctx: DeviceContext,
     mut bufs: List[DeviceBuffer[DType.uint8]],
+    mut host_bufs: List[HostBuffer[DType.uint8]],
     src: Pointer[T, MutUntrackedOrigin],
     count: Int,
     host_kb: Int,
 ) raises -> Pointer[T, MutUntrackedOrigin]:
     if host_kb > 0 and count * size_of[T]() >= host_kb * 1024:
-        if Int(rtcore_host_register(UInt64(Int(src)), UInt64(count * size_of[T]()))) == 1:
+        if xert_alignment() == 0 and Int(rtcore_host_register(UInt64(Int(src)), UInt64(count * size_of[T]()))) == 1:
             return src
+        # No registering malloc'd memory (Level Zero): a copy in a host allocation, which kernels reach as well.
+        var hb = ctx.enqueue_create_host_buffer[DType.uint8](count * size_of[T]())
+        ctx.synchronize()
+        var dst = Pointer[T, MutUntrackedOrigin](unsafe_from_address=Int(hb.unsafe_ptr()))
+        unsafe_memcpy(dest=dst, src=src, count=count)
+        host_bufs.append(hb^)
+        return dst
     return _gpu_upload_owned[T](ctx, bufs, src, count)
 
 # Which arrays stay in host memory, as KB thresholds (0: none): (mesh arrays, environment-light pixels).

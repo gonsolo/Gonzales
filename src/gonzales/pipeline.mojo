@@ -4,7 +4,7 @@ from std.memory import OwnedPointer, unsafe_memcpy
 from std.collections import List, Array
 from std.math import sqrt, ceil, pow
 from std.sys.info import size_of
-from max.gpu.host import DeviceBuffer, DeviceContext
+from max.gpu.host import DeviceBuffer, DeviceContext, HostBuffer
 from .footprint import camera_footprint
 from .pbrt_parser import ParsedScene_Mojo, mojo_parsed_free, mojo_parsed_scene_descriptor, resize_film, mojo_apply_overrides
 from .scene_loader import mojo_parse_scene_any
@@ -1060,6 +1060,7 @@ struct _RtBufs(Movable):
     var instance_base_mesh: Optional[DeviceBuffer[DType.uint8]]
     var n_meshes: Int
     var xert: List[DeviceBuffer[DType.uint8]]      # Intel Xe2: the structures and the ordinary-mesh table
+    var xert_host: List[HostBuffer[DType.uint8]]   # Intel Xe2: structures kept in host memory
 
     def __init__(out self):
         self.on = False
@@ -1070,6 +1071,7 @@ struct _RtBufs(Movable):
         self.instance_base_mesh = None
         self.n_meshes = 0
         self.xert = List[DeviceBuffer[DType.uint8]]()
+        self.xert_host = List[HostBuffer[DType.uint8]]()
 
 
 # The RT cores trace the triangles; the curves are OptiX curves on the RT hardware (optixcurves.mojo) when the curves are
@@ -1111,7 +1113,7 @@ def _rt_curve_clusters(handle: Pointer[GpuSceneHandle, MutUntrackedOrigin], psc:
 # (user id = instance) and, last, the ordinary geometry's identity instance. Returns the TLAS's device address (0 on
 # failure), that last instance and the device table of its meshes; the curve tables go to xert_set_curves.
 def _xert_attach(ctx: DeviceContext, psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin], curves: Int, materials: Int,
-                 mut bufs: List[DeviceBuffer[DType.uint8]]) raises -> Tuple[UInt64, Int64, UInt64]:
+                 mut bufs: List[DeviceBuffer[DType.uint8]], mut host_bufs: List[HostBuffer[DType.uint8]]) raises -> Tuple[UInt64, Int64, UInt64]:
     var fail = (UInt64(0), Int64(-1), UInt64(0))
     var align = Int(xert_alignment())
     var nm = Int(psc[unsafe_offset=0].mesh_count)
@@ -1203,14 +1205,22 @@ def _xert_attach(ctx: DeviceContext, psc: Pointer[ParsedScene_Mojo, MutUntracked
             return fail
         blas.append(r); sizes.append(Int(size)); offsets.append(total)
         total += (Int(size) + align - 1) // align * align
-    var blas_buf = ctx.enqueue_create_buffer[DType.uint8](total + align)
-    var base = Int(UInt(Int(blas_buf.unsafe_ptr())) + UInt(align - 1)) & -align
-    var pad = base - Int(blas_buf.unsafe_ptr())
+    # GONZALES_XERT_BLAS_HOST=1: the BLASes stay in host memory and the RT units fetch them over PCIe.
+    var on_host = getenv("GONZALES_XERT_BLAS_HOST") == "1"
+    var blas_buf = ctx.enqueue_create_buffer[DType.uint8](align if on_host else total + align)
+    var blas_host = ctx.enqueue_create_host_buffer[DType.uint8](total + align if on_host else 1)
+    ctx.synchronize()
+    var start = Int(blas_host.unsafe_ptr()) if on_host else Int(blas_buf.unsafe_ptr())
+    var base = Int(UInt(start) + UInt(align - 1)) & -align
+    var pad = base - start
     var addr = unsafe_alloc[UInt64](max(n_blas, 1))
     for b in range(n_blas):
         addr[unsafe_offset=b] = UInt64(0)
         if sizes[b] > 0:
-            ctx.enqueue_copy(blas_buf.create_sub_buffer[DType.uint8](pad + offsets[b], sizes[b]), blas[b])
+            if on_host:
+                unsafe_memcpy(dest=Pointer[UInt8, MutUntrackedOrigin](unsafe_from_address=base + offsets[b]), src=blas[b], count=sizes[b])
+            else:
+                ctx.enqueue_copy(blas_buf.create_sub_buffer[DType.uint8](pad + offsets[b], sizes[b]), blas[b])
             addr[unsafe_offset=b] = UInt64(base + offsets[b])
     ctx.synchronize()
     for b in range(n_blas):
@@ -1271,6 +1281,7 @@ def _xert_attach(ctx: DeviceContext, psc: Pointer[ParsedScene_Mojo, MutUntracked
     print("RT hardware (Intel): structures", total // 1048576, "MiB, instances", Int(tlas_size) // 1048576, "MiB")
     var ord_addr = UInt64(Int(ord_buf.unsafe_ptr()))
     bufs.append(blas_buf^); bufs.append(tlas_buf^); bufs.append(ord_buf^)
+    host_bufs.append(blas_host^)
     return (UInt64(tbase), Int64(ni) if has_ord else Int64(-1), ord_addr)
 
 
@@ -1280,7 +1291,7 @@ def _rt_wavefront_setup(handle: Pointer[GpuSceneHandle, MutUntrackedOrigin], psc
     var xe_scene = (UInt64(0), Int64(-1), UInt64(0))
     if xe:
         var sd = handle[].scene_descriptor()
-        xe_scene = _xert_attach(handle[].ctx, psc, Int(sd.curves), Int(sd.materials), b.xert)
+        xe_scene = _xert_attach(handle[].ctx, psc, Int(sd.curves), Int(sd.materials), b.xert, b.xert_host)
         if xe_scene[0] == 0:
             return b^
     else:
