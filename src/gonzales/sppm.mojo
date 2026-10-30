@@ -818,7 +818,12 @@ def _sppm_trace_visible_point[use_gpu: Bool](
             # "cloud" medium as uniform density-1 fog -- bunny-cloud came out a
             # featureless sphere with no bunny in it. See sample_free_flight.
             var ff = sample_free_flight(
-                med, sd.grids, sd.nvdbGrids, Vec3f(ro.x, ro.y, ro.z), rd, t_hit, pcg)
+                med, sd.grids, sd.nvdbGrids, Vec3f(ro.x, ro.y, ro.z), rd, t_hit, pcg,
+                vp.wavelengths, sd.spectral.coeffs, sd.spectral.res,
+                sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65)
+            var (em_r, em_g, em_b) = spectral_sample_to_rgb(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y,
+                                                            sd.spectral.cie_z, sd.spectral.d65, ff.emission, vp.wavelengths)
+            vp.env += vp.beta * RGB(em_r, em_g, em_b)
             if ff.collided:
                 # Volume scatter — store VP here
                 # NOTE: ff.weight (the chromatic collision ratio) is deliberately
