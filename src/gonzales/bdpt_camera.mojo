@@ -473,7 +473,10 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             # ONE shared sampler for both medium kinds (geometry.mojo):
             # homogeneous closed form, or delta tracking against the real
             var ff = sample_free_flight(
-                med, sd.grids, sd.nvdbGrids, Vec3f(st.ro.x, st.ro.y, st.ro.z), st.rd, t_hit, pcg)
+                med, sd.grids, sd.nvdbGrids, Vec3f(st.ro.x, st.ro.y, st.ro.z), st.rd, t_hit, pcg,
+                st.wl, sd.spectral.coeffs, sd.spectral.res,
+                sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65)
+            st.total += st.beta * ff.emission   # no light path samples a glowing medium, so no MIS
             if ff.collided:
                 # Chromatic collision weight -- the ratio to the sampled (red)
                 # channel. Without it a chromatic medium is biased at every
