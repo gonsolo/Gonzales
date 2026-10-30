@@ -354,7 +354,6 @@ def medium_sigma_t_spectral(
         spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
         sig_t.r, sig_t.g, sig_t.b, wavelengths)
 
-@always_inline   # as a call it returned ~sigma_t on the B580 (absorbing media rendered clear in PT)
 def medium_sigma_s_spectral(
     med: Medium, wavelengths: SampledWavelengths,
     spectral_coeffs: Pointer[Float32, MutUntrackedOrigin], spectral_res: Int,
