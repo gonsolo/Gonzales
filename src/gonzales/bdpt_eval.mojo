@@ -17,7 +17,8 @@ from .rng import PCG32
 from .bxdf import BSDF, LobeEval, LobeTables
 from .spectrum import SampledWavelengths, SpectralSample, spec_illum
 from .bdpt_vertex import BDPTVertex
-from .bdpt_nee import _bdpt_simple_light_count, _bdpt_sample_simple_light, _bdpt_nee_contribute
+from .media import medium_sigma_t_at_spectral
+from .bdpt_nee import _bdpt_simple_light_count, _bdpt_sample_simple_light, _bdpt_nee_contribute, _bdpt_nee_transmittance
 
 @always_inline
 def _vcm_sphere_slot(ref sd: SceneView, si: Int) -> Int:
@@ -46,6 +47,36 @@ def _vcm_point_slot(ref sd: SceneView, j: Int) -> Int:
             + Int(sd.infiniteLightCount) + j)
 
 
+@always_inline
+def _vcm_free_flight(ref sd: SceneView, v: BDPTVertex, tr: SpectralSample) -> Float32:
+    """A connection edge's distance-sampling density ending at `v`: survival to a surface, collision in a medium
+    (Scenes/vcm_volume_mis_derivation.py, free_flight)."""
+    if v.is_surface != Int32(0) or Int(v.med_idx) < 0:
+        return tr.average()
+    ref s = sd.spectral
+    return (tr * medium_sigma_t_at_spectral(sd.mediums[unsafe_offset=Int(v.med_idx)], sd.grids, sd.nvdbGrids, v.pos.to_simd(),
+                                            v.wavelengths, s.coeffs, s.res, s.cie_x, s.cie_y, s.cie_z, s.d65)).average()
+
+
+@always_inline
+def _vcm_nee_one(
+    ref sd: SceneView, v: BDPTVertex, ctx: BSDF, ls: LightSample, var pol: MisPolicy, tab: LobeTables, pos: Point3f, gn_geo: Vec3f,
+    beta: SpectralSample, cur_med_idx: Int32, scratch: Pointer[Intersection, MutUntrackedOrigin],
+    wavelengths: SampledWavelengths, spawn_eps: Float32, two_sided: Bool, long_path: Bool,
+) -> SpectralSample:
+    """One light sample's contribution. In a medium the weight needs the edge's transmittance, so it is traced first."""
+    if long_path:
+        pol.emission_pdf_w = Float32(0)   # no light strategy reaches this far (_vcm_past_cache)
+    if Int(sd.mediumCount) == 0:
+        return _bdpt_nee_contribute(beta, ctx.nee_weight_mis(ls, tab, wavelengths, pol), ls, pos, gn_geo, cur_med_idx, sd, scratch, wavelengths, spawn_eps, two_sided)
+    var tr = _bdpt_nee_transmittance(ls, pos, gn_geo, cur_med_idx, sd, scratch, wavelengths, spawn_eps, two_sided)
+    if tr.is_black():
+        return SpectralSample(Float32(0))
+    pol.tr = tr.average()
+    pol.emission_pdf_w *= _vcm_free_flight(sd, v, tr)
+    return beta * ctx.nee_weight_mis(ls, tab, wavelengths, pol) * tr
+
+
 def _vcm_simple_light_policy(
     ref sd: SceneView, i: Int, ls: LightSample, v: BDPTVertex, eta_x: Float32,
     dvcm: Float32, dvc: Float32, cos_geo: Float32, wavelengths: SampledWavelengths,
@@ -64,7 +95,7 @@ def _vcm_simple_light_policy(
     else:
         var sph = sd.spheres[unsafe_offset=i - nd - np_]
         emission = light_path_pick_pdf(sd, _vcm_sphere_slot(sd, i - nd - np_)) / max(PI * Float32(4.0) * PI * sph.radius * sph.radius, Float32(1e-12))
-    return MisPolicy(le.scoped, eta_x, dvcm, dvc, emission, le.pdf_rev, False, cos_geo)
+    return MisPolicy(le.scoped, eta_x, dvcm, dvc, emission, le.pdf_rev, False, cos_geo, Float32(1))
 
 
 @always_inline
@@ -84,10 +115,7 @@ def _vcm_nee_surface(
         if not ls.valid:
             continue   # a non-emitting sphere
         var pol = _vcm_simple_light_policy(sd, li, ls, v, eta_x, dvcm, dvc, _vcm_cos_at(sd, v, ls.wi), wavelengths)
-        if long_path:
-            pol.emission_pdf_w = Float32(0)   # no light strategy reaches this far (_vcm_past_cache)
-        var w = ctx.nee_weight_mis(ls, tab, wavelengths, pol)
-        total += _bdpt_nee_contribute(beta, w, ls, pos, gn_geo, cur_med_idx, sd, scratch, wavelengths, spawn_eps, two_sided)
+        total += _vcm_nee_one(sd, v, ctx, ls, pol, tab, pos, gn_geo, beta, cur_med_idx, scratch, wavelengths, spawn_eps, two_sided, long_path)
     for inf_i in range(Int(sd.infiniteLightCount)):
         var ls = _sample_infinite_light_nee(sd.infiniteLights[unsafe_offset=inf_i], Point2f(pcg.next_float(), pcg.next_float()), pos)
         var (_c, r) = _scene_bounding_sphere(sd)
@@ -95,11 +123,8 @@ def _vcm_nee_surface(
         # `scoped` decides: a kind with real densities gets the balance weight over all four strategies.
         var pol = MisPolicy(le.scoped, eta_x, dvcm, dvc,
                             ls.pdf * light_path_pick_pdf(sd, _vcm_infinite_slot(sd, inf_i)) / max(PI * r * r, Float32(1e-12)),
-                            le.pdf_rev, False, _vcm_cos_at(sd, v, ls.wi))
-        if long_path:
-            pol.emission_pdf_w = Float32(0)
-        var w = ctx.nee_weight_mis(ls, tab, wavelengths, pol)
-        total += _bdpt_nee_contribute(beta, w, ls, pos, gn_geo, cur_med_idx, sd, scratch, wavelengths, spawn_eps, two_sided)
+                            le.pdf_rev, False, _vcm_cos_at(sd, v, ls.wi), Float32(1))
+        total += _vcm_nee_one(sd, v, ctx, ls, pol, tab, pos, gn_geo, beta, cur_med_idx, scratch, wavelengths, spawn_eps, two_sided, long_path)
     return total
 
 @always_inline

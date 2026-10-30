@@ -18,24 +18,12 @@ from .spectrum import SpectralSample, spec_illum
 from .bdpt_vertex import _BDPT_MAX_VERTS, BDPTVertex
 from .materials import LobeKind
 from .bdpt_nee import _visible_transmittance
-from .media import medium_sigma_t_at_spectral
-from .bdpt_eval import _vcm_cos_at, _eval_vertex_spectral, _bdpt_vertex_pdfs, _bdpt_vertex_mis_scoped, _bdpt_connect_pair_weighted
+from .bdpt_eval import _vcm_free_flight, _vcm_cos_at, _eval_vertex_spectral, _bdpt_vertex_pdfs, _bdpt_vertex_mis_scoped, _bdpt_connect_pair_weighted
 from .vcm_grid import (
     _vcm_too_long, _vcm_keep, _VCM_CAMIS, _CAMIS_CAM_RECS, _CAMIS_FORCE_C1, _vcm_eta_scale,
     _vcm_eta_at, _vcm_on_fibre, _vcm_past_depth, _vcm_past_cache,
 )
 from .vcm_merge_weight import _camis_gather_light
-
-
-@always_inline
-def _vcm_free_flight(ref sd: SceneView, v: BDPTVertex, tr: SpectralSample) -> Float32:
-    """A connection edge's distance-sampling density ending at `v`: survival to a surface, collision in a medium
-    (Scenes/vcm_volume_mis_derivation.py, free_flight)."""
-    if v.is_surface != Int32(0) or Int(v.med_idx) < 0:
-        return tr.average()
-    ref s = sd.spectral
-    return (tr * medium_sigma_t_at_spectral(sd.mediums[unsafe_offset=Int(v.med_idx)], sd.grids, sd.nvdbGrids, v.pos.to_simd(),
-                                            v.wavelengths, s.coeffs, s.res, s.cie_x, s.cie_y, s.cie_z, s.d65)).average()
 
 
 @always_inline

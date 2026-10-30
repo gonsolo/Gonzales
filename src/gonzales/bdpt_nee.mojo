@@ -157,6 +157,21 @@ def _bdpt_nee_contribute(
     given a LightSample + material weight (from the shared Light interface"""
     if w.is_black():
         return SpectralSample(Float32(0))
+    return beta * w * _bdpt_nee_transmittance(ls, hit, gn, cur_med_idx, sd, scratch, wl, eps, two_sided)
+
+
+@always_inline
+def _bdpt_nee_transmittance(
+    ls: LightSample,
+    hit: Point3f,
+    gn: Vec3f,
+    cur_med_idx: Int32,
+    ref sd: SceneView,
+    scratch: Pointer[Intersection, MutUntrackedOrigin],
+    wl: SampledWavelengths,
+    eps: Float32 = Float32(0.0001),
+    two_sided: Bool = False,
+) -> SpectralSample:
     # `gn` is the GEOMETRIC normal (pbrt's OffsetRayOrigin), never the shading
     # one: that is turned toward wo (face_toward) and can point into the
     var side_eps = eps
@@ -166,7 +181,4 @@ def _bdpt_nee_contribute(
     # Stop 3 offsets short: shadow_org sits `eps` off the surface, so a light closer than
     # eps / 0.0005 (0.2 units at eps=1e-4) would otherwise end past its own surface and occlude itself.
     var shadow_end = shadow_org + Vec3f(ls.wi[0], ls.wi[1], ls.wi[2]) * (ls.dist - Float32(3) * abs(side_eps))
-    var Tr = _visible_transmittance(shadow_org, shadow_end, cur_med_idx, sd, scratch, wl)
-    if not Tr.is_black():
-        return beta * w * Tr
-    return SpectralSample(Float32(0))
+    return _visible_transmittance(shadow_org, shadow_end, cur_med_idx, sd, scratch, wl)
