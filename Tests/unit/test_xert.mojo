@@ -165,6 +165,7 @@ def test_xert_instances() raises:
                                                  Pointer[Curve, MutUntrackedOrigin].unsafe_dangling(), Pointer[PrimId, MutUntrackedOrigin].unsafe_dangling(),
                                                  Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(), Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
                                                  Pointer[Material, MutUntrackedOrigin].unsafe_dangling(),
+                                                 Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(), Int32.MAX,
                                                  heat.unsafe_ptr(),
                                                  grid_dim=(NX * NY + 63) // 64, block_dim=64)
     var hits = 0; var expected = 0; var bad = 0
