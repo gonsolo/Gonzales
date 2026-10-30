@@ -2,20 +2,21 @@
 depth-first layout. Segments (contiguous primitive ranges) get trees of their own: the segment id sits above the Morton
 bits, so each segment is one node of the radix tree, and its clusters merge down to one root without leaving it."""
 from std.math import ceildiv
-from std.atomic import Atomic, Ordering
+from std.atomic import Atomic, Ordering, fence
+from std.sys.info import is_nvidia_gpu
 from std.bit import count_trailing_zeros, pop_count
 from std.memory import bitcast, stack_allocation
 from std.memory.alloc import unsafe_alloc
 from std.sys.info import size_of
 from max.gpu import block_idx, block_dim, thread_idx, lane_id, WARP_SIZE
 from max.gpu.sync import barrier, syncwarp
-from max.gpu.intrinsics import threadfence
 from max.gpu.memory import AddressSpace
 from max.gpu.primitives.warp import shuffle_idx, vote
 from max.gpu.host import DeviceContext, DeviceBuffer
 from .bvh import BVH2Node
 from .geometry import Point3f
 
+comptime _FENCE_SCOPE = "device" if is_nvidia_gpu() else ""
 comptime TPB = 256
 comptime THRESH = WARP_SIZE // 2        # clusters a range hands its parent
 comptime RADIUS = 8                      # nearest-neighbour window
@@ -346,7 +347,7 @@ def _hploc_kernel(keys: Pointer[UInt32, MutUntrackedOrigin], n_dp: Int64, seg_sh
                     split = L; L = Int(prev)
             if prev == Int32(-1):
                 active = False
-        threadfence()                                    # acquire: the sibling's clusters and nodes, written before its exchange
+        fence[ordering=Ordering.SEQUENTIAL, scope=_FENCE_SCOPE]()                                    # acquire: the sibling's clusters and nodes, written before its exchange
         var merge = False
         var whole = False
         if active:
@@ -423,7 +424,7 @@ def _hploc_kernel(keys: Pointer[UInt32, MutUntrackedOrigin], n_dp: Int64, seg_sh
                     id = Int32(nid)
                 elif mutual:
                     id = Int32(-1)
-                threadfence()
+                fence[ordering=Ordering.SEQUENTIAL, scope=_FENCE_SCOPE]()
                 keep = vote[MaskT](id >= Int32(0))
                 if Int(pop_count(keep)) == num:          # no mutual pair: only a bug gets here; don't hang the GPU
                     break
@@ -431,7 +432,7 @@ def _hploc_kernel(keys: Pointer[UInt32, MutUntrackedOrigin], n_dp: Int64, seg_sh
             syncwarp()
             if lane < n_load:
                 cl[unsafe_offset=bl + lane] = id
-        threadfence()
+        fence[ordering=Ordering.SEQUENTIAL, scope=_FENCE_SCOPE]()
 
 
 # ---- depth-first layout ----
