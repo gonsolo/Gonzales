@@ -1,6 +1,7 @@
 from std.math import sqrt
 from .layered import diel_f, diel_pdf, diel_sample, layered_f, layered_pdf, layered_sample
 from .geometry import RGB, Vec3f, dot, INV_PI, PI, Frame, INV_FOUR_PI
+from .media import hg_phase
 from .materials import LobeKind, MatKind, Material, fr_dielectric, MeasuredBRDF, sss_boundary_lobe
 from .curves import Curve
 from .sampling import sample_ggx_vndf, sample_cosine_hemisphere_world
@@ -924,10 +925,8 @@ def _lobe_scoped(c: BSDF) -> Bool:
 
     coateddiffuse is the layered lobe; dielectrics are delta and never in scope.
 
-    Volume (isotropic phase): always in scope. Unlike a surface lobe there is
-    no kind dispatch -- every medium here is hardcoded isotropic (1/4pi),
-    never delta -- and the forward/reverse densities are always real and
-    exact. See Scenes/vcm_volume_mis_derivation.py (connections+merges exact
+    Volume: always in scope. The phase function is never delta and samples
+    itself, so the forward/reverse densities are always real and exact. See Scenes/vcm_volume_mis_derivation.py (connections+merges exact
     to 4.4e-16 including every mixed surface/volume path)."""
     if not c.is_surface:
         return True
@@ -1022,9 +1021,10 @@ def _lobe_eval[want_pdfs: Bool = True, want_rev: Bool = True](
         return LobeEval(ZERO, Float32(1), Float32(0), Float32(0), False)
 
     if not c.is_surface:
-        # Volume: isotropic phase, no surface, and so NO cosine at all.
+        # Volume: the phase function (`param` is g), no surface, and so NO cosine at all.
         var alb_v = rgb_bands_to_spectral_sample(c.alb.r, c.alb.g, c.alb.b, wavelengths)
-        return LobeEval(alb_v * INV_FOUR_PI, Float32(1), INV_FOUR_PI, INV_FOUR_PI, False)
+        var ph = hg_phase(dot(c.wo, dir_to_other), c.param)
+        return LobeEval(alb_v * ph, Float32(1), ph, ph, False)
 
     var vn = c.n
     var vwo = c.wo

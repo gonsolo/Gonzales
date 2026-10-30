@@ -7,7 +7,7 @@ from .geometry import Point3f, Point2f, Vec3f, vec3f, point3f, dot, PI, INV_FOUR
 from .materials import MatKind, LobeKind, resolve_mix
 from .primitives import Ray, Intersection
 from .media import sample_free_flight, spectral_free_flight_weight
-from .vcm_mis import vcm_scatter_carries
+from .vcm_mis import vcm_scatter_carries, vcm_phase_scatter
 from .vcm_camis import (
     CamisLightRecord, CamisLightCarry, camis_light_carry_off, camis_light_origin, camis_light_arrive,
     camis_light_scatter,
@@ -361,6 +361,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
                 v.beta = st.flux
                 v.alb = ff.albedo
                 v.is_surface = Int32(0); v.is_delta = Int32(0)
+                v.wo = vec3f(-ray_dir); v.pdf_bwd = med.g
                 v.pdf_fwd = ff.pdf   # the density actually sampled from; under hero-wavelength MIS this is a lane MIXTURE, not sig_t's lone exponential
                 v.med_idx = st.cur_med_idx
                 v.wavelengths = st.wl
@@ -377,19 +378,15 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
                 # Distant/infinite/point lights store NO lv0 (n_verts starts at
                 # 0 for them -- this function's own docstring: they have no
                 var eta_v = _vcm_eta_at(sd, v, mis_vm_weight_factor)
-                (st.dvcm, st.dvc, st.dvm) = vcm_scatter_carries[dvc0=_VCM_CAMIS](
-                    st.dvcm, st.dvc, st.dvm,
-                    Float32(4.0) * PI, INV_FOUR_PI, INV_FOUR_PI,
-                    mis_vc_weight_factor, eta_v)
+                var (dvcm_v, dvc_v, dvm_v, wi_v) = vcm_phase_scatter[dvc0=_VCM_CAMIS](
+                    -ray_dir, med.g, pcg.next_float(), pcg.next_float(),
+                    st.dvcm, st.dvc, st.dvm, mis_vc_weight_factor, eta_v)
+                st.dvcm = dvcm_v; st.dvc = dvc_v; st.dvm = dvm_v
                 st.prev_was_volume = True
                 st.mnee.side = Float32(0)
                 # Continuation: flux = prev × alb_s (same as stored vertex beta)
                 st.flux *= spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (ff.albedo).r, (ff.albedo).g, (ff.albedo).b, st.wl)
-                var u1 = pcg.next_float(); var u2 = pcg.next_float()
-                var cosT = Float32(2)*u1 - Float32(1)
-                var sinT = sqrt(max(Float32(0), Float32(1)-cosT*cosT))
-                var phi  = Float32(2)*PI*u2
-                st.rd = Vec3f(sinT*cos(phi), sinT*sin(phi), cosT)
+                st.rd = vec3f(wi_v)
                 st.ro = sp + st.rd*Float32(0.0002)
                 st.mis_null_dist = Float32(0)
                 return True   # volume free-flight scatter: no vertex stored this bounce, path continues

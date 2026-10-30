@@ -16,7 +16,7 @@ from .geometry import offset_eps, TERMINAL_SEGMENT_GRACE_ROUNDS, RGB, Point3f, P
 from .materials import Material, MatKind, LobeKind, PhotonKind, fr_dielectric, resolve_mix
 from .primitives import Ray, Intersection, PrimId, TriangleMesh, Sphere, Instance, sphere_outward_normal, mesh_normal, mesh_vi
 from .primitives import mesh_pos
-from .media import medium_inv_sigma_t_spectral, medium_kernel_radius
+from .media import medium_inv_sigma_t_spectral, medium_kernel_radius, hg_phase, hg_sample
 from .media import Medium, Grid, NvdbGrid, sample_free_flight, medium_is_heterogeneous, medium_sigma_t_spectral, medium_grid_for, medium_nvdb_for, grid_sample_density, nvdb_sample_density, SSS_WALK_ROUNDS, spectral_free_flight_weight
 from .lights import area_light_pick_triangle, AreaLight
 from .curves import Curve, curve_at, curve_piece_endpoints, _curve_perp_axis
@@ -1363,12 +1363,8 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
                 # exactly the channel value in every lane.
                 flux *= rgb_bands_to_spectral_sample((ff.albedo).r, (ff.albedo).g, (ff.albedo).b, ph_wavelengths)
                 # Sample new isotropic direction (uniform sphere)
-                var usp1 = pcg.next_float()
-                var usp2 = pcg.next_float()
-                var cosT = Float32(2.0) * usp1 - Float32(1.0)
-                var sinT = sqrt(max(Float32(0), Float32(1) - cosT*cosT))
-                var phiS = Float32(2.0) * PI * usp2
-                rd = Vec3f(sinT * cos(phiS), sinT * sin(phiS), cosT)
+                var hs = hg_sample((-rd).to_simd(), med.g, pcg.next_float(), pcg.next_float())
+                rd = vec3f(Vec3f(hs[0], hs[1], hs[2]))
                 ro = sp + rd * Float32(0.0001)
                 continue
             else:
@@ -1711,6 +1707,12 @@ def _sppm_photon_on_vp_surface(vp_is_volume: Int32, vp_mat_kind: Int32, vp_norma
         return dot(dir_in, vp_normal) < Float32(0.0)
     return True
 
+@always_inline
+def _vp_phase(ref sd: SceneView, vp: SPPMPixel, wi: Vec3f) -> Float32:
+    """A volume visible point's phase function toward wi."""
+    return hg_phase(dot(vp.wo.to_simd(), wi), sd.mediums[unsafe_offset=Int(vp.med_idx)].g)
+
+
 def _sppm_gather_one(
     vps:      Pointer[SPPMPixel, MutUntrackedOrigin],
     i:        Int,
@@ -1879,7 +1881,7 @@ def _sppm_gather_one(
                                                  spectral_cie_x, spectral_cie_y,
                                                  spectral_cie_z, spectral_d65,
                                                  vp.alb.r, vp.alb.g, vp.alb.b, ph.wavelengths) \
-                                       * inv_sig * INV_FOUR_PI * ph.flux
+                                       * inv_sig * _vp_phase(sd, vp, -ph.dir_in.to_simd()) * ph.flux
                                 var (tr_2, tg_2, tb_2) = spectral_sample_to_rgb(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, term_2, ph.wavelengths)
                                 phi_rgb += RGB(tr_2, tg_2, tb_2)
                         else:
@@ -1982,7 +1984,7 @@ def _sppm_nee_weight(
 ) -> SpectralSample:
     """One distant, point, sphere or infinite light sample's NEE weight at a visible point, through its BSDF."""
     if vp.is_volume == PhotonKind.volume:
-        # Isotropic phase function: albedo/4pi, and NO cosine factor -- a
+        # The phase function, and NO cosine factor -- a
         # volume vertex has no normal. Same convention the photon gather
         # already uses for volume VPs (see _sppm_gather_one), so the two
         # estimators agree on what a volume VP scatters.
@@ -1998,7 +2000,7 @@ def _sppm_nee_weight(
         if not ls.valid or ls.pdf <= Float32(0.0):
             return SpectralSample(Float32(0))
         var ph_v = spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65,
-                             vp.alb.r * INV_FOUR_PI, vp.alb.g * INV_FOUR_PI, vp.alb.b * INV_FOUR_PI, vp.wavelengths)
+                             vp.alb.r, vp.alb.g, vp.alb.b, vp.wavelengths) * _vp_phase(sd, vp, ls.wi)
         var li_v = spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65,
                               ls.Li.r, ls.Li.g, ls.Li.b, vp.wavelengths)
         return ph_v * li_v * (Float32(1.0) / ls.pdf)
@@ -2166,10 +2168,8 @@ def _sppm_nee_at(
                     var inv_pdf_area = Float32(n_area) * al.total_area
                     var geom = cos_light / dist2 * inv_pdf_area
                     if is_vol:
-                        # Isotropic phase (albedo/4pi), matching the photon
-                        # gather's own volume-VP convention.
                         ld += (spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65,
-                                                vp.alb.r * INV_FOUR_PI, vp.alb.g * INV_FOUR_PI, vp.alb.b * INV_FOUR_PI, vp.wavelengths)
+                                                vp.alb.r, vp.alb.g, vp.alb.b, vp.wavelengths) * _vp_phase(sd, vp, wi)
                                       * spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, al.emission.r, al.emission.g, al.emission.b, vp.wavelengths)
                                       * geom * tr_a)
                     else:

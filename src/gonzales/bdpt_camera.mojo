@@ -12,6 +12,7 @@ from .materials import Material, MatKind, LobeKind, resolve_mix
 from .primitives import Ray, Intersection, mesh_pos
 from .media import sample_free_flight, spectral_free_flight_weight
 from .vcm_mis import (
+    vcm_phase_scatter,
     vcm_arrival_carries, vcm_scatter_carries,
     vcm_env_escape_weight,
 )
@@ -518,6 +519,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 v.beta = st.beta
                 v.alb = ff.albedo
                 v.is_surface = Int32(0); v.is_delta = Int32(0)
+                v.wo = vec3f(-ray_dir); v.pdf_bwd = med.g
                 v.pdf_fwd = ff.pdf   # the density actually sampled from; under hero-wavelength MIS this is a lane MIXTURE, not sig_t's lone exponential
                 v.med_idx = st.cur_med_idx
                 v.wavelengths = st.wl
@@ -530,10 +532,10 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 # NOT `n_verts += 1`. _BDPT_MAX_VERTS is the light-vertex
                 # CACHE's per-path slot count, and the camera subpath stores
                 var eta_v = _vcm_eta_at(sd, v, mis_vm_weight_factor)
-                (st.dvcm, st.dvc, st.dvm) = vcm_scatter_carries[dvc0=_VCM_CAMIS](
-                    st.dvcm, st.dvc, st.dvm,
-                    Float32(4.0) * PI, INV_FOUR_PI, INV_FOUR_PI,
-                    mis_vc_weight_factor, eta_v)
+                var (dvcm_v, dvc_v, dvm_v, wi_v) = vcm_phase_scatter[dvc0=_VCM_CAMIS](
+                    -ray_dir, med.g, pcg.next_float(), pcg.next_float(),
+                    st.dvcm, st.dvc, st.dvm, mis_vc_weight_factor, eta_v)
+                st.dvcm = dvcm_v; st.dvc = dvc_v; st.dvm = dvm_v
                 st.prev_was_volume = True
                 st.mnee.pdf0 = Float32(0)
                 if path_len > 0:
@@ -547,11 +549,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                                              st.n_verts + st.n_vol + st.n_delta > _VCM_MAX_STORED)
                 # Continuation beta = prev × alb_s (same as stored vertex beta)
                 st.beta *= spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (ff.albedo).r, (ff.albedo).g, (ff.albedo).b, st.wl)
-                var u1 = pcg.next_float(); var u2 = pcg.next_float()
-                var cosT = Float32(2)*u1 - Float32(1)
-                var sinT = sqrt(max(Float32(0), Float32(1)-cosT*cosT))
-                var phi  = Float32(2)*PI*u2
-                st.rd = Vec3f(sinT*cos(phi), sinT*sin(phi), cosT)
+                st.rd = vec3f(wi_v)
                 st.ro = sp + st.rd*Float32(0.0002)
                 st.last_bsdf_pdf = _VOL_PHASE_HIT   # see the sentinel's definition
                 st.mis_null_dist = Float32(0)     # this vertex is the new origin

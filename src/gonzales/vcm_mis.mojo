@@ -15,7 +15,8 @@ Two rules cover every vertex:
 Delta dielectrics reset dVCM to 0. Volume vertices carry the same recursion with
 no cosine (Scenes/vcm_volume_mis_derivation.py).
 """
-from .geometry import PI
+from .geometry import PI, Vec3f
+from .media import hg_sample
 from .sampling import power_heuristic
 
 
@@ -79,6 +80,17 @@ def vcm_scatter_carries[dvc0: Bool = False](
     return (Float32(1.0) / pdf_fwd_w,
             cos_over_pdf * (dvc * pdf_rev_w + dvcm + mis_vm_weight_factor),
             cos_over_pdf * (dvm * pdf_rev_w + dvcm * mis_vc_weight_factor + Float32(1.0)))
+
+
+@always_inline
+def vcm_phase_scatter[dvc0: Bool = False](
+                        wo: Vec3f, g: Float32, u1: Float32, u2: Float32,
+                        dvcm: Float32, dvc: Float32, dvm: Float32,
+                        mis_vc_weight_factor: Float32, eta: Float32) -> Tuple[Float32, Float32, Float32, Vec3f]:
+    """A volume vertex's scatter: the carries and the new direction. No cosine, and the phase function is symmetric."""
+    var hs = hg_sample(wo, g, u1, u2)
+    var (a, b, c) = vcm_scatter_carries[dvc0=dvc0](dvcm, dvc, dvm, Float32(1) / hs[3], hs[3], hs[3], mis_vc_weight_factor, eta)
+    return (a, b, c, Vec3f(hs[0], hs[1], hs[2]))
 
 
 @always_inline
