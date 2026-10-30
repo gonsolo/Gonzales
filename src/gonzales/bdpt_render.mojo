@@ -5,6 +5,7 @@ from std.sys.info import size_of
 from max.algorithm import parallelize
 from std.math import tan, max, abs
 from std.memory.alloc import unsafe_alloc
+from .gpu_media import default_emit_medium
 from .geometry import RGB, PI
 from .primitives import Intersection
 from .vcm_camis import CamisLightRecord
@@ -65,13 +66,7 @@ def _bdpt_render_core(
     var has_med = Int(sd.mediumCount) > 0
 
     # Determine starting medium for light subpaths (same logic as SPPM)
-    var default_emit_med = Int32(-1)
-    if has_med and Int(sd.mediumIfaceCount) > 0:
-        for mi in range(Int(sd.mediumIfaceCount)):
-            var iface = sd.mediumInterfaces[unsafe_offset=mi]
-            if Int(iface.outside_medium_idx) >= 0:
-                default_emit_med = iface.outside_medium_idx
-                break
+    var default_emit_med = default_emit_medium(sd)
 
     # Output buffer: one RGB per pixel, plus a parallel first-hit-albedo AOV
     # accumulator for the post-render denoiser (see write_image call below).

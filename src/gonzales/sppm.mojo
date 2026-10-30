@@ -10,6 +10,7 @@ from std.math import sqrt, cos, sin, floor, max, min
 from std.memory.alloc import unsafe_alloc
 from std.atomic import Atomic
 from std.memory import bitcast
+from .gpu_media import default_emit_medium, medium_after
 from .geometry import offset_eps, TERMINAL_SEGMENT_GRACE_ROUNDS, RGB, Point3f, Point2f, Vec3f, vec3f, point3f, dot, cross, PI, INV_FOUR_PI, Frame, _is_real_ptr
 from .materials import Material, MatKind, LobeKind, PhotonKind, fr_dielectric, resolve_mix
 from .primitives import Ray, Intersection, PrimId, TriangleMesh, Sphere, Instance, sphere_outward_normal, mesh_normal, mesh_vi
@@ -653,36 +654,6 @@ def sample_area_light_point(
 # ── Camera pass ───────────────────────────────────────────────────────────────
 
 @always_inline
-def medium_after_crossing(
-    ray_dir: Vec3f,
-    inter: Intersection,
-    meshes: Pointer[TriangleMesh, MutUntrackedOrigin],
-    mat: Material,
-    ref sd: SceneView,
-    hit: Point3f = Point3f(Float32(0)),
-) -> Int32:
-    """Return new current_medium_idx after crossing a surface with MediumInterface.
-
-    Shared by SPPM and VCM (bdpt_*.mojo had a byte-for-byte copy of this until
-    2026-09-17, whose mesh branch also ignored instance transforms).
-
-    `hit` is REQUIRED for analytic spheres: their outward normal is
-    normalize(hit - center), so leaving it at the default origin
-    makes the inside/outside test read one FIXED direction for every ray that
-    crosses the sphere, regardless of where it actually struck. All four call
-    sites omitted it until 2026-09-09, which is why volumetric-caustic's glass
-    sphere never switched a ray between `gas` and its own vacuum interior --
-    and so never produced the focused beam that is the whole point of the
-    scene. Same mesh-only-assumption class as the three sphere bugs found
-    earlier that day (see project_volume_area_light_nee_bug defect 3)."""
-    if mat.medium_interface_idx < Int32(0) or sd.mediumIfaceCount == Int64(0):
-        return Int32(-1)  # stays vacuum; caller keeps existing idx if needed
-    var iface = sd.mediumInterfaces[unsafe_offset=Int(mat.medium_interface_idx)]
-    var n = _geom_normal(inter, meshes, sd.instances, sd.spheres, hit.to_simd())
-    var md = ray_dir[0]*n.x + ray_dir[1]*n.y + ray_dir[2]*n.z
-    return iface.outside_medium_idx if md > Float32(0) else iface.inside_medium_idx
-
-@always_inline
 def _film_rgb(c: RGB, wl: SampledWavelengths, ref sd: SceneView) -> RGB:
     """Seen radiance through the film's spectral response (a named sensor's curves), as the path tracer sees it."""
     var sp = rgb_illuminant_to_spectral_sample(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, c.r, c.g, c.b, wl)
@@ -1065,7 +1036,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
                 var gn_s = _shading_normal_at(inter, sd.meshes, sd.instances, sd.spheres, hit)
                 if dot(gn_s, rd) > Float32(0.0):
                     gn_s = gn_s * Float32(-1.0)
-                var inside_idx = medium_after_crossing(ray_dir, inter, sd.meshes, mat, sd, hit)
+                var inside_idx = medium_after(ray_dir, Int32(-1), inter, mat, sd, hit.to_simd())
                 if inside_idx >= Int32(0):
                     vp.pos = hit
                     vp.normal = vec3f(gn_s)
@@ -1106,16 +1077,12 @@ def _sppm_trace_visible_point[use_gpu: Bool](
             rd = vec3f(new_dir)
             ro = point3f(new_org)
             if has_media:
-                var new_idx = medium_after_crossing(ray_dir, inter, sd.meshes, mat, sd, hit)
-                if new_idx != Int32(-1) or mat.medium_interface_idx >= Int32(0):
-                    cur_med_idx = new_idx
+                cur_med_idx = medium_after(new_dir, cur_med_idx, inter, mat, sd, hit.to_simd())
 
         elif mat.type == MatKind.interface:
             # Transparent boundary — update medium, continue ray
             if has_media:
-                var new_idx = medium_after_crossing(ray_dir, inter, sd.meshes, mat, sd, hit)
-                if new_idx != Int32(-1) or mat.medium_interface_idx >= Int32(0):
-                    cur_med_idx = new_idx
+                cur_med_idx = medium_after(ray_dir, cur_med_idx, inter, mat, sd, hit.to_simd())
             ro = hit + rd * Float32(0.0002)
 
         else:
@@ -1530,7 +1497,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
             # `has_media` matters: a BSSRDF deposit TERMINATES the photon, so
             # without a subsurface medium to terminate into this branch just
             # eats the photon. The camera side already required a real interior
-            # (medium_after_crossing >= 0) and VCM already required `has_med`;
+            # (medium_after >= 0) and VCM already required `has_med`;
             # this one tested sss_boundary alone, which is what let the
             # uninitialised flag above reach anything at all.
             if has_media and mat.sss_boundary != Int8(0) and Int(cur_med_idx) < 0:
@@ -1576,16 +1543,12 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
             rd = vec3f(new_dir)
             ro = point3f(new_org)
             if has_media:
-                var new_idx = medium_after_crossing(ray_dir, inter, sd.meshes, mat, sd, hit)
-                if new_idx != Int32(-1) or mat.medium_interface_idx >= Int32(0):
-                    cur_med_idx = new_idx
+                cur_med_idx = medium_after(new_dir, cur_med_idx, inter, mat, sd, hit.to_simd())
 
         elif mat.type == MatKind.interface:
             n_null += 1   # a null boundary is not an interaction for the surface "first segment" store gates
             if has_media:
-                var new_idx = medium_after_crossing(ray_dir, inter, sd.meshes, mat, sd, hit)
-                if new_idx != Int32(-1) or mat.medium_interface_idx >= Int32(0):
-                    cur_med_idx = new_idx
+                cur_med_idx = medium_after(ray_dir, cur_med_idx, inter, mat, sd, hit.to_simd())
             ro = hit + rd * Float32(0.0002)
 
         else:
@@ -1619,13 +1582,7 @@ def _sppm_photon_pass(
     # Determine the "default" starting medium for photons emitted into a medium.
     # Convention: photon is cosine-sampled from ln, so dot(pdir,ln)>0 always.
     # We use the first MediumInterface whose outside_medium_idx is valid.
-    var default_emit_med = Int32(-1)
-    if Int(sd.mediumCount) > 0 and Int(sd.mediumIfaceCount) > 0:
-        for mi in range(Int(sd.mediumIfaceCount)):
-            var iface = sd.mediumInterfaces[unsafe_offset=mi]
-            if Int(iface.outside_medium_idx) >= 0:
-                default_emit_med = iface.outside_medium_idx
-                break
+    var default_emit_med = default_emit_medium(sd)
 
     # use_gpu=True: parallel CPU workers now need the SAME atomic slot-
     # reservation _sppm_store_photon uses for GPU threads (concurrent

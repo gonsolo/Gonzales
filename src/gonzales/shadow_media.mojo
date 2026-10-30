@@ -94,8 +94,7 @@ def shadow_transmittance(
         var p = o + dir * t_seg
         if mat.medium_interface_idx >= Int32(0):
             var iface = medium_ifaces[unsafe_offset=Int(mat.medium_interface_idx)]
-            var n = _geom_normal(inter, meshes, instances, spheres, p)
-            cur = iface.outside_medium_idx if dot(dir, n) > Float32(0.0) else iface.inside_medium_idx
+            cur = iface.toward(dir, _geom_normal(inter, meshes, instances, spheres, p))
         o = p + dir * Float32(0.0002)
         remaining = remaining - t_seg - Float32(0.0002)
     return T

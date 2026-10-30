@@ -7,6 +7,7 @@ from max.gpu import block_dim
 from max.gpu.host import DeviceBuffer
 from std.math import tan, max, abs, ceildiv
 from std.memory.alloc import unsafe_alloc
+from .gpu_media import default_emit_medium
 from .geometry import RGB, PI
 from .primitives import Intersection
 from .vcm_camis import CamisLightRecord
@@ -122,13 +123,7 @@ struct VcmGpu(Movable):
         self.n_pix = self.fw * self.fh
         self.n_light_paths = max(n_photons_req, self.n_pix)
         self.lvc_cap = self.n_light_paths * _BDPT_MAX_VERTS
-        self.default_emit_med = Int32(-1)
-        if Int(sd.mediumCount) > 0:
-            for mi in range(Int(sd.mediumIfaceCount)):
-                var iface = sd.mediumInterfaces[unsafe_offset=mi]
-                if Int(iface.outside_medium_idx) >= 0:
-                    self.default_emit_med = iface.outside_medium_idx
-                    break
+        self.default_emit_med = default_emit_medium(sd)
         var (_c, radius_bbox) = _scene_bounding_sphere(sd)
         self.scene_radius = radius_bbox
         if radius_from_camera:

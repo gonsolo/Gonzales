@@ -3,7 +3,8 @@ from std.utils import StaticTuple
 from .bvh import LightSample, _sample_distant_light_nee, _sample_infinite_light_nee, _sample_point_light_nee, _sample_sphere_light_nee, any_hit_bvh2_core, test_spheres, traverse_bvh2_core, traverse_bvh2_core_defer_curves, SceneView
 from .geometry import Frame, Point2f, Point3f, RGB, Vec3f, _is_real_ptr, cross, dot, point3f, vec3f
 from .lights import area_light_pick_triangle, light_sampler_sample
-from .materials import MatKind, fr_dielectric
+from .geom_normal import _geom_normal
+from .materials import Material, MatKind, fr_dielectric
 from .media import Grid, MEDIUM_TRACK_MAX_ITERS, Medium, NvdbGrid, grid_ray_range, grid_sample_density, hg_phase, hg_sample, medium_emission_spectral, medium_grid_for, medium_nvdb_for, medium_sigma_s_spectral, medium_sigma_t_spectral, medium_transmittance_ratio_spectral, nvdb_index_ray, nvdb_majorant_at_world, nvdb_node_exit_t, nvdb_ray_range, nvdb_sample_density, sample_free_flight
 from .primitives import Intersection, PrimId, Ray, sphere_outward_normal, mesh_vi
 from .primitives import mesh_pos
@@ -18,6 +19,41 @@ from std.collections import Array
 from std.math import abs, cos, exp, log, pow, sin, sqrt
 
 
+@always_inline
+def default_emit_medium(ref sd: SceneView) -> Int32:
+    """The medium light paths start in: the first interface's valid outside medium."""
+    if Int(sd.mediumCount) == 0:
+        return Int32(-1)
+    for mi in range(Int(sd.mediumIfaceCount)):
+        var outside = sd.mediumInterfaces[unsafe_offset=mi].outside_medium_idx
+        if Int(outside) >= 0:
+            return outside
+    return Int32(-1)
+
+
+@always_inline
+def medium_after(w: Vec3f, cur: Int32, inter: Intersection, mat: Material, ref sd: SceneView, hit: Vec3f) -> Int32:
+    """The medium a ray leaving a surface hit in direction `w` travels in; `cur` when the surface binds none.
+    Every integrator uses this, with the OUTGOING direction, so a reflection stays on its side."""
+    if mat.medium_interface_idx < Int32(0) or sd.mediumIfaceCount == Int64(0):
+        return cur
+    var iface = sd.mediumInterfaces[unsafe_offset=Int(mat.medium_interface_idx)]
+    return iface.toward(w, _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit))
+
+
+@always_inline
+def path_medium_after_shading(path_ptr: Pointer[PathState, MutUntrackedOrigin], inter: Intersection, ref sd: SceneView):
+    """The path tracer's medium_after, after the material shaders set the outgoing ray (its origin is the hit)."""
+    if inter.hit == 0 or inter.primId.materialIndex < Int64(0):
+        return
+    var mat = sd.materials[unsafe_offset=Int(inter.primId.materialIndex)]
+    if mat.sss_walk_interior() and inter.primId.type == Int8(0):   # walked, not entered
+        return
+    var r = path_ptr[].ray
+    path_ptr[].current_medium_idx = medium_after(Vec3f(r.direction.x, r.direction.y, r.direction.z), path_ptr[].current_medium_idx,
+                                                 inter, mat, sd, Vec3f(r.origin.x, r.origin.y, r.origin.z))
+
+
 @__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
 @__llvm_metadata(`nvvm.minctasm`=SIMDLength(1))    # NVIDIA keeps its old register budget; AMD ignores this
 def update_medium_gpu(
@@ -28,9 +64,7 @@ def update_medium_gpu(
     live_idx: Pointer[Int32, MutUntrackedOrigin],
     live_count: Pointer[Int32, MutUntrackedOrigin],
 ):
-    """Update current_medium_idx for any surface hit with a MediumInterface bound.
-    Runs after all material shaders; uses the post-scatter ray direction (same
-    convention as CPU rendering.mojo) to determine inside vs outside."""
+    """path_medium_after_shading for every live path."""
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
     if tid >= Int(live_count[unsafe_offset=0]):
         return
@@ -38,54 +72,7 @@ def update_medium_gpu(
     var path_ptr = paths.unsafe_offset(tid)
     if path_ptr[].active == 0:
         return
-    var inter = intersections[unsafe_offset=tid]
-    if inter.hit == 0:
-        return
-    var mat = sd.materials[unsafe_offset=Int(inter.primId.materialIndex)]
-    if mat.medium_interface_idx < Int32(0) or (mat.sss_walk_interior() and inter.primId.type == Int8(0)):   # walked, not entered
-        return
-    var iface = sd.mediumInterfaces[unsafe_offset=Int(mat.medium_interface_idx)]
-    var ray_dir = Vec3f(path_ptr[].ray.direction.x, path_ptr[].ray.direction.y, path_ptr[].ray.direction.z)
-    var geom_n: Vec3f
-    if inter.primId.type == 4:
-        # Sphere: outward normal = hit point - center. Medium-bounding
-        # volumes (e.g. smoke-plume's "MediumInterface .. Shape sphere")
-        # are commonly a big invisible sphere, so this case matters even
-        # though sd.spheres otherwise rarely carry sd.materials with real shading.
-        var sph = sd.spheres[unsafe_offset=Int(inter.primId.id1)]
-        # ray.origin is ALREADY the hit point -- this kernel runs after all
-        # material shaders (see the docstring above), and each shader rewrites
-        # path.ray to the outgoing ray whose origin sits on the surface.
-        # Advancing by tHit again walked a second full hit distance past the
-        # sphere and inverted the inside/outside test below. Same bug and same
-        # fix as rendering.mojo's CPU medium-interface loop -- see the longer
-        # writeup there.
-        var ray_org = Vec3f(path_ptr[].ray.origin.x, path_ptr[].ray.origin.y, path_ptr[].ray.origin.z)
-        var hit_pt = ray_org
-        geom_n = sphere_outward_normal(point3f(hit_pt), sph.center).to_simd()
-    else:
-        var mi: Int
-        var bv: Int
-        if inter.primId.type == 0:
-            mi = Int(inter.primId.id1)
-            bv = Int(inter.primId.id2)
-        elif inter.primId.type == 1 or inter.primId.type == 2 or inter.primId.type == 3:
-            mi = Int(inter.primId.id2 >> 32)
-            bv = Int(inter.primId.id2 & 0xFFFFFFFF) * 3
-        else:
-            return
-        var m = sd.meshes[unsafe_offset=mi]
-        var v0 = Int(mesh_vi(m, bv))
-        var v1 = Int(mesh_vi(m, bv + 1))
-        var v2 = Int(mesh_vi(m, bv + 2))
-        var p0 = mesh_pos(m, v0)
-        var p1 = mesh_pos(m, v1)
-        var p2 = mesh_pos(m, v2)
-        geom_n = cross(p1 - p0, p2 - p0)
-    if dot(ray_dir, geom_n) > Float32(0.0):
-        path_ptr[].current_medium_idx = iface.outside_medium_idx
-    else:
-        path_ptr[].current_medium_idx = iface.inside_medium_idx
+    path_medium_after_shading(path_ptr, intersections[unsafe_offset=tid], sd)
 
 
 

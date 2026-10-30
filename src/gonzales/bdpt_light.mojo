@@ -2,6 +2,7 @@
 # Part of the BDPT/VCM machinery that used to be one file (bdpt_*.mojo).
 
 from std.math import sqrt, cos, sin, log, exp, max
+from .gpu_media import medium_after
 from .geometry import Point3f, Point2f, Vec3f, vec3f, point3f, dot, PI, INV_FOUR_PI
 from .materials import MatKind, LobeKind, resolve_mix
 from .primitives import Ray, Intersection
@@ -14,7 +15,7 @@ from .vcm_camis import (
 from .bvh import traverse_dispatch
 from .bvh import SceneView, test_spheres, _scene_bounding_sphere, _sample_disk_perpendicular, _sample_infinite_light_dir, sphere_light_cone_pdf, light_path_pick
 from .rng import PCG32
-from .sppm import medium_after_crossing, _cosine_hemisphere_sample, sample_area_light_point, sample_sphere_light_emission, area_light_emit_normal, area_light_side_pdf
+from .sppm import _cosine_hemisphere_sample, sample_area_light_point, sample_sphere_light_emission, area_light_emit_normal, area_light_side_pdf
 from .spectrum import SampledWavelengths, SpectralSample, spec_refl, spec_illum
 from .bdpt_vertex import _BDPT_MAX_DEPTH, _BDPT_MAX_VERTS, BDPTVertex, _null_vertex
 from .bdpt_eval import _bdpt_vertex_mis_scoped, _vcm_mnee_light_dvcm
@@ -462,7 +463,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
             # is drawn by the SAME sampler (the MIS weights require identical
             var did_bssrdf_hop = False
             if mat.sss_boundary != Int8(0) and Int(st.cur_med_idx) < 0 and has_med:
-                var med_in = medium_after_crossing(ray_dir, inter, sd.meshes, mat, sd, hit)
+                var med_in = medium_after(ray_dir, Int32(-1), inter, mat, sd, hit.to_simd())
                 if med_in >= Int32(0) and Int(med_in) < Int(sd.mediumCount):
                     var ex = _vcm_bssrdf_hop(sd, inter, mat, hit, ray_dir, Int(med_in), mis_vc_weight_factor, pcg, st.wl,
                                              st.flux, st.dvcm, st.dvc, st.dvm)
@@ -489,8 +490,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
 
         elif mat.passes_rays():
             if has_med:
-                var new_idx = medium_after_crossing(ray_dir, inter, sd.meshes, mat, sd, hit)
-                if mat.medium_interface_idx >= Int32(0): st.cur_med_idx = new_idx
+                st.cur_med_idx = medium_after(ray_dir, st.cur_med_idx, inter, mat, sd, hit.to_simd())
             st.ro = hit + st.rd*Float32(0.0002)
             if d_seg > Float32(0):
                 st.dvcm /= max(d_seg * d_seg, Float32(1e-20))

@@ -15,7 +15,7 @@ from .shading import cpu_shade_context, shade_core_cpu_nee_ctx, GIPendingX1, gi_
 from .sampling import TileSamplerParams, encode_morton2, sobol_index_pixel_part, mix_bits_u64, gen_primary_ray_state
 from .guide import GuideGrid, guide_merge, null_guide
 from .spectrum import SpectralSample, spectral_sample_to_rgb
-from .gpu_media import _sample_medium_core
+from .gpu_media import _sample_medium_core, path_medium_after_shading
 from .restir_di import ReservoirIO, reservoir_io_null
 from .restir_gi import GIReservoirIO, gi_reservoir_io_null
 from .restir_sms import SMSReservoirIO, sms_reservoir_io_null
@@ -333,62 +333,7 @@ def render_tile[Osp: Origin[mut=True], Oc2w: Origin[mut=True]](
             var i = Int(act_idx[unsafe_offset=ak])
             if paths[unsafe_offset=i].active == 0:
                 continue
-            if intersections[unsafe_offset=i].hit == Int8(0):
-                continue
-            var mi_mat_idx = Int(intersections[unsafe_offset=i].primId.materialIndex)
-            if mi_mat_idx < 0 or scene.mediumIfaceCount == Int64(0):
-                continue
-            var mi_mat = scene.materials[unsafe_offset=mi_mat_idx]
-            if mi_mat.medium_interface_idx < Int32(0):
-                continue
-            var iface = scene.mediumInterfaces[unsafe_offset=Int(mi_mat.medium_interface_idx)]
-            var mi_n: Vec3f
-            if intersections[unsafe_offset=i].primId.type == 4:
-                # Sphere: outward normal = hit point - center. Medium-bounding
-                # volumes are commonly a big invisible sphere (e.g.
-                # smoke-plume's MediumInterface .. Shape sphere), so this
-                # case matters even though spheres rarely carry real shading.
-                var mi_sph = scene.spheres[unsafe_offset=Int(intersections[unsafe_offset=i].primId.id1)]
-                # paths[i].ray.origin is ALREADY the hit point: this loop runs
-                # AFTER the material shaders, and every shader (shade_interface
-                # included) rewrites path.ray to the outgoing ray whose origin
-                # sits on the surface it just hit. Advancing it by tHit again
-                # here walked a SECOND full hit distance past the sphere,
-                # landing outside it on the far side, so sphere_outward_normal
-                # returned a normal for the wrong point and the dot test below
-                # read almost every ENTRY into the medium as an EXIT out of it
-                # (measured on bunny-cloud: 1968 "exit" vs 18 "enter" for a
-                # camera that is entirely outside the sphere). The medium was
-                # therefore almost never entered and the volume rendered as
-                # near-vacuum. Triangles were unaffected -- their normal comes
-                # from the vertices, not from a reconstructed hit point --
-                # which is why only sphere-bounded media (the common case for
-                # a "MediumInterface .. Shape sphere" volume) showed it.
-                var mi_hit = paths[unsafe_offset=i].ray.origin
-                mi_n = sphere_outward_normal(mi_hit, mi_sph.center)
-            else:
-                var mi_mesh_idx: Int
-                var mi_base_vidx: Int
-                if intersections[unsafe_offset=i].primId.type == 0:
-                    mi_mesh_idx = Int(intersections[unsafe_offset=i].primId.id1)
-                    mi_base_vidx = Int(intersections[unsafe_offset=i].primId.id2)
-                else:
-                    mi_mesh_idx = Int(intersections[unsafe_offset=i].primId.id2 >> 32)
-                    mi_base_vidx = Int(intersections[unsafe_offset=i].primId.id2 & 0xFFFFFFFF) * 3
-                var mi_m = scene.meshes[unsafe_offset=mi_mesh_idx]
-                var mi_vi0 = Int(mesh_vi(mi_m, mi_base_vidx))
-                var mi_vi1 = Int(mesh_vi(mi_m, mi_base_vidx + 1))
-                var mi_vi2 = Int(mesh_vi(mi_m, mi_base_vidx + 2))
-                var mi_p0 = mesh_point(mi_m, mi_vi0)
-                var mi_p1 = mesh_point(mi_m, mi_vi1)
-                var mi_p2 = mesh_point(mi_m, mi_vi2)
-                var mi_e1 = mi_p1 - mi_p0; var mi_e2 = mi_p2 - mi_p0
-                mi_n = Vec3f(mi_e1.y*mi_e2.z - mi_e1.z*mi_e2.y, mi_e1.z*mi_e2.x - mi_e1.x*mi_e2.z, mi_e1.x*mi_e2.y - mi_e1.y*mi_e2.x)
-            var mi_dot = paths[unsafe_offset=i].ray.direction.x * mi_n.x + paths[unsafe_offset=i].ray.direction.y * mi_n.y + paths[unsafe_offset=i].ray.direction.z * mi_n.z
-            if mi_dot > Float32(0):
-                paths[unsafe_offset=i].current_medium_idx = iface.outside_medium_idx
-            else:
-                paths[unsafe_offset=i].current_medium_idx = iface.inside_medium_idx
+            path_medium_after_shading(paths.unsafe_offset(i), intersections[unsafe_offset=i], scene)
 
     # Accumulate the spp samples per pixel and emit one result per pixel.
     idx = 0

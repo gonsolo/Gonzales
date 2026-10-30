@@ -13,7 +13,7 @@ from gonzales.spectrum import SampledWavelengths, SpectralSample, spec_refl, spe
 from gonzales.nanovdb import nvdb_sample_index, nvdb_majorant_at, nvdb_leaf_base, nvdb_leaf_value
 from gonzales.rgb2spec import CIE_Y_INTEGRAL
 from gonzales.rng import PCG32
-from .geometry import Point3f, Vec3f, RGB, Frame, INV_FOUR_PI, TWO_PI
+from .geometry import Point3f, Vec3f, RGB, Frame, INV_FOUR_PI, TWO_PI, dot
 
 @fieldwise_init
 struct Medium(TrivialRegisterPassable):
@@ -1027,6 +1027,11 @@ struct MediumInterface(TrivialRegisterPassable):
     """Binds inside/outside media to a surface. -1 = vacuum."""
     var inside_medium_idx:  Int32
     var outside_medium_idx: Int32
+
+    @always_inline
+    def toward(self, w: Vec3f, n: Vec3f) -> Int32:
+        """The medium on the side `w` points into (pbrt GetMedium); `n` is the geometric normal."""
+        return self.outside_medium_idx if dot(w, n) > Float32(0) else self.inside_medium_idx
 
 
 # ── One free-flight sampler for every integrator ───────────────────────────────

@@ -3,6 +3,7 @@
 
 from std.collections import Array
 from std.math import abs
+from .gpu_media import medium_after
 from .geometry import Point3f, Vec3f, vec3f, dot
 from .materials import MatKind, fr_dielectric
 from .primitives import Ray, Intersection, PrimId
@@ -99,22 +100,13 @@ def _visible_transmittance(
             if Tr.is_black():
                 return SpectralSample(Float32(0))
             # Update medium after crossing glass surface
-            if mat.medium_interface_idx >= Int32(0) and sd.mediumIfaceCount > Int64(0):
-                var iface = sd.mediumInterfaces[unsafe_offset=Int(mat.medium_interface_idx)]
-                var md = dir[0]*gn[0]+dir[1]*gn[1]+dir[2]*gn[2]
-                cur_med = iface.outside_medium_idx if md > Float32(0) else iface.inside_medium_idx
+            cur_med = medium_after(dir, cur_med, inter, mat, sd, hit.to_simd())
             org = hit + Vec3f(dir[0], dir[1], dir[2]) * Float32(0.0002)
             remaining = remaining - t_hit - Float32(0.0002)
 
         elif mat.type == MatKind.interface:
             # Pure medium boundary: update medium, continue
-            if mat.medium_interface_idx >= Int32(0) and sd.mediumIfaceCount > Int64(0):
-                var iface = sd.mediumInterfaces[unsafe_offset=Int(mat.medium_interface_idx)]
-                # An ANALYTIC SPHERE boundary has no mesh to read a normal
-                # from -- _geom_normal would index sd.meshes with a sphere's
-                var igna = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
-                var md = dir[0]*igna[0]+dir[1]*igna[1]+dir[2]*igna[2]
-                cur_med = iface.outside_medium_idx if md > Float32(0) else iface.inside_medium_idx
+            cur_med = medium_after(dir, cur_med, inter, mat, sd, hit.to_simd())
             org = hit + Vec3f(dir[0], dir[1], dir[2]) * Float32(0.0002)
             remaining = remaining - t_hit - Float32(0.0002)
 

@@ -6,6 +6,7 @@ from std.sys.info import size_of
 from max.gpu import block_dim
 from std.math import max, min, ceildiv
 from std.memory.alloc import unsafe_alloc
+from .gpu_media import default_emit_medium
 from .materials import LobeKind
 from .primitives import Intersection
 from .media import Medium, SSS_WALK_ROUNDS, Grid, NvdbGrid
@@ -48,13 +49,7 @@ def sppm_render_gpu(
           + " " + String(n_passes) + " passes x "
           + String(n_photons_per_pass) + " photons  r=" + String(initial_radius))
 
-    var default_emit_med = Int32(-1)
-    if Int(sd.mediumCount) > 0 and Int(sd.mediumIfaceCount) > 0:
-        for mi in range(Int(sd.mediumIfaceCount)):
-            var iface = sd.mediumInterfaces[unsafe_offset=mi]
-            if Int(iface.outside_medium_idx) >= 0:
-                default_emit_med = iface.outside_medium_idx
-                break
+    var default_emit_med = default_emit_medium(sd)
 
     # A BSSRDF visible point gathers out to the material's diffusion reach, often far past the SPPM radius.
     var eff_radius = initial_radius

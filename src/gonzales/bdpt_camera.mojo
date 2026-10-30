@@ -3,6 +3,7 @@
 
 from std.collections import Array
 from std.math import sqrt, cos, sin, log, exp, max, abs
+from .gpu_media import medium_after
 from .geometry import offset_eps, RGB, Point3f, Point2f, Vec3f, vec3f, point3f, dot, cross, PI, INV_FOUR_PI, INV_PI
 from .render_state import PDF_DELTA_FULL, PDF_DROP_DIRECT
 from .materials import Material, MatKind, LobeKind, resolve_mix
@@ -21,7 +22,7 @@ from .bvh import traverse_dispatch
 from .bvh import SceneView, test_spheres, _scene_bounding_sphere, _eval_infinite_light_and_pdf, sphere_light_cone_pdf, _sample_infinite_light_nee, light_path_pick_pdf
 from .sampling import power_heuristic, camera_ray_from_film_xy, FilmFilter, film_filter_offset, ThinLens
 from .rng import PCG32
-from .sppm import _geom_normal, _shading_normal_at, _dielectric_bounce, medium_after_crossing, _cosine_hemisphere_sample, area_light_side_pdf
+from .sppm import _geom_normal, _shading_normal_at, _dielectric_bounce, _cosine_hemisphere_sample, area_light_side_pdf
 from .shading import _get_tri_verts, apply_surface_maps_at_hit, area_light_hit_cos, curve_light_hit
 from .bxdf import BSDF, LobeSample, LobeTables
 from .spectrum import (
@@ -331,8 +332,7 @@ def _vcm_dielectric_cross[use_gpu: Bool, radiance: Bool](
     cur_ior = new_cur_ior
     prev_ior = new_prev_ior
     if has_med:
-        var new_idx = medium_after_crossing(ray_dir, inter, sd.meshes, mat, sd, hit)
-        if mat.medium_interface_idx >= Int32(0): med_idx = new_idx
+        med_idx = medium_after(new_dir, med_idx, inter, mat, sd, hit.to_simd())
     rd = vec3f(new_dir)
     ro = point3f(new_org)
     # Delta vertex, as in SmallVCM: dVCM restarts, dVC and dVM trade the arrival cosine for the departure one.
@@ -773,7 +773,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             # The camera arrives at the entry x_i, the exit x_o is sampled from
             # the diffusion profile (shared with the light subpath, see
             if mat.sss_boundary != Int8(0) and Int(st.cur_med_idx) < 0 and has_med:
-                var med_in = medium_after_crossing(ray_dir, inter, sd.meshes, mat, sd, hit)
+                var med_in = medium_after(ray_dir, Int32(-1), inter, mat, sd, hit.to_simd())
                 if med_in >= Int32(0) and Int(med_in) < Int(sd.mediumCount):
                     var ex = _vcm_bssrdf_hop(sd, inter, mat, hit, ray_dir, Int(med_in), mis_vc_weight_factor, pcg, st.wl,
                                              st.beta, st.dvcm, st.dvc, st.dvm)
@@ -820,8 +820,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
 
         elif mat.type == MatKind.interface:
             if has_med:
-                var new_idx = medium_after_crossing(ray_dir, inter, sd.meshes, mat, sd, hit)
-                if mat.medium_interface_idx >= Int32(0): st.cur_med_idx = new_idx
+                st.cur_med_idx = medium_after(ray_dir, st.cur_med_idx, inter, mat, sd, hit.to_simd())
             st.ro = hit + st.rd*Float32(0.0002)
             st.dvcm /= max(d_seg * d_seg, Float32(1e-20))
             st.mis_null_dist += t_hit + Float32(0.0002)   # see VCMCameraPathState.mis_null_dist
