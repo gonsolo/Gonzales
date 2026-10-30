@@ -93,23 +93,6 @@ comptime SPPM_DEFAULT_RADIUS_FRACTION = Float32(0.012)
 # at every scale. An explicit CLI or scene-file radius still wins outright.
 
 @always_inline
-def _sample_clamp(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin]) -> Float32:
-    """`maxcomponentvalue` expressed in the units the accumulation kernels see.
-
-    pbrt clamps each SAMPLE's sensor RGB (RGBFilm::AddSample); normalize_film
-    clamps the finished pixel, which almost never trips and so removed
-    essentially nothing. The kernels accumulate pre-iso radiance and
-    normalize_film multiplies by iso/100 afterwards, so the per-sample limit
-    has to be divided by that same scale to mean the same thing."""
-    var mcv = psc[unsafe_offset=0].film_max_comp
-    if mcv <= Float32(0):
-        return Float32(0)
-    var scale = psc[unsafe_offset=0].film_iso / Float32(100)
-    if scale <= Float32(0):
-        return Float32(0)
-    return mcv / scale
-
-
 def _resolve_sppm_params(
     psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin],
     ref sd: SceneView,
@@ -2149,7 +2132,7 @@ struct GpuGuidedRenderer(GuidedRenderer):
             UInt32(self.psc[unsafe_offset=0].rng_seed & UInt64(0xFFFFFFFF)),
             UInt32(self.psc[unsafe_offset=0].rng_seed >> UInt64(32)),
             Int64(self.n_pixels), max_depth if max_depth >= Int32(0) else self.psc[unsafe_offset=0].max_depth,
-            _sample_clamp(self.psc),
+            self.psc[unsafe_offset=0].sample_clamp(),
             self.use_vk, self.interop_scene, self.interop_rays_buf, self.interop_results_buf,
             self.mesh_material_idx_buf, self.mesh_al_idx_buf, self.n_meshes_vk,
             self.instance_base_mesh_buf,
@@ -2826,7 +2809,7 @@ def parse_and_render(
                     UInt32(psc[unsafe_offset=0].rng_seed & UInt64(0xFFFFFFFF)),
                     UInt32(psc[unsafe_offset=0].rng_seed >> UInt64(32)),
                     Int64(n_pixels), psc[unsafe_offset=0].max_depth,
-                    sample_clamp=_sample_clamp(psc),
+                    sample_clamp=psc[unsafe_offset=0].sample_clamp(),
                     use_restir=use_restir, frame_index=si,
                     use_vol_restir_reuse=use_vol_restir_reuse,
                 )
@@ -3413,7 +3396,7 @@ def render_interactive(
                     UInt32(0), UInt32(0),
                     UInt32(frame_count & 0xFFFFFFFF), UInt32(0),
                     Int64(n_pixels), psc[unsafe_offset=0].max_depth,
-                    _sample_clamp(psc),
+                    psc[unsafe_offset=0].sample_clamp(),
                     True, Pointer[UInt8, MutUntrackedOrigin].unsafe_dangling(), rtb.rays, rtb.results,
                     rtb.mesh_material_idx, rtb.mesh_al_idx, rtb.n_meshes, rtb.instance_base_mesh,
                 )

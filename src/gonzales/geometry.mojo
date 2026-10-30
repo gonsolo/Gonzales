@@ -337,13 +337,18 @@ struct RGB(TrivialRegisterPassable):
         X = 0.41 R, so clamping in sRGB cut saturated red ~2.4x harder than
         pbrt (a directly seen L = (200, 10, 5) lamp at limit 50: pbrt 110,
         gonzales 50). The matrix inverts rgb2spec's xyz_to_srgb."""
+        return self * self.sensor_clamp_scale(lim)
+
+    @always_inline
+    def sensor_clamp_scale(self, lim: Float32) -> Float32:
+        """The factor sensor_clamped multiplies by; 1 when nothing is clamped."""
         if lim <= Float32(0):
-            return self
+            return Float32(1)
         var x = Float32(0.412453) * self.r + Float32(0.357580) * self.g + Float32(0.180423) * self.b
         var y = Float32(0.212671) * self.r + Float32(0.715160) * self.g + Float32(0.072169) * self.b
         var z = Float32(0.019334) * self.r + Float32(0.119193) * self.g + Float32(0.950227) * self.b
         var m = max(x, max(y, z))
-        return self * (lim / m) if m > lim else self
+        return lim / m if m > lim else Float32(1)
 
     @always_inline
     def __iadd__(mut self, o: RGB):

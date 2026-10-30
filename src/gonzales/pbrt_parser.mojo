@@ -168,6 +168,13 @@ struct ParsedScene_Mojo:
     var measured_brdfs:  Pointer[MeasuredBRDF, MutUntrackedOrigin]
     var measured_count:  Int32
 
+    def sample_clamp(self) -> Float32:
+        """pbrt's per-sample `maxcomponentvalue` in pre-iso radiance (the kernels apply iso later); 0 = off."""
+        var scale = self.film_iso / Float32(100)
+        if self.film_max_comp <= Float32(0) or scale <= Float32(0):
+            return Float32(0)
+        return self.film_max_comp / scale
+
 # ── Matrix utilities ──────────────────────────────────────────────────────────
 
 def _psc_identity(m: Pointer[Float32, MutUntrackedOrigin]):

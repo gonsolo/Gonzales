@@ -66,6 +66,7 @@ struct VcmGpu(Movable):
     var fw: Int
     var fh: Int
     var n_light_paths: Int
+    var sample_clamp: Float32   # pbrt's per-sample maxcomponentvalue
     var lvc_cap: Int
     var default_emit_med: Int32
     var scene_radius: Float32
@@ -122,6 +123,7 @@ struct VcmGpu(Movable):
         self.fh = Int(psc[unsafe_offset=0].film_h)
         self.n_pix = self.fw * self.fh
         self.n_light_paths = max(n_photons_req, self.n_pix)
+        self.sample_clamp = psc[unsafe_offset=0].sample_clamp()
         self.lvc_cap = self.n_light_paths * _BDPT_MAX_VERTS
         self.default_emit_med = default_emit_medium(sd)
         var (_c, radius_bbox) = _scene_bounding_sphere(sd)
@@ -299,7 +301,8 @@ struct VcmGpu(Movable):
         ctx.enqueue_function[_bdpt_splat_light_paths_gpu](
             film, self.lvc.unsafe_ptr().unsafe_bitcast[BDPTVertex](), self.path_len.unsafe_ptr().unsafe_bitcast[Int32](),
             Int64(self.n_light_paths), self.inter_light.unsafe_ptr().unsafe_bitcast[Intersection](), _f32(self.w2c),
-            _f32(self.c2r), _f32(self.c2w), Int64(self.fw), Int64(self.fh), self.px_scale, p.mis_vm, p.filt, p.vsd, lvc_camis,
+            _f32(self.c2r), _f32(self.c2w), Int64(self.fw), Int64(self.fh), self.px_scale, p.mis_vm, p.filt, p.vsd,
+            self.sample_clamp * Float32(self.n_pix) / Float32(max(self.n_light_paths, 1)), lvc_camis,
             grid_dim=ceildiv(max(self.n_light_paths, 1), block_size), block_dim=block_size)
         if self.budget:
             # The budget is the merge work the fixed cap would have spent, sum Q min(n, cap).
@@ -344,7 +347,7 @@ struct VcmGpu(Movable):
             film, _f32(self.accum_merge), albedo, _f32(self.visit_accum), Int64(self.n_pix), Int64(self.fw),
             _f32(self.r2c), _f32(self.c2w), self.inter_cam.unsafe_ptr().unsafe_bitcast[Intersection](),
             lvc, path_len, lvc_camis, p.merge_next, p.merge_heads, p.merge_inv_cell, p.merge_r2, p.merge_norm, self.px_scale,
-            p.mis_vc, p.mis_vm, Float32(self.n_light_paths), p.filt, p.base_seed, Int64(si), p.vsd,
+            p.mis_vc, p.mis_vm, Float32(self.n_light_paths), p.filt, p.base_seed, Int64(si), p.vsd, self.sample_clamp,
             grid_dim=ceildiv(self.n_pix, block_size), block_dim=block_size)
         self._end_pass(p, film, verbose)
 
@@ -432,7 +435,7 @@ struct VcmGpu(Movable):
         ref spec = sd.spectral
         ctx.enqueue_function[_bdpt_camera_path_accumulate_gpu](
             cam_states, film, _f32(self.accum_merge), albedo, Int64(self.n_pix), spec.coeffs, Int64(spec.res),
-            spec.cie_x, spec.cie_y, spec.cie_z, spec.d65, grid_dim=grid_pix, block_dim=block_size)
+            spec.cie_x, spec.cie_y, spec.cie_z, spec.d65, self.sample_clamp, grid_dim=grid_pix, block_dim=block_size)
         self._end_pass(p, film, verbose)
 
 

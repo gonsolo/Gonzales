@@ -10,7 +10,7 @@ from .gpu_tuning import (
 )
 from std.math import sqrt, min
 from std.atomic import Atomic
-from .geometry import Point3f, Vec3f
+from .geometry import Point3f, Vec3f, RGB
 from .materials import MatKind
 from .primitives import Ray, Intersection
 from .vcm_camis import CamisCamRecord, CamisCamCarry, CamisLightRecord, camis_light_carry_off
@@ -33,6 +33,21 @@ from .bdpt_light import VCMLightPathState, _bdpt_light_path_init, _bdpt_light_pa
 def _finite3(a: Float32, b: Float32, c: Float32) -> Bool:
     """False for NaN/inf: one such sample would otherwise zero its pixel's whole sum at normalisation."""
     return (a - a) == Float32(0) and (b - b) == Float32(0) and (c - c) == Float32(0)
+
+
+@always_inline
+def _accum_camera_sample(accum: Pointer[Float32, MutUntrackedOrigin], accum_merge: Pointer[Float32, MutUntrackedOrigin],
+                         pix: Int, c: RGB, m: RGB, sample_clamp: Float32):
+    """One camera sample onto the film, connections and merges clamped together as pbrt clamps a sample."""
+    if not (_finite3(c.r, c.g, c.b) and _finite3(m.r, m.g, m.b)):
+        return
+    var k = (c + m).sensor_clamp_scale(sample_clamp)
+    accum[unsafe_offset=pix*3]   += c.r * k
+    accum[unsafe_offset=pix*3+1] += c.g * k
+    accum[unsafe_offset=pix*3+2] += c.b * k
+    accum_merge[unsafe_offset=pix*3]   += m.r * k
+    accum_merge[unsafe_offset=pix*3+1] += m.g * k
+    accum_merge[unsafe_offset=pix*3+2] += m.b * k
 
 
 @__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
@@ -88,6 +103,7 @@ def _bdpt_splat_light_paths_gpu(
     # reconstructed the same way as the camera half.
     film_filter: FilmFilter,
     sd: SceneView,
+    splat_clamp: Float32,   # pbrt's per-splat clamp, scaled by n_pix / n_light_paths
     # _VCM_CAMIS: see _bdpt_merge_from_cache's matching parameter.
     lvc_camis: Pointer[CamisLightRecord, MutUntrackedOrigin] = Pointer[CamisLightRecord, MutUntrackedOrigin].unsafe_dangling(),
 ):
@@ -117,7 +133,8 @@ def _bdpt_splat_light_paths_gpu(
                 spectral_coeffs, Int(spectral_res_dp), spectral_cie_x, spectral_cie_y,
                 spectral_cie_z, spectral_d65, r[3], lvc[unsafe_offset=base + local].wavelengths)
             if _finite3(cr, cg, cb):
-                _bdpt_splat_filtered[True](accum, r[1], r[2], cr, cg, cb,
+                var c = RGB(cr, cg, cb).sensor_clamped(splat_clamp)
+                _bdpt_splat_filtered[True](accum, r[1], r[2], c.r, c.g, c.b,
                                        Int(fw_dp), Int(fh_dp), film_filter)
 
 @__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
@@ -150,6 +167,7 @@ def _bdpt_camera_connect_gpu(
     seed: UInt64,
     pass_idx_dp: Int64,
     sd: SceneView,
+    sample_clamp: Float32,
 ):
     """One thread per pixel. Thin wrapper: build sd, seed this thread's own
     PCG32 (same seed formula vcm_render's CPU driver uses, keyed by pixel"""
@@ -188,17 +206,10 @@ def _bdpt_camera_connect_gpu(
     var (cr, cg, cb) = spectral_sample_to_rgb(
         spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y,
         spectral_cie_z, spectral_d65, contrib, pass_wl)
-    if _finite3(cr, cg, cb):
-        accum[unsafe_offset=pix*3]   += cr
-        accum[unsafe_offset=pix*3+1] += cg
-        accum[unsafe_offset=pix*3+2] += cb
     var (mr, mg, mb) = spectral_sample_to_rgb(
         spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y,
         spectral_cie_z, spectral_d65, contrib_merge, pass_wl)
-    if _finite3(mr, mg, mb):
-        accum_merge[unsafe_offset=pix*3]   += mr
-        accum_merge[unsafe_offset=pix*3+1] += mg
-        accum_merge[unsafe_offset=pix*3+2] += mb
+    _accum_camera_sample(accum, accum_merge, pix, RGB(cr, cg, cb), RGB(mr, mg, mb), sample_clamp)
     albedo_accum[unsafe_offset=pix*3]   += alb.r
     albedo_accum[unsafe_offset=pix*3+1] += alb.g
     albedo_accum[unsafe_offset=pix*3+2] += alb.b
@@ -427,6 +438,7 @@ def _bdpt_camera_path_accumulate_gpu(
     spectral_cie_y: Pointer[Float32, MutUntrackedOrigin],
     spectral_cie_z: Pointer[Float32, MutUntrackedOrigin],
     spectral_d65: Pointer[Float32, MutUntrackedOrigin],
+    sample_clamp: Float32,
 ):
     """Runs once per `si` sample, after the camera-path bounce loop has
     fully terminated for every lane -- writes each pixel's now-complete"""
@@ -439,17 +451,10 @@ def _bdpt_camera_path_accumulate_gpu(
     var (tr, tg, tb) = spectral_sample_to_rgb(
         spectral_coeffs, Int(spectral_res_dp), spectral_cie_x, spectral_cie_y,
         spectral_cie_z, spectral_d65, states[unsafe_offset=pix].total, wl_acc)
-    if _finite3(tr, tg, tb):
-        accum[unsafe_offset=pix*3]   += tr
-        accum[unsafe_offset=pix*3+1] += tg
-        accum[unsafe_offset=pix*3+2] += tb
     var (mr, mg, mb) = spectral_sample_to_rgb(
         spectral_coeffs, Int(spectral_res_dp), spectral_cie_x, spectral_cie_y,
         spectral_cie_z, spectral_d65, states[unsafe_offset=pix].total_merge, wl_acc)
-    if _finite3(mr, mg, mb):
-        accum_merge[unsafe_offset=pix*3]   += mr
-        accum_merge[unsafe_offset=pix*3+1] += mg
-        accum_merge[unsafe_offset=pix*3+2] += mb
+    _accum_camera_sample(accum, accum_merge, pix, RGB(tr, tg, tb), RGB(mr, mg, mb), sample_clamp)
     albedo_accum[unsafe_offset=pix*3]   += states[unsafe_offset=pix].first_alb.r
     albedo_accum[unsafe_offset=pix*3+1] += states[unsafe_offset=pix].first_alb.g
     albedo_accum[unsafe_offset=pix*3+2] += states[unsafe_offset=pix].first_alb.b
