@@ -25,7 +25,7 @@ from .vcm_mis import mis_policy_sole
 from .bxdf import ggx_lambda, dielectric_interface, bxdf_sample_dielectric, bxdf_sample_thin_dielectric, BxDFFlags, GeomContext, bxdf_sample_conductor, BSDF, LobeTables
 from .surface import sss_entry_tint, surface_hit
 from .shading import apply_surface_maps_at_hit, area_light_hit_cos
-from .geom_normal import _geom_normal
+from .geom_normal import _geom_normal, _shading_normal_at
 from .shadow_media import shadow_transmittance
 from .sampling import sample_ggx_vndf, camera_ray_from_film_xy, FilmFilter, film_filter_of, film_filter_offset
 from .transform import transform_normal, Mat4
@@ -215,70 +215,6 @@ struct SPPMPhoton(TrivialRegisterPassable):
 
 # ── Geometry helpers ──────────────────────────────────────────────────────────
 
-@always_inline
-def _shading_normal_at(
-    inter: Intersection,
-    meshes: Pointer[TriangleMesh, MutUntrackedOrigin],
-    instances: Pointer[Instance, MutUntrackedOrigin] = Pointer[Instance, MutUntrackedOrigin].unsafe_dangling(),
-    spheres: Pointer[Sphere, MutUntrackedOrigin] = Pointer[Sphere, MutUntrackedOrigin].unsafe_dangling(),
-    hit: Point3f = Point3f(Float32(0)),
-) -> Vec3f:
-    """Barycentrically-interpolated SMOOTH shading normal at a triangle hit,
-    falling back to the flat geometric normal when the mesh has no per-vertex
-    normals. Refraction through a finely-tessellated curved surface (e.g. the
-    wavy water sheet in water-caustic, whose PLY carries per-vertex normals)
-    MUST use the smooth normal — the flat per-triangle normal refracts each
-    triangle's whole patch of light in one direction, producing a blocky/
-    blotchy caustic and the wrong energy distribution. This is what pbrt (and
-    gonzales's own main path tracer via shading.mojo::_shading_normal) does;
-    SPPM previously used only _geom_normal here, which was the discrepancy.
-
-    `spheres`/`hit` give analytic spheres (primId.type == 4) their exact
-    outward normal. Without them this returned the +Y placeholder below for
-    every sphere hit, so a dielectric sphere refracted every ray identically
-    regardless of where it was struck -- silently destroying any caustic it
-    should cast."""
-    var mi: Int; var bv: Int
-    if inter.primId.type == 0:
-        mi = Int(inter.primId.id1); bv = Int(inter.primId.id2)
-    elif inter.primId.type == 1 or inter.primId.type == 2 or inter.primId.type == 3:
-        mi = Int(inter.primId.id2 >> 32); bv = Int(inter.primId.id2 & 0xFFFFFFFF) * 3
-    elif inter.primId.type == Int8(4) and _is_real_ptr[Sphere](spheres):
-        return sphere_outward_normal(hit, spheres[unsafe_offset=Int(inter.primId.id1)].center)
-    else:
-        return Vec3f(Float32(0), Float32(1), Float32(0))
-    var m = meshes[unsafe_offset=mi]
-    var v0 = Int(mesh_vi(m, bv))
-    var v1 = Int(mesh_vi(m, bv + 1))
-    var v2 = Int(mesh_vi(m, bv + 2))
-    var p0 = mesh_pos(m, v0)
-    var p1 = mesh_pos(m, v1)
-    var p2 = mesh_pos(m, v2)
-    var gn = cross(p1 - p0, p2 - p0)
-    if inter.primId.instanceIdx >= Int32(0):
-        gn = transform_normal(Mat4(instances[unsafe_offset=Int(inter.primId.instanceIdx)].world_to_obj()), gn)
-    var gl = dot(gn, gn)
-    if gl > Float32(0.0): gn = gn * (Float32(1.0) / sqrt(gl))
-    # No per-vertex normals → flat normal (sentinel addr <= 4, see GPU-nullable convention).
-    if not _is_real_ptr(m.normals):
-        return gn
-    var w0 = Float32(1.0) - inter.u - inter.v
-    var n0 = mesh_normal(m, v0)
-    var n1 = mesh_normal(m, v1)
-    var n2 = mesh_normal(m, v2)
-    var sn = n0 * w0 + n1 * inter.u + n2 * inter.v
-    if inter.primId.instanceIdx >= Int32(0):
-        sn = transform_normal(Mat4(instances[unsafe_offset=Int(inter.primId.instanceIdx)].world_to_obj()), sn)
-    var sl = dot(sn, sn)
-    if sl <= Float32(1e-12):
-        return gn
-    # pbrt's convention, NOT the winding's: with per-vertex normals the
-    # interpolated N IS the outward direction, and pbrt flips the GEOMETRIC
-    # normal to agree with it (Triangle::InteractionFromIntersection,
-    # FaceForward(n, ns)). Only glass reads this, and glass decides inside
-    # vs outside from it: flipping N toward an inward winding instead
-    # rendered a rough-glass sphere 1.28x pbrt, lte-orb's shell up to 2.5x.
-    return sn * (Float32(1.0) / sqrt(sl))
 
 @always_inline
 def _hash_cell(ix: Int, iy: Int, iz: Int) -> Int:

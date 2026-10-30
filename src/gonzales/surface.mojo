@@ -5,9 +5,8 @@ from .geometry import offset_eps, face_toward, RGB, Point3f, Vec3f, vec3f, dot
 from .materials import Material, MatKind
 from .primitives import Intersection
 from .bvh import SceneView, curve_hit_frame, curve_offset_eps, curve_tangent, fibre_cos
-from .geom_normal import _geom_normal
+from .geom_normal import _geom_normal, _shading_normal_at
 from .shading import _tex_lookup, _get_tri_verts, apply_surface_maps_at_hit, uv_footprint_at_hit
-from .sppm import _shading_normal_at
 from .bxdf import BSDF
 from .spectrum import SampledWavelengths, SpectralSample, rgb_bands_to_spectral_sample
 

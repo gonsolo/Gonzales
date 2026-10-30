@@ -17,10 +17,10 @@ from .rng import PCG32
 from .spectrum import SpectralSample, spec_illum
 from .bdpt_vertex import _BDPT_MAX_VERTS, BDPTVertex
 from .bdpt_nee import _visible_transmittance
-from .bdpt_eval import _eval_vertex_spectral, _bdpt_vertex_pdfs, _bdpt_vertex_mis_scoped, _bdpt_connect_pair_weighted
+from .bdpt_eval import _vcm_cos_at, _eval_vertex_spectral, _bdpt_vertex_pdfs, _bdpt_vertex_mis_scoped, _bdpt_connect_pair_weighted
 from .vcm_grid import (
     _vcm_too_long, _vcm_keep, _VCM_CAMIS, _CAMIS_CAM_RECS, _CAMIS_FORCE_C1, _vcm_eta_scale,
-    _vcm_eta_at, _vcm_cos_at, _vcm_on_fibre,
+    _vcm_eta_at, _vcm_on_fibre,
 )
 from .vcm_merge_weight import _camis_gather_light
 

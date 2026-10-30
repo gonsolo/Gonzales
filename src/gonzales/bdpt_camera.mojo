@@ -23,7 +23,8 @@ from .bvh import traverse_dispatch
 from .bvh import SceneView, test_spheres, _scene_bounding_sphere, _eval_infinite_light_and_pdf, sphere_light_cone_pdf, _sample_infinite_light_nee, light_path_pick_pdf
 from .sampling import power_heuristic, camera_ray_from_film_xy, FilmFilter, film_filter_offset, ThinLens
 from .rng import PCG32
-from .sppm import _geom_normal, _shading_normal_at, _dielectric_bounce, _cosine_hemisphere_sample, area_light_side_pdf
+from .geom_normal import _geom_normal, _shading_normal_at
+from .sppm import _dielectric_bounce, _cosine_hemisphere_sample, area_light_side_pdf
 from .shading import _get_tri_verts, apply_surface_maps_at_hit, area_light_hit_cos, curve_light_hit
 from .bxdf import BSDF, LobeSample, LobeTables
 from .spectrum import (

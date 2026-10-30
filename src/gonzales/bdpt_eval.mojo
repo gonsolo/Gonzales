@@ -12,13 +12,12 @@ from .shading import (
     _shade_context, _mnee_first_probe, _mnee_chain, _mnee_chain_t_eta, _mnee_reproduce, _emitter_face_normal,
 )
 from .vcm_mis import MisPolicy
-from .bvh import SceneView, _scene_bounding_sphere, LightSample, _sample_infinite_light_nee, light_path_pick, light_path_pick_pdf
+from .bvh import curve_tangent, fibre_cos, SceneView, _scene_bounding_sphere, LightSample, _sample_infinite_light_nee, light_path_pick, light_path_pick_pdf
 from .rng import PCG32
 from .bxdf import BSDF, LobeEval, LobeTables
 from .spectrum import SampledWavelengths, SpectralSample, spec_illum
 from .bdpt_vertex import BDPTVertex
 from .bdpt_nee import _bdpt_simple_light_count, _bdpt_sample_simple_light, _bdpt_nee_contribute
-from .vcm_grid import _vcm_cos_at
 
 @always_inline
 def _vcm_sphere_slot(ref sd: SceneView, si: Int) -> Int:
@@ -347,3 +346,13 @@ def _vcm_mnee_light_dvcm(
     var den = side * cos0 * rp[3] * t_ch
     return PI * eta_ch * eta_ch / den if den > Float32(0) else Float32(0)
 
+
+@always_inline
+def _vcm_cos_at(ref sd: SceneView, v: BDPTVertex, w: Vec3f) -> Float32:
+    """|cos| between direction `w` and this vertex's own geometric normal --
+    1.0 at a volume vertex, which has none (Scenes/vcm_volume_mis_derivation.py's"""
+    if v.is_surface == Int32(0):
+        return Float32(1.0)
+    if v.mat_kind == LobeKind.hair:   # the fibre cosine, as the lobe's own cos_used and the arrival use
+        return fibre_cos(curve_tangent(sd.curves, Int(v.hair_curve_idx), v.hair_v), w)
+    return abs(dot(w, v.normal.to_simd()))
