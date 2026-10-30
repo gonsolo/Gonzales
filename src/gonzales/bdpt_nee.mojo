@@ -84,10 +84,7 @@ def _visible_transmittance(
         if Int(cur_med) >= 0:
             Tr *= segment_transmittance(sd.mediums[unsafe_offset=Int(cur_med)], org.to_simd(), dir, t_hit, sd.grids, sd.nvdbGrids, sd.spectral, wl, pcg)
 
-        if mat.type == MatKind.thin_dielectric or (
-                mat.type == MatKind.dielectric and mat.sss_boundary != Int8(0)):
-            # ... and a SUBSURFACE boundary, which is a dielectric too but
-            # whose transport the BSSRDF models separately -- blocking it
+        if mat.type == MatKind.thin_dielectric:
             var gn = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
             var facing = dot(dir, gn) < Float32(0)
             var n_for_cos = gn if facing else gn*Float32(-1)
