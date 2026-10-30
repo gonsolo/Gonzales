@@ -20,7 +20,7 @@ from .sppm import _HSIZE
 from .gpu_scene import GpuSceneHandle
 from .progress import Progress
 from .outputs import finish_render, _sidecar_name, _write_channels
-from .bdpt_vertex import _BDPT_MAX_DEPTH, _BDPT_MAX_VERTS, BDPTVertex
+from .bdpt_vertex import _vcm_walk_limit, _BDPT_MAX_VERTS, BDPTVertex
 from .bdpt_camera import VCMCameraPathState
 from .bdpt_light import VCMLightPathState
 from .spectrum import SpectralSample
@@ -370,7 +370,7 @@ struct VcmGpu(Movable):
         ctx.enqueue_function[_bdpt_light_path_init_gpu](
             light_states, lvc, path_len, p.mis_vc, Int64(self.n_light_paths), self.default_emit_med, p.pass_seed,
             Int64(si), p.gsd, grid_dim=grid_light, block_dim=block_size)
-        for _ in range(_BDPT_MAX_DEPTH):
+        for _ in range(_vcm_walk_limit(psc[unsafe_offset=0].max_depth)):
             if rt.active:
                 rt.trace[False](ctx, self.light_states, self.inter_light, self.n_light_paths, sd)
             else:
@@ -404,7 +404,7 @@ struct VcmGpu(Movable):
         var shadow_valid = self.shadow_valid.unsafe_ptr().unsafe_bitcast[Int8]()
         var shadow_seg_med = self.shadow_seg_med.unsafe_ptr().unsafe_bitcast[Int32]()
         var shadow_cap = self.n_pix * _BDPT_MAX_VERTS
-        for _ in range(_BDPT_MAX_DEPTH):
+        for _ in range(_vcm_walk_limit(psc[unsafe_offset=0].max_depth)):
             if rt.active:
                 rt.trace[True](ctx, self.cam_states, self.inter_cam, self.n_pix, sd)
             else:

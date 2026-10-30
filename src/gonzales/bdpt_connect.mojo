@@ -19,7 +19,7 @@ from .bdpt_vertex import _BDPT_MAX_VERTS, BDPTVertex
 from .bdpt_nee import _visible_transmittance
 from .bdpt_eval import _eval_vertex_spectral, _bdpt_vertex_pdfs, _bdpt_vertex_mis_scoped, _bdpt_connect_pair_weighted
 from .vcm_grid import (
-    _vcm_depth, _vcm_light_count, _vcm_keep, _VCM_CAMIS, _CAMIS_CAM_RECS, _CAMIS_FORCE_C1, _vcm_eta_scale,
+    _vcm_too_long, _vcm_keep, _VCM_CAMIS, _CAMIS_CAM_RECS, _CAMIS_FORCE_C1, _vcm_eta_scale,
     _vcm_eta_at, _vcm_cos_at, _vcm_on_fibre,
 )
 from .vcm_merge_weight import _camis_gather_light
@@ -253,9 +253,8 @@ def _bdpt_connect_to_cache(
     # Sum every MIS-WEIGHTED pair, but take at most ONE UNWEIGHTED pair.
     # Volume vertices have no dVCM/dVC (no surface pdf), so any (s,t) split
     var took_unweighted = False
-    var d = _vcm_depth(sd)
     for local in range(path_len):
-        if _vcm_light_count(lvc, lp_idx, local) + cam_count > d:
+        if _vcm_too_long(sd, lvc, lp_idx, local, cam_count):
             break   # see _vcm_depth: a path longer than d has no strategy at all
         var lv = lvc[unsafe_offset=lp_idx * _BDPT_MAX_VERTS + local]
         if not _bdpt_connect_pair_weighted(cv, lv):
@@ -292,7 +291,7 @@ def _bdpt_connect_to_cache_deferred(
     # _bdpt_connect_to_cache -- see its comment for the derivation and the
     var took_unweighted = False
     for local in range(_BDPT_MAX_VERTS):
-        if local < path_len and _vcm_light_count(lvc, lp_idx, local) + cam_count > _vcm_depth(sd):
+        if local < path_len and _vcm_too_long(sd, lvc, lp_idx, local, cam_count):
             break   # see _vcm_depth
         if local >= path_len:
             shadow_valid[unsafe_offset=base + local] = Int8(0)

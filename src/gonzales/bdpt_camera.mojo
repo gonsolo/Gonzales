@@ -29,13 +29,13 @@ from .spectrum import (
     SampledWavelengths, SpectralSample, spec_refl, spec_refl_unbounded, spec_illum,
     rgb_bands_to_spectral_sample,
 )
-from .bdpt_vertex import _VOL_PHASE_HIT, _BDPT_MAX_DEPTH, _BDPT_MAX_VERTS, BDPTVertex, _null_vertex
+from .bdpt_vertex import _VOL_PHASE_HIT, _vcm_walk_limit, _BDPT_MAX_VERTS, BDPTVertex, _null_vertex
 from .bdpt_nee import _bdpt_simple_light_count, _bdpt_sample_simple_light, _bdpt_nee_contribute
 from .bdpt_eval import (
     _vcm_sphere_slot, _vcm_infinite_slot, _vcm_nee_surface, _vertex_ctx, _bdpt_vertex_mis_scoped, _vcm_mnee,
     _vcm_mnee_hit_term,
 )
-from .vcm_grid import _vcm_depth, _vcm_keep, _VCM_CAMIS, _CAMIS_CAM_RECS, _CAMIS_FORCE_C1, _vcm_eta_scale, _vcm_eta_at, _vcm_fibre_scale
+from .vcm_grid import _vcm_depth, _VCM_MAX_STORED, _vcm_keep, _VCM_CAMIS, _CAMIS_CAM_RECS, _CAMIS_FORCE_C1, _vcm_eta_scale, _vcm_eta_at, _vcm_fibre_scale
 from .bdpt_connect import _bdpt_connect_to_cache, _bdpt_connect_to_cache_deferred
 from .vcm_merge import _bdpt_merge_from_cache
 from .bdpt_bssrdf import _bdpt_sample_bssrdf_exit, BssrdfExitSample
@@ -88,7 +88,7 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
     var camis_recs = Array[CamisCamRecord, _CAMIS_CAM_RECS](
         fill=CamisCamRecord(Float32(0), Float32(0), Float32(0), Float32(0), Float32(0)))
 
-    for _ in range(_BDPT_MAX_DEPTH):
+    for _ in range(_vcm_walk_limit(sd.vcmMaxDepth)):
         # The same intersect step _bdpt_camera_path_intersect_gpu performs;
         # kept at the call site because it is the Vulkan RT swap point.
         var ray = Ray(st.ro, st.rd)
@@ -714,7 +714,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 st.n_delta += 1
             if v.is_delta == Int32(0):
                 if st.n_verts == 0: st.first_alb = eff_alb
-                if st.n_verts + st.n_delta >= _vcm_depth(sd):
+                if st.n_verts + st.n_delta >= _vcm_depth(sd) or st.n_verts >= _VCM_MAX_STORED:
                     return False   # a vertex past d starts no strategy (see _vcm_depth)
                 st.n_verts += 1
                 comptime if _VCM_CAMIS:
@@ -787,7 +787,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                     var n_o = ex.n_o
                     var v = _vcm_bssrdf_vertex(ex, eta_e, st.beta, st.cur_med_idx, st.wl, st.dvcm, st.dvc, st.dvm)
                     if st.n_verts == 0: st.first_alb = mat.sss_mean_refl
-                    if st.n_verts + st.n_delta >= _vcm_depth(sd):
+                    if st.n_verts + st.n_delta >= _vcm_depth(sd) or st.n_verts >= _VCM_MAX_STORED:
                         return False   # a vertex past d starts no strategy (see _vcm_depth)
                     st.n_verts += 1
                     # Merging queries the GLOBAL photon grid and does not use this

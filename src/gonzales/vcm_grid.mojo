@@ -17,11 +17,18 @@ from .bdpt_eval import _bdpt_vertex_mis_scoped
 
 @always_inline
 def _vcm_depth(ref sd: SceneView) -> Int:
-    """VCM's full-path length limit d: min(scene maxdepth, _BDPT_MAX_VERTS - 1)."""
+    """VCM's full-path length limit: the scene's maxdepth, glass bounces included."""
     var d = Int(sd.vcmMaxDepth)
-    if d <= 0 or d > _BDPT_MAX_VERTS - 1:
-        d = _BDPT_MAX_VERTS - 1
-    return d
+    return d if d > 0 else _VCM_MAX_STORED
+
+comptime _VCM_MAX_STORED = _BDPT_MAX_VERTS - 1   # non-delta vertices of a full path, or a strategy would not fit the cache
+
+
+@always_inline
+def _vcm_too_long(ref sd: SceneView, lvc: Pointer[BDPTVertex, MutUntrackedOrigin], lp_idx: Int, local: Int, cam_count: Int) -> Bool:
+    """Light slot `local` plus `cam_count` camera vertices is past a limit: such a path has no strategy at all."""
+    var n = _vcm_light_count(lvc, lp_idx, local)
+    return n + cam_count > _vcm_depth(sd) or n - Int(lvc[unsafe_offset=lp_idx * _BDPT_MAX_VERTS + local].n_delta) + cam_count > _VCM_MAX_STORED
 
 
 @always_inline

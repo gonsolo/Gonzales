@@ -13,6 +13,11 @@ comptime _BDPT_MAX_DEPTH = 40  # max surface/medium interactions per subpath (in
                                 # non-stored delta/dielectric bounces — glass-of-water's
                                 # nested water/ice/glass interfaces need ~30 crossings
                                 # just to reach a real (diffuse) vertex)
+@always_inline
+def _vcm_walk_limit(max_depth: Int32) -> Int:
+    """Bounces a subpath may walk: glass bounces count, so a scene asking for more must get more."""
+    return max(_BDPT_MAX_DEPTH, Int(max_depth))
+
 comptime _BDPT_MAX_VERTS = 10  # max non-delta vertices per subpath. NOT light-only,
                                 # despite the name: it caps how many vertices a light
                                 # subpath stores in the shared cache (_bdpt_light_path_bounce)

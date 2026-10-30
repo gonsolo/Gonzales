@@ -17,9 +17,9 @@ from .bvh import SceneView, test_spheres, _scene_bounding_sphere, _sample_disk_p
 from .rng import PCG32
 from .sppm import _cosine_hemisphere_sample, sample_area_light_point, sample_sphere_light_emission, area_light_emit_normal, area_light_side_pdf
 from .spectrum import SampledWavelengths, SpectralSample, spec_refl, spec_illum
-from .bdpt_vertex import _BDPT_MAX_DEPTH, _BDPT_MAX_VERTS, BDPTVertex, _null_vertex
+from .bdpt_vertex import _vcm_walk_limit, _BDPT_MAX_VERTS, BDPTVertex, _null_vertex
 from .bdpt_eval import _bdpt_vertex_mis_scoped, _vcm_mnee_light_dvcm
-from .vcm_grid import _vcm_depth, _vcm_keep, _VCM_CAMIS, _vcm_eta_scale, _vcm_eta_at, _vcm_fibre_scale
+from .vcm_grid import _vcm_depth, _VCM_MAX_STORED, _vcm_keep, _VCM_CAMIS, _vcm_eta_scale, _vcm_eta_at, _vcm_fibre_scale
 from .bdpt_connect import _bdpt_store_lvc_vertex
 from .bdpt_camera import (
     _vcm_scatter, _vcm_lobe_vertex, _vcm_bssrdf_hop, _vcm_bssrdf_vertex,
@@ -304,7 +304,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
         var next_count = st.n_verts
         if st.n_verts == 0 or lvc[unsafe_offset=lp_idx * _BDPT_MAX_VERTS].is_light != Int32(1):
             next_count = st.n_verts + 1
-        if next_count + st.n_delta > _vcm_depth(sd):
+        if next_count + st.n_delta > _vcm_depth(sd) or next_count > _VCM_MAX_STORED:
             return False
         if inter.hit == Int8(0):
             return False   # nothing hit -- path escapes the scene
@@ -549,7 +549,7 @@ def _bdpt_trace_light_path[use_gpu: Bool](
     else:
         camis_recs = lvc_camis   # never dereferenced
 
-    for _ in range(_BDPT_MAX_DEPTH):
+    for _ in range(_vcm_walk_limit(sd.vcmMaxDepth)):
         # The same intersect step _bdpt_light_path_intersect_gpu performs --
         # kept here rather than inside the bounce because this one step is
         # the eventual Vulkan RT swap point on the wavefront side.

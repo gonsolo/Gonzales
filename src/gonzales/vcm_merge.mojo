@@ -16,7 +16,7 @@ from .spectrum import SpectralSample
 from .bdpt_vertex import _BDPT_MAX_VERTS, BDPTVertex
 from .bdpt_eval import _lobe_eval, _bdpt_vertex_mis_scoped
 from .vcm_grid import (
-    _vcm_depth, _vcm_light_count, _vcm_keep, _vcm_cap, _MERGE_COVERAGE, _VCM_FINE_LEVELS, _VCM_MN_STRIDE,
+    _vcm_too_long, _vcm_keep, _vcm_cap, _MERGE_COVERAGE, _VCM_FINE_LEVELS, _VCM_MN_STRIDE,
     _VCM_VISIT_INSTRUMENT, _CAMIS_CAM_RECS, _vcm_budget_active, _vcm_merge_radius_at,
     _VCM_RADIUS_VOLUME_SCALE, _vcm_mergeable, _vcm_on_fibre,
 )
@@ -61,7 +61,6 @@ def _bdpt_merge_from_cache(
     if not _bdpt_vertex_mis_scoped(cv) or not _vcm_mergeable(sd, cv):
         return SpectralSample(Float32(0))
     var total = SpectralSample(Float32(0))
-    var d_len = _vcm_depth(sd)
     # This query's own radius (see _vcm_merge_radius_at); r2/norm arrive as the
     # pass's global values and the grid cells are sized to that radius.
     var r2 = r2_pass
@@ -112,7 +111,7 @@ def _bdpt_merge_from_cache(
                 while k != -1:
                     # The merged path shares cv and the photon, so its interior
                     # length is light count + camera count - 1 (see _vcm_depth).
-                    if _vcm_light_count(lvc, k // _BDPT_MAX_VERTS, k % _BDPT_MAX_VERTS) + cam_count - 1 > d_len:
+                    if _vcm_too_long(sd, lvc, k // _BDPT_MAX_VERTS, k % _BDPT_MAX_VERTS, cam_count - 1):
                         k = Int(merge_next[unsafe_offset=k * _VCM_MN_STRIDE + lvl])
                         continue
                     var lv = lvc[unsafe_offset=k]
