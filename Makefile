@@ -83,7 +83,7 @@ PFM = $(IMAGE:.exr=.pfm)
 
 OPTIONS = $(SINGLERAY) $(SYNC) $(VERBOSE) $(QUICK) $(PARSE) $(WRITE_GONZALES) $(USE_GONZALES)
 
-.PHONY: all c ca clean clean_all e edit es editScene em editMakefile lldb p perf tags t test smoke smoketest \
+.PHONY: unittest-intel-src all c ca clean clean_all e edit es editScene em editMakefile lldb p perf tags t test smoke smoketest \
 	test_debug test_release v view wc book book-html book-watch ut unittest \
 	caustics causticstest sms_mitsuba_ref release-amd unittest-amd intel-hello hydra gzreplay
 
@@ -373,13 +373,32 @@ GPU_ONLY_TEST_SRCS := Tests/unit/test_gpu.mojo \
                       Tests/unit/test_vulkaninterop_rt.mojo \
                       Tests/unit/test_rtcore.mojo \
                       Tests/unit/test_xert.mojo
-ifeq ($(HAVE_CUDA),)
+# Intel Arc (xe driver, no NVIDIA driver): the released Mojo has no Intel target, so tests build with
+# the source-built HAL Mojo, from a copy of src/ that imports _nvidia_cuda from its new place.
+HAL_ROOT ?= /mnt/storage/gonzales_cache/mojo-src-hal
+# Patched IGC until intel/intel-graphics-compiler#463 reaches the installed package
+IGC_FIX_LIB ?= $(HOME)/src/igc-ws/build/IGC/Release
+ifeq ($(wildcard /proc/driver/nvidia),)
+ifneq ($(shell grep -ls '^DRIVER=xe$$' /sys/class/drm/card*/device/uevent 2>/dev/null),)
+INTEL := 1
+endif
+endif
+ifdef INTEL
+UNIT_TEST_SRCS := $(filter-out Tests/unit/test_vulkaninterop.mojo Tests/unit/test_vulkaninterop_rt.mojo \
+                               Tests/unit/test_rtcore.mojo,$(UNIT_TEST_SRCS))
+UNIT_TEST_DEPS := unittest-intel-src
+UNIT_TEST_RUN = . $(HAL_ROOT)/env.sh && \
+    MODULAR_DRIVER_PLUGINS="level_zero@$(HAL_ROOT)/lib/plugins/LevelZeroPlugin.so;cpu@$(HAL_ROOT)/lib/plugins/CPUPlugin.so" \
+    LD_LIBRARY_PATH=$(IGC_FIX_LIB):$$LD_LIBRARY_PATH \
+    uv run mojo run --target-accelerator intel:bmg -I $(BUILD_DIR)/intel-src
+else ifeq ($(HAVE_CUDA),)
 ifdef AMD
 UNIT_TEST_SRCS := $(filter-out $(filter-out Tests/unit/test_gpu.mojo,$(GPU_ONLY_TEST_SRCS)),$(UNIT_TEST_SRCS))
 else
 UNIT_TEST_SRCS := $(filter-out $(GPU_ONLY_TEST_SRCS),$(UNIT_TEST_SRCS))
 endif
 endif
+UNIT_TEST_RUN ?= uv run mojo run -I src
 # Integration smoke test: render one tiny image per integrator/backend and
 # assert each is openable, finite and non-black. Unit tests cover pure
 # functions and cannot notice that a whole MODE has stopped working --
@@ -494,6 +513,10 @@ smoketest: release
 	exit $$rc
 
 ut: unittest
+# The HAL Mojo has _nvidia_cuda under _legacy; rewrite a copy so the working tree stays untouched
+unittest-intel-src:
+	@mkdir -p $(BUILD_DIR)/intel-src && rsync -a --delete src/ $(BUILD_DIR)/intel-src/
+	@grep -rl 'max.gpu.host._nvidia_cuda' $(BUILD_DIR)/intel-src | xargs -r sed -i 's/max\.gpu\.host\._nvidia_cuda/max.gpu.host._legacy._nvidia_cuda/'
 # On the AMD card: test_gpu stays in; the CUDA interop and RT-core tests only have stubs there
 unittest-amd:
 	$(MAKE) unittest AMD=1 BUILD_DIR=build-amd CUDA_HOME=/nonexistent
@@ -511,13 +534,13 @@ unittest-amd:
 # stays readable/deterministic despite running out of order. Fails if any
 # file failed (checked after all finish, not fail-fast, so a run tells you
 # everything that broke in one pass).
-unittest: $(OIIO_BRIDGE_LIB) $(VIEWER_LIB) $(VULKANRT_LIB) $(VULKANINTEROP_LIB) $(RTCORE_LIB) $(XERT_LIB) $(OPTIXCURVES_LIB)
+unittest: $(OIIO_BRIDGE_LIB) $(VIEWER_LIB) $(VULKANRT_LIB) $(VULKANINTEROP_LIB) $(RTCORE_LIB) $(XERT_LIB) $(OPTIXCURVES_LIB) $(UNIT_TEST_DEPS)
 	@rm -rf build/unittest-logs && mkdir -p build/unittest-logs
 	@i=0; \
 	for f in $(UNIT_TEST_SRCS); do \
 		i=$$((i+1)); \
 		echo "$$f" >> build/unittest-logs/order.txt; \
-		( uv run mojo run -I src $(subst -Xlinker -lm,,$(MOJO_LINK_FLAGS)) "$$f" > build/unittest-logs/$$i.log 2>&1; \
+		( $(UNIT_TEST_RUN) $(subst -Xlinker -lm,,$(MOJO_LINK_FLAGS)) "$$f" > build/unittest-logs/$$i.log 2>&1; \
 		  echo $$? > build/unittest-logs/$$i.exit ) & \
 		while [ $$(jobs -pr | wc -l) -ge $$(nproc) ]; do sleep 0.2; done; \
 	done; \
