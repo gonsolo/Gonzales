@@ -1229,6 +1229,7 @@ def sample_free_flight(
     # global majorant (no per-node structure to walk).
     var t = Float32(0.0)
     var collided = False
+    var tr = Float32(1)
     var iters = 0
     var seg_end = Float32(-1.0)       # < t forces a majorant query on entry
     var sigma_maj_seg = Float32(0.0)
@@ -1288,8 +1289,9 @@ def sample_free_flight(
         if u2 < sigma_t_real / sigma_maj_seg:
             collided = True
             break
+        tr *= max(Float32(1) - sigma_t_real / sigma_maj_seg, Float32(0))   # ratio tracking along the same candidates
     if not collided:
-        return FreeFlight(False, t, Float32(0), Float32(1.0), RGB(Float32(0)), RGB(Float32(1)), emission)
+        return FreeFlight(False, t, Float32(0), tr, RGB(Float32(0)), RGB(Float32(1)), emission)
 
     # `sig_t` is the extinction ACTUALLY in force at the collision point
     # (density-scaled), so a caller's analytic `sig_t * exp(-sig_t * t_free)`
@@ -1300,10 +1302,7 @@ def sample_free_flight(
     var alb = RGB(med.sigma_s.r * inv_sig_t,
                   med.sigma_s.g / max(sigma_t.g, Float32(1e-7)) if sigma_t.g > Float32(0.0) else med.sigma_s.r * inv_sig_t,
                   med.sigma_s.b / max(sigma_t.b, Float32(1e-7)) if sigma_t.b > Float32(0.0) else med.sigma_s.r * inv_sig_t)
-    # Delta tracking's collision density is not analytic; it accepts on the
-    # red channel alone and carries no chromatic ratio (weight 1), so the
-    # honest pdf to record is that lane's own exponential -- which is what
-    # bdpt_*.mojo reconstructed here before, so heterogeneous media are
-    # bit-for-bit unchanged by the MIS work.
+    # Delta tracking's collision density is not analytic and carries no chromatic
+    # ratio (weight 1): the red lane's sigma_t here times the tracked transmittance.
     var het_sig = density * sigma_t.r
-    return FreeFlight(True, t, het_sig, het_sig * exp(-het_sig * t), alb, RGB(Float32(1)), emission)
+    return FreeFlight(True, t, het_sig, het_sig * tr, alb, RGB(Float32(1)), emission)

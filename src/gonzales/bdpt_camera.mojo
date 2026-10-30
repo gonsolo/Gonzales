@@ -157,7 +157,7 @@ struct VCMCameraPathState(TrivialRegisterPassable):
     # _bdpt_camera_path_bounce's `cone_len`.
     var cone_len: Float32
     var n_delta: Int
-    var prev_was_volume: Bool   # the previous vertex was a volume scatter (see the light subpath's)
+    var prev_sig_t: Float32   # sigma_t at the previous vertex, 1 on a surface: dVC's free-flight ratio
     var mnee: VCMMneeTrack
 
 def _bdpt_camera_path_init[use_gpu: Bool](
@@ -215,7 +215,7 @@ def _bdpt_camera_path_init[use_gpu: Bool](
         dvcm=dvcm_carry, dvc=dvc_carry, dvm=dvm_carry, n_verts=n_verts, n_vol=0, cur_med_idx=cur_med_idx,
         last_bsdf_pdf=last_bsdf_pdf, active=Int8(1), pcg_state=pcg.state, pcg_inc=pcg.inc, wl=wavelengths,
         mis_null_dist=Float32(0.0), current_dielectric_ior=Float32(1.0), previous_dielectric_ior=Float32(1.0),   # vacuum
-        cone_len=Float32(0.0), n_delta=0, prev_was_volume=False, mnee=vcm_mnee_track_none(),
+        cone_len=Float32(0.0), n_delta=0, prev_sig_t=Float32(1), mnee=vcm_mnee_track_none(),
     )
 
 def _vcm_scatter(
@@ -510,8 +510,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 # the SURFACE the ray was cast toward); the real arrival
                 st.dvcm *= ((ff.t_free + st.mis_null_dist) * (ff.t_free + st.mis_null_dist)) / max(d_seg * d_seg, Float32(1e-20))
                 st.dvcm *= Float32(1.0) / max(ff.pdf, Float32(1e-30))
-                if not st.prev_was_volume:
-                    st.dvc *= Float32(1.0) / max(ff.sig_t, Float32(1e-20))
+                st.dvc *= st.prev_sig_t / max(ff.sig_t, Float32(1e-20))
                 var v = _null_vertex()
                 v.pos = sp
                 # `beta`, NOT beta*albedo -- a vertex's beta is the throughput
@@ -536,7 +535,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                     -ray_dir, med.g, pcg.next_float(), pcg.next_float(),
                     st.dvcm, st.dvc, st.dvm, mis_vc_weight_factor, eta_v)
                 st.dvcm = dvcm_v; st.dvc = dvc_v; st.dvm = dvm_v
-                st.prev_was_volume = True
+                st.prev_sig_t = ff.sig_t
                 st.mnee.pdf0 = Float32(0)
                 if path_len > 0:
                     # BUG FIX (found investigating volumetric-caustic's
@@ -565,9 +564,8 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 st.dvcm *= exp(ff_exp)
                 # ...unless the PREVIOUS vertex was itself a volume scatter --
                 # then this edge changes kind (volume -> surface) and dVC
-                if st.prev_was_volume:
-                    st.dvc *= ff.sig_t
-                st.prev_was_volume = False
+                st.dvc *= st.prev_sig_t
+                st.prev_sig_t = Float32(1)
 
         var mat_idx = Int(inter.primId.materialIndex)
         var mat = sd.materials[unsafe_offset=mat_idx]

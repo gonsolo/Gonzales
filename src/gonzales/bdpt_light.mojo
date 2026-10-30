@@ -71,7 +71,7 @@ struct VCMLightPathState(TrivialRegisterPassable):
     var n_delta: Int
     # Null-interface distance since the last real vertex: the d^2 of a crossing is applied once, over the whole edge.
     var mis_null_dist: Float32
-    var prev_was_volume: Bool   # the previous vertex was a volume scatter: a medium arrival's dVC ratio depends on it
+    var prev_sig_t: Float32   # sigma_t at the previous vertex, 1 on a surface: dVC's free-flight ratio
     var mnee: VCMMneeLightTrack
 
 def _null_light_path_state() -> VCMLightPathState:
@@ -80,7 +80,7 @@ def _null_light_path_state() -> VCMLightPathState:
         ro=Point3f(z, z, z), rd=Vec3f(z, z, z), flux=SpectralSample(z), dvcm=z, dvc=z, dvm=z, is_finite_origin=False,
         origin_sphere=Int32(-1), cur_med_idx=Int32(-1), n_verts=0, active=Int8(0), pcg_state=UInt64(0), pcg_inc=UInt64(0),
         wl=SampledWavelengths(z, z, z, z), current_dielectric_ior=Float32(1.0), previous_dielectric_ior=Float32(1.0),
-        n_delta=0, mis_null_dist=z, prev_was_volume=False, mnee=vcm_mnee_light_track_none(),
+        n_delta=0, mis_null_dist=z, prev_sig_t=Float32(1), mnee=vcm_mnee_light_track_none(),
     )
 
 def _bdpt_light_path_init[use_gpu: Bool](
@@ -276,7 +276,7 @@ def _bdpt_light_path_init[use_gpu: Bool](
         origin_sphere=origin_sphere, cur_med_idx=cur_med_idx, n_verts=n_verts, active=Int8(1),
         pcg_state=pcg.state, pcg_inc=pcg.inc, wl=wavelengths,
         current_dielectric_ior=Float32(1.0), previous_dielectric_ior=Float32(1.0),   # vacuum
-        n_delta=0, mis_null_dist=Float32(0), prev_was_volume=False, mnee=mnee_l,
+        n_delta=0, mis_null_dist=Float32(0), prev_sig_t=Float32(1), mnee=mnee_l,
     )
 
 def _bdpt_light_path_bounce[use_gpu: Bool](
@@ -352,8 +352,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
                 st.dvcm *= Float32(1.0) / max(ff.pdf, Float32(1e-30))
                 # dVC's ff_a/ff_b ratio is 1/sigma_t only when the PREVIOUS
                 # vertex was a surface (kind-changing edge); a volume->volume
-                if not st.prev_was_volume:
-                    st.dvc *= Float32(1.0) / max(ff.sig_t, Float32(1e-20))
+                st.dvc *= st.prev_sig_t / max(ff.sig_t, Float32(1e-20))
                 var v = _null_vertex()
                 v.pos = sp
                 # `flux`, NOT flux*albedo -- see the matching camera-side
@@ -382,7 +381,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
                     -ray_dir, med.g, pcg.next_float(), pcg.next_float(),
                     st.dvcm, st.dvc, st.dvm, mis_vc_weight_factor, eta_v)
                 st.dvcm = dvcm_v; st.dvc = dvc_v; st.dvm = dvm_v
-                st.prev_was_volume = True
+                st.prev_sig_t = ff.sig_t
                 st.mnee.side = Float32(0)
                 # Continuation: flux = prev × alb_s (same as stored vertex beta)
                 st.flux *= spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (ff.albedo).r, (ff.albedo).g, (ff.albedo).b, st.wl)
@@ -400,9 +399,8 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
                 st.dvcm *= exp(ff_exp_l)
                 # dVC's ff_a/ff_b ratio is sigma_t only when the PREVIOUS
                 # vertex was a volume scatter (kind-changing edge, exiting
-                if st.prev_was_volume:
-                    st.dvc *= ff.sig_t
-                st.prev_was_volume = False
+                st.dvc *= st.prev_sig_t
+                st.prev_sig_t = Float32(1)
 
         var mat_idx = Int(inter.primId.materialIndex)
         var mat = sd.materials[unsafe_offset=mat_idx]
