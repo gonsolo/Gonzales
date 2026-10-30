@@ -19,6 +19,7 @@ from .bxdf import BSDF, LobeEval, LobeTables
 from .spectrum import SampledWavelengths, SpectralSample, spec_illum
 from .bdpt_vertex import BDPTVertex
 from .bdpt_nee import _bdpt_simple_light_count, _bdpt_sample_simple_light, _bdpt_nee_contribute
+from .vcm_grid import _vcm_cos_at
 
 @always_inline
 def _vcm_sphere_slot(ref sd: SceneView, si: Int) -> Int:
@@ -84,7 +85,7 @@ def _vcm_nee_surface(
         var ls = _bdpt_sample_simple_light(sd, li, pos.to_simd(), pcg)
         if not ls.valid:
             continue   # a non-emitting sphere
-        var pol = _vcm_simple_light_policy(sd, li, ls, v, eta_x, dvcm, dvc, abs(dot(ls.wi, gn_geo)), wavelengths)
+        var pol = _vcm_simple_light_policy(sd, li, ls, v, eta_x, dvcm, dvc, _vcm_cos_at(sd, v, ls.wi), wavelengths)
         var w = ctx.nee_weight_mis(ls, tab, wavelengths, pol)
         if exit_eta > Float32(0):
             w = w * bssrdf_exit_ft(dot(gn_geo, ls.wi), exit_eta)
@@ -96,7 +97,7 @@ def _vcm_nee_surface(
         # `scoped` decides: a kind with real densities gets the balance weight over all four strategies.
         var pol = MisPolicy(le.scoped, eta_x, dvcm, dvc,
                             ls.pdf * light_path_pick_pdf(sd, _vcm_infinite_slot(sd, inf_i)) / max(PI * r * r, Float32(1e-12)),
-                            le.pdf_rev, False, abs(dot(ls.wi, gn_geo)))
+                            le.pdf_rev, False, _vcm_cos_at(sd, v, ls.wi))
         var w = ctx.nee_weight_mis(ls, tab, wavelengths, pol)
         if exit_eta > Float32(0):
             w = w * bssrdf_exit_ft(dot(gn_geo, ls.wi), exit_eta)
