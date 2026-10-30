@@ -15,8 +15,6 @@ NVIDIA GPUs, plus an à-trous wavelet denoiser.
 📖 Read the [Gonzales Book](https://gonsolo.github.io/gonzales/) for detailed
 documentation with annotated source code.
 
-![Moana Island rendered by Gonzales](Images/moana.png)
-
 [![The whole Moana island on an RTX 3060](https://img.youtube.com/vi/dMYG1hy7kVY/maxresdefault.jpg)](https://youtu.be/dMYG1hy7kVY)
 
 *The whole Moana island, interactive and fullscreen on an RTX 3060 with 12 GB ([video](https://youtu.be/dMYG1hy7kVY)).*
@@ -104,10 +102,10 @@ tutorial path tracer has no textures and only approximate materials.
 | Dependency | Description | Install (Arch) |
 | --- | --- | --- |
 | [Mojo](https://www.modular.com/mojo) (via `uv`) | Compiler; GPU target requires `--target-accelerator sm_XX` | `uv run mojo` |
-| [OpenImageIO](https://github.com/AcademySoftwareFoundation/OpenImageIO) | EXR/HDR image I/O | `pacman -S openimageio` |
-| [Ptex](https://github.com/wdas/ptex) | Per-face texture mapping (Disney) | `pacman -S ptex` |
-| [Vulkan](https://vulkan.lunarg.com/) | Interactive viewer | `pacman -S vulkan-icd-loader` |
-| [Loupe](https://gitlab.gnome.org/GNOME/loupe) | EXR image viewer (for `make view_release`) | `pacman -S loupe` |
+| [OpenImageIO](https://github.com/AcademySoftwareFoundation/OpenImageIO) | EXR/HDR image I/O | `yay openimageio` |
+| [Ptex](https://github.com/wdas/ptex) | Per-face texture mapping (Disney) | `yay ptex` |
+| [Vulkan](https://vulkan.lunarg.com/) | Interactive viewer | `yay vulkan-icd-loader` |
+| [Loupe](https://gitlab.gnome.org/GNOME/loupe) | EXR image viewer (for `make view_release`) | `yay loupe` |
 
 For GPU rendering, set `--target-accelerator` to match your GPU's compute
 capability (e.g. `sm_86` for RTX 3060, `sm_89` for RTX 4090).
