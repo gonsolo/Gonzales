@@ -1112,6 +1112,52 @@ def medium_emission_spectral(
     return rgb_illuminant_to_spectral_sample(spectral_coeffs, spectral_res,
         spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, c.r, c.g, c.b, wl)
 
+def _medium_density_at(med: Medium, grids: Pointer[Grid, MutUntrackedOrigin], nvdb_grids: Pointer[NvdbGrid, MutUntrackedOrigin], p: Vec3f) -> Float32:
+    if not medium_is_heterogeneous(med):
+        return Float32(1)
+    if med.nvdb_idx >= Int32(0):
+        return nvdb_sample_density(medium_nvdb_for(med, nvdb_grids), p)
+    return grid_sample_density(medium_grid_for(med, grids), p)
+
+
+def medium_kernel_radius(med: Medium, grids: Pointer[Grid, MutUntrackedOrigin], nvdb_grids: Pointer[NvdbGrid, MutUntrackedOrigin], p: Vec3f) -> Float32:
+    """The widest photon kernel at p: half the shortest channel's mean free path. A ball wider than the mean free path
+    reaches past the medium's boundary, where no photon can be, and reads dark. Huge where the density vanishes."""
+    var t = med.sigma_a + med.sigma_s
+    return Float32(0.5) / max(max(t.r, max(t.g, t.b)) * _medium_density_at(med, grids, nvdb_grids, p), Float32(1e-6))
+
+
+def medium_sigma_t_at_spectral(
+    med: Medium, grids: Pointer[Grid, MutUntrackedOrigin], nvdb_grids: Pointer[NvdbGrid, MutUntrackedOrigin],
+    p: Vec3f, wl: SampledWavelengths,
+    spectral_coeffs: Pointer[Float32, MutUntrackedOrigin], spectral_res: Int,
+    spectral_cie_x: Pointer[Float32, MutUntrackedOrigin],
+    spectral_cie_y: Pointer[Float32, MutUntrackedOrigin],
+    spectral_cie_z: Pointer[Float32, MutUntrackedOrigin],
+    spectral_d65: Pointer[Float32, MutUntrackedOrigin],
+) -> SpectralSample:
+    """sigma_t at p, density included."""
+    var sig = medium_sigma_t_spectral(med, wl, spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65)
+    return sig * _medium_density_at(med, grids, nvdb_grids, p)
+
+
+def medium_inv_sigma_t_spectral(
+    med: Medium, grids: Pointer[Grid, MutUntrackedOrigin], nvdb_grids: Pointer[NvdbGrid, MutUntrackedOrigin],
+    p: Vec3f, wl: SampledWavelengths,
+    spectral_coeffs: Pointer[Float32, MutUntrackedOrigin], spectral_res: Int,
+    spectral_cie_x: Pointer[Float32, MutUntrackedOrigin],
+    spectral_cie_y: Pointer[Float32, MutUntrackedOrigin],
+    spectral_cie_z: Pointer[Float32, MutUntrackedOrigin],
+    spectral_d65: Pointer[Float32, MutUntrackedOrigin],
+) -> SpectralSample:
+    """1 / sigma_t at p: a volume density estimate needs it, because photons are stored at collisions, whose density
+    goes as sigma_t."""
+    var sig = medium_sigma_t_at_spectral(med, grids, nvdb_grids, p, wl, spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65)
+    var e = Float32(1e-12)
+    return SpectralSample(Float32(1) / max(sig.v0, e), Float32(1) / max(sig.v1, e),
+                          Float32(1) / max(sig.v2, e), Float32(1) / max(sig.v3, e))
+
+
 def sample_free_flight(
     med: Medium,
     grids: Pointer[Grid, MutUntrackedOrigin],

@@ -12,13 +12,14 @@ from .sppm import (
     _HSIZE, _hash_cell, _PHOTON_BUCKET_CAP, grid_keep, grid_weight, gather_disk_coverage,
     gather_disk_contains,
 )
+from .media import medium_inv_sigma_t_spectral
 from .spectrum import SpectralSample
 from .bdpt_vertex import _BDPT_MAX_VERTS, BDPTVertex
 from .bdpt_eval import _lobe_eval, _bdpt_vertex_mis_scoped
 from .vcm_grid import (
     _vcm_too_long, _vcm_keep, _vcm_cap, _MERGE_COVERAGE, _VCM_FINE_LEVELS, _VCM_MN_STRIDE,
     _VCM_VISIT_INSTRUMENT, _CAMIS_CAM_RECS, _vcm_budget_active, _vcm_merge_radius_at,
-    _VCM_RADIUS_VOLUME_SCALE, _vcm_mergeable, _vcm_on_fibre,
+    _VCM_RADIUS_VOLUME_SCALE, _vcm_inv_eta_at, _vcm_volume_radius_at, _vcm_mergeable, _vcm_on_fibre,
 )
 from .vcm_merge_weight import _bdpt_merge_mis_weight
 
@@ -73,14 +74,15 @@ def _bdpt_merge_from_cache(
         var r_pass_vol = r_pass_len * _VCM_RADIUS_VOLUME_SCALE
         norm = norm_pass / (Float32(4.0 / 3.0) * r_pass_len * s3)
         r2 = r_pass_vol * r_pass_vol
-        if sd.vcmFootprint > Float32(0) and sd.vcmMergeR > Float32(0):
-            var rq = _vcm_merge_radius_at(sd, cv.pos, is_volume=True)
+        if sd.vcmMergeR > Float32(0):
+            var rq = _vcm_volume_radius_at(sd, cv)
             r2 = rq * rq
             norm = norm * (r_pass_vol * r_pass_vol * r_pass_vol) / max(rq * rq * rq, Float32(1e-20))
     elif sd.vcmFootprint > Float32(0) and sd.vcmMergeR > Float32(0):
         var rq = _vcm_merge_radius_at(sd, cv.pos)
         r2 = rq * rq
         norm = norm_pass * (r2_pass / max(r2, Float32(1e-20)))
+    var inv_eta_cv = _vcm_inv_eta_at(sd, cv, mis_vc_weight_factor)
     var on_fibre = _vcm_on_fibre(cv)
     if on_fibre:
         # The fibre kernel: N * 2r * w, the strand within r as a ribbon of its own width, instead of N * pi r^2.
@@ -156,7 +158,7 @@ def _bdpt_merge_from_cache(
                                 f_cv = f_cv * (Float32(1.0) / cos_div)
                             else:
                                 f_cv = SpectralSample(Float32(0.0))
-                            var w = _bdpt_merge_mis_weight(cv, lv, sd, mis_vc_weight_factor,
+                            var w = _bdpt_merge_mis_weight(cv, lv, sd, mis_vc_weight_factor, inv_eta_cv,
                                 camis, camis_recs, cam_count - 1, lvc, lvc_camis, k, n_light_paths_f)
                             # 1 / keep: the bucket's under the fixed cap; under
                             # the per-cell budget the vertex's own (_vcm_keep,
@@ -167,6 +169,10 @@ def _bdpt_merge_from_cache(
                             total += f_cv * lv.beta * (w * keep_w)
                     k = Int(merge_next[unsafe_offset=k * _VCM_MN_STRIDE + lvl])
     var result = total * cv.beta * norm
+    if cv.is_surface == Int32(0) and Int(cv.med_idx) >= 0:
+        ref s = sd.spectral
+        result *= medium_inv_sigma_t_spectral(sd.mediums[unsafe_offset=Int(cv.med_idx)], sd.grids, sd.nvdbGrids, cv.pos.to_simd(),
+                                              cv.wavelengths, s.coeffs, s.res, s.cie_x, s.cie_y, s.cie_z, s.d65)
     # Truncation: the photons came only from the part of the disk that is
     # surface (gather_disk_coverage). Queries that found nothing have nothing
     # to correct, and a disk the probes find empty keeps the plain estimate.

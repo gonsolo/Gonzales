@@ -16,6 +16,7 @@ from .geometry import offset_eps, TERMINAL_SEGMENT_GRACE_ROUNDS, RGB, Point3f, P
 from .materials import Material, MatKind, LobeKind, PhotonKind, fr_dielectric, resolve_mix
 from .primitives import Ray, Intersection, PrimId, TriangleMesh, Sphere, Instance, sphere_outward_normal, mesh_normal, mesh_vi
 from .primitives import mesh_pos
+from .media import medium_inv_sigma_t_spectral, medium_kernel_radius
 from .media import Medium, Grid, NvdbGrid, sample_free_flight, medium_is_heterogeneous, medium_sigma_t_spectral, medium_grid_for, medium_nvdb_for, grid_sample_density, nvdb_sample_density, SSS_WALK_ROUNDS, spectral_free_flight_weight
 from .lights import area_light_pick_triangle, AreaLight
 from .curves import Curve, curve_at, curve_piece_endpoints, _curve_perp_axis
@@ -1761,6 +1762,14 @@ def _sppm_gather_one(
         return
     var vp = vps[unsafe_offset=i]
     var r2 = vp.r2
+    if vp.is_volume == PhotonKind.volume and Int(vp.med_idx) >= 0:
+        var cap = medium_kernel_radius(sd.mediums[unsafe_offset=Int(vp.med_idx)], sd.grids, sd.nvdbGrids, vp.pos.to_simd())
+        if r2 > cap * cap:   # same history rescale as the update below
+            var q = cap * cap / r2
+            vp.tau = vp.tau * (q * sqrt(q))
+            r2 = cap * cap
+            vps[unsafe_offset=i].tau = vp.tau
+            vps[unsafe_offset=i].r2 = r2
 
     # Accumulate contributions from photons in 3x3x3 neighborhood
     # Gathered spectrally at THIS pass's wavelengths, then converted to RGB
@@ -1854,24 +1863,9 @@ def _sppm_gather_one(
                                 nvdb_temp_idx=Int32(-1), le_scale=Float32(0),
                                 temp_offset=Float32(0), temp_scale=Float32(1),
                                 is_sss=Int32(0))
-                            var sig_t_spec = medium_sigma_t_spectral(
-                                medv, ph.wavelengths, spectral_coeffs, spectral_res,
+                            var inv_sig = medium_inv_sigma_t_spectral(
+                                medv, grids_arr, nvdb_arr, vp.pos.to_simd(), ph.wavelengths, spectral_coeffs, spectral_res,
                                 spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65)
-                            # Heterogeneous media author sigma per UNIT DENSITY,
-                            # so the extinction actually in force at the VP is
-                            # density(x) * sigma_t (same rule Medium documents).
-                            var dens = Float32(1.0)
-                            if medium_is_heterogeneous(medv):
-                                var gvol = medium_grid_for(medv, grids_arr)
-                                var nvol = medium_nvdb_for(medv, nvdb_arr)
-                                if medv.nvdb_idx >= Int32(0):
-                                    dens = nvdb_sample_density(nvol, vp.pos.to_simd())
-                                else:
-                                    dens = grid_sample_density(gvol, vp.pos.to_simd())
-                            var inv0 = Float32(1.0) / max(sig_t_spec.v0 * dens, Float32(1e-12))
-                            var inv1 = Float32(1.0) / max(sig_t_spec.v1 * dens, Float32(1e-12))
-                            var inv2 = Float32(1.0) / max(sig_t_spec.v2 * dens, Float32(1e-12))
-                            var inv3 = Float32(1.0) / max(sig_t_spec.v3 * dens, Float32(1e-12))
                             if ok_med:
                                 # Keep `alb`, and divide by sigma_t (NOT
                                 # sigma_s): this implementation stores a photon
@@ -1885,7 +1879,7 @@ def _sppm_gather_one(
                                                  spectral_cie_x, spectral_cie_y,
                                                  spectral_cie_z, spectral_d65,
                                                  vp.alb.r, vp.alb.g, vp.alb.b, ph.wavelengths) \
-                                       * SpectralSample(inv0, inv1, inv2, inv3) * INV_FOUR_PI * ph.flux
+                                       * inv_sig * INV_FOUR_PI * ph.flux
                                 var (tr_2, tg_2, tb_2) = spectral_sample_to_rgb(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, term_2, ph.wavelengths)
                                 phi_rgb += RGB(tr_2, tg_2, tb_2)
                         else:

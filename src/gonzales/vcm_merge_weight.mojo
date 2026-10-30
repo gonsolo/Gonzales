@@ -7,7 +7,7 @@ from .vcm_camis import CamisCamRecord, CamisCamCarry, CamisLightRecord, CAMIS_IN
 from .bvh import SceneView
 from .bdpt_vertex import _BDPT_MAX_VERTS, BDPTVertex
 from .bdpt_eval import _bdpt_vertex_pdfs, _bdpt_vertex_mis_scoped
-from .vcm_grid import _vcm_keep, _VCM_CAMIS, _CAMIS_CAM_RECS, _CAMIS_FORCE_C1, _vcm_eta_scale, _vcm_inv_eta_at
+from .vcm_grid import _vcm_keep, _VCM_CAMIS, _CAMIS_CAM_RECS, _CAMIS_FORCE_C1, _vcm_eta_scale
 
 @always_inline
 def _camis_gather_light[N: Int](
@@ -34,6 +34,7 @@ def _bdpt_merge_mis_weight(
     lv: BDPTVertex,
     ref sd: SceneView,
     mis_vc_weight_factor: Float32,
+    inv_eta_x: Float32,   # 1/eta at cv (_vcm_inv_eta_at), which a volume vertex pays a density lookup for
     camis: CamisCamCarry,
     camis_recs: Array[CamisCamRecord, _CAMIS_CAM_RECS],
     num_cam_scat: Int,
@@ -49,7 +50,6 @@ def _bdpt_merge_mis_weight(
     var (camera_bsdf_dir_pdf_w, camera_bsdf_rev_pdf_w) = _bdpt_vertex_pdfs(cv, lv.wo.to_simd(), sd)
     # dVM is dVC / eta at the merge vertex. With one global eta that held by
     # construction (the carried dVM); with the variance-aware eta(x) it has
-    var inv_eta_x = _vcm_inv_eta_at(sd, cv, mis_vc_weight_factor)
     comptime if _VCM_CAMIS:
         var light_arr = lvc_camis[unsafe_offset=k]
         if camis.in_class and (light_arr.flags & CAMIS_IN_CLASS) != Int32(0):

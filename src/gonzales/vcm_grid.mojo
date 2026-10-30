@@ -14,6 +14,7 @@ from .sppm import (
 )
 from .bdpt_vertex import _BDPT_MAX_VERTS, BDPTVertex
 from .bdpt_eval import _bdpt_vertex_mis_scoped, _vcm_cos_at
+from .media import medium_kernel_radius
 
 @always_inline
 def _vcm_depth(ref sd: SceneView) -> Int:
@@ -123,6 +124,15 @@ def _vcm_merge_radius_at(ref sd: SceneView, p: Point3f, is_volume: Bool = False)
 
 
 @always_inline
+def _vcm_volume_radius_at(ref sd: SceneView, v: BDPTVertex) -> Float32:
+    """Merge radius at volume vertex `v`."""
+    var r = _vcm_merge_radius_at(sd, v.pos, is_volume=True)
+    if Int(v.med_idx) < 0:
+        return r
+    return min(r, medium_kernel_radius(sd.mediums[unsafe_offset=Int(v.med_idx)], sd.grids, sd.nvdbGrids, v.pos.to_simd()))
+
+
+@always_inline
 def _vcm_grid_inv_cell(ref sd: SceneView, radius_i: Float32) -> Float32:
     """Coarse merge-grid cell: r_pass, or the volume radius in a scene with media
     (the 3x3x3 search must cover it; the fine levels keep surface lookups cheap)."""
@@ -141,14 +151,14 @@ def _vcm_eta_scale(ref sd: SceneView, p: Point3f) -> Float32:
     return s
 
 @always_inline
-def _vcm_eta_scale_vol(ref sd: SceneView, p: Point3f) -> Float32:
+def _vcm_eta_scale_vol(ref sd: SceneView, v: BDPTVertex) -> Float32:
     """Same ratio as _vcm_eta_scale but for the BALL kernel measure a volume
     vertex merges in: keep(x) * (r(x)/r_pass)^3, cubed rather than squared,
     since (4/3)pi r^3 scales with the radius CUBED
     (Scenes/vcm_volume_mis_derivation.py, kernel_measure)."""
-    var s = _vcm_keep(sd, p)
-    if sd.vcmFootprint > Float32(0) and sd.vcmMergeR > Float32(0):
-        var q = _vcm_merge_radius_at(sd, p, is_volume=True) / (sd.vcmMergeR * _VCM_RADIUS_VOLUME_SCALE)
+    var s = _vcm_keep(sd, v.pos)
+    if sd.vcmMergeR > Float32(0):
+        var q = _vcm_volume_radius_at(sd, v) / (sd.vcmMergeR * _VCM_RADIUS_VOLUME_SCALE)
         s *= q * q * q
     return s
 
@@ -181,7 +191,7 @@ def _vcm_eta_at(ref sd: SceneView, v: BDPTVertex, mis_vm_weight_factor: Float32)
         return mis_vm_weight_factor * _vcm_fibre_scale(sd, v.pos, Int(v.hair_curve_idx), v.hair_v)
     if v.is_surface == Int32(0):
         var s3 = _VCM_RADIUS_VOLUME_SCALE * _VCM_RADIUS_VOLUME_SCALE * _VCM_RADIUS_VOLUME_SCALE
-        return mis_vm_weight_factor * (Float32(4.0 / 3.0) * sd.vcmMergeR * s3) * _vcm_eta_scale_vol(sd, v.pos)
+        return mis_vm_weight_factor * (Float32(4.0 / 3.0) * sd.vcmMergeR * s3) * _vcm_eta_scale_vol(sd, v)
     return mis_vm_weight_factor * _vcm_eta_scale(sd, v.pos)
 
 @always_inline
@@ -195,7 +205,7 @@ def _vcm_inv_eta_at(ref sd: SceneView, v: BDPTVertex, mis_vc_weight_factor: Floa
         return mis_vc_weight_factor / fs if fs > Float32(0) else Float32(0)
     if v.is_surface == Int32(0):
         var s3 = _VCM_RADIUS_VOLUME_SCALE * _VCM_RADIUS_VOLUME_SCALE * _VCM_RADIUS_VOLUME_SCALE
-        return mis_vc_weight_factor / ((Float32(4.0 / 3.0) * sd.vcmMergeR * s3) * _vcm_eta_scale_vol(sd, v.pos))
+        return mis_vc_weight_factor / ((Float32(4.0 / 3.0) * sd.vcmMergeR * s3) * _vcm_eta_scale_vol(sd, v))
     return mis_vc_weight_factor / _vcm_eta_scale(sd, v.pos)
 
 
