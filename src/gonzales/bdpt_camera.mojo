@@ -528,7 +528,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                         var w_v = phase_alb_v * li_spec_v * (mis_v / ls_v.pdf)
                         st.total += _bdpt_nee_contribute(st.beta, w_v, ls_v, sp, Vec3f(Float32(0)), st.cur_med_idx, sd, scratch, st.wl, Float32(0))
                 for inf_v in range(Int(sd.infiniteLightCount)):
-                    var ls_infv = _sample_infinite_light_nee(sd.infiniteLights[unsafe_offset=inf_v], Point2f(pcg.next_float(), pcg.next_float()))
+                    var ls_infv = _sample_infinite_light_nee(sd.infiniteLights[unsafe_offset=inf_v], Point2f(pcg.next_float(), pcg.next_float()), sp)
                     if ls_infv.valid and ls_infv.pdf > Float32(0):
                         var li_spec_infv = spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (ls_infv.Li).r, (ls_infv.Li).g, (ls_infv.Li).b, st.wl)
                         var mis_infv = Float32(1) if ls_infv.is_delta else power_heuristic(ls_infv.pdf, INV_FOUR_PI)

@@ -1080,7 +1080,7 @@ def _sample_medium_core(
                     sd)
         for inf_i in range(Int(sd.infiniteLightCount)):
             _volume_nee_light(path_ptr,
-                _sample_infinite_light_nee(sd.infiniteLights[unsafe_offset=inf_i], Point2f(pcg.next_float(), pcg.next_float())),
+                _sample_infinite_light_nee(sd.infiniteLights[unsafe_offset=inf_i], Point2f(pcg.next_float(), pcg.next_float()), scatter_pt),
                 scatter_w, wo_v, med.g, pcg, use_nvdb, use_dense, grid, nvdb_grid, sigma_maj, sigma_t.r,
                 sd)
         # Sample the scatter direction from the medium's Henyey-Greenstein

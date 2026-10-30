@@ -90,7 +90,7 @@ def _vcm_nee_surface(
             w = w * bssrdf_exit_ft(dot(gn_geo, ls.wi), exit_eta)
         total += _bdpt_nee_contribute(beta, w, ls, pos, gn_geo, cur_med_idx, sd, scratch, wavelengths, spawn_eps, two_sided)
     for inf_i in range(Int(sd.infiniteLightCount)):
-        var ls = _sample_infinite_light_nee(sd.infiniteLights[unsafe_offset=inf_i], Point2f(pcg.next_float(), pcg.next_float()))
+        var ls = _sample_infinite_light_nee(sd.infiniteLights[unsafe_offset=inf_i], Point2f(pcg.next_float(), pcg.next_float()), pos)
         var (_c, r) = _scene_bounding_sphere(sd)
         var le = _lobe_eval[want_pdfs=True](v, ls.wi, sd, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths)
         # `scoped` decides: a kind with real densities gets the balance weight over all four strategies.

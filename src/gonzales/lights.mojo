@@ -8,6 +8,7 @@ comments and docstrings stripped before moving it."""
 from std.memory.alloc import unsafe_alloc
 from std.math import max, min, sqrt
 from .geometry import Point3f, Vec3f, RGB, _is_real_ptr
+from .portal_light import portal_frame, portal_ray_crosses
 
 # ── Lights ────────────────────────────────────────────────────────────────────
 # See: docs/06_lights_and_materials.md
@@ -118,6 +119,14 @@ struct InfiniteLight(TrivialRegisterPassable):
     var portal_p3: Point3f
     # 1: pixels_ptr holds Float16 triples (the GPU copy of a big map); the host keeps Float32.
     var pixels_half: Int32
+
+    @always_inline
+    def portal_admits(self, origin: Point3f, dir: Vec3f) -> Bool:
+        """pbrt's portal Le: a light with a portal is seen only by rays through the portal quad."""
+        if self.has_portal == Int32(0):
+            return True
+        var (e1, e2, n, _) = portal_frame(self.portal_p0, self.portal_p1, self.portal_p3)
+        return portal_ray_crosses(origin, dir, self.portal_p0, e1, e2, n)
 
 # Flat 2D sampling table of an equal-area environment map: (ih+1) marginal entries, then ih rows of (iw+1) conditional entries.
 def env_build_cdf(pixels: Pointer[Float32, MutUntrackedOrigin], iw: Int, ih: Int) -> Pointer[Float32, MutUntrackedOrigin]:

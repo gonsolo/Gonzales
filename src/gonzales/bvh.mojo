@@ -17,7 +17,6 @@ from .primitives import Ray, Intersection, PrimId, TriangleMesh, Sphere, interse
 from .primitives import mesh_pos, mesh_point
 from .media import Medium, MediumInterface, Grid, NvdbGrid
 from .lights import AreaLight, DistantLight, PointLight, InfiniteLight, LightSampler, il_rgb
-from .portal_light import portal_frame, portal_ray_crosses
 from .curves import Curve, curve_at, CurveBvh, intersect_curve, CURVE_DEFER_K, curve_piece_endpoints, curve_view_frame, curve_hit_normal
 from .rng import PCG32
 from .footprint import CameraFootprint
@@ -682,31 +681,11 @@ def _sample_sphere_light_nee(
     return LightSample(wi, sph.emission, pdf_light, max(d_surf, Float32(0.0)), False, True)
 
 @always_inline
-def _sample_infinite_light_nee(ilight: InfiniteLight, u: Point2f) -> LightSample:
-    """Thin LightSample-shaped wrapper over the existing shared
-    _sample_infinite_light_dir, so infinite lights present the same
-    interface as the other 3 non-area light types above.
-
-    Portal-restricted lights (ilight.has_portal != 0) are NOT special-cased
-    here -- they still sample the whole env map via the ordinary CDF, and
-    rely on the ordinary shadow-ray occlusion test to zero out directions
-    that don't actually escape through the portal opening (scene geometry
-    already has a real hole cut for the window; see portal_light.mojo's
-    module docstring). A tried-and-reverted alternative sampled the portal
-    quad's AREA directly, uniform in (u,v), to avoid wasting samples on
-    occluded directions -- it measured self-consistent in isolation (its
-    pdf's implied solid angle matched an independent direction-sampling
-    estimate to 4 significant figures) but under-lit watercolor by ~2x
-    end-to-end (mean 0.205 vs the unrestricted+occlusion path's 0.353,
-    against a pbrt reference of 0.386) at both 64 and 512 spp -- a flat
-    bias, not noise. Root cause not pinned down (leading suspect: the
-    portal quad artists placed is measurably larger than the real
-    geometric window hole, so uniform-area quad sampling wastes roughly
-    half its samples on occluded wall behind the frame while still
-    dividing by the FULL quad's pdf/area) -- only the escape side (this
-    module's caller, shading.mojo's miss handler) needs the portal quad at
-    all, since it has no BVH occlusion test of its own to fall back on."""
+def _sample_infinite_light_nee(ilight: InfiniteLight, u: Point2f, origin: Point3f) -> LightSample:
+    """Samples the whole env map; a direction outside this light's portal carries nothing, as in the escape gate."""
     var (dir, Li, pdf) = _sample_infinite_light_dir(ilight, u)
+    if not ilight.portal_admits(origin, dir):
+        return LightSample(dir.to_simd(), RGB(Float32(0)), pdf, Float32(100000.0), False, False)
     return LightSample(dir.to_simd(), Li, pdf, Float32(100000.0), False, True)
 
 @always_inline
@@ -770,10 +749,8 @@ def _eval_infinite_light_and_pdf(ilight: InfiniteLight, dir_world: Vec3f, origin
     watercolor/kroken leak (1.46x/1.50x) after the PT-only portal fix, the
     exact "PT-only feature gap" bug class this project keeps re-finding --
     see project_pt_only_feature_gaps memory."""
-    if ilight.has_portal != Int32(0):
-        var (pe1, pe2, pn, _) = portal_frame(ilight.portal_p0, ilight.portal_p1, ilight.portal_p3)
-        if not portal_ray_crosses(point3f(origin), dir_world, ilight.portal_p0, pe1, pe2, pn):
-            return (RGB(Float32(0)), Float32(1) / (Float32(4) * PI))
+    if not ilight.portal_admits(point3f(origin), dir_world):
+        return (RGB(Float32(0)), Float32(1) / (Float32(4) * PI))
     if ilight.tex_idx < Int32(0) or not _is_real_ptr(ilight.pixels_ptr) or ilight.cdf_w <= Int32(0):
         return (ilight.scale, Float32(1) / (Float32(4) * PI))
     var local_dir = Mat4.load(ilight.world_to_light) * dir_world

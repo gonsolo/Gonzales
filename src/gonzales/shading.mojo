@@ -6,13 +6,13 @@ from std.math import sqrt, floor, atan, log2, ceil, exp, abs, pow
 from std.ffi import external_call
 from std.memory.alloc import unsafe_alloc
 from .geometry import offset_point, offset_eps, RGB, Point3f, Point2f, Point2i, restir_jitter_pixel, Vec3f, dot, face_toward, cross, Frame, fast_sincos, PI, TWO_PI, INV_PI, INV_FOUR_PI, _is_real_ptr, _atan2f
+from .geometry import point3f
 from .render_state import PDF_DROP_DIRECT
 from .materials import Material, MatKind, LobeKind, MeasuredBRDF, fr_dielectric, resolve_mix
 from .render_state import PathState, SssWalk, GpuTexture, NormalSlopeMap, normal_slope_map_none, ShadowTask, SuppressTask, SHADOW_SLOTS
 from .primitives import Ray, Intersection, PrimId, TriangleMesh, Sphere, Instance, mesh_uv, mesh_has_uvs, mesh_normal, mesh_vi, mesh_face
 from .primitives import mesh_pos
 from .lights import AreaLight, DistantLight, PointLight, InfiniteLight, LightSampler, il_rgb, light_sampler_sample, light_sampler_sample_at, light_sampler_pdf_at, light_sampler_pdf, area_light_pick_triangle
-from .portal_light import portal_frame, portal_ray_crosses
 from .media import Medium, MediumInterface, Grid, NvdbGrid
 from .shadow_media import shadow_transmittance
 from .curves import Curve, curve_at, curve_piece_endpoints, _curve_perp_axis, curve_hit_normal
@@ -1265,7 +1265,7 @@ def shade_diffuse_transmission[use_gpu: Bool, enqueue_shadow: Bool](
                                      lobe_alb, Float32(0.0), Int32(0), wo_dt, pcg,
                                      null_guide(), lobe_w)
     for inf_i in range(ctx.lights.infinite_count):
-        var ls_e = _sample_infinite_light_nee(ctx.lights.infinite_lights[unsafe_offset=inf_i], Point2f(pcg.next_float(), pcg.next_float()))
+        var ls_e = _sample_infinite_light_nee(ctx.lights.infinite_lights[unsafe_offset=inf_i], Point2f(pcg.next_float(), pcg.next_float()), point3f(hit_point))
         var w_e = _nee_weight_simple_spectral(ls_e, LobeKind.lambertian, lobe_alb, Float32(0), bounce_normal, wo_dt, ctx.spectral.coeffs, ctx.spectral.res, ctx.spectral.cie_x, ctx.spectral.cie_y, ctx.spectral.cie_z, ctx.spectral.d65, path_ptr[].wavelengths, LobeTables(ctx.materials, ctx.curves, ctx.measured_brdfs, ctx.spectral)) * lobe_w
         if not w_e.is_black():
             var contrib_e = path_ptr[].throughput * w_e
@@ -1325,7 +1325,7 @@ def _shade_principled[enqueue_shadow: Bool, defer_only: Bool](
         var res = _nee_sample_simple_light(ctx, li, hit_point, pcg)
         _principled_nee[enqueue_shadow, defer_only](path_ptr, ctx, hit_point, res[0].copy(), res[1], normal, wo, Rd, f0, a, ps)
     for inf_i in range(ctx.lights.infinite_count):
-        var ls_inf = _sample_infinite_light_nee(ctx.lights.infinite_lights[unsafe_offset=inf_i], Point2f(ss.env1, ss.env2) if inf_i == 0 else Point2f(pcg.next_float(), pcg.next_float()))
+        var ls_inf = _sample_infinite_light_nee(ctx.lights.infinite_lights[unsafe_offset=inf_i], Point2f(ss.env1, ss.env2) if inf_i == 0 else Point2f(pcg.next_float(), pcg.next_float()), point3f(hit_point))
         _principled_nee[enqueue_shadow, defer_only](path_ptr, ctx, hit_point, ls_inf, ls_inf.dist, normal, wo, Rd, f0, a, ps)
 
     if walk_w > Float32(0):
@@ -2080,7 +2080,7 @@ def _lobe_nee_with[L: NeeLobe, enqueue_shadow: Bool, defer_only: Bool = False](
         _lobe_nee_one[L, enqueue_shadow, defer_only](path_ptr, ctx, bsdf, tab, hit_point, res[0].copy(), res[1], side_n)
     for inf_i in range(ctx.lights.infinite_count):
         var u = u_env if inf_i == 0 and has_u_env else Point2f(pcg.next_float(), pcg.next_float())
-        var ls_e = _sample_infinite_light_nee(ctx.lights.infinite_lights[unsafe_offset=inf_i], u)
+        var ls_e = _sample_infinite_light_nee(ctx.lights.infinite_lights[unsafe_offset=inf_i], u, point3f(hit_point))
         _lobe_nee_one[L, enqueue_shadow, defer_only](path_ptr, ctx, bsdf, tab, hit_point, ls_e, ls_e.dist, side_n)
 
 
@@ -5105,10 +5105,8 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
         var miss_albedo = RGB(Float32(0.0))
         for inf_i in range(ctx.lights.infinite_count):
             var ilight = ctx.lights.infinite_lights[unsafe_offset=inf_i]
-            if ilight.has_portal != Int32(0):
-                var (pe1, pe2, pn, _) = portal_frame(ilight.portal_p0, ilight.portal_p1, ilight.portal_p3)
-                if not portal_ray_crosses(ray_org, ray_dir, ilight.portal_p0, pe1, pe2, pn):
-                    continue
+            if not ilight.portal_admits(ray_org, ray_dir):
+                continue
             # Transform world-space ray direction into light's local frame
             var local_dir = Mat4.load(ilight.world_to_light) * ray_dir
             var env_rgb: RGB
