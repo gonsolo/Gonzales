@@ -3,15 +3,16 @@
 
 from std.collections import Array
 from std.math import sqrt, cos, sin, log, exp, max, abs
-from .gpu_media import medium_after
+from .geometry import face_toward
+from .gpu_media import SssExit, medium_after, sss_entry_lobe, sss_walk_to_exit
+from .materials import fr_dielectric, sss_boundary_lobe
 from .geometry import offset_eps, RGB, Point3f, Point2f, Vec3f, vec3f, point3f, dot, cross, PI, INV_FOUR_PI, INV_PI
 from .render_state import PDF_DELTA_FULL, PDF_DROP_DIRECT
 from .materials import Material, MatKind, LobeKind, resolve_mix
 from .primitives import Ray, Intersection, mesh_pos
 from .media import sample_free_flight, spectral_free_flight_weight
-from .bssrdf import bssrdf_exit_ft
 from .vcm_mis import (
-    vcm_arrival_carries, vcm_scatter_carries, bssrdf_hop_carries, bssrdf_exit_scatter_carries,
+    vcm_arrival_carries, vcm_scatter_carries,
     vcm_env_escape_weight,
 )
 from .vcm_camis import (
@@ -38,8 +39,7 @@ from .bdpt_eval import (
 from .vcm_grid import _vcm_depth, _VCM_MAX_STORED, _vcm_keep, _VCM_CAMIS, _CAMIS_CAM_RECS, _CAMIS_FORCE_C1, _vcm_eta_scale, _vcm_eta_at, _vcm_fibre_scale
 from .bdpt_connect import _bdpt_connect_to_cache, _bdpt_connect_to_cache_deferred
 from .vcm_merge import _bdpt_merge_from_cache
-from .bdpt_bssrdf import _bdpt_sample_bssrdf_exit, BssrdfExitSample
-from .surface import surface_hit
+from .surface import sss_entry_tint, surface_hit
 
 def _bdpt_trace_camera_and_connect[use_gpu: Bool](
     r2c:     Pointer[Float32, MutUntrackedOrigin],
@@ -255,30 +255,45 @@ def _area_light_hit(ref sd: SceneView, inter: Intersection, mat: Material,
             area_light_hit_cos(inter, sd.meshes, sd.instances, ray_dir))
 
 
-@always_inline
-def _vcm_bssrdf_hop(
-    ref sd: SceneView, inter: Intersection, mat: Material, hit: Point3f, ray_dir: Vec3f, med_in: Int, mis_vc: Float32,
-    mut pcg: PCG32, wl: SampledWavelengths, mut beta: SpectralSample, mut dvcm: Float32, mut dvc: Float32, mut dvm: Float32,
-) -> BssrdfExitSample:
-    """A subsurface hop from the entry at `hit` to an exit both subpaths sample alike: arrival, the hop's weight in
-    `beta` and its MIS carries."""
-    var gn_e = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
-    if dot(gn_e, ray_dir) > Float32(0): gn_e = gn_e * Float32(-1)
-    var cos_e = abs(dot(-ray_dir, gn_e))
-    (dvcm, dvc, dvm) = vcm_arrival_carries(dvcm, dvc, dvm, cos_e)
-    var ex = _bdpt_sample_bssrdf_exit(sd, med_in, hit, gn_e, cos_e, mat.albedo.r, pcg)
-    if not ex.ok:
-        return ex
-    ref s = sd.spectral
-    beta *= spec_refl_unbounded(s.coeffs, s.res, s.cie_x, s.cie_y, s.cie_z, s.d65, ex.weight.r, ex.weight.g, ex.weight.b, wl)
-    (dvcm, dvc, dvm) = bssrdf_hop_carries[dvc0=_VCM_CAMIS](dvcm, dvc, dvm, ex.p_area, cos_e * INV_PI, mis_vc)
+def _vcm_sss_walk[use_gpu: Bool](
+    ref sd: SceneView, inter: Intersection, mat: Material, hit: Point3f, ray_dir: Vec3f, rd: Vec3f, wl: SampledWavelengths,
+    mis_vc: Float32, mut pcg: PCG32, mut beta: SpectralSample, mut dvcm: Float32, mut dvc: Float32, mut dvm: Float32,
+    dvcm_in: Float32, dvc_in: Float32, dvm_in: Float32,
+) -> SssExit:
+    """The path tracer's walk below a subsurface boundary the dielectric cross just refracted into, and its MIS carries:
+    Scenes/vcm_sss_hop_mis_derivation.py. The interior is one symmetric hop, so its density cancels between the
+    subpaths, and nothing connects across it."""
+    var gn = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
+    var wi = sss_entry_lobe(face_toward(gn, rd), mat.albedo.r, pcg)
+    var ex = sss_walk_to_exit(sd, mat, inter, hit.to_simd(), gn, wi, wl, pcg)
+    if ex.ok:
+        beta *= ex.weight * sss_entry_tint[use_gpu](sd, mat, inter, wl)
+        var cos_e = abs(dot(-ray_dir, gn))
+        var (a_vcm, a_vc, a_vm) = vcm_arrival_carries(dvcm_in, dvc_in, dvm_in, cos_e)
+        var inv_t = Float32(1) / max(Float32(1) - fr_dielectric(cos_e, mat.albedo.r), Float32(1e-6))
+        var pdf_rev = cos_e * INV_PI
+        dvcm = Float32(0)
+        dvc = inv_t * (a_vc * pdf_rev + a_vcm)
+        comptime if _VCM_CAMIS:
+            dvm = inv_t * (a_vm * pdf_rev + a_vcm)
+        else:
+            dvm = inv_t * (a_vm * pdf_rev + a_vcm * mis_vc)
     return ex
 
 
 @always_inline
-def _vcm_bssrdf_vertex(ex: BssrdfExitSample, eta: Float32, beta: SpectralSample, med_idx: Int32, wl: SampledWavelengths,
-                       dvcm: Float32, dvc: Float32, dvm: Float32) -> BDPTVertex:
-    """The subpath vertex at a hop's exit: a diffuse lobe weighted by the exit Fresnel."""
+def _vcm_sss_entered(mat: Material, inter: Intersection, ray_dir: Vec3f, rd: Vec3f, med_before: Int32, ref sd: SceneView, hit: Point3f) -> Bool:
+    """Did this dielectric cross refract into a subsurface interior?"""
+    if not mat.sss_walk_interior() or inter.primId.type != Int8(0) or Int(med_before) >= 0:
+        return False
+    var gn = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
+    return dot(gn, ray_dir) * dot(gn, rd) > Float32(0)
+
+
+@always_inline
+def _vcm_sss_exit_vertex(ex: SssExit, eta: Float32, beta: SpectralSample, med_idx: Int32, wl: SampledWavelengths,
+                         dvcm: Float32, dvc: Float32, dvm: Float32) -> BDPTVertex:
+    """The subpath vertex at a walk's exit: Lambertian, the walk's internal Fresnel already spent."""
     var v = _null_vertex()
     v.pos = ex.x_o
     v.normal = vec3f(ex.n_o)
@@ -286,10 +301,9 @@ def _vcm_bssrdf_vertex(ex: BssrdfExitSample, eta: Float32, beta: SpectralSample,
     v.beta = beta
     v.alb = RGB(Float32(1))
     v.is_surface = Int32(1)
-    v.mat_kind = LobeKind.bssrdf
-    v.pdf_fwd = ex.p_area   # reverse density toward x_i: the hop is symmetric
+    v.mat_kind = LobeKind.sss_exit
     v.pdf_bwd = eta
-    v.wo = vec3f(ex.n_o)    # unused by LobeKind.bssrdf
+    v.wo = vec3f(ex.n_o)     # unused by LobeKind.sss_exit
     v.med_idx = med_idx
     v.wavelengths = wl
     v.dVCM = dvcm; v.dVC = dvc; v.dVM = dvm
@@ -297,18 +311,18 @@ def _vcm_bssrdf_vertex(ex: BssrdfExitSample, eta: Float32, beta: SpectralSample,
 
 
 @always_inline
-def _vcm_bssrdf_exit_scatter(
-    ref sd: SceneView, ex: BssrdfExitSample, eta: Float32, mis_vc: Float32, mis_vm: Float32, mut pcg: PCG32,
+def _vcm_sss_exit_scatter(
+    ref sd: SceneView, ex: SssExit, eta: Float32, mis_vc: Float32, mis_vm: Float32, mut pcg: PCG32,
     mut ro: Point3f, mut rd: Vec3f, mut beta: SpectralSample, mut dvcm: Float32, mut dvc: Float32, mut dvm: Float32,
 ) -> Float32:
-    """Leaves a hop's exit along the cosine-sampled exit lobe, weight Ft(cos_out); returns cos_out."""
+    """Leaves a walk's exit along its cosine-sampled lobe; returns cos_out. The reverse density is the entry choice 1 - F."""
     var ux1 = pcg.next_float(); var ux2 = pcg.next_float()
     rd = vec3f(_cosine_hemisphere_sample(ex.n_o, ux1, ux2))
     ro = ex.x_o + rd * Float32(0.0002)
     var cos_out = abs(dot(rd.to_simd(), ex.n_o))
-    beta *= SpectralSample(bssrdf_exit_ft(cos_out, eta))
-    (dvcm, dvc, dvm) = bssrdf_exit_scatter_carries[dvc0=_VCM_CAMIS](
-        dvcm, dvc, dvm, ex.p_area, cos_out, mis_vc, mis_vm * _vcm_eta_scale(sd, ex.x_o))
+    beta *= SpectralSample(sss_boundary_lobe(cos_out, eta))
+    (dvcm, dvc, dvm) = vcm_scatter_carries[_VCM_CAMIS](dvcm, dvc, dvm, PI, cos_out / PI, Float32(1) - fr_dielectric(cos_out, eta),
+                                                        mis_vc, mis_vm * _vcm_eta_scale(sd, ex.x_o))
     return cos_out
 
 
@@ -737,8 +751,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 # Light interface (bvh.mojo's LightSample samplers) + BxDF
                 st.total += _vcm_nee_surface(sd, v, _vertex_ctx(v), hit, gn_geo, st.beta, eta_x, st.dvcm, st.dvc,
                                           st.cur_med_idx, scratch, st.wl, pcg, spawn_eps,
-                                          v.mat_kind == LobeKind.diffuse_transmit or v.mat_kind == LobeKind.hair or v.mat_kind == LobeKind.rough_dielectric,
-                                          Float32(0))
+                                          v.mat_kind == LobeKind.diffuse_transmit or v.mat_kind == LobeKind.hair or v.mat_kind == LobeKind.rough_dielectric)
                 # MNEE toward a light behind glass, one more strategy in the balance (_vcm_mnee).
                 if LobeKind.is_diffuse(v.mat_kind):
                     st.total += _vcm_mnee(sd, v, hit.to_simd(), gn, st.beta, pcg, st.wl, eta_x, st.dvcm, st.dvc)
@@ -769,56 +782,47 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
 
         elif mat.type == MatKind.dielectric or mat.type == MatKind.thin_dielectric:
             comptime if _VCM_CAMIS:
-                # A BSSRDF hop and a delta dielectric are both outside the Class.
+                # A subsurface walk and a delta dielectric are both outside the Class.
                 camis.in_class = False
-            var did_bssrdf_hop = False
-            # ── Subsurface boundary: a BSSRDF hop to a real EXIT VERTEX ────
-            # The camera arrives at the entry x_i, the exit x_o is sampled from
-            # the diffusion profile (shared with the light subpath, see
-            if mat.sss_boundary != Int8(0) and Int(st.cur_med_idx) < 0 and has_med:
-                var med_in = medium_after(ray_dir, Int32(-1), inter, mat, sd, hit.to_simd())
-                if med_in >= Int32(0) and Int(med_in) < Int(sd.mediumCount):
-                    var ex = _vcm_bssrdf_hop(sd, inter, mat, hit, ray_dir, Int(med_in), mis_vc_weight_factor, pcg, st.wl,
-                                             st.beta, st.dvcm, st.dvc, st.dvm)
-                    if not ex.ok:
-                        return False
-                    var eta_e = mat.albedo.r
-                    var x_o = ex.x_o
-                    var n_o = ex.n_o
-                    var v = _vcm_bssrdf_vertex(ex, eta_e, st.beta, st.cur_med_idx, st.wl, st.dvcm, st.dvc, st.dvm)
-                    if st.n_verts == 0: st.first_alb = mat.sss_mean_refl
-                    if st.n_verts + st.n_delta >= _vcm_depth(sd) or st.n_verts >= _VCM_MAX_STORED:
-                        return False   # a vertex past d starts no strategy (see _vcm_depth)
-                    st.n_verts += 1
-                    # Merging queries the GLOBAL photon grid and does not use this
-                    # pixel's own paired light path, so unlike the connect below it
-                    st.total_merge += _bdpt_merge_from_cache(v, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm, mis_vc_weight_factor, st.n_verts + st.n_delta, camis, camis_recs, lvc_camis, n_light_paths_f, visit_naive=visit_naive, visit_footprint=visit_footprint, visit_thin=visit_thin)
-                    if path_len > 0:
-                        if defer_shadow_rays:
-                            _bdpt_connect_to_cache_deferred(v, sd, lvc, lp_idx, path_len, mis_vm_weight_factor, shadow_rays, shadow_pending, shadow_valid, shadow_seg_med, st.n_verts + st.n_delta, camis, camis_recs, lvc_camis, n_light_paths_f)
-                        else:
-                            st.total += _bdpt_connect_to_cache(v, sd, has_med, scratch, lvc, lp_idx, path_len, mis_vm_weight_factor, st.n_verts + st.n_delta, camis, camis_recs, lvc_camis, n_light_paths_f)
-                    # Direct lighting at the exit: the diffuse vertex's NEE with
-                    # the exit lobe's Fresnel factor toward each light.
-                    var ctx_x = BSDF(LobeKind.lambertian, True, False, n_o, n_o, RGB(Float32(1)), Int32(-1), Float32(0),
-                                        Float32(0), Int32(-1), Float32(0), Float32(0), True, False)
-                    st.total += _vcm_nee_surface(sd, v, ctx_x, x_o, n_o, st.beta, mis_vm_weight_factor * _vcm_eta_scale(sd, x_o),
-                                              v.dVCM, v.dVC, st.cur_med_idx, scratch, st.wl, pcg,
-                                              offset_eps(x_o.x, x_o.y, x_o.z), False, eta_e)
-                    # Continue with the exit lobe: cosine-sampled, weight Ft(cos_out).
-                    var cos_out_x = _vcm_bssrdf_exit_scatter(sd, ex, eta_e, mis_vc_weight_factor, mis_vm_weight_factor, pcg,
-                                                             st.ro, st.rd, st.beta, st.dvcm, st.dvc, st.dvm)
-                    st.last_bsdf_pdf = cos_out_x * INV_PI
-                    did_bssrdf_hop = True
-                    st.mnee.pdf0 = Float32(0)
-            # Ordinary specular boundary, only when no hop was taken.
-            if not did_bssrdf_hop:
-                if st.n_verts + st.n_delta >= _vcm_depth(sd):
-                    return False   # a delta vertex past d starts no strategy either
+            if st.n_verts + st.n_delta >= _vcm_depth(sd):
+                return False   # a delta vertex past d starts no strategy either
+            var dvcm_in = st.dvcm; var dvc_in = st.dvc; var dvm_in = st.dvm; var med_in = st.cur_med_idx
+            var ior_cur = st.current_dielectric_ior; var ior_prev = st.previous_dielectric_ior
+            var cross_scale = _vcm_dielectric_cross[use_gpu, True](sd, inter, mat, hit, ray_dir, vcm_cone_w, has_med, pcg,
+                st.ro, st.rd, st.current_dielectric_ior, st.previous_dielectric_ior, st.cur_med_idx, st.dvcm, st.dvc, st.dvm)
+            if _vcm_sss_entered(mat, inter, ray_dir, st.rd, med_in, sd, hit):
+                st.cur_med_idx = med_in
+                st.current_dielectric_ior = ior_cur; st.previous_dielectric_ior = ior_prev
+                var ex = _vcm_sss_walk[use_gpu](sd, inter, mat, hit, ray_dir, st.rd, st.wl, mis_vc_weight_factor, pcg, st.beta,
+                                                st.dvcm, st.dvc, st.dvm, dvcm_in, dvc_in, dvm_in)
+                if not ex.ok:
+                    return False
+                var x_o = ex.x_o
+                var n_o = ex.n_o
+                var v = _vcm_sss_exit_vertex(ex, mat.albedo.r, st.beta, st.cur_med_idx, st.wl, st.dvcm, st.dvc, st.dvm)
+                if st.n_verts == 0: st.first_alb = mat.sss_mean_refl
+                if st.n_verts + st.n_delta >= _vcm_depth(sd) or st.n_verts >= _VCM_MAX_STORED:
+                    return False   # a vertex past d starts no strategy (see _vcm_depth)
+                st.n_verts += 1
+                # A walk's exit does not merge: light and camera exits are two walks, not one.
+                if path_len > 0:
+                    if defer_shadow_rays:
+                        _bdpt_connect_to_cache_deferred(v, sd, lvc, lp_idx, path_len, mis_vm_weight_factor, shadow_rays, shadow_pending, shadow_valid, shadow_seg_med, st.n_verts + st.n_delta, camis, camis_recs, lvc_camis, n_light_paths_f)
+                    else:
+                        st.total += _bdpt_connect_to_cache(v, sd, has_med, scratch, lvc, lp_idx, path_len, mis_vm_weight_factor, st.n_verts + st.n_delta, camis, camis_recs, lvc_camis, n_light_paths_f)
+                var ctx_x = BSDF(LobeKind.sss_exit, True, False, n_o, n_o, RGB(Float32(1)), Int32(-1), mat.albedo.r,
+                                    Float32(0), Int32(-1), Float32(0), Float32(0), True, False)
+                st.total += _vcm_nee_surface(sd, v, ctx_x, x_o, n_o, st.beta, mis_vm_weight_factor * _vcm_eta_scale(sd, x_o),
+                                          v.dVCM, v.dVC, st.cur_med_idx, scratch, st.wl, pcg,
+                                          offset_eps(x_o.x, x_o.y, x_o.z), False)
+                var cos_out_x = _vcm_sss_exit_scatter(sd, ex, mat.albedo.r, mis_vc_weight_factor, mis_vm_weight_factor, pcg,
+                                                      st.ro, st.rd, st.beta, st.dvcm, st.dvc, st.dvm)
+                st.last_bsdf_pdf = cos_out_x * INV_PI
+                st.mnee.pdf0 = Float32(0)
+            else:
                 st.n_delta += 1
                 st.mnee.n_glass += 1
-                st.beta *= _vcm_dielectric_cross[use_gpu, True](sd, inter, mat, hit, ray_dir, vcm_cone_w, has_med, pcg,
-                    st.ro, st.rd, st.current_dielectric_ior, st.previous_dielectric_ior, st.cur_med_idx, st.dvcm, st.dvc, st.dvm)
+                st.beta *= cross_scale
                 st.last_bsdf_pdf = Float32(-1)  # delta bounce: no infinite-light NEE done here
 
         elif mat.type == MatKind.interface:

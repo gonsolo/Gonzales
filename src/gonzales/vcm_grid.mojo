@@ -226,7 +226,7 @@ def _bdpt_merge_slot_bucket(
     # is_surface is NOT required here any more: a volume light vertex is a
     # legitimate merge candidate too (Scenes/vcm_volume_mis_derivation.py) --
     if not (lv.is_delta == Int32(0) and lv.is_light == Int32(0)
-            and lv.mat_kind != LobeKind.bssrdf and _bdpt_vertex_mis_scoped(lv)):
+            and lv.mat_kind != LobeKind.sss_exit and _bdpt_vertex_mis_scoped(lv)):
         return -1
     var ix = Int(floor(lvc[unsafe_offset=k].pos.x * inv_cell))
     var iy = Int(floor(lvc[unsafe_offset=k].pos.y * inv_cell))

@@ -1,9 +1,8 @@
 from std.math import sqrt
 from .layered import diel_f, diel_pdf, diel_sample, layered_f, layered_pdf, layered_sample
 from .geometry import RGB, Vec3f, dot, INV_PI, PI, Frame, INV_FOUR_PI
-from .materials import LobeKind, MatKind, Material, fr_dielectric, MeasuredBRDF
+from .materials import LobeKind, MatKind, Material, fr_dielectric, MeasuredBRDF, sss_boundary_lobe
 from .curves import Curve
-from .bssrdf import bssrdf_exit_ft
 from .sampling import sample_ggx_vndf, sample_cosine_hemisphere_world
 from .vcm_mis import MisPolicy, mis_policy_power, nee_mis_weight
 from .measured_bxdf_eval import bxdf_eval_measured, bxdf_pdf_measured, bxdf_sample_measured
@@ -779,7 +778,7 @@ struct BSDF(NeeLobe, TrivialRegisterPassable):
     VCM defect found on 2026-09-20 lived in that drift.
 
     `param` is the per-kind scalar, the way BDPTVertex already overloaded
-    pdf_bwd: GGX alpha for a conductor, eta for a BSSRDF exit, coat alpha for
+    pdf_bwd: GGX alpha for a conductor, coat alpha for
     a coat walk."""
     var kind:           Int32
     var is_surface:     Bool
@@ -944,7 +943,7 @@ def _lobe_scoped(c: BSDF) -> Bool:
     return (c.kind == LobeKind.lambertian or c.kind == LobeKind.ggx
             or c.kind == LobeKind.hair or c.kind == LobeKind.measured
             or c.kind == LobeKind.diffuse_transmit
-            or c.kind == LobeKind.rough_dielectric)
+            or c.kind == LobeKind.rough_dielectric or c.kind == LobeKind.sss_exit)
 
 
 @always_inline
@@ -1080,10 +1079,10 @@ def _lobe_eval[want_pdfs: Bool = True, want_rev: Bool = True](
             fwd_ly = pd[0]
             rev_ly = pd[1]
         return LobeEval(f_ly * cos_ly, cos_ly, fwd_ly, rev_ly, True)
-    if c.kind == LobeKind.bssrdf:
+    if c.kind == LobeKind.sss_exit:
         var cos_x = abs(dot(dir_to_other, vn))
-        return LobeEval(SpectralSample(bssrdf_exit_ft(cos_x, c.param) * INV_PI * cos_x),
-                        cos_x, cos_x * INV_PI, c.pdf_fwd, False)
+        return LobeEval(SpectralSample(sss_boundary_lobe(cos_x, c.param) * INV_PI * cos_x),
+                        cos_x, cos_x * INV_PI, Float32(1) - fr_dielectric(cos_x, c.param), _lobe_scoped(c))
 
     if c.kind == LobeKind.ggx:
         # _eval_conductor_ggx_spectral folds in cos(dir_to_other, n) via its

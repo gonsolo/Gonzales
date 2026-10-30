@@ -10,7 +10,6 @@ from .gpu_media import default_emit_medium
 from .materials import LobeKind
 from .primitives import Intersection
 from .media import Medium, SSS_WALK_ROUNDS, Grid, NvdbGrid
-from .bssrdf import dipole_max_radius
 from .bvh import SceneView
 from .sampling import film_filter_of
 from .footprint import camera_footprint
@@ -51,18 +50,10 @@ def sppm_render_gpu(
 
     var default_emit_med = default_emit_medium(sd)
 
-    # A BSSRDF visible point gathers out to the material's diffusion reach, often far past the SPPM radius.
-    var eff_radius = initial_radius
-    for _mi in range(Int(sd.mediumCount)):
-        if sd.mediums[unsafe_offset=_mi].is_sss != Int32(0):
-            var _rq = dipole_max_radius(sd.mediums[unsafe_offset=_mi].sigma_s, sd.mediums[unsafe_offset=_mi].sigma_a, sd.mediums[unsafe_offset=_mi].g)
-            if _rq > eff_radius:
-                eff_radius = _rq
-    # init_r2 stays on the scene's radius, or every surface visible point would blur; only the grid cells grow.
     var init_r2 = initial_radius * initial_radius
-    var inv_cell = Float32(1.0) / eff_radius
+    var inv_cell = Float32(1.0) / initial_radius
     if verbose:
-        print("SPPM: vp radius " + String(initial_radius) + ", grid cell " + String(eff_radius))
+        print("SPPM: vp radius " + String(initial_radius) + ", grid cell " + String(initial_radius))
 
     var ret = Int32(0)
     comptime if has_accelerator():
@@ -256,7 +247,7 @@ def sppm_render_gpu(
             handle[].ctx.synchronize()
             # Verbose: count pixels without visible points, photons or light.
             if verbose:
-                var n_novp = 0; var n_nophot = 0; var n_dark = 0; var n_tot = 0; var n_envonly = 0; var n_bssrdf = 0; var n_bssrdf_lit = 0; var n_bssrdf_nan = 0
+                var n_novp = 0; var n_nophot = 0; var n_dark = 0; var n_tot = 0; var n_envonly = 0
                 with vps_buf.map_to_host() as vh:
                     var vp_host = vh.unsafe_ptr().unsafe_bitcast[SPPMPixel]()
                     for pi in range(n_pix):
@@ -273,18 +264,13 @@ def sppm_render_gpu(
                         n_tot += 1
                         for s_i in range(vp_samples):
                             var v2 = vp_host[unsafe_offset=pi * vp_samples + s_i]
-                            if v2.mat_kind == LobeKind.bssrdf and v2.valid != Int32(0):
-                                n_bssrdf += 1
-                                var ts = v2.tau.r + v2.tau.g + v2.tau.b
-                                if ts > Float32(0): n_bssrdf_lit += 1
-                                elif ts != ts: n_bssrdf_nan += 1
                         if not any_valid:
                             # A ray that misses everything has no visible point but may see the env.
                             if not any_light: n_novp += 1
                             else: n_envonly += 1
                         elif not any_phot and not any_light: n_dark += 1
                         elif not any_phot: n_nophot += 1
-                var n_ph_surf = 0; var n_ph_vol = 0; var n_ph_bssrdf = 0
+                var n_ph_surf = 0; var n_ph_vol = 0
                 with photons_buf.map_to_host() as ph_h:
                     var ph_host = ph_h.unsafe_ptr().unsafe_bitcast[SPPMPhoton]()
                     var n_scan = min(max_photons, 200000)
@@ -292,15 +278,12 @@ def sppm_render_gpu(
                         var kind = Int(ph_host[unsafe_offset=k].is_volume)
                         if kind == 0: n_ph_surf += 1
                         elif kind == 1: n_ph_vol += 1
-                        elif kind == 2: n_ph_bssrdf += 1
                 print("SPPM diag photons (last pass, first " + String(min(max_photons,200000))
-                      + " slots): surface=" + String(n_ph_surf) + " volume=" + String(n_ph_vol)
-                      + " bssrdf=" + String(n_ph_bssrdf))
+                      + " slots): surface=" + String(n_ph_surf) + " volume=" + String(n_ph_vol))
                 print("SPPM diag: " + String(n_tot) + " pixels | DEAD (no VP, no env): " + String(n_novp)
                       + " | no VP but env only: " + String(n_envonly)
                       + " | VP but zero photons AND no light: " + String(n_dark)
-                      + " | VP with light but zero photons: " + String(n_nophot)
-                      + " || BSSRDF VPs: " + String(n_bssrdf) + " of which tau>0: " + String(n_bssrdf_lit) + " NaN: " + String(n_bssrdf_nan))
+                      + " | VP with light but zero photons: " + String(n_nophot))
             # Keep the device buffers alive until the kernels that use them are done.
             _ = vps_buf^; _ = photons_buf^; _ = heads_buf^
             _ = inter_cam_buf^; _ = inter_ph_buf^; _ = r2c_buf^; _ = c2w_buf^

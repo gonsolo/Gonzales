@@ -1,6 +1,6 @@
 # A ray's hit on a scattering surface as every integrator sees it, and the BSDF there (pbrt's SurfaceInteraction).
 
-from std.math import abs
+from std.math import abs, min
 from .geometry import offset_eps, face_toward, RGB, Point3f, Vec3f, vec3f, dot
 from .materials import Material, MatKind
 from .primitives import Intersection
@@ -9,6 +9,7 @@ from .geom_normal import _geom_normal
 from .shading import _tex_lookup, _get_tri_verts, apply_surface_maps_at_hit, uv_footprint_at_hit
 from .sppm import _shading_normal_at
 from .bxdf import BSDF
+from .spectrum import SampledWavelengths, SpectralSample, rgb_bands_to_spectral_sample
 
 
 @fieldwise_init
@@ -38,6 +39,21 @@ struct SurfaceHit(TrivialRegisterPassable):
         if self.on_curve:
             return self.pos + vec3f(self.gn_geo) * (self.spawn_eps if dot(wi, self.gn_geo) >= Float32(0) else -self.spawn_eps)
         return self.pos + vec3f(wi) * Float32(0.0002)
+
+
+@always_inline
+def sss_entry_tint[use_gpu: Bool](ref sd: SceneView, mat: Material, inter: Intersection, wl: SampledWavelengths) -> SpectralSample:
+    """A textured subsurface walk's colour against the mean it was built from, capped so a bright texel stays no spike."""
+    if mat.tex_idx < Int32(0):
+        return SpectralSample(Float32(1))
+    var (mesh, v0, v1, v2, ok) = _get_tri_verts(inter, sd.meshes)
+    if not ok:
+        return SpectralSample(Float32(1))
+    var a = _tex_lookup[use_gpu](mat, inter, v0, v1, v2, mesh, sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
+    var m = mat.sss_mean_refl
+    return rgb_bands_to_spectral_sample(min(a.r / m.r, Float32(4)) if m.r > Float32(1e-4) else Float32(1),
+                                        min(a.g / m.g, Float32(4)) if m.g > Float32(1e-4) else Float32(1),
+                                        min(a.b / m.b, Float32(4)) if m.b > Float32(1e-4) else Float32(1), wl)
 
 
 @always_inline

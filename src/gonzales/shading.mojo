@@ -8,7 +8,8 @@ from std.memory.alloc import unsafe_alloc
 from .geometry import offset_point, offset_eps, RGB, Point3f, Point2f, Point2i, restir_jitter_pixel, Vec3f, dot, face_toward, cross, Frame, fast_sincos, PI, TWO_PI, INV_PI, INV_FOUR_PI, _is_real_ptr, _atan2f
 from .geometry import point3f
 from .render_state import PDF_DROP_DIRECT
-from .materials import Material, MatKind, LobeKind, MeasuredBRDF, fr_dielectric, resolve_mix
+from .materials import Material, MatKind, LobeKind, MeasuredBRDF, fr_dielectric, resolve_mix, sss_boundary_lobe
+from .gpu_media import sss_entry_lobe, sss_walk_start
 from .render_state import PathState, SssWalk, GpuTexture, NormalSlopeMap, normal_slope_map_none, ShadowTask, SuppressTask, SHADOW_SLOTS
 from .primitives import Ray, Intersection, PrimId, TriangleMesh, Sphere, Instance, mesh_uv, mesh_has_uvs, mesh_normal, mesh_vi, mesh_face
 from .primitives import mesh_pos
@@ -1468,15 +1469,9 @@ def _sss_walk_enter_interior(
     """Start the walk below a pbrt subsurface boundary along the refracted direction wi, with the interior's own
     extinction and albedo (Material.sss_walk_interior). It leaves through the walk's Lambertian exit, which carries all
     the energy out as pbrt's normalized Fresnel exit lobe does."""
-    var wl = path_ptr[].wavelengths
-    var st = mat.checker_tex1
-    var al = mat.checker_tex2
-    var out_n = face_toward(geo_normal, -wi)
-    var org = offset_point(hit, -out_n)
-    path_ptr[].ray = Ray(Point3f(org[0], org[1], org[2]), Vec3f(wi[0], wi[1], wi[2]))
-    path_ptr[].sss = SssWalk(rgb_bands_to_spectral_sample(st.r, st.g, st.b, wl), rgb_bands_to_spectral_sample(al.r, al.g, al.b, wl),
-                             mat.checker_uscale, Int32(inter.primId.id1), inter.primId.instanceIdx, Int32(0), Int32(0),
-                             hit, out_n, Float32(-1), Float32(1), Float32(1), Float32(1), Float32(0), Float32(0), Float32(0))
+    var (ray, walk) = sss_walk_start(mat, inter, hit, geo_normal, wi, path_ptr[].wavelengths)
+    path_ptr[].ray = ray
+    path_ptr[].sss = walk
     if path_ptr[].bounce == 0 or path_ptr[].specularBounce == Int8(1):
         var mr = mat.sss_mean_refl
         path_ptr[].albedo = mr if mr.r + mr.g + mr.b > Float32(0) else RGB(Float32(1))
@@ -1522,14 +1517,18 @@ def _shade_sss_exit[enqueue_shadow: Bool](
     var n = face_toward(_shading_normal(mesh, v0, v1, v2, inter.u, inter.v, geo_normal, inter.primId.instanceIdx, ctx.instances), ray_dir)
     var hit_point = offset_point(ray_org + ray_dir * inter.tHit, gn)
     var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
-    var white = BSDF(LobeKind.lambertian, True, False, n, n, RGB(Float32(1)), Int32(-1), Float32(0), Float32(0), Int32(-1),
-                     Float32(0), Float32(0), True, False)
+    var exit_mat = ctx.materials[unsafe_offset=Int(inter.primId.materialIndex)]
+    var interior = exit_mat.sss_walk_interior()   # pbrt's subsurface; Principled keeps Cycles' plain Lambertian exit
+    var white = BSDF(LobeKind.sss_exit if interior else LobeKind.lambertian, True, False, n, n, RGB(Float32(1)), Int32(-1),
+                     exit_mat.albedo.r if interior else Float32(0), Float32(0), Int32(-1), Float32(0), Float32(0), True, False)
     _lobe_nee[enqueue_shadow](path_ptr, ctx, white, hit_point, pcg)
     var (wi, pdf) = sample_cosine_hemisphere_world(pcg.next_float(), pcg.next_float(), n)
     path_ptr[].pcgState = pcg.state
     if pdf <= Float32(0) or dot(wi, gn) <= Float32(0):
         path_ptr[].active = 0
         return
+    if interior:
+        path_ptr[].throughput *= SpectralSample(sss_boundary_lobe(dot(wi, n), exit_mat.albedo.r))
     var org = spawn_origin(hit_point, gn, wi)
     path_ptr[].ray = Ray(Point3f(org[0], org[1], org[2]), Vec3f(wi[0], wi[1], wi[2]))
     path_ptr[].specularBounce = Int8(0)
@@ -1862,7 +1861,8 @@ def shade_dielectric[use_gpu: Bool, enqueue_shadow: Bool](
                 path_ptr[].wavelengths)
     if mat.sss_walk_interior() and not is_reflect and inter.primId.type == Int8(0) and \
        (force_entering or dot(ray_dir, geom_normal) < Float32(0.0)):
-        _sss_walk_enter_interior(path_ptr, mat, inter, ray_org + ray_dir * inter.tHit, geom_normal, bs.wi)
+        var wi_lobe = sss_entry_lobe(face_toward(geom_normal, bs.wi), mat.albedo.r, pcg)
+        _sss_walk_enter_interior(path_ptr, mat, inter, ray_org + ray_dir * inter.tHit, geom_normal, wi_lobe)
         path_ptr[].pcgState = pcg.state
         return
     if not is_reflect:

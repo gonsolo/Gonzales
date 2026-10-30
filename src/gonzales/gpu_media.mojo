@@ -1,19 +1,19 @@
 from max.gpu import MAX_THREADS_PER_BLOCK_METADATA
 from std.utils import StaticTuple
 from .bvh import LightSample, _sample_distant_light_nee, _sample_infinite_light_nee, _sample_point_light_nee, _sample_sphere_light_nee, any_hit_bvh2_core, test_spheres, traverse_bvh2_core, traverse_bvh2_core_defer_curves, SceneView
-from .geometry import Frame, Point2f, Point3f, RGB, Vec3f, _is_real_ptr, cross, dot, point3f, vec3f
+from .geometry import Frame, Point2f, Point3f, RGB, Vec3f, _is_real_ptr, cross, dot, face_toward, offset_point, point3f, vec3f
 from .lights import area_light_pick_triangle, light_sampler_sample
 from .geom_normal import _geom_normal
 from .materials import Material, MatKind, fr_dielectric
 from .media import Grid, MEDIUM_TRACK_MAX_ITERS, Medium, NvdbGrid, grid_ray_range, grid_sample_density, hg_phase, hg_sample, medium_emission_spectral, medium_grid_for, medium_nvdb_for, medium_sigma_s_spectral, medium_sigma_t_spectral, medium_transmittance_ratio_spectral, nvdb_index_ray, nvdb_majorant_at_world, nvdb_node_exit_t, nvdb_ray_range, nvdb_sample_density, sample_free_flight
 from .primitives import Intersection, PrimId, Ray, sphere_outward_normal, mesh_vi
 from .primitives import mesh_pos
-from .render_state import PathState
+from .render_state import PathState, SssWalk
 from .reservoir import reservoir_finalize, reservoir_update
 from .restir_vol import VolReservoir, VOL_RIS_CANDIDATES, VOL_RIS_DISTANCE, VOL_TR_UNIT, VolShiftMode, vol_reservoir_init, vol_reservoir_io_null, vol_target_pdf, vol_temporal_spatial_combine
 from .rng import PCG32
 from .sampling import power_heuristic
-from .spectrum import SpectralSample
+from .spectrum import SampledWavelengths, SpectralSample, rgb_bands_to_spectral_sample
 from max.gpu import block_dim, block_idx, thread_idx
 from std.collections import Array
 from std.math import abs, cos, exp, log, pow, sin, sqrt
@@ -618,6 +618,99 @@ def _volume_area_light_nee(
                         sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65) * (geom * ph_a * mis_w * res.state.w)
 
 
+@always_inline
+def sss_walk_start(mat: Material, inter: Intersection, hit: Vec3f, geo_normal: Vec3f, wi: Vec3f, wl: SampledWavelengths) -> Tuple[Ray, SssWalk]:
+    """The ray and state of a walk entering a pbrt subsurface boundary at `hit` along the refracted direction wi."""
+    var st = mat.checker_tex1
+    var al = mat.checker_tex2
+    var out_n = face_toward(geo_normal, -wi)
+    var org = offset_point(hit, -out_n)
+    return (Ray(Point3f(org[0], org[1], org[2]), Vec3f(wi[0], wi[1], wi[2])),
+            SssWalk(rgb_bands_to_spectral_sample(st.r, st.g, st.b, wl), rgb_bands_to_spectral_sample(al.r, al.g, al.b, wl),
+                    mat.checker_uscale, Int32(inter.primId.id1), inter.primId.instanceIdx, Int32(0), Int32(0),
+                    hit, out_n, Float32(-1), Float32(1), Float32(1), Float32(1), Float32(0), Float32(0), Float32(0)))
+
+
+@always_inline
+def sss_entry_lobe(in_n: Vec3f, eta: Float32, mut pcg: PCG32) -> Vec3f:
+    """A walk's first direction: a cosine lobe weighted by interior transmission, the mirror of its exit."""
+    var wi = _cosine_hemisphere_dir(in_n, pcg.next_float(), pcg.next_float())
+    for _ in range(8):
+        if pcg.next_float() >= fr_dielectric(abs(dot(wi, in_n)), Float32(1) / max(eta, Float32(1.0001))):
+            break
+        wi = _cosine_hemisphere_dir(in_n, pcg.next_float(), pcg.next_float())
+    return wi
+
+
+@always_inline
+def _cosine_hemisphere_dir(n: Vec3f, u1: Float32, u2: Float32) -> Vec3f:
+    var f = Frame.from_z(n)
+    var r = sqrt(u1)
+    var phi = Float32(6.283185307) * u2
+    var x = r * cos(phi)
+    var y = r * sin(phi)
+    var z = sqrt(max(Float32(1) - u1, Float32(0)))
+    return Vec3f(f.x.x * x + f.y.x * y + n.x * z, f.x.y * x + f.y.y * y + n.y * z, f.x.z * x + f.y.z * y + n.z * z)
+
+
+@fieldwise_init
+struct SssExit(TrivialRegisterPassable):
+    var ok: Bool
+    var x_o: Point3f
+    var n_o: Vec3f                  # outward geometric normal
+    var weight: SpectralSample
+
+
+@always_inline
+def sss_walk_to_exit(ref sd: SceneView, mat: Material, inter: Intersection, hit: Vec3f, geo_normal: Vec3f, wi: Vec3f,
+                     wl: SampledWavelengths, mut pcg: PCG32) -> SssExit:
+    """The path tracer's walk, run to its end in one go for the integrators without a walking wavefront."""
+    var (ray, walk) = sss_walk_start(mat, inter, hit, geo_normal, wi, wl)
+    var state = Array[PathState, 1](uninitialized=True)
+    var store = Array[Intersection, 1](fill=inter)
+    var ps = state.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
+    var hits = store.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
+    ps[].ray = ray
+    ps[].sss = walk
+    ps[].throughput = SpectralSample(Float32(1))
+    ps[].wavelengths = wl
+    ps[].active = Int8(1)
+    ps[].volume_scattered = Int8(0)
+    ps[].pcgState = pcg.state
+    ps[].pcgInc = pcg.inc
+    _sss_walk_trace(sd, walk, ray, hits)
+    _sss_walk_step(ps, hits, 0, sd)
+    pcg.state = ps[].pcgState
+    if ps[].active == 0 or ps[].sss.exiting == Int32(0):
+        return SssExit(False, Point3f(hit[0], hit[1], hit[2]), geo_normal, SpectralSample(Float32(0)))
+    var e = hits[unsafe_offset=0]
+    var r = ps[].ray
+    var x = Point3f(r.origin.x + r.direction.x * e.tHit, r.origin.y + r.direction.y * e.tHit, r.origin.z + r.direction.z * e.tHit)
+    var n = _geom_normal(e, sd.meshes, sd.instances, sd.spheres, x.to_simd())
+    if dot(n, Vec3f(r.direction.x, r.direction.y, r.direction.z)) < Float32(0):
+        n = -n
+    return SssExit(True, x, n, ps[].throughput)
+
+
+@always_inline
+def _sss_walk_trace(ref sd: SceneView, walk: SssWalk, ray: Ray, store: Pointer[Intersection, MutUntrackedOrigin]):
+    """One segment of a walk: in the mesh's own BVH when it has one."""
+    var local_bvh = -1
+    if _is_real_ptr(sd.walkBvhOfMesh) and walk.instance < Int32(0):
+        local_bvh = Int(sd.walkBvhOfMesh[unsafe_offset=Int(walk.mesh)])
+    if local_bvh >= 0:
+        traverse_bvh2_core_defer_curves[False, False, False](
+            sd.walkNodesArr[unsafe_offset=local_bvh], sd.walkPrimsArr[unsafe_offset=local_bvh], sd.meshes, sd.curves,
+            ray, Float32(1.0e38), store,
+            Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(), Pointer[Int32, MutUntrackedOrigin].unsafe_dangling())
+    else:
+        traverse_bvh2_core_defer_curves[False, True, False](
+            sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, Float32(1.0e38),
+            store,
+            Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(), Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
+            sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances)
+
+
 # Inlined so `sd` stays in kernel param space: a non-inlined call needs its
 # address, which copies the whole descriptor to local memory per thread.
 @always_inline
@@ -644,29 +737,16 @@ def _sss_walk_step[steps: Int = 256](
     var st_iso = st0 * (Float32(1) - al0 * walk.g)
     var al_iso = al0 * (Float32(1) - walk.g) / max(Float32(1) - al0 * walk.g, Float32(1e-7))
     # Dwivedi's diffusion length for the highest albedo (Cycles: a lower one gives fireflies).
-    var amax = max(al0.reduce_max(), Float32(1e-4))
+    var amax = min(max(al0.reduce_max(), Float32(1e-4)), Float32(0.9999))   # at exactly 1 the diffusion length diverges
     var dl = Float32(1) / sqrt(max(Float32(1) - pow(amax, Float32(2.44294) - Float32(0.0215813) * amax + Float32(0.578637) / amax), Float32(1e-12)))
     var phase_log = log((dl + Float32(1)) / max(dl - Float32(1), Float32(1e-7)))
     var guided_g = Float32(1) - max(Float32(0.5), pow(abs(walk.g), Float32(0.125)))
     var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
     var store = Array[Intersection, 1](fill=intersections[unsafe_offset=i])
     var ray = path_ptr[].ray
-    var local_bvh = -1
-    if _is_real_ptr(sd.walkBvhOfMesh) and walk.instance < Int32(0):
-        local_bvh = Int(sd.walkBvhOfMesh[unsafe_offset=Int(walk.mesh)])
     for it in range(steps):
         if it > 0:
-            if local_bvh >= 0:
-                traverse_bvh2_core_defer_curves[False, False, False](
-                    sd.walkNodesArr[unsafe_offset=local_bvh], sd.walkPrimsArr[unsafe_offset=local_bvh], sd.meshes, sd.curves,
-                    ray, Float32(1.0e38), store.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin](),
-                    Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(), Pointer[Int32, MutUntrackedOrigin].unsafe_dangling())
-            else:
-                traverse_bvh2_core_defer_curves[False, True, False](
-                    sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, Float32(1.0e38),
-                    store.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin](),
-                    Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(), Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
-                    sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances)
+            _sss_walk_trace(sd, walk, ray, store.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]())
         var step = path_ptr[].sss.steps
         if step >= Int32(_SSS_MAX_STEPS):
             path_ptr[].active = 0   # Cycles' BSSRDF_MAX_BOUNCES: a walk this long is given up

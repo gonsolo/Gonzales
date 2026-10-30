@@ -11,7 +11,6 @@ from .sppm import area_light_side_pdf
 from .shading import (
     _shade_context, _mnee_first_probe, _mnee_chain, _mnee_chain_t_eta, _mnee_reproduce, _emitter_face_normal,
 )
-from .bssrdf import bssrdf_exit_ft
 from .vcm_mis import MisPolicy
 from .bvh import SceneView, _scene_bounding_sphere, LightSample, _sample_infinite_light_nee, light_path_pick, light_path_pick_pdf
 from .rng import PCG32
@@ -75,7 +74,7 @@ def _vcm_nee_surface(
     beta: SpectralSample, eta_x: Float32, dvcm: Float32, dvc: Float32,
     cur_med_idx: Int32, scratch: Pointer[Intersection, MutUntrackedOrigin],
     wavelengths: SampledWavelengths, mut pcg: PCG32,
-    spawn_eps: Float32, two_sided: Bool, exit_eta: Float32,
+    spawn_eps: Float32, two_sided: Bool,
 ) -> SpectralSample:
     """NEE from one camera surface vertex to every distant/point/sphere and infinite
     light, weighted by VCM's balance policy. `ctx` is the lobe, `gn_geo` the geometric"""
@@ -87,8 +86,6 @@ def _vcm_nee_surface(
             continue   # a non-emitting sphere
         var pol = _vcm_simple_light_policy(sd, li, ls, v, eta_x, dvcm, dvc, _vcm_cos_at(sd, v, ls.wi), wavelengths)
         var w = ctx.nee_weight_mis(ls, tab, wavelengths, pol)
-        if exit_eta > Float32(0):
-            w = w * bssrdf_exit_ft(dot(gn_geo, ls.wi), exit_eta)
         total += _bdpt_nee_contribute(beta, w, ls, pos, gn_geo, cur_med_idx, sd, scratch, wavelengths, spawn_eps, two_sided)
     for inf_i in range(Int(sd.infiniteLightCount)):
         var ls = _sample_infinite_light_nee(sd.infiniteLights[unsafe_offset=inf_i], Point2f(pcg.next_float(), pcg.next_float()), pos)
@@ -99,8 +96,6 @@ def _vcm_nee_surface(
                             ls.pdf * light_path_pick_pdf(sd, _vcm_infinite_slot(sd, inf_i)) / max(PI * r * r, Float32(1e-12)),
                             le.pdf_rev, False, _vcm_cos_at(sd, v, ls.wi))
         var w = ctx.nee_weight_mis(ls, tab, wavelengths, pol)
-        if exit_eta > Float32(0):
-            w = w * bssrdf_exit_ft(dot(gn_geo, ls.wi), exit_eta)
         total += _bdpt_nee_contribute(beta, w, ls, pos, gn_geo, cur_med_idx, sd, scratch, wavelengths, spawn_eps, two_sided)
     return total
 

@@ -7,12 +7,10 @@ recursion is short but easy to get subtly wrong, and it was written out by
 hand at sixteen sites in bdpt_*.mojo -- once per material per subpath -- which
 is how a material ends up with a rule the others do not have.
 
-Three rules cover every vertex:
+Two rules cover every vertex:
 
   arrival  (`vcm_arrival_carries`)  divide by the geometry cos at the vertex
   scatter  (`vcm_scatter_carries`)  the recursion proper, per sampled direction
-  hop      (`bssrdf_hop_carries`)   a subsurface hop, which has no connection
-                                    across it
 
 Volume vertices and delta dielectrics deliberately sit OUTSIDE this
 recursion (they reset dVCM to 0 rather than carrying a real weight) -- see
@@ -72,7 +70,7 @@ def vcm_scatter_carries[dvc0: Bool = False](
     per-vertex eta, so the same recursion at eta = 0 IS the constant term --
     no second recursion and no closed form. The delta rule (scale by cos_out)
     and the arrival divide are identical for all three carries, so only this
-    function and bssrdf_hop_carries need the switch. Default False keeps the
+    function needs the switch. Default False keeps the
     legacy dVM, byte for byte."""
     if pdf_fwd_w <= Float32(1e-8):
         return (Float32(0.0), Float32(0.0), Float32(0.0))
@@ -83,88 +81,6 @@ def vcm_scatter_carries[dvc0: Bool = False](
     return (Float32(1.0) / pdf_fwd_w,
             cos_over_pdf * (dvc * pdf_rev_w + dvcm + mis_vm_weight_factor),
             cos_over_pdf * (dvm * pdf_rev_w + dvcm * mis_vc_weight_factor + Float32(1.0)))
-
-
-@always_inline
-def bssrdf_hop_carries[dvc0: Bool = False](
-                       dvcm: Float32, dvc: Float32, dvm: Float32,
-                       p_area: Float32, pdf_rev_entry: Float32,
-                       mis_vc_weight_factor: Float32) -> Tuple[Float32, Float32, Float32]:
-    """(dVCM, dVC, dVM) after a hop from an entry vertex to its exit point.
-
-    dVC's rule is machine-checked against brute-force path pdfs to 4e-16 by
-    Scenes/vcm_bssrdf_mis_derivation.py:
-
-        dVC  = (1/p_A) * (dVC * pdf_rev_entry + dVCM)   area measure: no cos, no d^2
-        dVCM = 0                                         no connection ACROSS the hop
-
-    pdf_rev_entry is the entry vertex's own direction pdf toward its
-    predecessor (the exit lobe's cos/pi). dVCM = 0 is the load-bearing part:
-    keeping 1/p_A counts a connection across the hop that does not exist and
-    biases every real strategy dark.
-
-    dVM follows the same shape with the vertex-merging term at the ENTRY
-    vertex dropped, because the entry is never a merge site. That half is NOT
-    covered by the harness (which models connections only; merging is off by
-    default), so treat it as derived, not verified.
-
-    `dvc0=True`: the third slot is dVC0 (see vcm_scatter_carries), whose hop
-    rule is dVC's own -- dVC's hop carries no eta term, so it is already its
-    own eta = 0 version. The hop takes a path out of CAMIS's class anyway."""
-    var inv = Float32(1.0) / p_area
-    comptime if dvc0:
-        return (Float32(0.0),
-                inv * (dvc * pdf_rev_entry + dvcm),
-                inv * (dvm * pdf_rev_entry + dvcm))
-    return (Float32(0.0),
-            inv * (dvc * pdf_rev_entry + dvcm),
-            inv * (dvm * pdf_rev_entry + dvcm * mis_vc_weight_factor))
-
-
-@always_inline
-def bssrdf_exit_scatter_carries[dvc0: Bool = False](
-                                dvcm: Float32, dvc: Float32, dvm: Float32,
-                                p_area: Float32, cos_out: Float32,
-                                mis_vc_weight_factor: Float32,
-                                mis_vm_weight_factor: Float32) -> Tuple[Float32, Float32, Float32]:
-    """(dVCM, dVC, dVM) after the exit vertex scatters a cosine-sampled ray.
-
-    vcm_scatter_carries with one difference the harness establishes: the exit
-    vertex's REVERSE density toward its predecessor is the hop's p_A (area
-    measure, symmetric), not a direction pdf. `dvc0` as there."""
-    return vcm_scatter_carries[dvc0](dvcm, dvc, dvm, PI, cos_out / PI, p_area,
-                                     mis_vc_weight_factor, mis_vm_weight_factor)
-
-
-# ── The two CAMERA-side weights for an ENVIRONMENT light ────────────────────
-# Everything above carries MIS state along a subpath. These two spend it, at
-# the only two places a camera path can see an infinite light: it samples one
-# (NEE) or it escapes into one.
-#
-# Both were a bare `power_heuristic(pdf_a, pdf_b)` -- a TWO-strategy weight,
-# beta=2, that knows only about NEE and BSDF sampling. Every other strategy
-# here is combined with the BALANCE heuristic (bdpt_*.mojo's opening line: "MIS:
-# balance heuristic over all valid connection strategies"), and the two
-# families cannot partition unity: NEE and the escape divided a full 1.0
-# between themselves, leaving no share for vertex merging or t=1 light
-# tracing, which then added theirs on top.
-#
-# Derived and verified in Scenes/vcm_env_mis_derivation.py (exact to 1e-16
-# against a direct enumeration of every strategy's path density). At one
-# surface vertex there:
-#
-#     strategy          correct   power heuristic gave
-#     escape (s=0)       0.5400   0.7995
-#     NEE    (s=1)       0.2107   0.2005
-#     t=1                0.0442
-#     merging            0.2050
-#
-# The ESCAPE is the dominant error: the 0.26 it takes too much is almost
-# exactly merging + t=1's combined share, 0.249.
-#
-# Both take `cos_at_light = 1`: an environment light is NOT finite, so it has
-# no surface to take a cosine at -- the same "usedCosLight" case the light
-# subpath's own origin takes when it seeds these carries.
 
 
 @always_inline

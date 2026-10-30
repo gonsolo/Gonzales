@@ -29,7 +29,7 @@ struct LobeKind:
     comptime ggx         = Int32(1)
     comptime hair        = Int32(2)
     comptime measured    = Int32(3)
-    comptime bssrdf      = Int32(5)   # subsurface: exit lobe Ft(cos)/pi (VCM), diffusion gather (SPPM)
+    comptime sss_exit    = Int32(5)   # a subsurface walk's exit, Lambertian; does not merge
     comptime diffuse_transmit = Int32(6)   # two cosine lobes, one per side
     comptime layered = Int32(8)   # coateddiffuse as pbrt's LayeredBxDF (layered.mojo): f, pdf_fwd, pdf_rev all real
     comptime rough_dielectric = Int32(9)   # pbrt DielectricBxDF over Trowbridge-Reitz (layered.mojo diel_*); param = alpha, IOR from the material
@@ -45,7 +45,6 @@ struct PhotonKind:
     pairs equal kinds."""
     comptime surface = Int32(0)
     comptime volume  = Int32(1)
-    comptime bssrdf  = Int32(2)   # photons on a subsurface boundary, for the diffusion gather
 
 @fieldwise_init
 struct Material(TrivialRegisterPassable):
@@ -371,3 +370,11 @@ def fr_dielectric(cos_theta_i_in: Float32, eta_in: Float32) -> Float32:
     var r_perp = fast_div(cos_theta_i - eta * cos_theta_t, cos_theta_i + eta * cos_theta_t)
     return (r_parl * r_parl + r_perp * r_perp) * Float32(0.5)
 
+
+@always_inline
+def sss_boundary_lobe(cos_theta: Float32, eta: Float32) -> Float32:
+    """A subsurface boundary's cosine lobe, Ft(cos)/c: pbrt's reciprocal S_w, normalised over the hemisphere."""
+    var x = Float32(1) / eta
+    var moment = Float32(0.45966) + x * (Float32(-1.73965) + x * (Float32(3.37668) + x * (Float32(-3.904945)
+                 + x * (Float32(2.49277) + x * Float32(-0.68441)))))
+    return (Float32(1) - fr_dielectric(cos_theta, eta)) / (Float32(1) - Float32(2) * moment)

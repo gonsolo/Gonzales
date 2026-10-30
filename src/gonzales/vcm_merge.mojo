@@ -117,7 +117,7 @@ def _bdpt_merge_from_cache(
                     var lv = lvc[unsafe_offset=k]
                     # is_light==1 vertices are the light SOURCE's own point
                     # (the s=1 connection strategy): their beta is 1/pdf_area
-                    if lv.is_delta == Int32(0) and lv.is_surface == cv.is_surface and lv.is_light == Int32(0) and lv.mat_kind != LobeKind.bssrdf and _bdpt_vertex_mis_scoped(lv) and _vcm_on_fibre(lv) == on_fibre:
+                    if lv.is_delta == Int32(0) and lv.is_surface == cv.is_surface and lv.is_light == Int32(0) and lv.mat_kind != LobeKind.sss_exit and _bdpt_vertex_mis_scoped(lv) and _vcm_on_fibre(lv) == on_fibre:
                         var e = lv.pos - cv.pos
                         var dist2 = e.length_sq()
                         var accept: Bool

@@ -105,7 +105,7 @@ def camis_cam_arrive[N: Int](
     """Arriving at STORED camera vertex tau (0 = y1), after the carries were
     divided by cos_v. `dvcm_arrival` is that divided dVCM: 1/p_A of the edge
     in, for tau > 0. `vertex_ok`: this vertex itself qualifies for the Class
-    (MIS-scoped surface, non-delta, not a BSSRDF exit).
+    (MIS-scoped surface, non-delta, not a subsurface exit).
 
     At y1 the path has had no event before (else it would already be out of
     the Class), so t_hit IS |y1 - lens|."""

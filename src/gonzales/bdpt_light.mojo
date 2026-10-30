@@ -22,8 +22,8 @@ from .bdpt_eval import _bdpt_vertex_mis_scoped, _vcm_mnee_light_dvcm
 from .vcm_grid import _vcm_depth, _VCM_MAX_STORED, _vcm_keep, _VCM_CAMIS, _vcm_eta_scale, _vcm_eta_at, _vcm_fibre_scale
 from .bdpt_connect import _bdpt_store_lvc_vertex
 from .bdpt_camera import (
-    _vcm_scatter, _vcm_lobe_vertex, _vcm_bssrdf_hop, _vcm_bssrdf_vertex,
-    _vcm_bssrdf_exit_scatter, _vcm_dielectric_cross,
+    _vcm_scatter, _vcm_lobe_vertex, _vcm_sss_walk, _vcm_sss_entered, _vcm_sss_exit_vertex,
+    _vcm_sss_exit_scatter, _vcm_dielectric_cross,
 )
 
 @fieldwise_init
@@ -459,36 +459,32 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
 
         elif mat.type == MatKind.dielectric or mat.type == MatKind.thin_dielectric:
             comptime if _VCM_CAMIS:
-                camis_l.in_class = False   # BSSRDF hop or delta dielectric: see the camera side
-            # ── Subsurface boundary: the light subpath's half of the hop ───
-            # Mirror of the camera side: the light enters at x_i, the exit x_o
-            # is drawn by the SAME sampler (the MIS weights require identical
-            var did_bssrdf_hop = False
-            if mat.sss_boundary != Int8(0) and Int(st.cur_med_idx) < 0 and has_med:
-                var med_in = medium_after(ray_dir, Int32(-1), inter, mat, sd, hit.to_simd())
-                if med_in >= Int32(0) and Int(med_in) < Int(sd.mediumCount):
-                    var ex = _vcm_bssrdf_hop(sd, inter, mat, hit, ray_dir, Int(med_in), mis_vc_weight_factor, pcg, st.wl,
-                                             st.flux, st.dvcm, st.dvc, st.dvm)
-                    if not ex.ok:
-                        return False
-                    var eta_e = mat.albedo.r
-                    var v = _vcm_bssrdf_vertex(ex, eta_e, st.flux, st.cur_med_idx, st.wl, st.dvcm, st.dvc, st.dvm)
-                    st.n_verts += 1
-                    v.n_delta = Int32(st.n_delta)
-                    _bdpt_store_lvc_vertex(v, lvc, lp_idx, st.n_verts - 1)
-                    comptime if _VCM_CAMIS:
-                        camis_light_arrive(camis_l, camis_recs, st.n_verts - 1, Float32(0), t_hit, Float32(0), False)
-                    _ = _vcm_bssrdf_exit_scatter(sd, ex, eta_e, mis_vc_weight_factor, mis_vm_weight_factor, pcg,
-                                                 st.ro, st.rd, st.flux, st.dvcm, st.dvc, st.dvm)
-                    did_bssrdf_hop = True
-                    st.mnee.side = Float32(0)
-            if not did_bssrdf_hop:
+                camis_l.in_class = False   # subsurface walk or delta dielectric: see the camera side
+            var dvcm_in = st.dvcm; var dvc_in = st.dvc; var dvm_in = st.dvm; var med_in = st.cur_med_idx
+            var ior_cur = st.current_dielectric_ior; var ior_prev = st.previous_dielectric_ior
+            _ = _vcm_dielectric_cross[use_gpu, False](sd, inter, mat, hit, ray_dir, Float32(-1.0), has_med, pcg,
+                    st.ro, st.rd, st.current_dielectric_ior, st.previous_dielectric_ior, st.cur_med_idx, st.dvcm, st.dvc, st.dvm)
+            if _vcm_sss_entered(mat, inter, ray_dir, st.rd, med_in, sd, hit):
+                st.cur_med_idx = med_in
+                st.current_dielectric_ior = ior_cur; st.previous_dielectric_ior = ior_prev
+                var ex = _vcm_sss_walk[use_gpu](sd, inter, mat, hit, ray_dir, st.rd, st.wl, mis_vc_weight_factor, pcg, st.flux,
+                                                st.dvcm, st.dvc, st.dvm, dvcm_in, dvc_in, dvm_in)
+                if not ex.ok:
+                    return False
+                var v = _vcm_sss_exit_vertex(ex, mat.albedo.r, st.flux, st.cur_med_idx, st.wl, st.dvcm, st.dvc, st.dvm)
+                st.n_verts += 1
+                v.n_delta = Int32(st.n_delta)
+                _bdpt_store_lvc_vertex(v, lvc, lp_idx, st.n_verts - 1)
+                comptime if _VCM_CAMIS:
+                    camis_light_arrive(camis_l, camis_recs, st.n_verts - 1, Float32(0), t_hit, Float32(0), False)
+                _ = _vcm_sss_exit_scatter(sd, ex, mat.albedo.r, mis_vc_weight_factor, mis_vm_weight_factor, pcg,
+                                          st.ro, st.rd, st.flux, st.dvcm, st.dvc, st.dvm)
+                st.mnee.side = Float32(0)
+            else:
                 st.n_delta += 1
                 if st.mnee.n_glass == Int32(0):
                     st.mnee.first_glass = hit.to_simd()
                 st.mnee.n_glass += 1
-                _ = _vcm_dielectric_cross[use_gpu, False](sd, inter, mat, hit, ray_dir, Float32(-1.0), has_med, pcg,
-                    st.ro, st.rd, st.current_dielectric_ior, st.previous_dielectric_ior, st.cur_med_idx, st.dvcm, st.dvc, st.dvm)
 
         elif mat.passes_rays():
             if has_med:

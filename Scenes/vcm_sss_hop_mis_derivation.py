@@ -1,23 +1,14 @@
 #!/usr/bin/env python3
-"""Numerical check of VCM's dVCM/dVC recursion across a BSSRDF HOP.
+"""Numerical check of VCM's dVCM/dVC/dVM recursion across a subsurface WALK with a reciprocal boundary.
 
-A subsurface event splits into two path vertices joined by a non-ray edge:
-the path enters at one point and leaves at another, the exit sampled from the
-diffusion profile with an AREA density p_A(r). This harness enumerates every
-connection strategy's full path pdf directly and checks that a local recursion
-carried along each subpath reproduces the balance-heuristic weights.
-
-Model (surface-only path, vacuum, so free flight is 1 and only the hop is new):
-  ray edge a->b   p(b) = p_dir(a, w) * cos_b / d^2          (Lambertian p_dir)
-  hop edge A<->B  p(B|A) = p(A|B) = p_A(|A-B|)               (area, symmetric)
-
-The hop is oriented. Along the CAMERA subpath (high index -> low) the path
-enters at B and exits at A; along the LIGHT subpath it enters at A and exits
-at B. Only an EXIT point is a connectible vertex. A connection ACROSS the hop
-edge itself (a deterministic BSSRDF connection) is not implemented, so that
-one strategy has zero probability and is excluded from the ground truth.
-
-Usage: vcm_bssrdf_mis_derivation.py    (exit status 1 on failure)
+Reciprocal model: a path enters with probability T(cos) = 1 - F(cos) at its arrival direction, walks to an exit, and
+leaves with a cosine-sampled ray. The walk's interior is treated as one symmetric hop density p_A (exact for an
+unguided walk, r = 1, see vcm_sss_walk_mis_derivation.py). So unlike a dipole hop the edge is NOT symmetric:
+  entry A -> exit B: p = T(A, toward predecessor) * p_A
+  reverse at B:      p = T(B, toward successor)   * p_A
+Enumerates every connection strategy's full path pdf and checks that the local recursion reproduces the balance
+weights. Only an exit is a connectible vertex; connecting across the hop is not a strategy.
+Usage: vcm_sss_hop_mis_derivation.py    (exit status 1 on failure)
 """
 import math, random, sys
 
@@ -43,6 +34,17 @@ def p_hop(a, b, sigma_tr):
     return sigma_tr * math.exp(-sigma_tr * r) / (2.0 * math.pi * r) * abs(dot(a.n, b.n))
 
 
+def T(v, other):
+    """1 - Fresnel at v for the direction toward `other`, eta 1.33."""
+    c = abs(dot(v.n, unit(sub(other.pos, v.pos))))
+    eta = 1.33
+    s2 = (1 - c * c) / (eta * eta)
+    ct = math.sqrt(1 - s2)
+    rs = (c - eta * ct) / (c + eta * ct)
+    rp = (eta * c - ct) / (eta * c + ct)
+    return 1 - 0.5 * (rs * rs + rp * rp)
+
+
 class V:
     def __init__(self, pos, n):
         self.pos, self.n = pos, n
@@ -52,7 +54,8 @@ def edge_pdf(xs, i, j, hop, sigma_tr):
     """Density of sampling xs[j] from xs[i] (i, j adjacent)."""
     a, b = xs[i], xs[j]
     if hop is not None and {i, j} == {hop, hop + 1}:
-        return p_hop(a, b, sigma_tr)
+        prev = i - 1 if j > i else i + 1
+        return T(a, xs[prev]) * p_hop(a, b, sigma_tr)
     d = sub(b.pos, a.pos); dist = norm(d); w = unit(d)
     return p_dir(a.n, w) * abs(dot(b.n, w)) / (dist * dist)
 
@@ -117,13 +120,13 @@ def carries(xs, hop, sigma_tr, p_start, stop, from_camera):
         if first:
             pdf_rev = 0.0
         elif hop is not None and {i, k} == {hop, hop + 1}:
-            pdf_rev = p_hop(a, xs[k], sigma_tr)     # reverse of the hop just taken
+            pdf_rev = (T(a, b) if RULE == "exact" else 1.0) * p_hop(a, xs[k], sigma_tr)     # reverse of the hop just taken
         else:
             pdf_rev = p_dir(a.n, unit(sub(xs[k].pos, a.pos)))
         if is_hop:
-            pdf_dir = p_hop(a, b, sigma_tr)
+            pdf_dir = (T(a, xs[k]) if RULE == "exact" else 1.0) * p_hop(a, b, sigma_tr)
             dVC = (1.0 / pdf_dir) * (dVC * pdf_rev + dVCM)
-            dVCM = 0.0 if RULE == "exact" else 1.0 / pdf_dir
+            dVCM = 0.0
         else:
             d = sub(b.pos, a.pos); dist = norm(d); w = unit(d)
             pdf_dir = p_dir(a.n, w)
@@ -135,10 +138,10 @@ def carries(xs, hop, sigma_tr, p_start, stop, from_camera):
     return dVCM, dVC
 
 
-def rev_pdf_at(xs, v_idx, other_idx, hop, sigma_tr):
-    """Reverse density at an endpoint toward its subpath predecessor."""
+def rev_pdf_at(xs, v_idx, other_idx, partner_idx, hop, sigma_tr):
+    """Reverse density at an endpoint toward its subpath predecessor; the connection partner is its successor."""
     if hop is not None and {v_idx, other_idx} == {hop, hop + 1}:
-        return p_hop(xs[v_idx], xs[other_idx], sigma_tr)
+        return (T(xs[v_idx], xs[partner_idx]) if RULE == "exact" else 1.0) * p_hop(xs[v_idx], xs[other_idx], sigma_tr)
     return p_dir(xs[v_idx].n, unit(sub(xs[other_idx].pos, xs[v_idx].pos)))
 
 
@@ -150,8 +153,8 @@ def recursion_weight(xs, s, hop, sigma_tr, pL, pC):
     wc2l = (-wl2c[0], -wl2c[1], -wl2c[2])
     lv_dVCM, lv_dVC = carries(xs, hop, sigma_tr, pL, lvi, from_camera=False)
     cv_dVCM, cv_dVC = carries(xs, hop, sigma_tr, pC, cvi, from_camera=True)
-    lig_rev = 0.0 if lvi == 0 else rev_pdf_at(xs, lvi, lvi - 1, hop, sigma_tr)
-    cam_rev = 0.0 if cvi == n else rev_pdf_at(xs, cvi, cvi + 1, hop, sigma_tr)
+    lig_rev = 0.0 if lvi == 0 else rev_pdf_at(xs, lvi, lvi - 1, cvi, hop, sigma_tr)
+    cam_rev = 0.0 if cvi == n else rev_pdf_at(xs, cvi, cvi + 1, lvi, hop, sigma_tr)
     cam_dir_a = p_dir(cv.n, wc2l) * abs(dot(lv.n, wc2l)) / (dist * dist)
     lig_dir_a = p_dir(lv.n, wl2c) * abs(dot(cv.n, wl2c)) / (dist * dist)
     w_light = cam_dir_a * (lv_dVCM + lv_dVC * lig_rev)
@@ -211,7 +214,7 @@ def main():
         if hop is not None:
             bad = max(bad, w)
     RULE = "exact"
-    print(f"anti-vacuity, recursion with dVCM = 1/p_A: worst {bad:.3e}  (must be >> 1e-9)")
+    print(f"anti-vacuity, recursion without the entry and exit T: worst {bad:.3e}  (must be >> 1e-9)")
     sys.exit(0 if ok and bad > 1e-6 else 1)
 
 
