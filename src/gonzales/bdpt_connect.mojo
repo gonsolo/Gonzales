@@ -16,6 +16,7 @@ from .sampling import power_heuristic, FilmFilter, filter_eval_2d, filter_integr
 from .rng import PCG32
 from .spectrum import SpectralSample, spec_illum
 from .bdpt_vertex import _BDPT_MAX_VERTS, BDPTVertex
+from .materials import LobeKind
 from .bdpt_nee import _visible_transmittance
 from .bdpt_eval import _vcm_cos_at, _eval_vertex_spectral, _bdpt_vertex_pdfs, _bdpt_vertex_mis_scoped, _bdpt_connect_pair_weighted
 from .vcm_grid import (
@@ -198,7 +199,7 @@ def _bdpt_connect_to_camera(
     #   wLight = (cameraPdfA / lightSubPathCount)
     var (_dp, rev_pdf_w) = _bdpt_vertex_pdfs(lv, Vec3f(dir_to_cam[0], dir_to_cam[1], dir_to_cam[2]), sd)
     var camera_pdf_a = image_to_surface
-    var eta_lv_splat = _vcm_eta_at(sd, lv, mis_vm_weight_factor) if _vcm_on_fibre(lv) \
+    var eta_lv_splat = _vcm_eta_at(sd, lv, mis_vm_weight_factor) if _vcm_on_fibre(lv) or lv.mat_kind == LobeKind.sss_exit \
         else mis_vm_weight_factor * _vcm_eta_scale(sd, lv.pos)
     var mis_weight: Float32
     comptime if _VCM_CAMIS:

@@ -31,7 +31,7 @@ from .spectrum import (
     SampledWavelengths, SpectralSample, spec_refl, spec_refl_unbounded, spec_illum,
     rgb_bands_to_spectral_sample,
 )
-from .bdpt_vertex import _VOL_PHASE_HIT, _vcm_walk_limit, _BDPT_MAX_VERTS, BDPTVertex, _null_vertex
+from .bdpt_vertex import _VCM_SSS_CAMERA_ONLY, _VOL_PHASE_HIT, _vcm_walk_limit, _BDPT_MAX_VERTS, BDPTVertex, _null_vertex
 from .bdpt_nee import _bdpt_simple_light_count, _bdpt_sample_simple_light, _bdpt_nee_contribute
 from .bdpt_eval import (
     _vcm_sphere_slot, _vcm_infinite_slot, _vcm_nee_surface, _vertex_ctx, _bdpt_vertex_mis_scoped, _vcm_mnee,
@@ -274,6 +274,10 @@ def _vcm_sss_walk[use_gpu: Bool](
         var inv_t = Float32(1) / max(Float32(1) - fr_dielectric(cos_e, mat.albedo.r), Float32(1e-6))
         var pdf_rev = cos_e * INV_PI
         dvcm = Float32(0)
+        comptime if _VCM_SSS_CAMERA_ONLY:
+            dvc = Float32(0)
+            dvm = Float32(0)
+            return ex
         dvc = inv_t * (a_vc * pdf_rev + a_vcm)
         comptime if _VCM_CAMIS:
             dvm = inv_t * (a_vm * pdf_rev + a_vcm)
@@ -323,7 +327,7 @@ def _vcm_sss_exit_scatter(
     var cos_out = abs(dot(rd.to_simd(), ex.n_o))
     beta *= SpectralSample(sss_boundary_lobe(cos_out, eta))
     (dvcm, dvc, dvm) = vcm_scatter_carries[_VCM_CAMIS](dvcm, dvc, dvm, PI, cos_out / PI, Float32(1) - fr_dielectric(cos_out, eta),
-                                                        mis_vc, mis_vm * _vcm_eta_scale(sd, ex.x_o))
+                                                        mis_vc, Float32(0))   # an exit does not merge
     return cos_out
 
 
@@ -813,7 +817,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                         st.total += _bdpt_connect_to_cache(v, sd, has_med, scratch, lvc, lp_idx, path_len, mis_vm_weight_factor, st.n_verts + st.n_delta, camis, camis_recs, lvc_camis, n_light_paths_f)
                 var ctx_x = BSDF(LobeKind.sss_exit, True, False, n_o, n_o, RGB(Float32(1)), Int32(-1), mat.albedo.r,
                                     Float32(0), Int32(-1), Float32(0), Float32(0), True, False)
-                st.total += _vcm_nee_surface(sd, v, ctx_x, x_o, n_o, st.beta, mis_vm_weight_factor * _vcm_eta_scale(sd, x_o),
+                st.total += _vcm_nee_surface(sd, v, ctx_x, x_o, n_o, st.beta, Float32(0),
                                           v.dVCM, v.dVC, st.cur_med_idx, scratch, st.wl, pcg,
                                           offset_eps(x_o.x, x_o.y, x_o.z), False)
                 var cos_out_x = _vcm_sss_exit_scatter(sd, ex, mat.albedo.r, mis_vc_weight_factor, mis_vm_weight_factor, pcg,

@@ -17,7 +17,7 @@ from .bvh import SceneView, test_spheres, _scene_bounding_sphere, _sample_disk_p
 from .rng import PCG32
 from .sppm import _cosine_hemisphere_sample, sample_area_light_point, sample_sphere_light_emission, area_light_emit_normal, area_light_side_pdf
 from .spectrum import SampledWavelengths, SpectralSample, spec_refl, spec_illum
-from .bdpt_vertex import _vcm_walk_limit, _BDPT_MAX_VERTS, BDPTVertex, _null_vertex
+from .bdpt_vertex import _VCM_SSS_CAMERA_ONLY, _vcm_walk_limit, _BDPT_MAX_VERTS, BDPTVertex, _null_vertex
 from .bdpt_eval import _bdpt_vertex_mis_scoped, _vcm_mnee_light_dvcm
 from .vcm_grid import _vcm_depth, _VCM_MAX_STORED, _vcm_keep, _VCM_CAMIS, _vcm_eta_scale, _vcm_eta_at, _vcm_fibre_scale
 from .bdpt_connect import _bdpt_store_lvc_vertex
@@ -465,6 +465,8 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
             _ = _vcm_dielectric_cross[use_gpu, False](sd, inter, mat, hit, ray_dir, Float32(-1.0), has_med, pcg,
                     st.ro, st.rd, st.current_dielectric_ior, st.previous_dielectric_ior, st.cur_med_idx, st.dvcm, st.dvc, st.dvm)
             if _vcm_sss_entered(mat, inter, ray_dir, st.rd, med_in, sd, hit):
+                comptime if _VCM_SSS_CAMERA_ONLY:
+                    return False
                 st.cur_med_idx = med_in
                 st.current_dielectric_ior = ior_cur; st.previous_dielectric_ior = ior_prev
                 var ex = _vcm_sss_walk[use_gpu](sd, inter, mat, hit, ray_dir, st.rd, st.wl, mis_vc_weight_factor, pcg, st.flux,

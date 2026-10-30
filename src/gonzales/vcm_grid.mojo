@@ -175,6 +175,8 @@ def _vcm_mergeable(ref sd: SceneView, v: BDPTVertex) -> Bool:
 def _vcm_eta_at(ref sd: SceneView, v: BDPTVertex, mis_vm_weight_factor: Float32) -> Float32:
     """This vertex's own eta(x) = N * (kernel measure at x), fully scaled --
     a DISK area on a surface, a BALL volume in a medium; 0 where it cannot merge. `mis_vm_weight_factor`"""
+    if v.mat_kind == LobeKind.sss_exit:
+        return Float32(0)
     if _vcm_on_fibre(v):
         return mis_vm_weight_factor * _vcm_fibre_scale(sd, v.pos, Int(v.hair_curve_idx), v.hair_v)
     if v.is_surface == Int32(0):
