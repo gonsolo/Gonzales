@@ -12,10 +12,8 @@ Two rules cover every vertex:
   arrival  (`vcm_arrival_carries`)  divide by the geometry cos at the vertex
   scatter  (`vcm_scatter_carries`)  the recursion proper, per sampled direction
 
-Volume vertices and delta dielectrics deliberately sit OUTSIDE this
-recursion (they reset dVCM to 0 rather than carrying a real weight) -- see
-project_vcm_stage2_mis_derivation; that gap is documented, not an oversight
-of this module.
+Delta dielectrics reset dVCM to 0. Volume vertices carry the same recursion with
+no cosine (Scenes/vcm_volume_mis_derivation.py).
 """
 from .geometry import PI
 from .sampling import power_heuristic

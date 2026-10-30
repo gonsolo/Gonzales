@@ -18,12 +18,25 @@ from .spectrum import SpectralSample, spec_illum
 from .bdpt_vertex import _BDPT_MAX_VERTS, BDPTVertex
 from .materials import LobeKind
 from .bdpt_nee import _visible_transmittance
+from .media import medium_sigma_t_at_spectral
 from .bdpt_eval import _vcm_cos_at, _eval_vertex_spectral, _bdpt_vertex_pdfs, _bdpt_vertex_mis_scoped, _bdpt_connect_pair_weighted
 from .vcm_grid import (
     _vcm_too_long, _vcm_keep, _VCM_CAMIS, _CAMIS_CAM_RECS, _CAMIS_FORCE_C1, _vcm_eta_scale,
-    _vcm_eta_at, _vcm_on_fibre,
+    _vcm_eta_at, _vcm_on_fibre, _vcm_past_depth, _vcm_past_cache,
 )
 from .vcm_merge_weight import _camis_gather_light
+
+
+@always_inline
+def _vcm_free_flight(ref sd: SceneView, v: BDPTVertex, tr: SpectralSample) -> Float32:
+    """A connection edge's distance-sampling density ending at `v`: survival to a surface, collision in a medium
+    (Scenes/vcm_volume_mis_derivation.py, free_flight)."""
+    if v.is_surface != Int32(0) or Int(v.med_idx) < 0:
+        return tr.average()
+    ref s = sd.spectral
+    return (tr * medium_sigma_t_at_spectral(sd.mediums[unsafe_offset=Int(v.med_idx)], sd.grids, sd.nvdbGrids, v.pos.to_simd(),
+                                            v.wavelengths, s.coeffs, s.res, s.cie_x, s.cie_y, s.cie_z, s.d65)).average()
+
 
 @always_inline
 def _pdf_solid_to_area(pdf_solid: Float32, cos_theta: Float32, dist2: Float32) -> Float32:
@@ -138,7 +151,7 @@ def _bdpt_connect_to_camera(
 ) -> Tuple[Bool, Float32, Float32, SpectralSample]:
     """The t=1 strategy: connect a LIGHT-subpath vertex directly to the
     camera and return the continuous raster position it lands on plus its"""
-    if lv.is_delta != Int32(0) or lv.is_surface == Int32(0):
+    if lv.is_delta != Int32(0):
         return (False, Float32(-1), Float32(-1), SpectralSample(Float32(0)))
     # The light-source vertex itself is NEVER splatted. Connecting the
     # emission point straight to the camera builds the length-1 path
@@ -198,9 +211,8 @@ def _bdpt_connect_to_camera(
     # MIS, SmallVCM ConnectToCamera:
     #   wLight = (cameraPdfA / lightSubPathCount)
     var (_dp, rev_pdf_w) = _bdpt_vertex_pdfs(lv, Vec3f(dir_to_cam[0], dir_to_cam[1], dir_to_cam[2]), sd)
-    var camera_pdf_a = image_to_surface
-    var eta_lv_splat = _vcm_eta_at(sd, lv, mis_vm_weight_factor) if _vcm_on_fibre(lv) or lv.mat_kind == LobeKind.sss_exit \
-        else mis_vm_weight_factor * _vcm_eta_scale(sd, lv.pos)
+    var camera_pdf_a = image_to_surface * _vcm_free_flight(sd, lv, Tr)
+    var eta_lv_splat = _vcm_eta_at(sd, lv, mis_vm_weight_factor)
     var mis_weight: Float32
     comptime if _VCM_CAMIS:
         var light_arr = lvc_camis[unsafe_offset=k]
@@ -255,15 +267,18 @@ def _bdpt_connect_to_cache(
     # Volume vertices have no dVCM/dVC (no surface pdf), so any (s,t) split
     var took_unweighted = False
     for local in range(path_len):
-        if _vcm_too_long(sd, lvc, lp_idx, local, cam_count):
+        if _vcm_past_depth(sd, lvc, lp_idx, local, cam_count):
             break   # see _vcm_depth: a path longer than d has no strategy at all
         var lv = lvc[unsafe_offset=lp_idx * _BDPT_MAX_VERTS + local]
+        var long_path = _vcm_past_cache(lvc, lp_idx, local, cam_count)
+        if long_path and lv.is_light != Int32(1):
+            break
         if not _bdpt_connect_pair_weighted(cv, lv):
             if took_unweighted:
                 continue
             took_unweighted = True
         sum += _connect(cv, lv, sd, has_med, scratch, mis_vm_weight_factor,
-            camis, camis_recs, cam_count - 1, lvc, lvc_camis, lp_idx * _BDPT_MAX_VERTS + local, n_light_paths_f)
+            camis, camis_recs, cam_count - 1, lvc, lvc_camis, lp_idx * _BDPT_MAX_VERTS + local, n_light_paths_f, long_path=long_path)
     return sum
 
 def _bdpt_connect_to_cache_deferred(
@@ -341,20 +356,27 @@ def _connect(
     lvc_camis: Pointer[CamisLightRecord, MutUntrackedOrigin] = Pointer[CamisLightRecord, MutUntrackedOrigin].unsafe_dangling(),
     k: Int = 0,
     n_light_paths_f: Float32 = Float32(0),
+    long_path: Bool = False,
 ) -> SpectralSample:
     """Evaluate the contribution of connecting cv to lv via a shadow ray.
     Each connection is already a complete, self-normalized estimator of its"""
     # THE connection estimator lives in _connect_unweighted; this is that
     # times visibility. They used to be two byte-for-byte copies (one for the
+    # Medium for the shadow segment: the camera vertex's (both endpoints agree
+    # in a well-defined scene). The weight needs the edge's transmittance too.
+    var Tr = SpectralSample(Float32(1))
+    if has_med:
+        Tr = _visible_transmittance(cv.pos, lv.pos, cv.med_idx, sd, scratch, cv.wavelengths)
+        if Tr.is_black():
+            return SpectralSample(Float32(0))
     var (contrib, valid) = _connect_unweighted(cv, lv, sd, mis_vm_weight_factor,
-        camis, camis_recs, num_cam_scat, lvc, lvc_camis, k, n_light_paths_f)
+        camis, camis_recs, num_cam_scat, lvc, lvc_camis, k, n_light_paths_f, Tr, long_path)
     if not valid or contrib.is_black():
         return SpectralSample(Float32(0))
-    # Medium for the shadow segment: the camera vertex's (both endpoints agree
-    # in a well-defined scene).
-    var Tr = _visible_transmittance(cv.pos, lv.pos, cv.med_idx, sd, scratch, cv.wavelengths)
-    if Tr.is_black():
-        return SpectralSample(Float32(0))
+    if not has_med:
+        Tr = _visible_transmittance(cv.pos, lv.pos, cv.med_idx, sd, scratch, cv.wavelengths)
+        if Tr.is_black():
+            return SpectralSample(Float32(0))
     return contrib * Tr
 
 def _connect_unweighted(
@@ -370,6 +392,8 @@ def _connect_unweighted(
     lvc_camis: Pointer[CamisLightRecord, MutUntrackedOrigin] = Pointer[CamisLightRecord, MutUntrackedOrigin].unsafe_dangling(),
     k: Int = 0,
     n_light_paths_f: Float32 = Float32(0),
+    tr: SpectralSample = SpectralSample(Float32(1)),
+    long_path: Bool = False,
 ) -> Tuple[SpectralSample, Bool]:
     """Task #163 stage 5: byte-for-byte copy of _connect's math (see that
     function's own docstring for the MIS derivation, not repeated here),"""
@@ -409,7 +433,7 @@ def _connect_unweighted(
     #
     var contrib = cv.beta * lv.beta * f_combined * (Float32(1) / dist2)
     contrib *= _bdpt_connect_mis_weight(cv, lv, sd, dir, dist2, mis_vm_weight_factor,
-        camis, camis_recs, num_cam_scat, lvc, lvc_camis, k, n_light_paths_f)
+        camis, camis_recs, num_cam_scat, lvc, lvc_camis, k, n_light_paths_f, tr, long_path)
     return (contrib, True)
 
 
@@ -428,6 +452,8 @@ def _bdpt_connect_mis_weight(
     lvc_camis: Pointer[CamisLightRecord, MutUntrackedOrigin],
     k: Int,
     n_light_paths_f: Float32,
+    tr: SpectralSample,
+    long_path: Bool,
 ) -> Float32:
     """Balance-heuristic connection weight (Georgiev et al. 2012 / SmallVCM's
     ConnectVertices), factored out of _connect_unweighted exactly as"""
@@ -450,8 +476,8 @@ def _bdpt_connect_mis_weight(
             var (ldp, lrp) = _bdpt_vertex_pdfs(lv, neg_dir, sd)
             light_bsdf_dir_pdf_w = ldp
             light_bsdf_rev_pdf_w = lrp
-        var camera_bsdf_dir_pdf_a = camera_bsdf_dir_pdf_w * cos_lv / dist2
-        var light_bsdf_dir_pdf_a = light_bsdf_dir_pdf_w * cos_cv / dist2
+        var camera_bsdf_dir_pdf_a = camera_bsdf_dir_pdf_w * cos_lv / dist2 * _vcm_free_flight(sd, lv, tr)
+        var light_bsdf_dir_pdf_a = light_bsdf_dir_pdf_w * cos_cv / dist2 * _vcm_free_flight(sd, cv, tr)
         var eta_cv = _vcm_eta_at(sd, cv, mis_vm_weight_factor)
         comptime if _VCM_CAMIS:
             if camis.in_class:
@@ -490,7 +516,7 @@ def _bdpt_connect_mis_weight(
         else:
             var eta_lv = _vcm_eta_at(sd, lv, mis_vm_weight_factor)
             w_light = camera_bsdf_dir_pdf_a * (eta_lv + lv.dVCM + lv.dVC * light_bsdf_rev_pdf_w)
-        var w_camera = light_bsdf_dir_pdf_a * (eta_cv + cv.dVCM + cv.dVC * camera_bsdf_rev_pdf_w)
+        var w_camera = Float32(0) if long_path else light_bsdf_dir_pdf_a * (eta_cv + cv.dVCM + cv.dVC * camera_bsdf_rev_pdf_w)
         return Float32(1) / (w_light + Float32(1) + w_camera)
     elif cv.is_surface == Int32(0) and lv.is_light == Int32(1) and lv.pdf_fwd > Float32(0):
         # Volume vertex -> light source: MIS against the phase-hit strategy

@@ -1541,6 +1541,8 @@ def _nee_faces(ls: LightSample, c: BSDF) -> Bool:
     """A valid light sample the lobe can see: opaque lobes reject one behind the normal, two-sided ones do not."""
     if not ls.valid or (not ls.is_delta and ls.pdf <= Float32(0)):
         return False
+    if not c.is_surface:
+        return True
     var cos_s = dot(c.n, ls.wi)
     # Lobes that transmit see lights on both sides; rough glass was missing, so VCM and SPPM lost its transmitted NEE.
     var two_sided = c.kind == LobeKind.diffuse_transmit or c.kind == LobeKind.hair or c.kind == LobeKind.rough_dielectric

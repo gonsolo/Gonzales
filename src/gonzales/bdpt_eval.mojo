@@ -73,9 +73,9 @@ def _vcm_nee_surface(
     beta: SpectralSample, eta_x: Float32, dvcm: Float32, dvc: Float32,
     cur_med_idx: Int32, scratch: Pointer[Intersection, MutUntrackedOrigin],
     wavelengths: SampledWavelengths, mut pcg: PCG32,
-    spawn_eps: Float32, two_sided: Bool,
+    spawn_eps: Float32, two_sided: Bool, long_path: Bool = False,
 ) -> SpectralSample:
-    """NEE from one camera surface vertex to every distant/point/sphere and infinite
+    """NEE from one camera vertex to every distant/point/sphere and infinite
     light, weighted by VCM's balance policy. `ctx` is the lobe, `gn_geo` the geometric"""
     var total = SpectralSample(Float32(0))
     var tab = LobeTables(sd.materials, sd.curves, sd.measuredBrdfs, sd.spectral)
@@ -84,6 +84,8 @@ def _vcm_nee_surface(
         if not ls.valid:
             continue   # a non-emitting sphere
         var pol = _vcm_simple_light_policy(sd, li, ls, v, eta_x, dvcm, dvc, _vcm_cos_at(sd, v, ls.wi), wavelengths)
+        if long_path:
+            pol.emission_pdf_w = Float32(0)   # no light strategy reaches this far (_vcm_past_cache)
         var w = ctx.nee_weight_mis(ls, tab, wavelengths, pol)
         total += _bdpt_nee_contribute(beta, w, ls, pos, gn_geo, cur_med_idx, sd, scratch, wavelengths, spawn_eps, two_sided)
     for inf_i in range(Int(sd.infiniteLightCount)):
@@ -94,6 +96,8 @@ def _vcm_nee_surface(
         var pol = MisPolicy(le.scoped, eta_x, dvcm, dvc,
                             ls.pdf * light_path_pick_pdf(sd, _vcm_infinite_slot(sd, inf_i)) / max(PI * r * r, Float32(1e-12)),
                             le.pdf_rev, False, _vcm_cos_at(sd, v, ls.wi))
+        if long_path:
+            pol.emission_pdf_w = Float32(0)
         var w = ctx.nee_weight_mis(ls, tab, wavelengths, pol)
         total += _bdpt_nee_contribute(beta, w, ls, pos, gn_geo, cur_med_idx, sd, scratch, wavelengths, spawn_eps, two_sided)
     return total

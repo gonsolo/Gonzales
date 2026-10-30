@@ -311,14 +311,17 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
         var t_hit = inter.tHit
         var ray_dir = st.rd.to_simd()
         var d_seg = Float32(0)   # the d^2 applied to dVCM at this hit, 0 if none
+        var cone_hit = Float32(0); var sphere_at = Int32(-1)   # a sphere light's first hit: its direct density from there
 
         # VCM Stage 2b: distance-squared portion of the per-bounce MIS
         # correction (project_vcm_stage2_mis_derivation memory) -- shared
         if st.origin_sphere >= Int32(0):
             # First hit of a sphere light's path: the origin's direct density
             # is the camera NEE's cone pdf seen from HERE, and its area
-            st.dvcm *= sphere_light_cone_pdf(sd.spheres[unsafe_offset=Int(st.origin_sphere)],
+            cone_hit = sphere_light_cone_pdf(sd.spheres[unsafe_offset=Int(st.origin_sphere)],
                                                 st.ro.to_simd() + ray_dir * t_hit)
+            sphere_at = st.origin_sphere
+            st.dvcm *= cone_hit
             st.origin_sphere = Int32(-2)   # applied; still a sphere light's path
         elif st.n_verts >= 1 or st.is_finite_origin:
             d_seg = t_hit + st.mis_null_dist
@@ -333,17 +336,16 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
             # homogeneous closed form, or delta tracking against the real
             var ff = sample_free_flight(
                 med, sd.grids, sd.nvdbGrids, Vec3f(st.ro.x, st.ro.y, st.ro.z), st.rd, t_hit, pcg)
-            if ff.collided and st.origin_sphere != Int32(-1):
-                # A sphere light's path ends at its first medium collision.
-                # Medium vertices are outside per-vertex MIS: the camera's
-                return False
             if ff.collided:
                 # Chromatic collision weight; see the camera-side comment.
                 st.flux *= spectral_free_flight_weight(med, ff, t_hit, st.wl, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65)
                 var sp = st.ro + st.rd*ff.t_free
                 # dVCM's Jacobian above was applied with t_hit (the distance
                 # to the SURFACE the ray was cast toward), computed before we
-                st.dvcm *= ((ff.t_free + st.mis_null_dist) * (ff.t_free + st.mis_null_dist)) / max(d_seg * d_seg, Float32(1e-20))
+                if d_seg > Float32(0):
+                    st.dvcm *= ((ff.t_free + st.mis_null_dist) * (ff.t_free + st.mis_null_dist)) / (d_seg * d_seg)
+                elif sphere_at >= Int32(0):
+                    st.dvcm *= sphere_light_cone_pdf(sd.spheres[unsafe_offset=Int(sphere_at)], sp.to_simd()) / max(cone_hit, Float32(1e-30))
                 # Free-flight at this VOLUME arrival: ff_b = the collision
                 # density actually sampled = ff.pdf. No cos_fix -- a volume
                 # vertex has no surface normal to divide by.

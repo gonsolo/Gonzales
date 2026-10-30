@@ -26,10 +26,20 @@ comptime _VCM_MAX_STORED = _BDPT_MAX_VERTS - 1   # non-delta vertices of a full 
 
 
 @always_inline
+def _vcm_past_depth(ref sd: SceneView, lvc: Pointer[BDPTVertex, MutUntrackedOrigin], lp_idx: Int, local: Int, cam_count: Int) -> Bool:
+    return _vcm_light_count(lvc, lp_idx, local) + cam_count > _vcm_depth(sd)
+
+
+@always_inline
+def _vcm_past_cache(lvc: Pointer[BDPTVertex, MutUntrackedOrigin], lp_idx: Int, local: Int, cam_count: Int) -> Bool:
+    """A path the light cache cannot hold whole: only the camera strategies (hit, NEE) exist for it, and only they share its weight."""
+    return _vcm_light_count(lvc, lp_idx, local) - Int(lvc[unsafe_offset=lp_idx * _BDPT_MAX_VERTS + local].n_delta) + cam_count > _VCM_MAX_STORED
+
+
+@always_inline
 def _vcm_too_long(ref sd: SceneView, lvc: Pointer[BDPTVertex, MutUntrackedOrigin], lp_idx: Int, local: Int, cam_count: Int) -> Bool:
-    """Light slot `local` plus `cam_count` camera vertices is past a limit: such a path has no strategy at all."""
-    var n = _vcm_light_count(lvc, lp_idx, local)
-    return n + cam_count > _vcm_depth(sd) or n - Int(lvc[unsafe_offset=lp_idx * _BDPT_MAX_VERTS + local].n_delta) + cam_count > _VCM_MAX_STORED
+    """Light slot `local` plus `cam_count` camera vertices is no light strategy."""
+    return _vcm_past_depth(sd, lvc, lp_idx, local, cam_count) or _vcm_past_cache(lvc, lp_idx, local, cam_count)
 
 
 @always_inline
