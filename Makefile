@@ -535,6 +535,7 @@ unittest-amd:
 # file failed (checked after all finish, not fail-fast, so a run tells you
 # everything that broke in one pass).
 unittest: $(OIIO_BRIDGE_LIB) $(VIEWER_LIB) $(VULKANRT_LIB) $(VULKANINTEROP_LIB) $(RTCORE_LIB) $(XERT_LIB) $(OPTIXCURVES_LIB) $(UNIT_TEST_DEPS)
+	@python3 -I Tests/check_layers.py
 	@rm -rf build/unittest-logs && mkdir -p build/unittest-logs
 	@i=0; \
 	for f in $(UNIT_TEST_SRCS); do \
