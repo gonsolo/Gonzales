@@ -1,7 +1,8 @@
 from std.memory.alloc import unsafe_alloc
 from gonzales.geometry import Point3f, RGB
 from gonzales.materials import Material, MatKind
-from gonzales.primitives import Ray, Intersection, PrimId, TriangleMesh
+from gonzales.primitives import Intersection, PrimId, TriangleMesh
+from gonzales.geometry import Ray
 from gonzales.curves import Curve
 from gonzales.bvh import BVH2Node, build_bvh2, traverse_bvh2_core
 

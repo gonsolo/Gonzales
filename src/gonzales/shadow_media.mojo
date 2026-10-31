@@ -3,7 +3,8 @@ from std.collections import Array
 from std.math import exp, log, max
 from .geometry import Point3f, Vec3f, dot
 from .materials import Material, MatKind
-from .primitives import Ray, Intersection, PrimId, TriangleMesh, Sphere, Instance
+from .primitives import Intersection, PrimId, TriangleMesh, Sphere, Instance
+from .geometry import Ray
 from .curves import Curve
 from .media import Medium, MediumInterface, Grid, NvdbGrid, MEDIUM_TRACK_MAX_ITERS, medium_sigma_t_spectral, grid_sample_density, nvdb_sample_density
 from .bvh import BVH2Node, traverse_bvh2_core, test_spheres

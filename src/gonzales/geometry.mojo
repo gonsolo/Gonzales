@@ -580,3 +580,11 @@ def face_toward(n: Vec3f, w: Vec3f) -> Vec3f:
         return -n
     return n
 
+
+@fieldwise_init
+struct Ray(TrivialRegisterPassable):
+    """A ray: a world-space origin point and a unit direction vector."""
+    var origin: Point3f
+# <<listing: Ray>>
+    var direction: Vec3f
+# <</listing>>

@@ -6,7 +6,7 @@ from max.gpu.host import DeviceContext
 from gonzales.gpu_wavefront import clear_film_gpu, accumulate_film_gpu
 from gonzales.geometry import RGB, Point3f, Vec3f
 from gonzales.render_state import PathState, MIN_RAY_PDF_NONE, SssWalk
-from gonzales.primitives import Ray
+from gonzales.geometry import Ray
 from gonzales.spectrum import SpectralSample, SampledWavelengths
 
 comptime EPS: Float32 = 1e-4

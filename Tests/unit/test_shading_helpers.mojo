@@ -15,7 +15,8 @@ from gonzales.footprint import CameraFootprint
 from gonzales.geometry import RGB, Point3f, Vec3f
 from gonzales.materials import Material, MeasuredBRDF
 from gonzales.render_state import GpuTexture, NormalSlopeMap, ShadowTask, SuppressTask, PathState, MIN_RAY_PDF_NONE, SssWalk
-from gonzales.primitives import Ray, PrimId, Intersection, TriangleMesh, Instance, Sphere
+from gonzales.primitives import PrimId, Intersection, TriangleMesh, Instance, Sphere
+from gonzales.geometry import Ray
 from gonzales.lights import LightSampler, AreaLight, DistantLight, PointLight, InfiniteLight
 from gonzales.curves import Curve
 from gonzales.spectrum import SpectralSample, SampledWavelengths, null_spectral_handle

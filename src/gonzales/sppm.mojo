@@ -14,7 +14,10 @@ from .geometry import face_toward
 from .gpu_media import default_emit_medium, medium_after, sss_entry_lobe, sss_walk_to_exit
 from .geometry import offset_eps, TERMINAL_SEGMENT_GRACE_ROUNDS, RGB, Point3f, Point2f, Vec3f, vec3f, point3f, dot, cross, PI, INV_FOUR_PI, Frame, _is_real_ptr
 from .materials import Material, MatKind, LobeKind, PhotonKind, fr_dielectric, resolve_mix
-from .primitives import Ray, Intersection, PrimId, TriangleMesh, Sphere, Instance, sphere_outward_normal, mesh_normal, mesh_vi
+from .primitives import (
+    Intersection, PrimId, TriangleMesh, Sphere, Instance, sphere_outward_normal, mesh_normal, mesh_vi,
+)
+from .geometry import Ray
 from .primitives import mesh_pos
 from .media import medium_inv_sigma_t_spectral, medium_kernel_radius, hg_phase, hg_sample
 from .media import Medium, Grid, NvdbGrid, sample_free_flight, medium_is_heterogeneous, medium_sigma_t_spectral, medium_grid_for, medium_nvdb_for, grid_sample_density, nvdb_sample_density, SSS_WALK_ROUNDS, spectral_free_flight_weight

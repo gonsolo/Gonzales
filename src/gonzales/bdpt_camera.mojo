@@ -9,7 +9,8 @@ from .materials import fr_dielectric, sss_boundary_lobe
 from .geometry import offset_eps, RGB, Point3f, Point2f, Vec3f, vec3f, point3f, dot, cross, PI, INV_FOUR_PI, INV_PI
 from .render_state import PDF_DELTA_FULL, PDF_DROP_DIRECT
 from .materials import Material, MatKind, LobeKind, resolve_mix
-from .primitives import Ray, Intersection, mesh_pos
+from .primitives import Intersection, mesh_pos
+from .geometry import Ray
 from .media import sample_free_flight, spectral_free_flight_weight
 from .vcm_mis import (
     vcm_phase_scatter,

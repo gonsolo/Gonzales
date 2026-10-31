@@ -6,7 +6,8 @@ from std.math import sqrt, floor, max, min, abs, pow
 from std.memory.alloc import unsafe_alloc
 from .geometry import Point3f, Vec3f, dot, PI
 from .materials import LobeKind
-from .primitives import Ray, Intersection, PrimId
+from .primitives import Intersection, PrimId
+from .geometry import Ray
 from .bvh import traverse_dispatch
 from .bvh import SceneView, test_spheres, _is_real_ptr, curve_tangent, fibre_cos, curve_radius
 from .sppm import (

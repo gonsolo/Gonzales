@@ -4,7 +4,8 @@ from std.testing import assert_true, TestSuite
 from gonzales.geometry import Point3f, Vec3f, RGB, dot, cross
 from gonzales.materials import Material, MatKind
 from gonzales.render_state import PathState, MIN_RAY_PDF_NONE, SssWalk
-from gonzales.primitives import Ray, Intersection, PrimId, TriangleMesh, Sphere
+from gonzales.primitives import Intersection, PrimId, TriangleMesh, Sphere
+from gonzales.geometry import Ray
 from gonzales.lights import AreaLight, DistantLight, PointLight, InfiniteLight, LightSampler
 from gonzales.curves import Curve, curve_bspline_point, curve_light_tube_area, _curve_perp_axis
 from gonzales.spectrum import SpectralSample, SampledWavelengths

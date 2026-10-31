@@ -6,7 +6,8 @@ from std.math import abs
 from .gpu_media import medium_after
 from .geometry import Point3f, Vec3f, vec3f, dot
 from .materials import MatKind, fr_dielectric
-from .primitives import Ray, Intersection, PrimId
+from .primitives import Intersection, PrimId
+from .geometry import Ray
 from .shadow_media import segment_transmittance
 from .bvh import traverse_dispatch
 from .bvh import (

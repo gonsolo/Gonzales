@@ -1,6 +1,6 @@
 """Scene primitives, split out of geometry.mojo (the per-cluster module
 split; see project_geometry_module_split memory). PrimId/Instance,
-TriangleMesh/Ray/Intersection, Sphere+sphere_outward_normal, and
+TriangleMesh/Intersection, Sphere+sphere_outward_normal, and
 intersect_triangle/_alpha_hash/alpha_killed were four separate ranges in
 geometry.mojo; every external dependency is the core
 (Point3f/Vec3f/RGB/_is_real_ptr/cross/dot), confirmed by a symbol-reference
@@ -136,18 +136,7 @@ struct TriangleMesh(TrivialRegisterPassable):
         self.quads = Int32(0)
         self.emit_two_sided = 0
 
-# ── Ray ───────────────────────────────────────────────────────────────────────
-# See: docs/03_shapes_and_acceleration.md
-
-@fieldwise_init
-struct Ray(TrivialRegisterPassable):
-    """A ray: a world-space origin point and a unit direction vector."""
-    var origin: Point3f
-# <<listing: Ray>>
-    var direction: Vec3f
-
 # ── Intersection ──────────────────────────────────────────────────────────────
-# <</listing>>
 
 @fieldwise_init
 struct Intersection(TrivialRegisterPassable):

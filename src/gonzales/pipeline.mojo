@@ -14,7 +14,8 @@ from .outputs import write_render_outputs
 from std.time import perf_counter_ns
 from .geometry import RGB, Point3f, Vec3f, Bounds3f, _is_real_ptr
 from .render_state import TileResult, FilmDims
-from .primitives import Ray, PrimId, TriangleMesh, Instance, mesh_vi, mesh_pos
+from .primitives import PrimId, TriangleMesh, Instance, mesh_vi, mesh_pos
+from .geometry import Ray
 from .curves import CurveBvh, curve_at, curve_piece_bounds
 from .postprocess import denoise, write_image, write_image_cropped
 from .transform import Mat4, matrix_invert

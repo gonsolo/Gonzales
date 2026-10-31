@@ -8,7 +8,7 @@ symbol-reference scan of the whole file found before this split, everywhere
 else was comments matching a name."""
 from gonzales.spectrum import SpectralSample, SampledWavelengths
 from .geometry import Point3f, Vec3f, RGB
-from .primitives import Ray
+from .geometry import Ray
 
 @fieldwise_init
 struct FilmDims(TrivialRegisterPassable):

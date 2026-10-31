@@ -12,7 +12,8 @@ from std.math import sqrt, min
 from std.atomic import Atomic
 from .geometry import Point3f, Vec3f, RGB
 from .materials import MatKind
-from .primitives import Ray, Intersection
+from .primitives import Intersection
+from .geometry import Ray
 from .vcm_camis import CamisCamRecord, CamisCamCarry, CamisLightRecord, camis_light_carry_off
 from .bvh import traverse_dispatch
 from .bvh import SceneView, test_spheres, _is_real_ptr, ray_sphere_hit

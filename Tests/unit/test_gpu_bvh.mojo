@@ -6,7 +6,8 @@ from max.gpu.host import DeviceContext, DeviceBuffer
 from gonzales.bvh import BVH2Node, build_bvh2
 from gonzales.gpu_bvh import gpu_build_bvh2
 from gonzales.geometry import Point3f, Vec3f
-from gonzales.primitives import Ray, PrimId
+from gonzales.primitives import PrimId
+from gonzales.geometry import Ray
 from gonzales.curves import Curve, CurveBvh, intersect_curve
 from gonzales.curve_bvh import gpu_build_curve_bvh, curve_bvh_occluded, curve_bvh_closest
 from _scene_fixture import make_triangle_scene

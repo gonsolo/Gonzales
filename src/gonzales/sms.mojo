@@ -37,7 +37,8 @@ from std.math import sqrt, abs, max, min, cos, sin, acos
 from .geometry import dot, cross, Frame, Vec3f, Point3f, _atan2f, PI, TWO_PI, _is_real_ptr
 from .materials import fr_dielectric
 from .render_state import NormalSlopeMap, normal_slope_map_none
-from .primitives import Ray, Intersection, PrimId, TriangleMesh, Instance, Sphere, mesh_vi, mesh_pos, mesh_normal
+from .primitives import Intersection, PrimId, TriangleMesh, Instance, Sphere, mesh_vi, mesh_pos, mesh_normal
+from .geometry import Ray
 from .curves import Curve
 from .rng import PCG32
 from .bvh import ray_sphere_hit, traverse_bvh2_core, BVH2Node

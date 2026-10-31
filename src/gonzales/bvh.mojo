@@ -13,7 +13,10 @@ from .geometry import dot, cross, Point3f, Point2f, Vec3f, Frame, RGB, PI, TWO_P
 from .sampling import ThinLens
 from .materials import Material, fr_dielectric, MeasuredBRDF
 from .render_state import GpuTexture, NormalSlopeMap
-from .primitives import Ray, Intersection, PrimId, TriangleMesh, Sphere, intersect_triangle, intersect_triangle_edges, alpha_killed, Instance, sphere_outward_normal, mesh_vi, mesh_material
+from .primitives import (
+    Intersection, PrimId, TriangleMesh, Sphere, intersect_triangle, intersect_triangle_edges, alpha_killed, Instance, sphere_outward_normal, mesh_vi, mesh_material,
+)
+from .geometry import Ray
 from .primitives import mesh_pos, mesh_point
 from .media import Medium, MediumInterface, Grid, NvdbGrid
 from .lights import AreaLight, DistantLight, PointLight, InfiniteLight, LightSampler, il_rgb

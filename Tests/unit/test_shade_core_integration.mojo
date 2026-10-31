@@ -4,7 +4,8 @@ from std.testing import assert_true, TestSuite
 from gonzales.geometry import Point3f, Vec3f, RGB
 from gonzales.materials import Material, MatKind
 from gonzales.render_state import PathState, MIN_RAY_PDF_NONE, SssWalk
-from gonzales.primitives import Ray, Intersection
+from gonzales.primitives import Intersection
+from gonzales.geometry import Ray
 from gonzales.spectrum import SpectralSample, SampledWavelengths, null_spectral_handle
 from gonzales.shading import shade_core
 from _scene_fixture import make_triangle_scene

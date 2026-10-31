@@ -1,8 +1,7 @@
 from std.math import sqrt, log, exp, cos, sin
 from std.bit import count_trailing_zeros
 from .rng import mix_bits_u64
-from .geometry import Vec3f, Point3f, dot, cross, Frame, PI, TWO_PI, _is_real_ptr, fast_sincos
-from .primitives import Ray
+from .geometry import Vec3f, Point3f, dot, cross, Frame, PI, TWO_PI, _is_real_ptr, fast_sincos, Ray
 from .spectrum import SampledWavelengths, sample_wavelengths
 
 # ── Multiple-importance sampling ───────────────────────────────────────────────

@@ -5,7 +5,8 @@ from std.math import sqrt, cos, sin, log, exp, max
 from .gpu_media import medium_after
 from .geometry import Point3f, Point2f, Vec3f, vec3f, point3f, dot, PI, INV_FOUR_PI
 from .materials import MatKind, LobeKind, resolve_mix
-from .primitives import Ray, Intersection
+from .primitives import Intersection
+from .geometry import Ray
 from .media import sample_free_flight, spectral_free_flight_weight
 from .vcm_mis import vcm_scatter_carries, vcm_phase_scatter
 from .vcm_camis import (

@@ -11,7 +11,10 @@ from .render_state import PDF_DROP_DIRECT
 from .materials import Material, MatKind, LobeKind, MeasuredBRDF, fr_dielectric, resolve_mix, sss_boundary_lobe
 from .gpu_media import sss_entry_lobe, sss_walk_start
 from .render_state import PathState, SssWalk, GpuTexture, NormalSlopeMap, normal_slope_map_none, ShadowTask, SuppressTask, SHADOW_SLOTS
-from .primitives import Ray, Intersection, PrimId, TriangleMesh, Sphere, Instance, mesh_uv, mesh_has_uvs, mesh_normal, mesh_vi, mesh_face
+from .primitives import (
+    Intersection, PrimId, TriangleMesh, Sphere, Instance, mesh_uv, mesh_has_uvs, mesh_normal, mesh_vi, mesh_face,
+)
+from .geometry import Ray
 from .primitives import mesh_pos
 from .lights import AreaLight, DistantLight, PointLight, InfiniteLight, LightSampler, il_rgb, light_sampler_sample, light_sampler_sample_at, light_sampler_pdf_at, light_sampler_pdf, area_light_pick_triangle
 from .media import Medium, MediumInterface, Grid, NvdbGrid

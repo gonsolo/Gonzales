@@ -19,7 +19,8 @@ from .curves import Curve, curve_at, CurveBvh, intersect_curve, curve_piece_endp
 from .geometry import Point3f, Vec3f, cross
 from .gpu_bvh import TPB, MaskT, _buf, _p, _tid, _seg_of, _ord, _unord
 from .materials import Material
-from .primitives import PrimId, Ray
+from .primitives import PrimId
+from .geometry import Ray
 
 comptime CURVE_CLUSTER = 4096       # pieces a cluster covers at most
 

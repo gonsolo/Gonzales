@@ -6,7 +6,8 @@ from .lights import area_light_pick_triangle, light_sampler_sample
 from .geom_normal import _geom_normal
 from .materials import Material, MatKind, fr_dielectric
 from .media import Grid, MEDIUM_TRACK_MAX_ITERS, Medium, NvdbGrid, grid_ray_range, grid_sample_density, hg_phase, hg_sample, medium_emission_spectral, medium_grid_for, medium_nvdb_for, medium_sigma_s_spectral, medium_sigma_t_spectral, medium_transmittance_ratio_spectral, nvdb_index_ray, nvdb_majorant_at_world, nvdb_node_exit_t, nvdb_ray_range, nvdb_sample_density, sample_free_flight
-from .primitives import Intersection, PrimId, Ray, sphere_outward_normal, mesh_vi
+from .primitives import Intersection, PrimId, sphere_outward_normal, mesh_vi
+from .geometry import Ray
 from .primitives import mesh_pos
 from .render_state import PathState, SssWalk
 from .reservoir import reservoir_finalize, reservoir_update

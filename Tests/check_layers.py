@@ -19,7 +19,7 @@ ALLOWED = set("""
 bdpt_camera>gpu_media bdpt_light>gpu_media bdpt_render>gpu_media rendering>gpu_media shading>gpu_media sppm>gpu_media bdpt_nee>gpu_media
 bvh>render_state host_textures>render_state pbrt_parser>render_state scene_cache>render_state sms>render_state
 bdpt_eval>shading surface>shading bdpt_eval>sppm bdpt_nee>sppm vcm_grid>sppm vcm_merge>sppm
-bdpt_connect>vcm_grid bdpt_connect>vcm_merge_weight bxdf>vcm_mis sampling>primitives
+bdpt_connect>vcm_grid bdpt_connect>vcm_merge_weight bxdf>vcm_mis 
 """.split())
 IMPORT = re.compile(r"^\s*from\s+(?:\.|gonzales\.)([A-Za-z_0-9]+)\s+import", re.M)
 
