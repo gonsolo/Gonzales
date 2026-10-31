@@ -14,7 +14,7 @@ from gonzales.core.spectrum import SpectralSample
 from gonzales.paths.bdpt_vertex import _BDPT_MAX_VERTS, BDPTVertex
 from gonzales.paths.bdpt_eval import _lobe_eval, _bdpt_vertex_mis_scoped
 from gonzales.paths.vcm_grid import _VCM_FINE_LEVELS, _VCM_MN_STRIDE
-from gonzales.paths.vcm_strategy import _vcm_too_long, _vcm_keep, _vcm_cap, _MERGE_COVERAGE, _VCM_VISIT_INSTRUMENT, _CAMIS_CAM_RECS, _vcm_budget_active, _vcm_merge_radius_at, _VCM_RADIUS_VOLUME_SCALE, _vcm_inv_eta_at, _vcm_volume_radius_at, _vcm_mergeable, _vcm_on_fibre
+from gonzales.paths.vcm_strategy import vcm_can_merge, _vcm_too_long, _vcm_keep, _vcm_cap, _MERGE_COVERAGE, _VCM_VISIT_INSTRUMENT, _CAMIS_CAM_RECS, _vcm_budget_active, _vcm_merge_radius_at, _VCM_RADIUS_VOLUME_SCALE, _vcm_inv_eta_at, _vcm_volume_radius_at, _vcm_mergeable, _vcm_on_fibre
 from gonzales.paths.vcm_merge_weight import _bdpt_merge_mis_weight
 
 @always_inline
@@ -113,7 +113,7 @@ def _bdpt_merge_from_cache(
                     var lv = lvc[unsafe_offset=k]
                     # is_light==1 vertices are the light SOURCE's own point
                     # (the s=1 connection strategy): their beta is 1/pdf_area
-                    if lv.is_delta == Int32(0) and lv.is_surface == cv.is_surface and lv.is_light == Int32(0) and lv.mat_kind != LobeKind.sss_exit and _bdpt_vertex_mis_scoped(lv) and _vcm_on_fibre(lv) == on_fibre:
+                    if vcm_can_merge(cv, lv):
                         var e = lv.pos - cv.pos
                         var dist2 = e.length_sq()
                         var accept: Bool

@@ -42,7 +42,7 @@ from gonzales.paths.bdpt_eval import (
     _vcm_sphere_slot, _vcm_infinite_slot, _vcm_nee_surface, _vertex_ctx, _bdpt_vertex_mis_scoped, _vcm_mnee,
     _vcm_mnee_hit_term,
 )
-from gonzales.paths.vcm_strategy import _vcm_depth, _VCM_MAX_STORED, _vcm_keep, _VCM_CAMIS, _CAMIS_CAM_RECS, _CAMIS_FORCE_C1, _vcm_eta_scale, _vcm_eta_at, _vcm_fibre_scale
+from gonzales.paths.vcm_strategy import vcm_camera_only, _vcm_depth, _VCM_MAX_STORED, _vcm_keep, _VCM_CAMIS, _CAMIS_CAM_RECS, _CAMIS_FORCE_C1, _vcm_eta_scale, _vcm_eta_at, _vcm_fibre_scale
 from gonzales.paths.bdpt_connect import _bdpt_connect_to_cache, _bdpt_connect_to_cache_deferred
 from gonzales.paths.vcm_merge import _bdpt_merge_from_cache
 from gonzales.transport.surface import surface_hit
@@ -163,6 +163,11 @@ struct VCMCameraPathState(TrivialRegisterPassable):
     var n_delta: Int
     var prev_sig_t: Float32   # sigma_t at the previous vertex, 1 on a surface: dVC's free-flight ratio
     var mnee: VCMMneeTrack
+
+    @always_inline
+    def cam_count(self) -> Int:
+        """Vertices so far, delta bounces included (see _vcm_depth)."""
+        return self.n_verts + self.n_vol + self.n_delta
 
 def _bdpt_camera_path_init[use_gpu: Bool](
     r2c:     Pointer[Float32, MutUntrackedOrigin],
@@ -450,7 +455,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
         # Zero carries do not mean no competitor: a walk's exit behind glass has none, and MNEE still samples this path.
         var mnee_rival = st.last_bsdf_pdf == PDF_DELTA_FULL and st.mnee.pdf0 > Float32(0)
         # Past the cache only camera strategies exist: see _vcm_past_cache.
-        var long_hit = st.n_verts + st.n_vol + st.n_delta > _VCM_MAX_STORED
+        var long_hit = vcm_camera_only(st.cam_count())
         if inter.hit == Int8(0):
             for inf_i in range(Int(sd.infiniteLightCount)):
                 var ilight = sd.infiniteLights[unsafe_offset=inf_i]
@@ -534,11 +539,11 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                     # BUG FIX (found investigating volumetric-caustic's
                     # colored-blob fireflies): merge is only safe to run
                     if _bdpt_vertex_mis_scoped(v):
-                        st.total_merge += _bdpt_merge_from_cache(v, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm, mis_vc_weight_factor, st.n_verts + st.n_vol + st.n_delta, camis, camis_recs, lvc_camis, n_light_paths_f, visit_naive=visit_naive, visit_footprint=visit_footprint, visit_thin=visit_thin)
-                    st.total += _bdpt_connect_to_cache(v, sd, has_med, scratch, lvc, lp_idx, path_len, mis_vm_weight_factor, st.n_verts + st.n_vol + st.n_delta, camis, camis_recs, lvc_camis, n_light_paths_f)
+                        st.total_merge += _bdpt_merge_from_cache(v, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm, mis_vc_weight_factor, st.cam_count(), camis, camis_recs, lvc_camis, n_light_paths_f, visit_naive=visit_naive, visit_footprint=visit_footprint, visit_thin=visit_thin)
+                    st.total += _bdpt_connect_to_cache(v, sd, has_med, scratch, lvc, lp_idx, path_len, mis_vm_weight_factor, st.cam_count(), camis, camis_recs, lvc_camis, n_light_paths_f)
                 st.total += _vcm_nee_surface(sd, v, _vertex_ctx(v), sp, Vec3f(Float32(0)), st.beta, eta_v, v.dVCM, v.dVC,
                                              st.cur_med_idx, scratch, st.wl, pcg, Float32(0), False,
-                                             st.n_verts + st.n_vol + st.n_delta > _VCM_MAX_STORED)
+                                             vcm_camera_only(st.cam_count()))
                 # Continuation beta = prev × alb_s (same as stored vertex beta)
                 st.beta *= spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (ff.albedo).r, (ff.albedo).g, (ff.albedo).b, st.wl)
                 st.rd = vec3f(wi_v)
@@ -689,12 +694,12 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             var spawn_eps = lh.spawn_eps; var on_curve = lh.on_curve; var eff_alb = lh.eff_alb
             v.dVCM = st.dvcm; v.dVC = st.dvc; v.dVM = st.dvm
             if v.is_delta != Int32(0):
-                if st.n_verts + st.n_vol + st.n_delta >= _vcm_depth(sd):
+                if st.cam_count() >= _vcm_depth(sd):
                     return False   # a delta vertex past d starts no strategy either
                 st.n_delta += 1
             if v.is_delta == Int32(0):
                 if st.n_verts == 0: st.first_alb = eff_alb
-                if st.n_verts + st.n_vol + st.n_delta >= _vcm_depth(sd) or st.n_verts >= _VCM_MAX_STORED:
+                if st.cam_count() >= _vcm_depth(sd) or st.n_verts >= _VCM_MAX_STORED:
                     return False   # a vertex past d starts no strategy (see _vcm_depth)
                 st.n_verts += 1
                 comptime if _VCM_CAMIS:
@@ -704,21 +709,21 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                                      _bdpt_vertex_mis_scoped(v))
                 # Merging queries the GLOBAL photon grid and does not use this
                 # pixel's own paired light path, so unlike the connect below it
-                st.total_merge += _bdpt_merge_from_cache(v, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm, mis_vc_weight_factor, st.n_verts + st.n_vol + st.n_delta, camis, camis_recs, lvc_camis, n_light_paths_f, visit_naive=visit_naive, visit_footprint=visit_footprint, visit_thin=visit_thin)
+                st.total_merge += _bdpt_merge_from_cache(v, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm, mis_vc_weight_factor, st.cam_count(), camis, camis_recs, lvc_camis, n_light_paths_f, visit_naive=visit_naive, visit_footprint=visit_footprint, visit_thin=visit_thin)
                 if path_len > 0:
                     # Task #163 stage 5: the diffuse branch's connect shadow
                     # rays are the single highest-volume, cleanest shadow-ray
                     if defer_shadow_rays:
-                        _bdpt_connect_to_cache_deferred(v, sd, lvc, lp_idx, path_len, mis_vm_weight_factor, shadow_rays, shadow_pending, shadow_valid, shadow_seg_med, st.n_verts + st.n_vol + st.n_delta, camis, camis_recs, lvc_camis, n_light_paths_f)
+                        _bdpt_connect_to_cache_deferred(v, sd, lvc, lp_idx, path_len, mis_vm_weight_factor, shadow_rays, shadow_pending, shadow_valid, shadow_seg_med, st.cam_count(), camis, camis_recs, lvc_camis, n_light_paths_f)
                     else:
-                        st.total += _bdpt_connect_to_cache(v, sd, has_med, scratch, lvc, lp_idx, path_len, mis_vm_weight_factor, st.n_verts + st.n_vol + st.n_delta, camis, camis_recs, lvc_camis, n_light_paths_f)
+                        st.total += _bdpt_connect_to_cache(v, sd, has_med, scratch, lvc, lp_idx, path_len, mis_vm_weight_factor, st.cam_count(), camis, camis_recs, lvc_camis, n_light_paths_f)
 
                 # NEE to distant/point/sphere/infinite lights, via the shared
                 # Light interface (bvh.mojo's LightSample samplers) + BxDF
                 st.total += _vcm_nee_surface(sd, v, _vertex_ctx(v), hit, gn_geo, st.beta, eta_x, st.dvcm, st.dvc,
                                           st.cur_med_idx, scratch, st.wl, pcg, spawn_eps,
                                           v.mat_kind == LobeKind.diffuse_transmit or v.mat_kind == LobeKind.hair or v.mat_kind == LobeKind.rough_dielectric,
-                                          st.n_verts + st.n_vol + st.n_delta > _VCM_MAX_STORED)
+                                          vcm_camera_only(st.cam_count()))
                 # MNEE toward a light behind glass, one more strategy in the balance (_vcm_mnee).
                 if LobeKind.is_diffuse(v.mat_kind):
                     st.total += _vcm_mnee(sd, v, hit.to_simd(), gn, st.beta, pcg, st.wl, eta_x, st.dvcm, st.dvc)
@@ -751,7 +756,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             comptime if _VCM_CAMIS:
                 # A subsurface walk and a delta dielectric are both outside the Class.
                 camis.in_class = False
-            if st.n_verts + st.n_vol + st.n_delta >= _vcm_depth(sd):
+            if st.cam_count() >= _vcm_depth(sd):
                 return False   # a delta vertex past d starts no strategy either
             var dvcm_in = st.dvcm; var dvc_in = st.dvc; var dvm_in = st.dvm; var med_in = st.cur_med_idx
             var ior_cur = st.current_dielectric_ior; var ior_prev = st.previous_dielectric_ior
@@ -768,15 +773,15 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 var n_o = ex.n_o
                 var v = _vcm_sss_exit_vertex(ex, mat.albedo.r, st.beta, st.cur_med_idx, st.wl, st.dvcm, st.dvc, st.dvm)
                 if st.n_verts == 0: st.first_alb = mat.sss_mean_refl
-                if st.n_verts + st.n_vol + st.n_delta >= _vcm_depth(sd) or st.n_verts >= _VCM_MAX_STORED:
+                if st.cam_count() >= _vcm_depth(sd) or st.n_verts >= _VCM_MAX_STORED:
                     return False   # a vertex past d starts no strategy (see _vcm_depth)
                 st.n_verts += 1
                 # A walk's exit does not merge: light and camera exits are two walks, not one.
                 if path_len > 0:
                     if defer_shadow_rays:
-                        _bdpt_connect_to_cache_deferred(v, sd, lvc, lp_idx, path_len, mis_vm_weight_factor, shadow_rays, shadow_pending, shadow_valid, shadow_seg_med, st.n_verts + st.n_vol + st.n_delta, camis, camis_recs, lvc_camis, n_light_paths_f)
+                        _bdpt_connect_to_cache_deferred(v, sd, lvc, lp_idx, path_len, mis_vm_weight_factor, shadow_rays, shadow_pending, shadow_valid, shadow_seg_med, st.cam_count(), camis, camis_recs, lvc_camis, n_light_paths_f)
                     else:
-                        st.total += _bdpt_connect_to_cache(v, sd, has_med, scratch, lvc, lp_idx, path_len, mis_vm_weight_factor, st.n_verts + st.n_vol + st.n_delta, camis, camis_recs, lvc_camis, n_light_paths_f)
+                        st.total += _bdpt_connect_to_cache(v, sd, has_med, scratch, lvc, lp_idx, path_len, mis_vm_weight_factor, st.cam_count(), camis, camis_recs, lvc_camis, n_light_paths_f)
                 var ctx_x = BSDF(LobeKind.sss_exit, True, False, n_o, n_o, RGB(Float32(1)), Int32(-1), mat.albedo.r,
                                     Float32(0), Int32(-1), Float32(0), Float32(0), True, False)
                 st.total += _vcm_nee_surface(sd, v, ctx_x, x_o, n_o, st.beta, Float32(0),

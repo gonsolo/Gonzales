@@ -2,6 +2,7 @@
 from std.math import sqrt, floor, max, min
 from gonzales.core.geometry import Point3f, PI
 from gonzales.scene.appearance.materials import LobeKind
+from gonzales.paths.bdpt_eval import _bdpt_vertex_mis_scoped
 from gonzales.scene.accel.bvh import SceneView, _is_real_ptr, curve_radius
 from gonzales.estimators.photon_grid import _hash_cell, _PHOTON_BUCKET_CAP, grid_keep
 from gonzales.paths.bdpt_vertex import _BDPT_MAX_VERTS, BDPTVertex
@@ -27,6 +28,20 @@ def _vcm_past_depth(ref sd: SceneView, lvc: Pointer[BDPTVertex, MutUntrackedOrig
 def _vcm_past_cache(lvc: Pointer[BDPTVertex, MutUntrackedOrigin], lp_idx: Int, local: Int, cam_count: Int) -> Bool:
     """A path the light cache cannot hold whole: only the camera strategies (hit, NEE) exist for it, and only they share its weight."""
     return _vcm_light_count(lvc, lp_idx, local) - Int(lvc[unsafe_offset=lp_idx * _BDPT_MAX_VERTS + local].n_delta) + cam_count > _VCM_MAX_STORED
+
+
+@always_inline
+def vcm_camera_only(cam_count: Int) -> Bool:
+    """Past the light cache from the camera side: only the camera strategies (hit, NEE) exist, see _vcm_past_cache."""
+    return cam_count > _VCM_MAX_STORED
+
+
+@always_inline
+def vcm_can_merge(cv: BDPTVertex, lv: BDPTVertex) -> Bool:
+    """May camera vertex cv merge with stored light vertex lv? Same kind of vertex, neither delta, the light source no
+    photon, and a walk's exit is two walks rather than one: it stores nothing to merge."""
+    return (lv.is_delta == Int32(0) and lv.is_surface == cv.is_surface and lv.is_light == Int32(0)
+            and lv.mat_kind != LobeKind.sss_exit and _bdpt_vertex_mis_scoped(lv) and _vcm_on_fibre(lv) == _vcm_on_fibre(cv))
 
 
 @always_inline
