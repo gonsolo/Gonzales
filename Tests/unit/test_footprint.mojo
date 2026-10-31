@@ -6,8 +6,8 @@ from std.math import abs, sqrt, cos, sin
 from std.memory.alloc import unsafe_alloc
 from std.testing import assert_true, TestSuite
 from gonzales.core.geometry import Vec3f, dot
-from gonzales.scene.primitives import TriangleMesh, Instance
-from gonzales.scene.footprint import CameraFootprint, uv_footprint, dp_dxy_approx_camera, dp_dxy_cone, camera_footprint, tri_world, hit_uv_footprint, TriWorld
+from gonzales.scene.shapes.primitives import TriangleMesh, Instance
+from gonzales.scene.appearance.footprint import CameraFootprint, uv_footprint, dp_dxy_approx_camera, dp_dxy_cone, camera_footprint, tri_world, hit_uv_footprint, TriWorld
 
 
 def _close(a: Float32, b: Float32, rel: Float32 = 1e-3) -> Bool:

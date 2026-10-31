@@ -2,8 +2,8 @@
 
     build/dump_tris scene.pbrt out.f32 [all | ordinary | template N]
 """
-from gonzales.scene.primitives import mesh_vi, mesh_pos
-from gonzales.scene.scene_loader import mojo_parse_scene_any
+from gonzales.scene.shapes.primitives import mesh_vi, mesh_pos
+from gonzales.scene.description.scene_loader import mojo_parse_scene_any
 from std.memory.alloc import unsafe_alloc
 from std.memory import bitcast
 from std.sys import argv

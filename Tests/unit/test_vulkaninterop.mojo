@@ -2,7 +2,7 @@ from std.sys import has_accelerator
 from max.gpu.host import DeviceContext, DeviceBuffer
 from max.gpu.host._nvidia_cuda import CUDA
 from std.testing import assert_true, TestSuite
-from gonzales.scene.vulkaninterop import (
+from gonzales.scene.accel.vulkaninterop import (
     vulkaninterop_create, vulkaninterop_get_cuda_ptr,
     vulkaninterop_round_trip, vulkaninterop_destroy,
     vulkaninterop_fill_kernel_test,

@@ -6,10 +6,10 @@ from std.os import getenv, setenv
 from std.memory.alloc import unsafe_alloc
 from gonzales.app.pipeline import _generate_sobol_matrices, parse_and_render, render_interactive, debug_trace_pixel, debug_render_vulkanrt, bake_scene
 from gonzales.core.spectrum import load_spectral_context, spectral_handle, SpectralContext
-from gonzales.scene.pbrt_parser import ParsedScene_Mojo
-from gonzales.scene.ply_prefetch import PlyPrefetch, scan_plys
+from gonzales.scene.description.pbrt_parser import ParsedScene_Mojo
+from gonzales.scene.shapes.ply_prefetch import PlyPrefetch, scan_plys
 from gonzales.core.os_thread import OsThread, ThreadArg
-from gonzales.scene.scene_loader import mojo_parse_scene_any
+from gonzales.scene.description.scene_loader import mojo_parse_scene_any
 from gonzales.gpu.gpu_scene import gpu_available
 from max.gpu.host import DeviceContext
 from gonzales.core.sensors import scan_film_sensor_params

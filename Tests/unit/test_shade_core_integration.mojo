@@ -2,9 +2,9 @@ from std.math import abs
 from std.memory.alloc import unsafe_alloc
 from std.testing import assert_true, TestSuite
 from gonzales.core.geometry import Point3f, Vec3f, RGB
-from gonzales.scene.materials import Material, MatKind
+from gonzales.scene.appearance.materials import Material, MatKind
 from gonzales.transport.render_state import PathState, MIN_RAY_PDF_NONE, SssWalk
-from gonzales.scene.primitives import Intersection
+from gonzales.scene.shapes.primitives import Intersection
 from gonzales.core.geometry import Ray
 from gonzales.core.spectrum import SpectralSample, SampledWavelengths, null_spectral_handle
 from gonzales.integrators.shading import shade_core

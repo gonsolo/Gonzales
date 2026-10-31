@@ -1,11 +1,11 @@
 from max.gpu import MAX_THREADS_PER_BLOCK_METADATA
 from std.utils import StaticTuple
 from gonzales.core.gpu_tuning import MINCTA_NEE, MINCTA_DIFFUSE, MINCTA_COATED, MINCTA_CONDUCTOR, MINCTA_MEASURED, MINCTA_DIELECTRIC
-from gonzales.scene.bvh import SceneView
+from gonzales.scene.accel.bvh import SceneView
 from gonzales.core.geometry import _is_real_ptr, Vec3f, dot
 from std.math import sqrt
-from gonzales.scene.materials import MatKind, resolve_mix
-from gonzales.scene.primitives import Intersection
+from gonzales.scene.appearance.materials import MatKind, resolve_mix
+from gonzales.scene.shapes.primitives import Intersection
 from gonzales.transport.render_state import PathState, ShadowTask, SuppressTask
 from gonzales.integrators.restir_di import DIReservoir, ReservoirIO, reservoir_io_null
 from gonzales.core.rng import PCG32

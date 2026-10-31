@@ -1,14 +1,14 @@
 """What a shading point can see of the scene."""
 from gonzales.core.geometry import RGB, Vec3f
-from gonzales.scene.materials import Material, MeasuredBRDF
+from gonzales.scene.appearance.materials import Material, MeasuredBRDF
 from gonzales.transport.render_state import PathState, ShadowTask, SuppressTask
-from gonzales.scene.materials import GpuTexture, NormalSlopeMap
-from gonzales.scene.primitives import PrimId, TriangleMesh, Sphere, Instance
-from gonzales.scene.lights import AreaLight, DistantLight, PointLight, InfiniteLight, LightSampler
-from gonzales.scene.media import Medium, MediumInterface, Grid, NvdbGrid
-from gonzales.scene.curves import Curve
-from gonzales.scene.footprint import CameraFootprint
-from gonzales.scene.bvh import BVH2Node, BVH4, SceneView
+from gonzales.scene.appearance.materials import GpuTexture, NormalSlopeMap
+from gonzales.scene.shapes.primitives import PrimId, TriangleMesh, Sphere, Instance
+from gonzales.scene.appearance.lights import AreaLight, DistantLight, PointLight, InfiniteLight, LightSampler
+from gonzales.scene.appearance.media import Medium, MediumInterface, Grid, NvdbGrid
+from gonzales.scene.shapes.curves import Curve
+from gonzales.scene.appearance.footprint import CameraFootprint
+from gonzales.scene.accel.bvh import BVH2Node, BVH4, SceneView
 from gonzales.paths.guide import GuideGrid, null_guide
 from gonzales.core.spectrum import SpectralHandle, SpectralSample
 from gonzales.integrators.restir_gi import GIReservoirIO, gi_reservoir_io_null

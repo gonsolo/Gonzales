@@ -1,9 +1,9 @@
 """The path tracer's medium kernels."""
 from max.gpu import MAX_THREADS_PER_BLOCK_METADATA
 from std.utils import StaticTuple
-from gonzales.scene.bvh import SceneView
+from gonzales.scene.accel.bvh import SceneView
 from gonzales.core.geometry import _is_real_ptr
-from gonzales.scene.primitives import Intersection
+from gonzales.scene.shapes.primitives import Intersection
 from gonzales.transport.render_state import PathState
 from gonzales.integrators.restir_vol import VolReservoir
 from max.gpu import block_dim, block_idx, thread_idx

@@ -2,13 +2,13 @@
 from std.collections import Array
 from std.math import sqrt, abs
 from gonzales.core.geometry import Point3f, Vec3f, dot, cross, _is_real_ptr
-from gonzales.scene.materials import fr_dielectric
-from gonzales.scene.materials import normal_slope_map_none
-from gonzales.scene.primitives import Intersection, PrimId, TriangleMesh, Instance, mesh_normal
+from gonzales.scene.appearance.materials import fr_dielectric
+from gonzales.scene.appearance.materials import normal_slope_map_none
+from gonzales.scene.shapes.primitives import Intersection, PrimId, TriangleMesh, Instance, mesh_normal
 from gonzales.core.geometry import Ray
-from gonzales.scene.primitives import mesh_pos
+from gonzales.scene.shapes.primitives import mesh_pos
 from gonzales.core.rng import PCG32
-from gonzales.scene.bvh import any_hit_dispatch, traverse_dispatch
+from gonzales.scene.accel.bvh import any_hit_dispatch, traverse_dispatch
 from gonzales.core.transform import transform_normal, Mat4
 from gonzales.transport.sms import MAX_SMS_VERTICES, SMSVertex, sms_vertex_init, sms_vertex_flat, sms_vertex_sphere, sms_vertex_mats, mat22_mul, mat22_mul_v, mat22_inv, sms_walk, SMS_SOLVER_THRESHOLD, mnee_orthonormal_basis, sms_refresh_solved_frames, sms_refresh_mesh_frames, sms_vertex_mesh, sms_curved, tri_barycentrics
 from gonzales.transport.texturing import _get_tri_verts

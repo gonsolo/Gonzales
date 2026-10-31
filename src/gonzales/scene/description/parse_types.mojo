@@ -1,7 +1,7 @@
 from std.collections import Array
 from gonzales.core.geometry import RGB
 from std.os.path import exists
-from gonzales.scene.ply_prefetch import PlyPrefetch
+from gonzales.scene.shapes.ply_prefetch import PlyPrefetch
 
 
 def scene_path(scene_dir: String, name: String, what: String) -> String:

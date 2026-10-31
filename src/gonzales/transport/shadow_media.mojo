@@ -2,13 +2,13 @@
 from std.collections import Array
 from std.math import exp, log, max
 from gonzales.core.geometry import Point3f, Vec3f, dot
-from gonzales.scene.materials import Material, MatKind
-from gonzales.scene.primitives import Intersection, PrimId, TriangleMesh, Sphere, Instance
+from gonzales.scene.appearance.materials import Material, MatKind
+from gonzales.scene.shapes.primitives import Intersection, PrimId, TriangleMesh, Sphere, Instance
 from gonzales.core.geometry import Ray
-from gonzales.scene.curves import Curve
-from gonzales.scene.media import Medium, MediumInterface, Grid, NvdbGrid, MEDIUM_TRACK_MAX_ITERS, medium_sigma_t_spectral, grid_sample_density, nvdb_sample_density
-from gonzales.scene.bvh import BVH2Node, traverse_bvh2_core, test_spheres
-from gonzales.scene.geom_normal import _geom_normal
+from gonzales.scene.shapes.curves import Curve
+from gonzales.scene.appearance.media import Medium, MediumInterface, Grid, NvdbGrid, MEDIUM_TRACK_MAX_ITERS, medium_sigma_t_spectral, grid_sample_density, nvdb_sample_density
+from gonzales.scene.accel.bvh import BVH2Node, traverse_bvh2_core, test_spheres
+from gonzales.scene.shapes.geom_normal import _geom_normal
 from gonzales.core.rng import PCG32
 from gonzales.core.spectrum import SpectralHandle, SampledWavelengths, SpectralSample
 

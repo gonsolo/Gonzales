@@ -3,13 +3,13 @@ from max.algorithm import parallelize
 from std.math import max, min
 from std.memory.alloc import unsafe_alloc
 from gonzales.transport.medium_interface import default_emit_medium
-from gonzales.scene.primitives import Intersection
-from gonzales.scene.media import SSS_WALK_ROUNDS
-from gonzales.scene.bvh import SceneView
+from gonzales.scene.shapes.primitives import Intersection
+from gonzales.scene.appearance.media import SSS_WALK_ROUNDS
+from gonzales.scene.accel.bvh import SceneView
 from gonzales.estimators.photon_grid import _HSIZE, grid_reset_cell
 from gonzales.core.sampling import FilmFilter, film_filter_of
 from gonzales.core.rng import PCG32
-from gonzales.scene.pbrt_parser import ParsedScene_Mojo
+from gonzales.scene.description.pbrt_parser import ParsedScene_Mojo
 from gonzales.core.progress import Progress
 from gonzales.integrators.outputs import finish_render
 from gonzales.core.spectrum import SampledWavelengths, pass_wavelengths

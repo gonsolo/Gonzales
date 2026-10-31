@@ -4,22 +4,22 @@
 from std.math import sqrt, cos, sin, log, exp, max
 from gonzales.transport.medium_interface import medium_after
 from gonzales.core.geometry import Point3f, Point2f, Vec3f, vec3f, point3f, dot, PI, INV_FOUR_PI
-from gonzales.scene.materials import MatKind, LobeKind, resolve_mix
-from gonzales.scene.primitives import Intersection
+from gonzales.scene.appearance.materials import MatKind, LobeKind, resolve_mix
+from gonzales.scene.shapes.primitives import Intersection
 from gonzales.core.geometry import Ray
-from gonzales.scene.media import sample_free_flight, spectral_free_flight_weight
+from gonzales.scene.appearance.media import sample_free_flight, spectral_free_flight_weight
 from gonzales.paths.vcm_mis import vcm_scatter_carries, vcm_phase_scatter
 from gonzales.paths.vcm_camis import (
     CamisLightRecord, CamisLightCarry, camis_light_carry_off, camis_light_origin, camis_light_arrive,
     camis_light_scatter,
 )
-from gonzales.scene.bvh import traverse_dispatch
-from gonzales.scene.bvh import SceneView, test_spheres, _scene_bounding_sphere, _sample_disk_perpendicular, _sample_infinite_light_dir, sphere_light_cone_pdf, light_path_pick
+from gonzales.scene.accel.bvh import traverse_dispatch
+from gonzales.scene.accel.bvh import SceneView, test_spheres, _scene_bounding_sphere, _sample_disk_perpendicular, _sample_infinite_light_dir, sphere_light_cone_pdf, light_path_pick
 from gonzales.core.rng import PCG32
 from gonzales.integrators.sppm import _cosine_hemisphere_sample, sample_area_light_point, sample_sphere_light_emission, area_light_emit_normal
-from gonzales.scene.lights import area_light_side_pdf
+from gonzales.scene.appearance.lights import area_light_side_pdf
 from gonzales.core.spectrum import SampledWavelengths, SpectralSample, spec_refl, spec_illum
-from gonzales.scene.geom_normal import _geom_normal
+from gonzales.scene.shapes.geom_normal import _geom_normal
 from gonzales.paths.bdpt_vertex import _VCM_SSS_CAMERA_ONLY, _vcm_walk_limit, _BDPT_MAX_VERTS, BDPTVertex, _null_vertex
 from gonzales.paths.bdpt_eval import _bdpt_vertex_mis_scoped, _vcm_mnee_light_dvcm
 from gonzales.paths.vcm_strategy import _vcm_depth, _VCM_MAX_STORED, _vcm_keep, _VCM_CAMIS, _vcm_eta_scale, _vcm_eta_at, _vcm_fibre_scale

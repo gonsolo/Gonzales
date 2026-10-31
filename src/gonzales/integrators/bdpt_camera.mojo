@@ -6,13 +6,13 @@ from std.math import sqrt, cos, sin, log, exp, max, abs
 from gonzales.core.geometry import face_toward
 from gonzales.transport.sss_walk import SssExit, sss_entry_lobe, sss_walk_to_exit
 from gonzales.transport.medium_interface import medium_after
-from gonzales.scene.materials import fr_dielectric, sss_boundary_lobe
+from gonzales.scene.appearance.materials import fr_dielectric, sss_boundary_lobe
 from gonzales.core.geometry import offset_eps, RGB, Point3f, Point2f, Vec3f, vec3f, point3f, dot, cross, PI, INV_FOUR_PI, INV_PI
 from gonzales.transport.render_state import PDF_DELTA_FULL, PDF_DROP_DIRECT
-from gonzales.scene.materials import Material, MatKind, LobeKind, resolve_mix
-from gonzales.scene.primitives import Intersection, mesh_pos
+from gonzales.scene.appearance.materials import Material, MatKind, LobeKind, resolve_mix
+from gonzales.scene.shapes.primitives import Intersection, mesh_pos
 from gonzales.core.geometry import Ray
-from gonzales.scene.media import sample_free_flight, spectral_free_flight_weight
+from gonzales.scene.appearance.media import sample_free_flight, spectral_free_flight_weight
 from gonzales.paths.vcm_mis import (
     vcm_phase_scatter,
     vcm_arrival_carries, vcm_scatter_carries,
@@ -22,13 +22,13 @@ from gonzales.paths.vcm_camis import (
     CamisCamRecord, CamisCamCarry, camis_cam_carry_init, camis_cam_arrive, camis_cam_scatter,
     CamisLightRecord, camis_clamp_log_p, camis_eval_emission_hit,
 )
-from gonzales.scene.bvh import traverse_dispatch
-from gonzales.scene.bvh import SceneView, test_spheres, _scene_bounding_sphere, _eval_infinite_light_and_pdf, sphere_light_cone_pdf, _sample_infinite_light_nee, light_path_pick_pdf
+from gonzales.scene.accel.bvh import traverse_dispatch
+from gonzales.scene.accel.bvh import SceneView, test_spheres, _scene_bounding_sphere, _eval_infinite_light_and_pdf, sphere_light_cone_pdf, _sample_infinite_light_nee, light_path_pick_pdf
 from gonzales.core.sampling import power_heuristic, camera_ray_from_film_xy, FilmFilter, film_filter_offset, ThinLens
 from gonzales.core.rng import PCG32
-from gonzales.scene.geom_normal import _geom_normal, _shading_normal_at
+from gonzales.scene.shapes.geom_normal import _geom_normal, _shading_normal_at
 from gonzales.integrators.sppm import _dielectric_bounce, _cosine_hemisphere_sample
-from gonzales.scene.lights import area_light_side_pdf
+from gonzales.scene.appearance.lights import area_light_side_pdf
 from gonzales.integrators.shading import area_light_hit_cos, curve_light_hit
 from gonzales.transport.texturing import _get_tri_verts, apply_surface_maps_at_hit
 from gonzales.transport.bxdf import BSDF, LobeSample, LobeTables

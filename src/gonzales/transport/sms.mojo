@@ -35,13 +35,13 @@
 from std.collections import Array
 from std.math import sqrt, abs, max, min, cos, sin, acos
 from gonzales.core.geometry import dot, cross, Frame, Vec3f, Point3f, _atan2f, PI, TWO_PI, _is_real_ptr
-from gonzales.scene.materials import fr_dielectric
-from gonzales.scene.materials import NormalSlopeMap, normal_slope_map_none
-from gonzales.scene.primitives import Intersection, PrimId, TriangleMesh, Instance, Sphere, mesh_vi, mesh_pos, mesh_normal
+from gonzales.scene.appearance.materials import fr_dielectric
+from gonzales.scene.appearance.materials import NormalSlopeMap, normal_slope_map_none
+from gonzales.scene.shapes.primitives import Intersection, PrimId, TriangleMesh, Instance, Sphere, mesh_vi, mesh_pos, mesh_normal
 from gonzales.core.geometry import Ray
-from gonzales.scene.curves import Curve
+from gonzales.scene.shapes.curves import Curve
 from gonzales.core.rng import PCG32
-from gonzales.scene.bvh import ray_sphere_hit, traverse_bvh2_core, BVH2Node
+from gonzales.scene.accel.bvh import ray_sphere_hit, traverse_bvh2_core, BVH2Node
 
 comptime MAX_SMS_VERTICES: Int = 6
 # Cap on the Bernoulli estimator's trial count. For a chain whose manifold

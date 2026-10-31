@@ -1,6 +1,6 @@
 from std.sys import has_accelerator
 from std.testing import assert_true, TestSuite
-from gonzales.scene.vulkanrt import vulkanrt_smoke_test
+from gonzales.scene.accel.vulkanrt import vulkanrt_smoke_test
 
 # Proves the full Mojo -> C++ bridge -> Vulkan -> RT-core round trip for
 # task #162's first step: a headless VK_KHR_ray_query dispatch against a

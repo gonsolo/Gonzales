@@ -10,7 +10,10 @@ integrators  one path step of PT, SPPM, VCM, ReSTIR, shared by cpu and gpu
 paths        subpaths, vertices, connections, MIS, VCM's strategies and merge grid
 estimators   generic photon stores and density estimates
 transport    lobes, light sampling, walks, MNEE, SMS, texturing
-scene        geometry, materials, media, lights, BVH, parsers
+scene/description  parsers, scene building
+scene/accel        BVHs and ray-tracing backends
+scene/appearance   materials, textures, media, lights
+scene/shapes       primitives, curves, mesh files
 core         math, spectra, sampling, random numbers
 ```
 

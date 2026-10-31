@@ -14,12 +14,12 @@ from max.gpu.memory import AddressSpace
 from max.gpu.primitives import warp
 from max.gpu.primitives.warp import match_any, shuffle_idx, vote
 from max.gpu.sync import barrier, syncwarp
-from gonzales.scene.bvh import BVH2Node, _node_box_hit, _shadow_is_null_material
-from gonzales.scene.curves import Curve, curve_at, CurveBvh, intersect_curve, curve_piece_endpoints, _curve_perp_axis
+from gonzales.scene.accel.bvh import BVH2Node, _node_box_hit, _shadow_is_null_material
+from gonzales.scene.shapes.curves import Curve, curve_at, CurveBvh, intersect_curve, curve_piece_endpoints, _curve_perp_axis
 from gonzales.core.geometry import Point3f, Vec3f, cross
-from gonzales.scene.gpu_bvh import TPB, MaskT, _buf, _p, _tid, _seg_of, _ord, _unord
-from gonzales.scene.materials import Material
-from gonzales.scene.primitives import PrimId
+from gonzales.scene.accel.gpu_bvh import TPB, MaskT, _buf, _p, _tid, _seg_of, _ord, _unord
+from gonzales.scene.appearance.materials import Material
+from gonzales.scene.shapes.primitives import PrimId
 from gonzales.core.geometry import Ray
 
 comptime CURVE_CLUSTER = 4096       # pieces a cluster covers at most

@@ -1,5 +1,5 @@
 from std.ffi import external_call
-from gonzales.scene.primitives import TriangleMesh
+from gonzales.scene.shapes.primitives import TriangleMesh
 
 # Task #162 step 1: Mojo-side FFI wrapper for the headless Vulkan
 # ray-query smoke test (src/vulkanrt/vulkanrt.cpp). Completes the

@@ -1,7 +1,7 @@
 from std.ffi import external_call
 from max.gpu import block_idx, thread_idx, block_dim
 from max.gpu.host._nvidia_cuda import CUstream
-from gonzales.scene.primitives import TriangleMesh
+from gonzales.scene.shapes.primitives import TriangleMesh
 
 # Task #163 stage 1: Mojo-side FFI wrapper for the CUDA/Vulkan GPU-side
 # interop bridge (src/vulkaninterop/vulkaninterop.cpp). Proves the whole

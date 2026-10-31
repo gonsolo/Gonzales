@@ -2,9 +2,9 @@
 
     build/scene_mem scene.pbrt cache.gsc
 """
-from gonzales.scene.scene_cache import scene_cache_load
-from gonzales.scene.scene_loader import mojo_parse_scene_any
-from gonzales.scene.primitives import mesh_points_floats, TriangleMesh
+from gonzales.scene.description.scene_cache import scene_cache_load
+from gonzales.scene.description.scene_loader import mojo_parse_scene_any
+from gonzales.scene.shapes.primitives import mesh_points_floats, TriangleMesh
 from std.memory.alloc import unsafe_alloc
 from std.sys import argv
 

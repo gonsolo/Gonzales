@@ -2,11 +2,11 @@ from std.memory.alloc import unsafe_alloc
 from std.ffi import external_call
 from std.math import sqrt, max, abs
 from gonzales.core.diagnostics import warn_unsupported
-from gonzales.scene.lexer import (PbrtScanner, scanner_parse_quoted_string, _psc_collect_params, ParameterDictionary)
-from gonzales.scene.parse_types import NamedMaterial, SceneParseState, PSC_NAME_MAX, scene_path
+from gonzales.scene.description.lexer import (PbrtScanner, scanner_parse_quoted_string, _psc_collect_params, ParameterDictionary)
+from gonzales.scene.description.parse_types import NamedMaterial, SceneParseState, PSC_NAME_MAX, scene_path
 from gonzales.core.geometry import RGB
-from gonzales.scene.materials import MatKind
-from gonzales.scene.measured_bsdf import load_measured_bsdf_reflectance
+from gonzales.scene.appearance.materials import MatKind
+from gonzales.scene.appearance.measured_bsdf import load_measured_bsdf_reflectance
 from gonzales.core.spd import load_spd_rgb, named_metal_rgb, named_glass_ior
 from gonzales.core.rng import PCG32
 from std.math import log, sqrt, cos

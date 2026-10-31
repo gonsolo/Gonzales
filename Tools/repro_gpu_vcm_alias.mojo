@@ -17,7 +17,7 @@ from max.gpu.host import DeviceContext
 from gonzales.core.geometry import (
     Point3f, Vec3f, Ray, PrimId, Intersection, TriangleMesh, Curve,
 )
-from gonzales.scene.bvh import BVH2Node, traverse_bvh2_core
+from gonzales.scene.accel.bvh import BVH2Node, traverse_bvh2_core
 from std.memory.alloc import unsafe_alloc
 
 comptime NO_CURVES = Pointer[Curve, MutUntrackedOrigin].unsafe_dangling

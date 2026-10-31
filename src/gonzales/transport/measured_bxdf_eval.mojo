@@ -35,7 +35,7 @@
 # retracted by its own author as unreproducible, but avoided defensively).
 from std.math import sqrt, sin, cos, acos, abs, max, floor
 from gonzales.core.geometry import safe_sqrt, PI, dot, Vec3f
-from gonzales.scene.materials import MeasuredBRDF
+from gonzales.scene.appearance.materials import MeasuredBRDF
 from gonzales.core.spectrum import SampledWavelengths, SpectralSample
 from gonzales.core.geometry import _atan2f
 

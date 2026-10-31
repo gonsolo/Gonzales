@@ -3,11 +3,11 @@ from max.algorithm import parallelize
 from std.math import sqrt, floor, max, pow
 from std.memory.alloc import unsafe_alloc
 from gonzales.core.geometry import Point3f, Vec3f
-from gonzales.scene.materials import LobeKind
-from gonzales.scene.primitives import Intersection, PrimId
+from gonzales.scene.appearance.materials import LobeKind
+from gonzales.scene.shapes.primitives import Intersection, PrimId
 from gonzales.core.geometry import Ray
-from gonzales.scene.bvh import traverse_dispatch
-from gonzales.scene.bvh import SceneView, test_spheres
+from gonzales.scene.accel.bvh import traverse_dispatch
+from gonzales.scene.accel.bvh import SceneView, test_spheres
 from gonzales.estimators.photon_grid import _HSIZE, _hash_cell, grid_reset_cell, grid_count, grid_keep, grid_coin_bits, grid_push
 from gonzales.paths.bdpt_vertex import _BDPT_MAX_VERTS, BDPTVertex
 from gonzales.paths.bdpt_eval import _bdpt_vertex_mis_scoped

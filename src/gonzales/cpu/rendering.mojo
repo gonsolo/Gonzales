@@ -8,9 +8,9 @@ from std.sys.info import num_performance_cores
 from gonzales.core.geometry import RGB, Vec3f, INV_FOUR_PI, _is_real_ptr
 from gonzales.transport.render_state import PathState, MIN_RAY_PDF_NONE, SssWalk, TileResult
 from gonzales.core.progress import Progress
-from gonzales.scene.primitives import Intersection, TriangleMesh, mesh_vi
-from gonzales.scene.media import SSS_WALK_ROUNDS
-from gonzales.scene.bvh import SceneView, traverse_dispatch, test_spheres
+from gonzales.scene.shapes.primitives import Intersection, TriangleMesh, mesh_vi
+from gonzales.scene.appearance.media import SSS_WALK_ROUNDS
+from gonzales.scene.accel.bvh import SceneView, traverse_dispatch, test_spheres
 from gonzales.integrators.shading import cpu_shade_context, shade_core_cpu_nee_ctx, gi_pending_x1_init
 from gonzales.transport.shade_context import GIPendingX1
 from gonzales.core.sampling import TileSamplerParams, encode_morton2, sobol_index_pixel_part, gen_primary_ray_state

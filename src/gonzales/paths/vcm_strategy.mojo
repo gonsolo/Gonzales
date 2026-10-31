@@ -1,11 +1,11 @@
 """Which of VCM's strategies exist at a vertex and with what merge density."""
 from std.math import sqrt, floor, max, min
 from gonzales.core.geometry import Point3f, PI
-from gonzales.scene.materials import LobeKind
-from gonzales.scene.bvh import SceneView, _is_real_ptr, curve_radius
+from gonzales.scene.appearance.materials import LobeKind
+from gonzales.scene.accel.bvh import SceneView, _is_real_ptr, curve_radius
 from gonzales.estimators.photon_grid import _hash_cell, _PHOTON_BUCKET_CAP, grid_keep
 from gonzales.paths.bdpt_vertex import _BDPT_MAX_VERTS, BDPTVertex
-from gonzales.scene.media import medium_kernel_radius
+from gonzales.scene.appearance.media import medium_kernel_radius
 
 
 @always_inline

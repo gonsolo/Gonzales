@@ -10,7 +10,7 @@ rng.mojo), confirmed by a symbol-reference scan of each block with comments
 and docstrings stripped before moving it."""
 from std.math import sqrt, cos, sin, min, max, abs, floor, log, exp
 from gonzales.core.spectrum import SampledWavelengths, SpectralSample, spec_refl, spec_refl_unbounded, rgb_illuminant_to_spectral_sample
-from gonzales.scene.nanovdb import nvdb_sample_index, nvdb_majorant_at, nvdb_leaf_base, nvdb_leaf_value
+from gonzales.scene.appearance.nanovdb import nvdb_sample_index, nvdb_majorant_at, nvdb_leaf_base, nvdb_leaf_value
 from gonzales.core.rgb2spec import CIE_Y_INTEGRAL
 from gonzales.core.rng import PCG32
 from gonzales.core.geometry import Point3f, Vec3f, RGB, Frame, INV_FOUR_PI, TWO_PI, dot

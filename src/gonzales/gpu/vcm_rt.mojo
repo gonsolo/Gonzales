@@ -4,14 +4,14 @@ from max.gpu import block_idx, thread_idx, block_dim, MAX_THREADS_PER_BLOCK_META
 from std.utils import StaticTuple
 from max.gpu.host import DeviceContext, DeviceBuffer
 from std.math import ceildiv
-from gonzales.scene.bvh import SceneView
-from gonzales.scene.primitives import Intersection
+from gonzales.scene.accel.bvh import SceneView
+from gonzales.scene.shapes.primitives import Intersection
 from gonzales.gpu.gpu_wavefront import (
     vulkaninterop_unpack_results_kernel, rtcore_trace_unpack_gpu, rtcore_spheres_from_rays_gpu,
     rtcore_alpha_passes, rt_no_ids, rt_no_paths, rt_no_meshes,
 )
-from gonzales.scene.hw_rt import hw_alpha, hw_rt_active, hw_trace_interop
-from gonzales.scene.vulkaninterop import VulkanInteropRtSceneHandle, vulkaninterop_rt_trace
+from gonzales.scene.accel.hw_rt import hw_alpha, hw_rt_active, hw_trace_interop
+from gonzales.scene.accel.vulkaninterop import VulkanInteropRtSceneHandle, vulkaninterop_rt_trace
 from max.gpu.host._nvidia_cuda import CUDA
 from gonzales.integrators.bdpt_camera import VCMCameraPathState
 from gonzales.integrators.bdpt_light import VCMLightPathState

@@ -11,18 +11,18 @@ from std.bit import count_trailing_zeros
 from gonzales.core.transform import Mat4
 from gonzales.core.geometry import dot, cross, Point3f, Point2f, Vec3f, Frame, RGB, PI, TWO_PI, INV_PI, safe_sqrt, _is_real_ptr, store_vec3, _atan2f, point3f, fast_sincos
 from gonzales.core.sampling import ThinLens
-from gonzales.scene.materials import Material, fr_dielectric, MeasuredBRDF
-from gonzales.scene.materials import GpuTexture, NormalSlopeMap
-from gonzales.scene.primitives import (
+from gonzales.scene.appearance.materials import Material, fr_dielectric, MeasuredBRDF
+from gonzales.scene.appearance.materials import GpuTexture, NormalSlopeMap
+from gonzales.scene.shapes.primitives import (
     Intersection, PrimId, TriangleMesh, Sphere, intersect_triangle, intersect_triangle_edges, alpha_killed, Instance, sphere_outward_normal, mesh_vi, mesh_material,
 )
 from gonzales.core.geometry import Ray
-from gonzales.scene.primitives import mesh_pos, mesh_point
-from gonzales.scene.media import Medium, MediumInterface, Grid, NvdbGrid
-from gonzales.scene.lights import AreaLight, DistantLight, PointLight, InfiniteLight, LightSampler, il_rgb
-from gonzales.scene.curves import Curve, curve_at, CurveBvh, intersect_curve, CURVE_DEFER_K, curve_piece_endpoints, curve_view_frame, curve_hit_normal
+from gonzales.scene.shapes.primitives import mesh_pos, mesh_point
+from gonzales.scene.appearance.media import Medium, MediumInterface, Grid, NvdbGrid
+from gonzales.scene.appearance.lights import AreaLight, DistantLight, PointLight, InfiniteLight, LightSampler, il_rgb
+from gonzales.scene.shapes.curves import Curve, curve_at, CurveBvh, intersect_curve, CURVE_DEFER_K, curve_piece_endpoints, curve_view_frame, curve_hit_normal
 from gonzales.core.rng import PCG32
-from gonzales.scene.footprint import CameraFootprint
+from gonzales.scene.appearance.footprint import CameraFootprint
 from gonzales.core.spectrum import SpectralHandle
 
 # ── BVH2 Compact Nodes (32 bytes per node, 1 cache line) ──────────────────────

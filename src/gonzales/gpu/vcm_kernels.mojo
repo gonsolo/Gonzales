@@ -11,12 +11,12 @@ from gonzales.core.gpu_tuning import (
 from std.math import sqrt, min
 from std.atomic import Atomic
 from gonzales.core.geometry import Point3f, Vec3f, RGB
-from gonzales.scene.materials import MatKind
-from gonzales.scene.primitives import Intersection
+from gonzales.scene.appearance.materials import MatKind
+from gonzales.scene.shapes.primitives import Intersection
 from gonzales.core.geometry import Ray
 from gonzales.paths.vcm_camis import CamisCamRecord, CamisCamCarry, CamisLightRecord, camis_light_carry_off
-from gonzales.scene.bvh import traverse_dispatch
-from gonzales.scene.bvh import SceneView, test_spheres, _is_real_ptr, ray_sphere_hit
+from gonzales.scene.accel.bvh import traverse_dispatch
+from gonzales.scene.accel.bvh import SceneView, test_spheres, _is_real_ptr, ray_sphere_hit
 from gonzales.core.sampling import FilmFilter, ThinLens
 from gonzales.core.rng import PCG32
 from gonzales.estimators.photon_grid import _HSIZE, _PHOTON_BUCKET_CAP

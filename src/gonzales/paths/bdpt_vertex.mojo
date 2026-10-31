@@ -4,7 +4,7 @@
 from std.sys import get_defined_int
 from gonzales.core.geometry import RGB, Point3f, Vec3f
 from gonzales.transport.render_state import PDF_VOL_PHASE_HIT
-from gonzales.scene.materials import LobeKind
+from gonzales.scene.appearance.materials import LobeKind
 from gonzales.core.spectrum import SampledWavelengths, SpectralSample
 
 # last_bsdf_pdf sentinel: the previous camera-path event was a VOLUME scatter.

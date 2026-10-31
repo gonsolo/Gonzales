@@ -5,11 +5,11 @@ from std.collections import Array
 from std.math import sqrt, floor, max, abs
 from std.atomic import Atomic
 from gonzales.core.geometry import dot, PI
-from gonzales.scene.materials import LobeKind
+from gonzales.scene.appearance.materials import LobeKind
 from gonzales.paths.vcm_camis import CamisCamRecord, CamisCamCarry, CamisLightRecord
-from gonzales.scene.bvh import SceneView, _is_real_ptr, curve_radius
+from gonzales.scene.accel.bvh import SceneView, _is_real_ptr, curve_radius
 from gonzales.estimators.photon_grid import _HSIZE, _hash_cell, _PHOTON_BUCKET_CAP, grid_keep, grid_weight, gather_disk_coverage, gather_disk_contains
-from gonzales.scene.media import medium_inv_sigma_t_spectral
+from gonzales.scene.appearance.media import medium_inv_sigma_t_spectral
 from gonzales.core.spectrum import SpectralSample
 from gonzales.paths.bdpt_vertex import _BDPT_MAX_VERTS, BDPTVertex
 from gonzales.paths.bdpt_eval import _lobe_eval, _bdpt_vertex_mis_scoped

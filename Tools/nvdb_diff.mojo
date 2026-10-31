@@ -19,7 +19,7 @@ too, and it is the one case a stub gets free.
 """
 from std.sys import argv
 from std.memory.alloc import unsafe_alloc
-from gonzales.scene.nanovdb import (
+from gonzales.scene.appearance.nanovdb import (
     nvdb_load, nvdb_data, nvdb_size, nvdb_free,
     nvdb_get_value_ref, nvdb_active_count, nvdb_active_coord, nvdb_majorant_at, nvdb_leaf_base, nvdb_leaf_value,
     nvdb_sample_index,

@@ -188,7 +188,7 @@ renderer.
   driver: Vulkan compiles `intersect_batch.comp`, the code is read from the pipeline cache and patched. The patcher
   checks the six instructions it rewrites and refuses a driver that compiled the shader differently. Nothing from
   NVIDIA is committed.
-- `src/gonzales/scene/rtcore.mojo` and `Tests/unit/test_rtcore.mojo`: Vulkan builds a BLAS, Mojo reads its bytes
+- `src/gonzales/scene/accel/rtcore.mojo` and `Tests/unit/test_rtcore.mojo`: Vulkan builds a BLAS, Mojo reads its bytes
   (`vulkanrt_debug_read_as`), traces 4096 rays on its own `DeviceContext` stream, and compares every ray with Vulkan's
   ray query (3431 hits, 0 mismatches). The test skips without the cubin or without CUDA.
 

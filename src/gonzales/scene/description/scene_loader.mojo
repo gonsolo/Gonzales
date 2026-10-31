@@ -1,7 +1,7 @@
-from gonzales.scene.pbrt_parser import ParsedScene_Mojo, mojo_parse_scene, resize_film
-from gonzales.scene.ply_prefetch import PlyPrefetch
-from gonzales.scene.mitsuba_parser import mojo_parse_mitsuba_scene
-from gonzales.scene.scene_cache import scene_cache_load, scene_cache_save
+from gonzales.scene.description.pbrt_parser import ParsedScene_Mojo, mojo_parse_scene, resize_film
+from gonzales.scene.shapes.ply_prefetch import PlyPrefetch
+from gonzales.scene.description.mitsuba_parser import mojo_parse_mitsuba_scene
+from gonzales.scene.description.scene_cache import scene_cache_load, scene_cache_save
 from std.os import getenv
 from gonzales.core.geometry import _is_real_ptr
 from std.memory.alloc import unsafe_alloc

@@ -1,14 +1,14 @@
 """Texture lookup and the surface maps applied at a hit."""
 from std.atomic import Atomic
-from gonzales.scene.ptex_cache import PTEX_QUEUE_CAP
+from gonzales.scene.appearance.ptex_cache import PTEX_QUEUE_CAP
 from std.math import sqrt, floor, log2, ceil, abs
 from std.ffi import external_call
 from std.memory.alloc import unsafe_alloc
 from gonzales.core.geometry import RGB, Vec3f, dot, cross, Frame, _is_real_ptr
-from gonzales.scene.materials import Material
-from gonzales.scene.materials import GpuTexture
-from gonzales.scene.primitives import Intersection, TriangleMesh, Instance, mesh_uv, mesh_has_uvs, mesh_vi, mesh_face
-from gonzales.scene.footprint import CameraFootprint, UVFootprint, TriWorld, tri_world, hit_uv_footprint
+from gonzales.scene.appearance.materials import Material
+from gonzales.scene.appearance.materials import GpuTexture
+from gonzales.scene.shapes.primitives import Intersection, TriangleMesh, Instance, mesh_uv, mesh_has_uvs, mesh_vi, mesh_face
+from gonzales.scene.appearance.footprint import CameraFootprint, UVFootprint, TriWorld, tri_world, hit_uv_footprint
 
 
 @always_inline

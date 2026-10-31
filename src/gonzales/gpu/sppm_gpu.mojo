@@ -7,13 +7,13 @@ from max.gpu import block_dim
 from std.math import max, min, ceildiv
 from std.memory.alloc import unsafe_alloc
 from gonzales.transport.medium_interface import default_emit_medium
-from gonzales.scene.materials import LobeKind
-from gonzales.scene.primitives import Intersection
-from gonzales.scene.media import Medium, SSS_WALK_ROUNDS, Grid, NvdbGrid
-from gonzales.scene.bvh import SceneView
+from gonzales.scene.appearance.materials import LobeKind
+from gonzales.scene.shapes.primitives import Intersection
+from gonzales.scene.appearance.media import Medium, SSS_WALK_ROUNDS, Grid, NvdbGrid
+from gonzales.scene.accel.bvh import SceneView
 from gonzales.core.sampling import film_filter_of
-from gonzales.scene.footprint import camera_footprint
-from gonzales.scene.pbrt_parser import ParsedScene_Mojo
+from gonzales.scene.appearance.footprint import camera_footprint
+from gonzales.scene.description.pbrt_parser import ParsedScene_Mojo
 from gonzales.integrators.sppm import SPPMPixel, SPPMPhoton, _vp_samples_for, _VP_SAMPLES, _photon_depth_cap
 from gonzales.estimators.photon_grid import _HSIZE
 from gonzales.gpu.gpu_scene import GpuSceneHandle

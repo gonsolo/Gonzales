@@ -2,10 +2,10 @@
 
 from std.math import abs, min
 from gonzales.core.geometry import offset_eps, face_toward, RGB, Point3f, Vec3f, vec3f, dot
-from gonzales.scene.materials import Material, MatKind
-from gonzales.scene.primitives import Intersection
-from gonzales.scene.bvh import SceneView, curve_hit_frame, curve_offset_eps, curve_tangent, fibre_cos
-from gonzales.scene.geom_normal import _geom_normal, _shading_normal_at
+from gonzales.scene.appearance.materials import Material, MatKind
+from gonzales.scene.shapes.primitives import Intersection
+from gonzales.scene.accel.bvh import SceneView, curve_hit_frame, curve_offset_eps, curve_tangent, fibre_cos
+from gonzales.scene.shapes.geom_normal import _geom_normal, _shading_normal_at
 from gonzales.transport.texturing import _tex_lookup, _get_tri_verts, apply_surface_maps_at_hit, uv_footprint_at_hit
 from gonzales.transport.bxdf import BSDF
 from gonzales.core.spectrum import SampledWavelengths, SpectralSample, rgb_bands_to_spectral_sample

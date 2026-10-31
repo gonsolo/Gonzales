@@ -16,7 +16,7 @@
 # bxdf_eval_measured/bxdf_sample_measured/bxdf_pdf_measured (Stage 2) for the
 # consumers of the MeasuredBRDF this returns.
 from std.memory.alloc import unsafe_alloc
-from gonzales.scene.materials import MeasuredBRDF
+from gonzales.scene.appearance.materials import MeasuredBRDF
 
 @always_inline
 def _mbsdf_u16(buf: Pointer[UInt8, MutUntrackedOrigin], pos: Int) -> Int:

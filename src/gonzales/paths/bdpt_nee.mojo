@@ -5,17 +5,17 @@ from std.collections import Array
 from std.math import abs
 from gonzales.transport.medium_interface import medium_after
 from gonzales.core.geometry import Point3f, Vec3f, vec3f, dot
-from gonzales.scene.materials import MatKind, fr_dielectric
-from gonzales.scene.primitives import Intersection, PrimId
+from gonzales.scene.appearance.materials import MatKind, fr_dielectric
+from gonzales.scene.shapes.primitives import Intersection, PrimId
 from gonzales.core.geometry import Ray
 from gonzales.transport.shadow_media import segment_transmittance
-from gonzales.scene.bvh import traverse_dispatch
-from gonzales.scene.bvh import (
+from gonzales.scene.accel.bvh import traverse_dispatch
+from gonzales.scene.accel.bvh import (
     SceneView, test_spheres, LightSample, _sample_distant_light_nee,
     _sample_point_light_nee, _sample_sphere_light_nee,
 )
 from gonzales.core.rng import PCG32
-from gonzales.scene.geom_normal import _geom_normal
+from gonzales.scene.shapes.geom_normal import _geom_normal
 from gonzales.core.spectrum import SampledWavelengths, SpectralSample
 
 @always_inline

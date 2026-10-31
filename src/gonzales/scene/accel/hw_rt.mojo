@@ -1,7 +1,7 @@
 from max.gpu.host import DeviceContext
 from max.gpu.host._nvidia_cuda import CUDA
-from gonzales.scene.rtcore import rtcore_active, rtcore_alpha_enabled, rtcore_shadow_enabled, rtcore_trace, rtcore_trace_interop
-from gonzales.scene.xert import xert_active, xert_alpha, xert_curve_table, xert_shadow_slots, xert_trace_interop
+from gonzales.scene.accel.rtcore import rtcore_active, rtcore_alpha_enabled, rtcore_shadow_enabled, rtcore_trace, rtcore_trace_interop
+from gonzales.scene.accel.xert import xert_active, xert_alpha, xert_curve_table, xert_shadow_slots, xert_trace_interop
 
 # Hardware ray tracing on either vendor: Intel Xe2 through xert, the NVIDIA RT cores through librtcore. Rays are 8
 # floats each (ox oy oz t_min dx dy dz t_max) at device addresses; CUDA streams are only asked for on NVIDIA.

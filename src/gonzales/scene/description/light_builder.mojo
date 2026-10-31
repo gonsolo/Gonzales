@@ -1,8 +1,8 @@
 from std.memory.alloc import unsafe_alloc
 from std.math import sqrt
-from gonzales.scene.lexer import (PbrtScanner, scanner_parse_quoted_string, _psc_collect_params,
+from gonzales.scene.description.lexer import (PbrtScanner, scanner_parse_quoted_string, _psc_collect_params,
                     _psc_streq)
-from gonzales.scene.parse_types import SceneParseState, scene_path
+from gonzales.scene.description.parse_types import SceneParseState, scene_path
 from gonzales.core.geometry import RGB
 from gonzales.core.transform import transform_points
 

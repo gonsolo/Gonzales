@@ -14,24 +14,24 @@ from gonzales.core.geometry import face_toward
 from gonzales.transport.sss_walk import sss_entry_lobe, sss_walk_to_exit
 from gonzales.transport.medium_interface import default_emit_medium, medium_after
 from gonzales.core.geometry import offset_eps, TERMINAL_SEGMENT_GRACE_ROUNDS, RGB, Point3f, Point2f, Vec3f, vec3f, point3f, dot, cross, PI, INV_FOUR_PI, Frame, _is_real_ptr
-from gonzales.scene.materials import Material, MatKind, LobeKind, PhotonKind, fr_dielectric, resolve_mix
-from gonzales.scene.primitives import (
+from gonzales.scene.appearance.materials import Material, MatKind, LobeKind, PhotonKind, fr_dielectric, resolve_mix
+from gonzales.scene.shapes.primitives import (
     Intersection, PrimId, TriangleMesh, Sphere, Instance, sphere_outward_normal, mesh_normal, mesh_vi,
 )
 from gonzales.core.geometry import Ray
-from gonzales.scene.primitives import mesh_pos
-from gonzales.scene.media import medium_inv_sigma_t_spectral, medium_kernel_radius, hg_phase, hg_sample
-from gonzales.scene.media import Medium, Grid, NvdbGrid, sample_free_flight, medium_is_heterogeneous, medium_sigma_t_spectral, medium_grid_for, medium_nvdb_for, grid_sample_density, nvdb_sample_density, SSS_WALK_ROUNDS, spectral_free_flight_weight
-from gonzales.scene.lights import area_light_pick_triangle, area_light_side_pdf, AreaLight
-from gonzales.scene.curves import Curve, curve_at, curve_piece_endpoints, _curve_perp_axis
-from gonzales.scene.bvh import traverse_dispatch, any_hit_dispatch
-from gonzales.scene.bvh import SceneView, curve_radius, _hair_sample_dir_u, _scene_bounding_sphere, _sample_disk_perpendicular, _sample_infinite_light_dir, _eval_infinite_light_and_pdf, _hair_precompute, LightSample, _sample_distant_light_nee, _sample_point_light_nee, _sample_sphere_light_nee, _sample_infinite_light_nee, light_path_pick
+from gonzales.scene.shapes.primitives import mesh_pos
+from gonzales.scene.appearance.media import medium_inv_sigma_t_spectral, medium_kernel_radius, hg_phase, hg_sample
+from gonzales.scene.appearance.media import Medium, Grid, NvdbGrid, sample_free_flight, medium_is_heterogeneous, medium_sigma_t_spectral, medium_grid_for, medium_nvdb_for, grid_sample_density, nvdb_sample_density, SSS_WALK_ROUNDS, spectral_free_flight_weight
+from gonzales.scene.appearance.lights import area_light_pick_triangle, area_light_side_pdf, AreaLight
+from gonzales.scene.shapes.curves import Curve, curve_at, curve_piece_endpoints, _curve_perp_axis
+from gonzales.scene.accel.bvh import traverse_dispatch, any_hit_dispatch
+from gonzales.scene.accel.bvh import SceneView, curve_radius, _hair_sample_dir_u, _scene_bounding_sphere, _sample_disk_perpendicular, _sample_infinite_light_dir, _eval_infinite_light_and_pdf, _hair_precompute, LightSample, _sample_distant_light_nee, _sample_point_light_nee, _sample_sphere_light_nee, _sample_infinite_light_nee, light_path_pick
 from gonzales.transport.mis_policy import mis_policy_sole
 from gonzales.transport.bxdf import ggx_lambda, dielectric_interface, bxdf_sample_dielectric, bxdf_sample_thin_dielectric, BxDFFlags, GeomContext, bxdf_sample_conductor, BSDF, LobeTables
 from gonzales.transport.surface import sss_entry_tint, surface_hit
 from gonzales.integrators.shading import area_light_hit_cos
 from gonzales.transport.texturing import apply_surface_maps_at_hit
-from gonzales.scene.geom_normal import _geom_normal, _shading_normal_at
+from gonzales.scene.shapes.geom_normal import _geom_normal, _shading_normal_at
 from gonzales.estimators.photon_grid import (
     _HSIZE, _hash_cell, _PHOTON_BUCKET_CAP, grid_reset_cell, grid_count, grid_keep, grid_coin_bits, grid_push, grid_weight,
     gather_disk_contains, gather_disk_coverage,
@@ -40,7 +40,7 @@ from gonzales.transport.shadow_media import shadow_transmittance
 from gonzales.core.sampling import sample_ggx_vndf, camera_ray_from_film_xy, FilmFilter, film_filter_of, film_filter_offset
 from gonzales.core.transform import transform_normal, Mat4
 from gonzales.core.rng import PCG32
-from gonzales.scene.pbrt_parser import ParsedScene_Mojo
+from gonzales.scene.description.pbrt_parser import ParsedScene_Mojo
 from gonzales.core.progress import Progress
 from gonzales.integrators.outputs import finish_render
 from gonzales.core.spectrum import (

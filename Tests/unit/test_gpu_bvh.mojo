@@ -3,13 +3,13 @@ from std.sys.info import size_of
 from std.memory.alloc import unsafe_alloc
 from std.testing import assert_true, assert_equal, TestSuite
 from max.gpu.host import DeviceContext, DeviceBuffer
-from gonzales.scene.bvh import BVH2Node, build_bvh2
-from gonzales.scene.gpu_bvh import gpu_build_bvh2
+from gonzales.scene.accel.bvh import BVH2Node, build_bvh2
+from gonzales.scene.accel.gpu_bvh import gpu_build_bvh2
 from gonzales.core.geometry import Point3f, Vec3f
-from gonzales.scene.primitives import PrimId
+from gonzales.scene.shapes.primitives import PrimId
 from gonzales.core.geometry import Ray
-from gonzales.scene.curves import Curve, CurveBvh, intersect_curve
-from gonzales.scene.curve_bvh import gpu_build_curve_bvh, curve_bvh_occluded, curve_bvh_closest
+from gonzales.scene.shapes.curves import Curve, CurveBvh, intersect_curve
+from gonzales.scene.accel.curve_bvh import gpu_build_curve_bvh, curve_bvh_occluded, curve_bvh_closest
 from _scene_fixture import make_triangle_scene
 from std.math import sqrt
 

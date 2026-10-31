@@ -9,13 +9,13 @@ from std.math import tan, max, abs, ceildiv
 from std.memory.alloc import unsafe_alloc
 from gonzales.transport.medium_interface import default_emit_medium
 from gonzales.core.geometry import RGB, PI
-from gonzales.scene.primitives import Intersection
+from gonzales.scene.shapes.primitives import Intersection
 from gonzales.paths.vcm_camis import CamisLightRecord
-from gonzales.scene.bvh import SceneView, _scene_bounding_sphere
+from gonzales.scene.accel.bvh import SceneView, _scene_bounding_sphere
 from gonzales.core.sampling import film_filter_of, FilmFilter
-from gonzales.scene.footprint import camera_footprint
+from gonzales.scene.appearance.footprint import camera_footprint
 from gonzales.core.transform import matrix_invert
-from gonzales.scene.pbrt_parser import ParsedScene_Mojo
+from gonzales.scene.description.pbrt_parser import ParsedScene_Mojo
 from gonzales.estimators.photon_grid import _HSIZE
 from gonzales.gpu.gpu_scene import GpuSceneHandle
 from gonzales.core.progress import Progress

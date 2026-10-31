@@ -4,24 +4,24 @@ from std.time import perf_counter_ns
 from std.utils import StaticTuple
 from gonzales.core.gpu_tuning import MINCTA_TRAVERSE
 from std.sys import get_defined_int
-from gonzales.scene.bvh import _node_box_hit, _node_hi, _node_lo, _node_oc, _bvh_has_nodes, _shadow_is_null_material, _traverse_instances, BVH2Node, any_hit_bvh2_core, ray_sphere_hit, test_spheres, traverse_bvh2_core, traverse_bvh2_core_defer_curves, SceneView
-from gonzales.scene.curve_bvh import curve_bvh_occluded, curve_bvh_closest, curve_bvh_prim
-from gonzales.scene.curves import CURVE_DEFER_K, Curve, curve_at, curve_piece_endpoints, intersect_curve, curve_hit_normal
+from gonzales.scene.accel.bvh import _node_box_hit, _node_hi, _node_lo, _node_oc, _bvh_has_nodes, _shadow_is_null_material, _traverse_instances, BVH2Node, any_hit_bvh2_core, ray_sphere_hit, test_spheres, traverse_bvh2_core, traverse_bvh2_core_defer_curves, SceneView
+from gonzales.scene.accel.curve_bvh import curve_bvh_occluded, curve_bvh_closest, curve_bvh_prim
+from gonzales.scene.shapes.curves import CURVE_DEFER_K, Curve, curve_at, curve_piece_endpoints, intersect_curve, curve_hit_normal
 from gonzales.core.geometry import INV_FOUR_PI, Point3f, RGB, Vec3f, _is_real_ptr, dot, store_vec3, vec3f
-from gonzales.scene.primitives import (
+from gonzales.scene.shapes.primitives import (
     Instance, Intersection, PrimId, Sphere, TriangleMesh, alpha_killed, intersect_triangle, sphere_outward_normal, mesh_vi,
 )
 from gonzales.core.geometry import Ray
-from gonzales.scene.primitives import mesh_pos, mesh_point, mesh_material
+from gonzales.scene.shapes.primitives import mesh_pos, mesh_point, mesh_material
 from gonzales.transport.render_state import PathState, MIN_RAY_PDF_NONE, SssWalk, ShadowTask, SHADOW_SLOTS
 from gonzales.integrators.restir_di import DIReservoir, di_reservoir_init
 from gonzales.integrators.restir_vol import VolReservoir, vol_reservoir_init
 from gonzales.core.sampling import gen_primary_ray_state, ThinLens
 from gonzales.core.spectrum import SpectralSample, spectral_sample_to_rgb
 from gonzales.core.transform import transform_normal, Mat4
-from gonzales.scene.vulkaninterop import VulkanInteropRtSceneHandle, vulkaninterop_rt_trace
-from gonzales.scene.hw_rt import hw_alpha, hw_curves, hw_rt_active, hw_trace_interop, hw_trace_shadow
-from gonzales.scene.optixcurves import oxc_active, oxc_scratch, oxc_trace_closest, oxc_trace_shadow
+from gonzales.scene.accel.vulkaninterop import VulkanInteropRtSceneHandle, vulkaninterop_rt_trace
+from gonzales.scene.accel.hw_rt import hw_alpha, hw_curves, hw_rt_active, hw_trace_interop, hw_trace_shadow
+from gonzales.scene.accel.optixcurves import oxc_active, oxc_scratch, oxc_trace_closest, oxc_trace_shadow
 from max.gpu import WARP_SIZE, barrier, block_dim, block_idx, lane_id, thread_idx
 from max.gpu.memory import AddressSpace
 from std.memory import stack_allocation

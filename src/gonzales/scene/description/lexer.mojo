@@ -1,7 +1,7 @@
 from std.memory import unsafe_memcpy
 from std.memory.alloc import unsafe_alloc
 from gonzales.core.geometry import RGB, _is_real_ptr
-from gonzales.scene.media import blackbody_rgb
+from gonzales.scene.appearance.media import blackbody_rgb
 
 # ── pbrt Scanner Helpers ──────────────────────────────────────────────
 

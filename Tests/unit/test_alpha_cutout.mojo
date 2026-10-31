@@ -4,7 +4,7 @@
 from std.memory.alloc import unsafe_alloc
 from std.testing import assert_true, assert_false, TestSuite
 from gonzales.core.geometry import Vec3f
-from gonzales.scene.primitives import TriangleMesh, alpha_killed
+from gonzales.scene.shapes.primitives import TriangleMesh, alpha_killed
 
 
 def _mesh(mask: Pointer[UInt8, MutUntrackedOrigin], w: Int32, h: Int32,

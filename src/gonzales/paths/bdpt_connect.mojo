@@ -6,17 +6,17 @@ from std.math import sqrt, floor, log, max, min, abs
 from std.atomic import Atomic
 from std.memory import bitcast
 from gonzales.core.geometry import Point3f, Vec3f, dot, PI, INV_FOUR_PI
-from gonzales.scene.primitives import Intersection
+from gonzales.scene.shapes.primitives import Intersection
 from gonzales.paths.vcm_camis import (
     CamisCamRecord, CamisCamCarry, CamisLightRecord, CAMIS_IN_CLASS, CAMIS_TAN_1DEG, camis_eval_connect,
     camis_eval_connect_s1, camis_eval_splat,
 )
-from gonzales.scene.bvh import SceneView
+from gonzales.scene.accel.bvh import SceneView
 from gonzales.core.sampling import power_heuristic, FilmFilter, filter_eval_2d, filter_integral_2d, sample_disk_concentric
 from gonzales.core.rng import PCG32
 from gonzales.core.spectrum import SpectralSample, spec_illum
 from gonzales.paths.bdpt_vertex import _BDPT_MAX_VERTS, BDPTVertex
-from gonzales.scene.materials import LobeKind
+from gonzales.scene.appearance.materials import LobeKind
 from gonzales.paths.bdpt_nee import _visible_transmittance
 from gonzales.paths.bdpt_eval import _vcm_free_flight, _vcm_cos_at, _eval_vertex_spectral, _bdpt_vertex_pdfs, _bdpt_vertex_mis_scoped, _bdpt_connect_pair_weighted
 from gonzales.paths.vcm_strategy import _vcm_too_long, _vcm_keep, _VCM_CAMIS, _CAMIS_CAM_RECS, _CAMIS_FORCE_C1, _vcm_eta_scale, _vcm_eta_at, _vcm_on_fibre, _vcm_past_depth, _vcm_past_cache

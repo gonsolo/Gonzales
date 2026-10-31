@@ -6,11 +6,11 @@ from std.memory import OpaquePointer, bitcast
 from std.sys.info import is_amd_gpu, is_apple_gpu, is_gpu, is_nvidia_gpu
 from max.gpu import global_idx
 from max.gpu.host import DeviceBuffer, DeviceContext
-from gonzales.scene.curves import Curve, curve_at, intersect_curve
+from gonzales.scene.shapes.curves import Curve, curve_at, intersect_curve
 from gonzales.core.geometry import Vec3f
-from gonzales.scene.bvh import _shadow_is_null_material
-from gonzales.scene.materials import Material
-from gonzales.scene.primitives import PrimId
+from gonzales.scene.accel.bvh import _shadow_is_null_material
+from gonzales.scene.appearance.materials import Material
+from gonzales.scene.shapes.primitives import PrimId
 
 # Hardware ray tracing on Intel Xe2 (src/xert): the driver builds the acceleration structures, kernels trace them with
 # IGC's ray-query built-ins (opencl-c-intel.h, cl_intel_rt_production), linked by name from IGC's built-in library.

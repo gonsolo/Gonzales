@@ -9,19 +9,19 @@
 from std.math import abs
 from std.memory.alloc import unsafe_alloc
 from std.testing import assert_true, TestSuite
-from gonzales.scene.footprint import CameraFootprint
+from gonzales.scene.appearance.footprint import CameraFootprint
 from gonzales.core.geometry import RGB, Point3f, Vec3f
-from gonzales.scene.materials import Material, MeasuredBRDF
+from gonzales.scene.appearance.materials import Material, MeasuredBRDF
 from gonzales.transport.render_state import ShadowTask, SuppressTask, PathState, MIN_RAY_PDF_NONE, SssWalk
-from gonzales.scene.materials import GpuTexture, NormalSlopeMap
-from gonzales.scene.primitives import PrimId, TriangleMesh, Instance, Sphere
+from gonzales.scene.appearance.materials import GpuTexture, NormalSlopeMap
+from gonzales.scene.shapes.primitives import PrimId, TriangleMesh, Instance, Sphere
 from gonzales.core.geometry import Ray
-from gonzales.scene.lights import LightSampler, AreaLight, DistantLight, PointLight, InfiniteLight
-from gonzales.scene.curves import Curve
+from gonzales.scene.appearance.lights import LightSampler, AreaLight, DistantLight, PointLight, InfiniteLight
+from gonzales.scene.shapes.curves import Curve
 from gonzales.core.spectrum import SpectralSample, null_spectral_handle, SampledWavelengths
-from gonzales.scene.bvh import BVH4, BVH2Node
+from gonzales.scene.accel.bvh import BVH4, BVH2Node
 from gonzales.paths.guide import null_guide
-from gonzales.scene.media import Medium, MediumInterface, Grid, NvdbGrid
+from gonzales.scene.appearance.media import Medium, MediumInterface, Grid, NvdbGrid
 from gonzales.integrators.shading import gi_pending_x1_init, _gi_generate_recon_candidate, _shade_diffuse_nee
 from gonzales.transport.shade_context import ShadeContext, LightContext, GIPendingX1
 from gonzales.integrators.restir_gi import gi_reservoir_io_null

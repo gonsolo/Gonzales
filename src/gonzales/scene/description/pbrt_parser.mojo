@@ -10,33 +10,33 @@ from std.sys.info import num_performance_cores
 from max.algorithm import parallelize
 from std.subprocess import run
 from std.os.path import exists
-from gonzales.scene.footprint import camera_footprint
+from gonzales.scene.appearance.footprint import camera_footprint
 from gonzales.core.sensors import named_sensor_is_supported, named_sensor_srgb_matrix
 from gonzales.core.diagnostics import warn_unsupported, warn_unsupported_in
-from gonzales.scene.lexer import PbrtScanner, scanner_open, scanner_free, scanner_is_at_end, scanner_scan_token, scanner_parse_quoted_string, scanner_scan_char, scanner_scan_float, _psc_streq, _psc_collect_params, ParameterDictionary, _psc_skip_params, _psc_skip_line
-from gonzales.scene.parse_types import (SceneParseState, MeshAccum, NamedMaterial, scene_path,
+from gonzales.scene.description.lexer import PbrtScanner, scanner_open, scanner_free, scanner_is_at_end, scanner_scan_token, scanner_parse_quoted_string, scanner_scan_char, scanner_scan_float, _psc_streq, _psc_collect_params, ParameterDictionary, _psc_skip_params, _psc_skip_line
+from gonzales.scene.description.parse_types import (SceneParseState, MeshAccum, NamedMaterial, scene_path,
                            ctm_push, ctm_pop, PSC_NAME_MAX, PSC_FILE_MAX)
 from gonzales.core.geometry import RGB, Point3f, Vec3f, dot, cross, PI, _is_real_ptr
-from gonzales.scene.materials import Material, MatKind, MeasuredBRDF
-from gonzales.scene.materials import GpuTexture, NormalSlopeMap, normal_slope_map_none
-from gonzales.scene.host_textures import HostTextures, TexPrefetch, decode_host_textures, host_texture_table
-from gonzales.scene.primitives import Sphere, TriangleMesh, PrimId, Instance, encode_normal, mesh_points_floats
-from gonzales.scene.quad_pack import quantise_quads
-from gonzales.scene.media import Medium, MediumInterface, Grid, NvdbGrid
-from gonzales.scene.lights import AreaLight, DistantLight, PointLight, InfiniteLight, LightSampler, LIGHT_BOUNDS_STRIDE, LIGHT_IMPORTANCE_MAX, env_build_cdf
-from gonzales.scene.curves import Curve, CURVE_N_PIECES, curve_piece_bounds, curve_bspline_point, curve_light_tube_area
-from gonzales.scene.nanovdb import nvdb_load, nvdb_load_named, nvdb_data, nvdb_size, nvdb_free, nvdb_index_bbox, nvdb_value_range, nvdb_map_invmatf, nvdb_map_vecf
+from gonzales.scene.appearance.materials import Material, MatKind, MeasuredBRDF
+from gonzales.scene.appearance.materials import GpuTexture, NormalSlopeMap, normal_slope_map_none
+from gonzales.scene.appearance.host_textures import HostTextures, TexPrefetch, decode_host_textures, host_texture_table
+from gonzales.scene.shapes.primitives import Sphere, TriangleMesh, PrimId, Instance, encode_normal, mesh_points_floats
+from gonzales.scene.accel.quad_pack import quantise_quads
+from gonzales.scene.appearance.media import Medium, MediumInterface, Grid, NvdbGrid
+from gonzales.scene.appearance.lights import AreaLight, DistantLight, PointLight, InfiniteLight, LightSampler, LIGHT_BOUNDS_STRIDE, LIGHT_IMPORTANCE_MAX, env_build_cdf
+from gonzales.scene.shapes.curves import Curve, CURVE_N_PIECES, curve_piece_bounds, curve_bspline_point, curve_light_tube_area
+from gonzales.scene.appearance.nanovdb import nvdb_load, nvdb_load_named, nvdb_data, nvdb_size, nvdb_free, nvdb_index_bbox, nvdb_value_range, nvdb_map_invmatf, nvdb_map_vecf
 from gonzales.core.noise import _perlin_perm_table, cloud_density
 from gonzales.core.transform import matrix_multiply, matrix_invert, transform_points, transform_normals
-from gonzales.scene.bvh import BVH2Node, BVH4, SceneView, build_bvh2, build_bvh2_split, build_bvh4, free_bvh4, collapse_bvh_wide
+from gonzales.scene.accel.bvh import BVH2Node, BVH4, SceneView, build_bvh2, build_bvh2_split, build_bvh4, free_bvh4, collapse_bvh_wide
 from gonzales.core.spectrum import SpectralHandle
 from gonzales.core.sampling import gaussian_norm, ThinLens
-from gonzales.scene.ply import load_ply
-from gonzales.scene.ply_prefetch import PlyPrefetch, scan_plys, load_all_plys
-from gonzales.scene.material_builder import _psc_handle_make_named_material, _psc_handle_named_material
-from gonzales.scene.measured_bsdf import load_measured_brdf_full
-from gonzales.scene.light_builder import _psc_handle_area_light_source, handle_light_source
-from gonzales.scene.scene_builder import store_mesh
+from gonzales.scene.shapes.ply import load_ply
+from gonzales.scene.shapes.ply_prefetch import PlyPrefetch, scan_plys, load_all_plys
+from gonzales.scene.description.material_builder import _psc_handle_make_named_material, _psc_handle_named_material
+from gonzales.scene.appearance.measured_bsdf import load_measured_brdf_full
+from gonzales.scene.description.light_builder import _psc_handle_area_light_source, handle_light_source
+from gonzales.scene.description.scene_builder import store_mesh
 
 # ── Output struct ─────────────────────────────────────────────────────────────
 

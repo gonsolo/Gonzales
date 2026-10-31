@@ -37,7 +37,7 @@ from std.sys.info import size_of
 from std.memory.alloc import unsafe_alloc
 from std.math import max, min
 from gonzales.core.geometry import Point3f, Bounds3f, _is_real_ptr
-from gonzales.scene.bvh import _equal_area_square_to_sphere, _equal_area_sphere_to_square
+from gonzales.scene.accel.bvh import _equal_area_square_to_sphere, _equal_area_sphere_to_square
 
 # 4π in Float32 — total solid angle of the unit sphere, which the equal-area
 # octahedral map spreads uniformly over the [0,1]^2 square: a quadtree leaf

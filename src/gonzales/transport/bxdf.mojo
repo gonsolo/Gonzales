@@ -1,13 +1,13 @@
 from std.math import sqrt
 from gonzales.transport.layered import diel_f, diel_pdf, diel_sample, layered_f, layered_pdf, layered_sample
 from gonzales.core.geometry import RGB, Vec3f, dot, INV_PI, PI, Frame, INV_FOUR_PI
-from gonzales.scene.media import hg_phase
-from gonzales.scene.materials import LobeKind, MatKind, Material, fr_dielectric, MeasuredBRDF, sss_boundary_lobe
-from gonzales.scene.curves import Curve
+from gonzales.scene.appearance.media import hg_phase
+from gonzales.scene.appearance.materials import LobeKind, MatKind, Material, fr_dielectric, MeasuredBRDF, sss_boundary_lobe
+from gonzales.scene.shapes.curves import Curve
 from gonzales.core.sampling import sample_ggx_vndf, sample_cosine_hemisphere_world
 from gonzales.transport.mis_policy import MisPolicy, mis_policy_power, nee_mis_weight
 from gonzales.transport.measured_bxdf_eval import bxdf_eval_measured, bxdf_pdf_measured, bxdf_sample_measured
-from gonzales.scene.bvh import LightSample, HairLobeConstants, _hair_eval_lobes, _hair_precompute, _hair_sample_dir_u
+from gonzales.scene.accel.bvh import LightSample, HairLobeConstants, _hair_eval_lobes, _hair_precompute, _hair_sample_dir_u
 from gonzales.core.spectrum import SampledWavelengths, SpectralHandle, SpectralSample, rgb_to_spectral_sample, spec_refl_unbounded, rgb_illuminant_to_spectral_sample, rgb_bands_to_spectral_sample
 
 # ── Isotropic GGX (Trowbridge-Reitz) evaluation ───────────────────────────────

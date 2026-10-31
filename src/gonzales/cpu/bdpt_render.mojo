@@ -5,13 +5,13 @@ from std.math import tan, max, abs
 from std.memory.alloc import unsafe_alloc
 from gonzales.transport.medium_interface import default_emit_medium
 from gonzales.core.geometry import RGB, PI
-from gonzales.scene.primitives import Intersection
+from gonzales.scene.shapes.primitives import Intersection
 from gonzales.paths.vcm_camis import CamisLightRecord
-from gonzales.scene.bvh import SceneView, _scene_bounding_sphere
+from gonzales.scene.accel.bvh import SceneView, _scene_bounding_sphere
 from gonzales.core.sampling import film_filter_of
 from gonzales.core.rng import PCG32
 from gonzales.core.transform import matrix_invert
-from gonzales.scene.pbrt_parser import ParsedScene_Mojo
+from gonzales.scene.description.pbrt_parser import ParsedScene_Mojo
 from gonzales.core.progress import Progress
 from gonzales.integrators.outputs import finish_render
 from gonzales.core.spectrum import SpectralSample, pass_wavelengths, spectral_sample_to_rgb

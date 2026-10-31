@@ -1,5 +1,5 @@
 from std.atomic import Atomic
-from gonzales.scene.ptex_cache import PTEX_QUEUE_CAP
+from gonzales.scene.appearance.ptex_cache import PTEX_QUEUE_CAP
 from std.sys import size_of
 from std.collections import Array
 from std.math import sqrt, floor, atan, log2, ceil, exp, abs, pow
@@ -8,23 +8,23 @@ from std.memory.alloc import unsafe_alloc
 from gonzales.core.geometry import offset_point, offset_eps, RGB, Point3f, Point2f, Point2i, restir_jitter_pixel, Vec3f, dot, face_toward, cross, Frame, fast_sincos, PI, TWO_PI, INV_PI, INV_FOUR_PI, _is_real_ptr, _atan2f
 from gonzales.core.geometry import point3f
 from gonzales.transport.render_state import PDF_DROP_DIRECT
-from gonzales.scene.materials import Material, MatKind, LobeKind, MeasuredBRDF, fr_dielectric, resolve_mix, sss_boundary_lobe
+from gonzales.scene.appearance.materials import Material, MatKind, LobeKind, MeasuredBRDF, fr_dielectric, resolve_mix, sss_boundary_lobe
 from gonzales.transport.sss_walk import sss_entry_lobe, sss_walk_start
 from gonzales.transport.render_state import PathState, SssWalk, ShadowTask, SuppressTask, SHADOW_SLOTS
-from gonzales.scene.materials import GpuTexture, NormalSlopeMap, normal_slope_map_none
-from gonzales.scene.primitives import (
+from gonzales.scene.appearance.materials import GpuTexture, NormalSlopeMap, normal_slope_map_none
+from gonzales.scene.shapes.primitives import (
     Intersection, PrimId, TriangleMesh, Sphere, Instance, mesh_uv, mesh_has_uvs, mesh_normal, mesh_vi, mesh_face,
 )
 from gonzales.core.geometry import Ray
-from gonzales.scene.primitives import mesh_pos
-from gonzales.scene.lights import AreaLight, DistantLight, PointLight, InfiniteLight, LightSampler, il_rgb, light_sampler_sample, light_sampler_sample_at, light_sampler_pdf_at, light_sampler_pdf, area_light_pick_triangle
-from gonzales.scene.media import Medium, MediumInterface, Grid, NvdbGrid
+from gonzales.scene.shapes.primitives import mesh_pos
+from gonzales.scene.appearance.lights import AreaLight, DistantLight, PointLight, InfiniteLight, LightSampler, il_rgb, light_sampler_sample, light_sampler_sample_at, light_sampler_pdf_at, light_sampler_pdf, area_light_pick_triangle
+from gonzales.scene.appearance.media import Medium, MediumInterface, Grid, NvdbGrid
 from gonzales.transport.shadow_media import shadow_transmittance
-from gonzales.scene.curves import Curve, curve_at, curve_piece_endpoints, _curve_perp_axis, curve_hit_normal
+from gonzales.scene.shapes.curves import Curve, curve_at, curve_piece_endpoints, _curve_perp_axis, curve_hit_normal
 from gonzales.transport.bxdf import BSDF, HairBSDF, NeeLobe, LobeSample, BxDFSample, GeomContext, SobolSamples8, BxDFFlags, bxdf_sample_dielectric, bxdf_sample_thin_dielectric, bxdf_eval_diffuse, bxdf_pdf_diffuse, bxdf_sample_diffuse_transmit, bxdf_eval_conductor_ggx, ggx_albedo, bxdf_pdf_conductor_ggx, _nee_weight_simple_spectral, LobeTables
 from gonzales.core.rng import PCG32
-from gonzales.scene.footprint import CameraFootprint, UVFootprint, TriWorld, tri_world, hit_uv_footprint
-from gonzales.scene.bvh import BVH2Node, BVH4, SceneView, any_hit_dispatch, traverse_dispatch, curve_hit_frame, curve_offset_eps, LightSample, _sample_distant_light_nee, _sample_point_light_nee, _sample_sphere_light_nee, _sample_infinite_light_nee, _sample_infinite_light_textured, _equal_area_sphere_to_square
+from gonzales.scene.appearance.footprint import CameraFootprint, UVFootprint, TriWorld, tri_world, hit_uv_footprint
+from gonzales.scene.accel.bvh import BVH2Node, BVH4, SceneView, any_hit_dispatch, traverse_dispatch, curve_hit_frame, curve_offset_eps, LightSample, _sample_distant_light_nee, _sample_point_light_nee, _sample_sphere_light_nee, _sample_infinite_light_nee, _sample_infinite_light_textured, _equal_area_sphere_to_square
 from gonzales.core.sampling import power_heuristic, sample_cosine_hemisphere_world, sample_ggx_vndf, sobol_sample_n, sobol_dim_seed
 from gonzales.core.transform import transform_normal, Mat4
 from gonzales.paths.guide import GuideGrid, guide_pos_to_cell, guide_pdf, guide_sample, guide_cell_has_data, guide_record, null_guide, guide_is_active

@@ -1,12 +1,12 @@
 """A subsurface walk: the hop from a boundary's entry to its exit, shared by every integrator."""
-from gonzales.scene.bvh import traverse_bvh2_core_defer_curves, SceneView
+from gonzales.scene.accel.bvh import traverse_bvh2_core_defer_curves, SceneView
 from gonzales.core.geometry import Frame, Point3f, Vec3f, _is_real_ptr, cross, dot, face_toward, offset_point
-from gonzales.scene.geom_normal import _geom_normal
-from gonzales.scene.materials import Material, fr_dielectric
-from gonzales.scene.media import hg_phase, hg_sample
-from gonzales.scene.primitives import Intersection, mesh_vi
+from gonzales.scene.shapes.geom_normal import _geom_normal
+from gonzales.scene.appearance.materials import Material, fr_dielectric
+from gonzales.scene.appearance.media import hg_phase, hg_sample
+from gonzales.scene.shapes.primitives import Intersection, mesh_vi
 from gonzales.core.geometry import Ray
-from gonzales.scene.primitives import mesh_pos
+from gonzales.scene.shapes.primitives import mesh_pos
 from gonzales.transport.render_state import PathState, SssWalk
 from gonzales.core.rng import PCG32
 from gonzales.core.spectrum import SampledWavelengths, SpectralSample, rgb_bands_to_spectral_sample

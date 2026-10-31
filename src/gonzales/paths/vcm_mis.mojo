@@ -16,7 +16,7 @@ Delta dielectrics reset dVCM to 0. Volume vertices carry the same recursion with
 no cosine (Scenes/vcm_volume_mis_derivation.py).
 """
 from gonzales.core.geometry import PI, Vec3f
-from gonzales.scene.media import hg_sample
+from gonzales.scene.appearance.media import hg_sample
 
 
 @always_inline

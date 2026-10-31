@@ -5,7 +5,7 @@
 spec.bin: int32 n_blas, int32 n_inst; per BLAS: int32 n_tris then nine float32 per triangle; per instance: int32 blas,
 twelve float32 (world-to-object, the top three rows of a column-major matrix). Writes outdir/tlas.bin, blas<k>.bin,
 blas<k>.gid (int32 per primitive id) and refs.txt (hex record pointer offset and structure index)."""
-from gonzales.scene.rt_build import rt_build_blas, rt_build_tlas, RtBlas, RtTlas
+from gonzales.scene.accel.rt_build import rt_build_blas, rt_build_tlas, RtBlas, RtTlas
 from std.memory.alloc import unsafe_alloc
 from std.sys import argv
 

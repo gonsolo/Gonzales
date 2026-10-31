@@ -3,9 +3,9 @@ from std.math import sqrt, cos, sin, abs
 from std.atomic import Atomic
 from std.memory import bitcast
 from gonzales.core.geometry import Point3f, Vec3f, Ray, dot
-from gonzales.scene.primitives import Intersection, PrimId
-from gonzales.scene.geom_normal import _geom_normal
-from gonzales.scene.bvh import SceneView, traverse_dispatch
+from gonzales.scene.shapes.primitives import Intersection, PrimId
+from gonzales.scene.shapes.geom_normal import _geom_normal
+from gonzales.scene.accel.bvh import SceneView, traverse_dispatch
 
 
 comptime _HSIZE  = 1048576   # 2^20 hash buckets

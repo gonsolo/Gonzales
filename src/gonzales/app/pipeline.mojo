@@ -5,9 +5,9 @@ from std.collections import List, Array
 from std.math import sqrt, ceil, pow
 from std.sys.info import size_of
 from max.gpu.host import DeviceBuffer, DeviceContext, HostBuffer
-from gonzales.scene.footprint import camera_footprint
-from gonzales.scene.pbrt_parser import ParsedScene_Mojo, mojo_parsed_free, mojo_parsed_scene_descriptor, resize_film, mojo_apply_overrides
-from gonzales.scene.scene_loader import mojo_parse_scene_any
+from gonzales.scene.appearance.footprint import camera_footprint
+from gonzales.scene.description.pbrt_parser import ParsedScene_Mojo, mojo_parsed_free, mojo_parsed_scene_descriptor, resize_film, mojo_apply_overrides
+from gonzales.scene.description.scene_loader import mojo_parse_scene_any
 from gonzales.cpu.rendering import render_all_tiles
 from gonzales.integrators.film import normalize_film, apply_film_sensor
 from gonzales.core.progress import Progress, fmt_time
@@ -15,14 +15,14 @@ from gonzales.integrators.outputs import write_render_outputs
 from std.time import perf_counter_ns
 from gonzales.core.geometry import RGB, Point3f, Vec3f, Bounds3f, _is_real_ptr
 from gonzales.transport.render_state import TileResult, FilmDims
-from gonzales.scene.primitives import PrimId, TriangleMesh, Instance, mesh_vi, mesh_pos
+from gonzales.scene.shapes.primitives import PrimId, TriangleMesh, Instance, mesh_vi, mesh_pos
 from gonzales.core.geometry import Ray
-from gonzales.scene.curves import CurveBvh, curve_at, curve_piece_bounds
+from gonzales.scene.shapes.curves import CurveBvh, curve_at, curve_piece_bounds
 from gonzales.integrators.postprocess import denoise, write_image, write_image_cropped
 from gonzales.core.transform import Mat4, matrix_invert
 from gonzales.core.sampling import TileSamplerParams, ThinLens, camera_ray_from_film_xy
 from gonzales.core.rng import mix_bits_u64
-from gonzales.scene.bvh import SceneView, render_aux_buffers, _scene_bounding_sphere
+from gonzales.scene.accel.bvh import SceneView, render_aux_buffers, _scene_bounding_sphere
 from gonzales.cpu.sppm_cpu import sppm_render
 from gonzales.gpu.sppm_gpu import sppm_render_gpu
 from gonzales.cpu.bdpt_render import vcm_render
@@ -41,23 +41,23 @@ from gonzales.gpu.gpu_denoise import gpu_atrous_denoise
 from gonzales.gpu.gpu_wavefront import gpu_gen_aux_buffers
 from gonzales.app.viewer import CameraState, viewer_create, viewer_update_framebuffer, viewer_should_close, viewer_poll_events, viewer_get_camera_state, viewer_set_camera_state, viewer_destroy, viewer_denoise_enabled, viewer_monitor_size, build_camera_to_world
 from gonzales.core.spectrum import SpectralHandle, null_spectral_handle
-from gonzales.scene.vulkanrt import vulkanrt_build_scene, vulkanrt_destroy_scene
-from gonzales.scene.curve_bvh import CurveBvhDev, gpu_build_curve_bvh, _leaf_range
-from gonzales.scene.optixcurves import gpu_build_optix_curves, oxc_active, oxc_bytes, oxc_destroy, oxc_set_active
-from gonzales.scene.rt_build import rt_build_blas, rt_build_tlas, rt_patch_ids, RtTlas, _fbits
-from gonzales.scene.xert import xert_alignment, xert_build_blas_geoms, xert_build_tlas, xert_curve_table, xert_free, xert_heat_path, xert_heat_save, xert_set_curves, xert_set_heat, xert_set_pieces, xert_set_scene
-from gonzales.scene.rt_cache import rt_cache_load, rt_cache_save, RtCacheTlas
-from gonzales.scene.scene_cache import scene_cache_variant
+from gonzales.scene.accel.vulkanrt import vulkanrt_build_scene, vulkanrt_destroy_scene
+from gonzales.scene.accel.curve_bvh import CurveBvhDev, gpu_build_curve_bvh, _leaf_range
+from gonzales.scene.accel.optixcurves import gpu_build_optix_curves, oxc_active, oxc_bytes, oxc_destroy, oxc_set_active
+from gonzales.scene.accel.rt_build import rt_build_blas, rt_build_tlas, rt_patch_ids, RtTlas, _fbits
+from gonzales.scene.accel.xert import xert_alignment, xert_build_blas_geoms, xert_build_tlas, xert_curve_table, xert_free, xert_heat_path, xert_heat_save, xert_set_curves, xert_set_heat, xert_set_pieces, xert_set_scene
+from gonzales.scene.description.rt_cache import rt_cache_load, rt_cache_save, RtCacheTlas
+from gonzales.scene.description.scene_cache import scene_cache_variant
 from max.algorithm import parallelize
 from std.sys import exit
 from std.atomic import Atomic
 from std.sys.info import num_performance_cores
-from gonzales.scene.rtcore import rtcore_set_gid_compact, rtcore_create_own_scene, rtcore_create_own, rtcore_set_shadow, rtcore_set_alpha, rtcore_create_scene, rtcore_set_domains, rtcore_set_instance_decode, rtcore_instance_records, RtCoreHandle, rtcore_create, rtcore_set_meshes, rtcore_set_active, rtcore_active, rtcore_destroy
+from gonzales.scene.accel.rtcore import rtcore_set_gid_compact, rtcore_create_own_scene, rtcore_create_own, rtcore_set_shadow, rtcore_set_alpha, rtcore_create_scene, rtcore_set_domains, rtcore_set_instance_decode, rtcore_instance_records, RtCoreHandle, rtcore_create, rtcore_set_meshes, rtcore_set_active, rtcore_active, rtcore_destroy
 from std.os import getenv
 from std.os.path import exists, getsize
 from std.ffi import external_call
 from gonzales.integrators.outputs import _cstr
-from gonzales.scene.vulkaninterop import (
+from gonzales.scene.accel.vulkaninterop import (
     VulkanInteropRtSceneHandle, vulkaninterop_rt_create_scene,
     vulkaninterop_rt_get_rays_ptr, vulkaninterop_rt_get_results_ptr,
     vulkaninterop_rt_destroy_scene, vulkaninterop_rt_debug_read_as,
@@ -1481,11 +1481,11 @@ def debug_trace_pixel(
     """Trace the centre ray of one pixel and print the path bounce-by-bounce
     (hit mesh/material/normal/t, dielectric entering/eta/Fresnel decision,
     envmap lookup). For comparing against `pbrt --pixelmaterial`."""
-    from gonzales.scene.bvh import traverse_bvh2_core, test_spheres, any_hit_bvh2_core, _equal_area_sphere_to_square
+    from gonzales.scene.accel.bvh import traverse_bvh2_core, test_spheres, any_hit_bvh2_core, _equal_area_sphere_to_square
     from gonzales.core.geometry import cross
-    from gonzales.scene.primitives import Intersection
+    from gonzales.scene.shapes.primitives import Intersection
     from gonzales.transport.bxdf import dielectric_interface
-    from gonzales.scene.geom_normal import _geom_normal
+    from gonzales.scene.shapes.geom_normal import _geom_normal
 
     var psc = mojo_parse_scene_any(path)
     if not _is_real_ptr[ParsedScene_Mojo](psc):
@@ -1761,9 +1761,9 @@ def debug_render_vulkanrt(
     either feature will show real disagreement in the printed CPU-vs-GPU
     stats below -- an honest, known limitation of this validation pass,
     not a bug to chase; see project_vulkan_rt_backend memory."""
-    from gonzales.scene.bvh import traverse_bvh2_core
-    from gonzales.scene.primitives import Intersection
-    from gonzales.scene.vulkanrt import vulkanrt_build_scene, vulkanrt_trace_rays, vulkanrt_destroy_scene
+    from gonzales.scene.accel.bvh import traverse_bvh2_core
+    from gonzales.scene.shapes.primitives import Intersection
+    from gonzales.scene.accel.vulkanrt import vulkanrt_build_scene, vulkanrt_trace_rays, vulkanrt_destroy_scene
     from std.math import abs
 
     var psc = mojo_parse_scene_any(path, verbose)

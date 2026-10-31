@@ -1,12 +1,12 @@
 from std.collections import List, Array
 from std.ffi import external_call
 from gonzales.core.sampling import ThinLens
-from gonzales.scene.materials import Material
-from gonzales.scene.primitives import TriangleMesh, PrimId, Sphere
-from gonzales.scene.media import Medium, MediumInterface
-from gonzales.scene.lights import AreaLight, DistantLight, PointLight, InfiniteLight
-from gonzales.scene.bvh import BVH2Node, BVH4, SceneView
-from gonzales.scene.curves import CurveBvh
+from gonzales.scene.appearance.materials import Material
+from gonzales.scene.shapes.primitives import TriangleMesh, PrimId, Sphere
+from gonzales.scene.appearance.media import Medium, MediumInterface
+from gonzales.scene.appearance.lights import AreaLight, DistantLight, PointLight, InfiniteLight
+from gonzales.scene.accel.bvh import BVH2Node, BVH4, SceneView
+from gonzales.scene.shapes.curves import CurveBvh
 
 # ── Scene IR ──────────────────────────────────────────────────────────────────
 #

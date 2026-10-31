@@ -13,14 +13,14 @@ from std.memory.alloc import unsafe_alloc
 from std.sys.info import size_of, num_performance_cores
 from std.time import perf_counter_ns
 from gonzales.core.geometry import _is_real_ptr
-from gonzales.scene.bvh import BVH2Node, BVH4
-from gonzales.scene.curves import Curve
-from gonzales.scene.lights import AreaLight, InfiniteLight, LightSampler, LIGHT_BOUNDS_STRIDE
-from gonzales.scene.materials import Material
-from gonzales.scene.pbrt_parser import ParsedScene_Mojo, _plan_ptex_budget, mojo_parsed_free
-from gonzales.scene.primitives import Instance, PrimId, Sphere, TriangleMesh, mesh_points_floats
-from gonzales.scene.materials import GpuTexture, NormalSlopeMap, normal_slope_map_none
-from gonzales.scene.host_textures import TexPrefetch
+from gonzales.scene.accel.bvh import BVH2Node, BVH4
+from gonzales.scene.shapes.curves import Curve
+from gonzales.scene.appearance.lights import AreaLight, InfiniteLight, LightSampler, LIGHT_BOUNDS_STRIDE
+from gonzales.scene.appearance.materials import Material
+from gonzales.scene.description.pbrt_parser import ParsedScene_Mojo, _plan_ptex_budget, mojo_parsed_free
+from gonzales.scene.shapes.primitives import Instance, PrimId, Sphere, TriangleMesh, mesh_points_floats
+from gonzales.scene.appearance.materials import GpuTexture, NormalSlopeMap, normal_slope_map_none
+from gonzales.scene.appearance.host_textures import TexPrefetch
 from gonzales.core.fast_io import read_parallel, PARALLEL_MIN
 
 comptime _MAGIC: Int = 0x474E5A53434143

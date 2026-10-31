@@ -3,10 +3,10 @@ from std.memory.alloc import unsafe_alloc
 from std.sys import has_accelerator
 from std.testing import assert_equal, assert_true, TestSuite
 from max.gpu.host import DeviceContext
-from gonzales.scene.curves import Curve
-from gonzales.scene.materials import Material
-from gonzales.scene.primitives import PrimId
-from gonzales.scene.xert import (
+from gonzales.scene.shapes.curves import Curve
+from gonzales.scene.appearance.materials import Material
+from gonzales.scene.shapes.primitives import PrimId
+from gonzales.scene.accel.xert import (
     xert_build_blas, xert_build_blas_geoms, xert_build_tlas, xert_alignment, xert_free, xert_trace_rays_gpu,
     xert_trace_interop_gpu, XERT_MISS,
 )

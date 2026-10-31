@@ -4,7 +4,7 @@ from std.memory.alloc import unsafe_alloc
 from std.os.path import getsize
 from std.sys.info import num_performance_cores
 from max.algorithm import parallelize
-from gonzales.scene.ply import load_ply
+from gonzales.scene.shapes.ply import load_ply
 
 # The scene parse is sequential, but the PLY files it will ask for are independent of each other: a text scan of the
 # scene (and its Include files) finds the plymesh filenames, loader threads load them while the parse runs, and the

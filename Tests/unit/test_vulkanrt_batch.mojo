@@ -3,8 +3,8 @@ from std.sys import has_accelerator
 from std.testing import assert_true, TestSuite
 from std.math import abs
 from gonzales.core.geometry import Vec3f
-from gonzales.scene.primitives import TriangleMesh, intersect_triangle
-from gonzales.scene.vulkanrt import (
+from gonzales.scene.shapes.primitives import TriangleMesh, intersect_triangle
+from gonzales.scene.accel.vulkanrt import (
     vulkanrt_build_scene, vulkanrt_trace_rays, vulkanrt_destroy_scene,
 )
 

@@ -1,10 +1,10 @@
 from std.math import abs
 from std.memory.alloc import unsafe_alloc
 from std.testing import assert_true, TestSuite
-from gonzales.scene.lexer import PbrtScanner, scanner_free
-from gonzales.scene.parse_types import SceneParseState
-from gonzales.scene.pbrt_parser import handle_curve_shape, handle_named_medium
-from gonzales.scene.material_builder import _psc_handle_make_named_material
+from gonzales.scene.description.lexer import PbrtScanner, scanner_free
+from gonzales.scene.description.parse_types import SceneParseState
+from gonzales.scene.description.pbrt_parser import handle_curve_shape, handle_named_medium
+from gonzales.scene.description.material_builder import _psc_handle_make_named_material
 
 comptime EPS: Float32 = 1e-4
 

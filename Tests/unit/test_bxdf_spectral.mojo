@@ -5,10 +5,10 @@
 from std.math import abs
 from std.testing import assert_true, TestSuite
 from gonzales.core.geometry import RGB, Vec3f
-from gonzales.scene.materials import Material, MeasuredBRDF
-from gonzales.scene.curves import Curve
+from gonzales.scene.appearance.materials import Material, MeasuredBRDF
+from gonzales.scene.shapes.curves import Curve
 from gonzales.transport.bxdf import bxdf_eval_conductor_ggx, bxdf_eval_any, BSDF, LobeTables, ggx_D, ggx_G2, ggx_albedo_avg, ggx_ms_shape, ggx_ms_tint, _nee_weight_simple, _nee_weight_simple_spectral
-from gonzales.scene.bvh import LightSample
+from gonzales.scene.accel.bvh import LightSample
 
 # These tests only exercise the lambertian/ggx kinds, which never touch the
 # material tables -- lobe_eval reads them for hair and measured only. Dangling

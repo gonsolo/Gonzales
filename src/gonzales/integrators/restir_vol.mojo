@@ -40,7 +40,7 @@
 from std.collections import Array
 from std.math import sqrt, abs
 from gonzales.core.geometry import RGB, dot, _is_real_ptr, Vec3f, Point2i, restir_jitter_pixel
-from gonzales.scene.media import hg_phase
+from gonzales.scene.appearance.media import hg_phase
 from gonzales.core.reservoir import ReservoirState, reservoir_state_init, reservoir_combine, reservoir_finalize, reservoir_cap_confidence
 from gonzales.core.rng import PCG32
 

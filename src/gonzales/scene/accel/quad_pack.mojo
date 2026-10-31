@@ -1,7 +1,7 @@
 from std.math import floor, fma
 from gonzales.core.geometry import Point3f
-from gonzales.scene.primitives import mesh_points_floats
-from gonzales.scene.bvh import BVH2Node
+from gonzales.scene.shapes.primitives import mesh_points_floats
+from gonzales.scene.accel.bvh import BVH2Node
 
 
 @no_inline

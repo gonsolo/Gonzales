@@ -3,14 +3,14 @@ from std.memory.alloc import unsafe_alloc
 from std.math import tan, atan2, sqrt, cos, sin
 from std.ffi import external_call
 from gonzales.core.diagnostics import warn_unsupported
-from gonzales.scene.lexer import is_whitespace
-from gonzales.scene.parse_types import SceneParseState, NamedMaterial, scene_path
+from gonzales.scene.description.lexer import is_whitespace
+from gonzales.scene.description.parse_types import SceneParseState, NamedMaterial, scene_path
 from gonzales.core.geometry import RGB, PI, Vec3f, Point3f
-from gonzales.scene.materials import MatKind
+from gonzales.scene.appearance.materials import MatKind
 from gonzales.core.transform import matrix_invert, transform_normals, Mat4
-from gonzales.scene.scene_builder import store_mesh
-from gonzales.scene.mitsuba_serialized import load_mitsuba_serialized
-from gonzales.scene.pbrt_parser import ParsedScene_Mojo, finalize_scene
+from gonzales.scene.description.scene_builder import store_mesh
+from gonzales.scene.shapes.mitsuba_serialized import load_mitsuba_serialized
+from gonzales.scene.description.pbrt_parser import ParsedScene_Mojo, finalize_scene
 
 # ── Mitsuba 0.5/0.6/2/3 XML scene parser ────────────────────────────────────
 #

@@ -1,27 +1,27 @@
 from max.gpu import MAX_THREADS_PER_BLOCK_METADATA
 from std.utils import StaticTuple
-from gonzales.scene.bvh import BVH2Node, BVH4, SceneView, build_bvh2
+from gonzales.scene.accel.bvh import BVH2Node, BVH4, SceneView, build_bvh2
 from max.algorithm import parallelize
-from gonzales.scene.curves import CURVE_DEFER_K, Curve, CurveBvh, CurveSeg, curve_piece_endpoints
-from gonzales.scene.curve_bvh import CurveBvhDev
+from gonzales.scene.shapes.curves import CURVE_DEFER_K, Curve, CurveBvh, CurveSeg, curve_piece_endpoints
+from gonzales.scene.accel.curve_bvh import CurveBvhDev
 from gonzales.core.geometry import Point3f, _is_real_ptr
 from gonzales.paths.guide import GuideGrid, null_guide
-from gonzales.scene.lights import AreaLight, DistantLight, InfiniteLight, PointLight, LightSampler, LIGHT_BOUNDS_STRIDE, env_build_cdf, env_downsample
-from gonzales.scene.materials import MatKind, Material, MeasuredBRDF
-from gonzales.scene.footprint import CameraFootprint
-from gonzales.scene.media import Grid, MediumInterface, Medium, NvdbGrid
-from gonzales.scene.primitives import Instance, Intersection, PrimId, Sphere, TriangleMesh, mesh_points_floats, mesh_pos, mesh_vi
+from gonzales.scene.appearance.lights import AreaLight, DistantLight, InfiniteLight, PointLight, LightSampler, LIGHT_BOUNDS_STRIDE, env_build_cdf, env_downsample
+from gonzales.scene.appearance.materials import MatKind, Material, MeasuredBRDF
+from gonzales.scene.appearance.footprint import CameraFootprint
+from gonzales.scene.appearance.media import Grid, MediumInterface, Medium, NvdbGrid
+from gonzales.scene.shapes.primitives import Instance, Intersection, PrimId, Sphere, TriangleMesh, mesh_points_floats, mesh_pos, mesh_vi
 from gonzales.core.sampling import FILTER_LUT_N, fill_filter_lut, ThinLens
 from gonzales.transport.render_state import FilmDims, FilterParams, PathState, ShadowTask, SHADOW_SLOTS
-from gonzales.scene.materials import GpuTexture, NormalSlopeMap
+from gonzales.scene.appearance.materials import GpuTexture, NormalSlopeMap
 from std.os import getenv
 from std.os.path import exists, getsize
 from gonzales.core.spectrum import SpectralHandle
-from gonzales.scene.rtcore import rtcore_device_free, rtcore_host_register, rtcore_device_total
-from gonzales.scene.xert import xert_alignment, xert_heat_path
-from gonzales.scene.pbrt_parser import ParsedScene_Mojo
-from gonzales.scene.host_textures import decode_host_textures
-from gonzales.scene.ptex_cache import PtexCache, PTEX_QUEUE_CAP
+from gonzales.scene.accel.rtcore import rtcore_device_free, rtcore_host_register, rtcore_device_total
+from gonzales.scene.accel.xert import xert_alignment, xert_heat_path
+from gonzales.scene.description.pbrt_parser import ParsedScene_Mojo
+from gonzales.scene.appearance.host_textures import decode_host_textures
+from gonzales.scene.appearance.ptex_cache import PtexCache, PTEX_QUEUE_CAP
 from gonzales.integrators.restir_di import DIReservoir
 from gonzales.integrators.restir_vol import VolReservoir
 from max.gpu import block_dim, block_idx, thread_idx

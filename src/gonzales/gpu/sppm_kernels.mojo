@@ -4,9 +4,9 @@
 from max.gpu import MAX_THREADS_PER_BLOCK_METADATA
 from std.utils import StaticTuple
 from max.gpu import block_idx, thread_idx, block_dim
-from gonzales.scene.primitives import Intersection
-from gonzales.scene.media import Medium, Grid, NvdbGrid
-from gonzales.scene.bvh import SceneView
+from gonzales.scene.shapes.primitives import Intersection
+from gonzales.scene.appearance.media import Medium, Grid, NvdbGrid
+from gonzales.scene.accel.bvh import SceneView
 from gonzales.core.sampling import FilmFilter
 from gonzales.core.rng import PCG32
 from gonzales.integrators.sppm import _sppm_count_photon, SPPMPixel, SPPMPhoton, _sppm_insert_photon, _sppm_gather_one, _sppm_nee_one, _sppm_finalize_albedo_one_pixel, _sppm_finalize_one_pixel, _sppm_trace_visible_point, _sppm_trace_photon, _sppm_flush_one

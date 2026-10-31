@@ -3,7 +3,7 @@
     build/rt_build_dump tris.f32 out.blas out.gid
 
 tris.f32: nine float32 per triangle. out.gid: int32 per primitive id (-1 = unused)."""
-from gonzales.scene.rt_build import rt_build_blas, RtBlas
+from gonzales.scene.accel.rt_build import rt_build_blas, RtBlas
 from std.memory.alloc import unsafe_alloc
 from std.sys import argv
 

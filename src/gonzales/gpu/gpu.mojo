@@ -1,12 +1,12 @@
-from gonzales.scene.bvh import SceneView
+from gonzales.scene.accel.bvh import SceneView
 from gonzales.core.geometry import TERMINAL_SEGMENT_GRACE_ROUNDS
-from gonzales.scene.materials import MatKind
-from gonzales.scene.primitives import Intersection, Sphere
+from gonzales.scene.appearance.materials import MatKind
+from gonzales.scene.shapes.primitives import Intersection, Sphere
 from gonzales.transport.render_state import PathState, ShadowTask, SuppressTask, SHADOW_SLOTS
-from gonzales.scene.hw_rt import hw_rt_active, hw_shadow_slots
+from gonzales.scene.accel.hw_rt import hw_rt_active, hw_shadow_slots
 from gonzales.integrators.restir_di import DIReservoir
 from gonzales.integrators.restir_vol import VolReservoir
-from gonzales.scene.vulkaninterop import VulkanInteropRtSceneHandle
+from gonzales.scene.accel.vulkaninterop import VulkanInteropRtSceneHandle
 from max.gpu import block_dim
 from max.gpu.host import DeviceBuffer
 from std.math import ceildiv

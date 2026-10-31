@@ -1,8 +1,8 @@
 # Geometric normal of a hit (triangle, instanced triangle or analytic sphere).
 # Lives apart from sppm.mojo so shading.mojo's shadow-ray media walk can use it.
 from gonzales.core.geometry import Point3f, Vec3f, cross, dot, _is_real_ptr
-from gonzales.scene.primitives import Intersection, TriangleMesh, Instance, Sphere, sphere_outward_normal, mesh_vi
-from gonzales.scene.primitives import mesh_normal, mesh_pos
+from gonzales.scene.shapes.primitives import Intersection, TriangleMesh, Instance, Sphere, sphere_outward_normal, mesh_vi
+from gonzales.scene.shapes.primitives import mesh_normal, mesh_pos
 from gonzales.core.transform import transform_normal, Mat4
 from std.math import sqrt
 

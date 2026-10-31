@@ -10,8 +10,8 @@ from std.math import abs, sqrt, cos, sin
 from std.memory.alloc import unsafe_alloc
 from std.testing import assert_true, TestSuite
 from gonzales.core.geometry import RGB, Vec3f, PI
-from gonzales.scene.materials import Material, MatKind, LobeKind, MeasuredBRDF
-from gonzales.scene.curves import Curve
+from gonzales.scene.appearance.materials import Material, MatKind, LobeKind, MeasuredBRDF
+from gonzales.scene.shapes.curves import Curve
 from gonzales.transport.bxdf import BSDF, LobeTables
 from gonzales.core.rng import PCG32
 from gonzales.core.spectrum import sample_wavelengths, SpectralContext, spectral_handle, SpectralHandle

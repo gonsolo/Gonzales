@@ -1,10 +1,10 @@
 from std.memory.alloc import unsafe_alloc
 from gonzales.core.geometry import Point3f, RGB
-from gonzales.scene.materials import Material, MatKind
-from gonzales.scene.primitives import Intersection, PrimId, TriangleMesh
+from gonzales.scene.appearance.materials import Material, MatKind
+from gonzales.scene.shapes.primitives import Intersection, PrimId, TriangleMesh
 from gonzales.core.geometry import Ray
-from gonzales.scene.curves import Curve
-from gonzales.scene.bvh import BVH2Node, build_bvh2, traverse_bvh2_core
+from gonzales.scene.shapes.curves import Curve
+from gonzales.scene.accel.bvh import BVH2Node, build_bvh2, traverse_bvh2_core
 
 # ── Shared BVH-backed triangle-scene fixture ────────────────────────────────
 # Builds a REAL BVH (via the same build_bvh2 that finalize_scene calls) over

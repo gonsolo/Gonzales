@@ -13,8 +13,8 @@
 # the sample spacing, not the whole pixel.
 from std.math import sqrt, abs, max, min
 from gonzales.core.geometry import Vec3f, Point3f, dot, cross, _is_real_ptr
-from gonzales.scene.primitives import TriangleMesh, Instance, mesh_uv, mesh_has_uvs, mesh_normal
-from gonzales.scene.primitives import mesh_pos
+from gonzales.scene.shapes.primitives import TriangleMesh, Instance, mesh_uv, mesh_has_uvs, mesh_normal
+from gonzales.scene.shapes.primitives import mesh_pos
 from gonzales.core.transform import Mat4, transform_normal
 
 

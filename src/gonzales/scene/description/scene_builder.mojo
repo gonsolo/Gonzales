@@ -1,5 +1,5 @@
 from std.memory.alloc import unsafe_alloc
-from gonzales.scene.parse_types import SceneParseState, MeshAccum
+from gonzales.scene.description.parse_types import SceneParseState, MeshAccum
 from gonzales.core.transform import transform_points
 
 # ── Shared scene-building API ───────────────────────────────────────────────

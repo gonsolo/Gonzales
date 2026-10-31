@@ -13,7 +13,7 @@ from max.gpu.sync import barrier, syncwarp
 from max.gpu.memory import AddressSpace
 from max.gpu.primitives.warp import shuffle_idx, vote
 from max.gpu.host import DeviceContext, DeviceBuffer
-from gonzales.scene.bvh import BVH2Node
+from gonzales.scene.accel.bvh import BVH2Node
 from gonzales.core.geometry import Point3f
 
 comptime _FENCE_SCOPE = "device" if is_nvidia_gpu() else ""

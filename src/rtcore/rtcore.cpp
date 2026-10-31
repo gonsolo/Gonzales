@@ -110,7 +110,7 @@ extern "C" void* rtcore_create(const char* cubinPath, const uint8_t* asBytes, in
     return rtcore_create_scene(cubinPath, 1, &asBytes, &asSize, &asVkAddress);
 }
 
-// A structure built by gonzales itself (src/gonzales/scene/rt_build.mojo): no driver addresses inside, so it is only copied to a
+// A structure built by gonzales itself (src/gonzales/scene/accel/rt_build.mojo): no driver addresses inside, so it is only copied to a
 // 64 KB aligned address. `gid` maps the primitive id the hardware reports to the triangle number in the merged geometry.
 extern "C" void* rtcore_create_own(const char* cubinPath, const uint8_t* asBytes, int64_t asSize, const int32_t* gid, int64_t nGid) {
     RtCore* rc = openCore(cubinPath);

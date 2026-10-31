@@ -1,9 +1,9 @@
 """Which medium a ray is in after crossing a surface."""
-from gonzales.scene.bvh import SceneView
+from gonzales.scene.accel.bvh import SceneView
 from gonzales.core.geometry import Vec3f
-from gonzales.scene.geom_normal import _geom_normal
-from gonzales.scene.materials import Material
-from gonzales.scene.primitives import Intersection
+from gonzales.scene.shapes.geom_normal import _geom_normal
+from gonzales.scene.appearance.materials import Material
+from gonzales.scene.shapes.primitives import Intersection
 
 
 @always_inline

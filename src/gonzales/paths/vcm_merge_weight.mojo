@@ -4,7 +4,7 @@
 from std.collections import Array
 from std.math import log
 from gonzales.paths.vcm_camis import _camis_gather_light, CamisCamRecord, CamisCamCarry, CamisLightRecord, CAMIS_IN_CLASS, camis_eval_merge
-from gonzales.scene.bvh import SceneView
+from gonzales.scene.accel.bvh import SceneView
 from gonzales.paths.bdpt_vertex import _BDPT_MAX_VERTS, BDPTVertex
 from gonzales.paths.bdpt_eval import _bdpt_vertex_pdfs, _bdpt_vertex_mis_scoped
 from gonzales.paths.vcm_strategy import _vcm_keep, _VCM_CAMIS, _CAMIS_CAM_RECS, _CAMIS_FORCE_C1, _vcm_eta_scale

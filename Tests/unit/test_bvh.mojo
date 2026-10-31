@@ -3,7 +3,7 @@ from std.math import abs, max
 from std.memory.alloc import unsafe_alloc
 from std.testing import assert_true, assert_false, assert_equal, TestSuite
 from gonzales.core.geometry import Point3f, Vec3f
-from gonzales.scene.bvh import intersect_aabb, build_bvh2, BVH2Node
+from gonzales.scene.accel.bvh import intersect_aabb, build_bvh2, BVH2Node
 
 comptime EPS: Float32 = 1e-4
 

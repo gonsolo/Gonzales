@@ -19,18 +19,18 @@
 
 from std.memory.alloc import unsafe_alloc
 from std.testing import assert_true, TestSuite
-from gonzales.scene.curves import CurveBvh
+from gonzales.scene.shapes.curves import CurveBvh
 from gonzales.core.sampling import ThinLens
-from gonzales.scene.footprint import CameraFootprint
+from gonzales.scene.appearance.footprint import CameraFootprint
 from gonzales.core.geometry import RGB, Point3f
-from gonzales.scene.materials import MeasuredBRDF, Material, MatKind
-from gonzales.scene.materials import GpuTexture, NormalSlopeMap
-from gonzales.scene.primitives import Intersection, PrimId, Sphere, Instance, TriangleMesh
+from gonzales.scene.appearance.materials import MeasuredBRDF, Material, MatKind
+from gonzales.scene.appearance.materials import GpuTexture, NormalSlopeMap
+from gonzales.scene.shapes.primitives import Intersection, PrimId, Sphere, Instance, TriangleMesh
 from gonzales.core.geometry import Ray
-from gonzales.scene.media import Medium, MediumInterface, Grid, NvdbGrid
-from gonzales.scene.lights import LightSampler, AreaLight, DistantLight, PointLight, InfiniteLight
-from gonzales.scene.curves import Curve
-from gonzales.scene.bvh import BVH4, SceneView, BVH2Node, build_bvh2, traverse_bvh2_core
+from gonzales.scene.appearance.media import Medium, MediumInterface, Grid, NvdbGrid
+from gonzales.scene.appearance.lights import LightSampler, AreaLight, DistantLight, PointLight, InfiniteLight
+from gonzales.scene.shapes.curves import Curve
+from gonzales.scene.accel.bvh import BVH4, SceneView, BVH2Node, build_bvh2, traverse_bvh2_core
 from gonzales.core.rng import PCG32
 from gonzales.core.spectrum import null_spectral_handle, sample_wavelengths
 from gonzales.paths.vcm_camis import camis_light_carry_off, CamisLightRecord

@@ -4,7 +4,7 @@ GONZALES_RT_CACHE=<file> (default: the scene cache's name plus .rt). The key has
 (triangle counts, instance matrices); a different key means the file is rebuilt.
 """
 from std.memory.alloc import unsafe_alloc
-from gonzales.scene.scene_cache import _fopen, _fclose, _put, _get, _Ptr
+from gonzales.scene.description.scene_cache import _fopen, _fclose, _put, _get, _Ptr
 
 comptime _RT_MAGIC: Int = 0x435452544E5A4A
 comptime PB = Pointer[UInt8, MutUntrackedOrigin]

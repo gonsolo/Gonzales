@@ -4,19 +4,19 @@
 from std.math import max, abs, sqrt, cos, sin
 from std.atomic import Atomic
 from gonzales.core.geometry import Point3f, Point2f, Vec3f, RGB, dot, cross, PI, _is_real_ptr
-from gonzales.scene.materials import LobeKind
-from gonzales.scene.primitives import Intersection, mesh_vi, mesh_pos
-from gonzales.scene.lights import area_light_pick_triangle
-from gonzales.scene.lights import area_light_side_pdf
+from gonzales.scene.appearance.materials import LobeKind
+from gonzales.scene.shapes.primitives import Intersection, mesh_vi, mesh_pos
+from gonzales.scene.appearance.lights import area_light_pick_triangle
+from gonzales.scene.appearance.lights import area_light_side_pdf
 from gonzales.transport.manifold import _mnee_first_probe, _mnee_chain, _mnee_chain_t_eta, _mnee_reproduce, _emitter_face_normal
 from gonzales.transport.shade_context import _shade_context
 from gonzales.transport.mis_policy import MisPolicy
-from gonzales.scene.bvh import curve_tangent, fibre_cos, SceneView, _scene_bounding_sphere, LightSample, _sample_infinite_light_nee, light_path_pick, light_path_pick_pdf
+from gonzales.scene.accel.bvh import curve_tangent, fibre_cos, SceneView, _scene_bounding_sphere, LightSample, _sample_infinite_light_nee, light_path_pick, light_path_pick_pdf
 from gonzales.core.rng import PCG32
 from gonzales.transport.bxdf import BSDF, LobeEval, LobeTables
 from gonzales.core.spectrum import SampledWavelengths, SpectralSample, spec_illum
 from gonzales.paths.bdpt_vertex import BDPTVertex
-from gonzales.scene.media import medium_sigma_t_at_spectral
+from gonzales.scene.appearance.media import medium_sigma_t_at_spectral
 from gonzales.paths.bdpt_nee import _bdpt_simple_light_count, _bdpt_sample_simple_light, _bdpt_nee_contribute, _bdpt_nee_transmittance
 
 @always_inline

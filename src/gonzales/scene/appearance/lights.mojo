@@ -8,7 +8,7 @@ comments and docstrings stripped before moving it."""
 from std.memory.alloc import unsafe_alloc
 from std.math import max, min, sqrt
 from gonzales.core.geometry import Point3f, Vec3f, RGB, _is_real_ptr
-from gonzales.scene.portal_light import portal_frame, portal_ray_crosses
+from gonzales.scene.appearance.portal_light import portal_frame, portal_ray_crosses
 
 # ── Lights ────────────────────────────────────────────────────────────────────
 # See: docs/06_lights_and_materials.md

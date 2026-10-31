@@ -14,16 +14,16 @@
 from std.math import abs
 from std.memory.alloc import unsafe_alloc
 from std.testing import assert_true, TestSuite
-from gonzales.scene.curves import CurveBvh
+from gonzales.scene.shapes.curves import CurveBvh
 from gonzales.core.sampling import ThinLens
-from gonzales.scene.footprint import CameraFootprint
+from gonzales.scene.appearance.footprint import CameraFootprint
 from gonzales.core.geometry import RGB, Point3f, Vec3f, INV_FOUR_PI, INV_PI
-from gonzales.scene.materials import LobeKind, MeasuredBRDF
-from gonzales.scene.materials import GpuTexture, NormalSlopeMap
-from gonzales.scene.primitives import Intersection, Sphere, PrimId, Instance
-from gonzales.scene.media import Medium, MediumInterface, Grid, NvdbGrid
-from gonzales.scene.lights import LightSampler, AreaLight, DistantLight, PointLight, InfiniteLight
-from gonzales.scene.bvh import BVH4, SceneView, BVH2Node
+from gonzales.scene.appearance.materials import LobeKind, MeasuredBRDF
+from gonzales.scene.appearance.materials import GpuTexture, NormalSlopeMap
+from gonzales.scene.shapes.primitives import Intersection, Sphere, PrimId, Instance
+from gonzales.scene.appearance.media import Medium, MediumInterface, Grid, NvdbGrid
+from gonzales.scene.appearance.lights import LightSampler, AreaLight, DistantLight, PointLight, InfiniteLight
+from gonzales.scene.accel.bvh import BVH4, SceneView, BVH2Node
 from gonzales.transport.bxdf import ggx_D, ggx_G2, ggx_albedo_avg, ggx_ms_shape, ggx_ms_tint
 from gonzales.paths.bdpt_vertex import BDPTVertex
 from gonzales.paths.bdpt_connect import _pdf_solid_to_area, _bdpt_connect_to_cache

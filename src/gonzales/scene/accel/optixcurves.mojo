@@ -4,9 +4,9 @@ from std.math import ceildiv
 from max.gpu import block_idx, block_dim, thread_idx
 from max.gpu.host import DeviceContext, DeviceBuffer
 from max.gpu.host._nvidia_cuda import CUDA, CUstream
-from gonzales.scene.curves import Curve, curve_at, curve_piece_endpoints
-from gonzales.scene.materials import Material, MatKind
-from gonzales.scene.primitives import PrimId
+from gonzales.scene.shapes.curves import Curve, curve_at, curve_piece_endpoints
+from gonzales.scene.appearance.materials import Material, MatKind
+from gonzales.scene.shapes.primitives import PrimId
 
 comptime OxcHandle = Pointer[UInt8, MutUntrackedOrigin]
 

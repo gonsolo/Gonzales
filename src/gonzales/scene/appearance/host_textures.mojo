@@ -1,5 +1,5 @@
-from gonzales.scene.materials import Material
-from gonzales.scene.materials import GpuTexture
+from gonzales.scene.appearance.materials import Material
+from gonzales.scene.appearance.materials import GpuTexture
 from gonzales.core.os_thread import OsThread, ThreadArg
 from gonzales.core.geometry import _is_real_ptr
 from max.algorithm import parallelize

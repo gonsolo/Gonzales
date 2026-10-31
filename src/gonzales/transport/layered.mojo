@@ -28,7 +28,7 @@ from std.sys import is_nvidia_gpu
 from std.math import sqrt, cos, sin, exp, abs, min, max, floor
 from std.memory import bitcast
 from gonzales.core.geometry import Vec3f, dot, cross, safe_sqrt, fast_div, fast_recip, PI, INV_PI
-from gonzales.scene.materials import fr_dielectric, ALPHA_EFFECTIVELY_SMOOTH
+from gonzales.scene.appearance.materials import fr_dielectric, ALPHA_EFFECTIVELY_SMOOTH
 from gonzales.core.spectrum import SpectralSample
 from gonzales.core.rng import PCG32
 
