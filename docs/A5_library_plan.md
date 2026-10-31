@@ -3,47 +3,13 @@
 Plan for splitting `src/gonzales` into layered subpackages with shared transport interfaces, so that new integrators
 (UPBP, photon planes, guiding, Metropolis) are thin modules and a feature cannot exist in one integrator only.
 
-**Status (2026-10-31): draft for review; moves under way on branch `library`.** Counts come from a scan of `from .x import` lines. Interfaces
-below are proposals and have not been compiled for the GPU.
+**Status (2026-10-31): steps 1 to 6b done on branch `library`, not merged yet.** `src/gonzales/README.md` has the layer order, and `Tests/check_layers.py` enforces it with no exceptions. The interfaces below are in progress.
 
 ## Why
 
 Most VCM bugs of 2026-10-30 had one of two shapes. A weight reserved a share for a strategy that never ran (volume splat,
 walks past the 9-vertex cache). A feature lived in one integrator (PT honoured `g`, VCM and SPPM hardcoded isotropic).
 Both come from strategies and media being implicit in each integrator's control flow.
-
-## Layers
-
-Each layer imports only from layers above it. 97 modules, 61,774 lines.
-
-| Layer | Holds | Lines today |
-|---|---|---|
-| `core` | geometry, spectra, sampling, random numbers | 4,672 |
-| `scene` | primitives, materials, media, lights, BVH, parsers | 22,251 |
-| `transport` | lobes, phase functions, light sampling, walks, MNEE, SMS | 4,627 |
-| `estimators` | generic photon stores and density estimates, no path vertices | 663 |
-| `paths` | subpaths, vertices, connections, MIS, VCM's strategies and vertex grid | 2,885 |
-| `integrators` | PT, VCM, SPPM, ReSTIR, then the new ones | 12,684 |
-| `gpu` | kernels and drivers | 9,527 |
-| `app` | pipeline, command line, viewer | 4,465 |
-
-`scene` is large enough to need sublayers: `scene.geometry`, `scene.accel`, `scene.materials`, `scene.parse`.
-
-## What is in the way
-
-22 of 590 imports point the wrong way, plus one cycle.
-
-| Imports | Symbols | Move |
-|---|---|---|
-| `spectrum` <-> `sampling` | `mix_bits_u64`; `sample_wavelengths` | hash to `core.rng`; breaks the only cycle |
-| `sampling` -> `primitives` | `Ray` | `Ray` to `core` |
-| `bvh`, `host_textures`, `pbrt_parser`, `scene_cache`, `sms` -> `render_state` | `GpuTexture`, `NormalSlopeMap` | those two types to `scene.materials` |
-| `bxdf` -> `vcm_mis` | `MisPolicy`, `nee_mis_weight` | policy to `transport`; the recursion stays in `paths` |
-| `vcm_grid`, `vcm_merge` -> `sppm` | grid, `gather_disk_*` | new `estimators.grid` |
-| `bdpt_nee`, `bdpt_eval` -> `sppm` | `_geom_normal`, `area_light_side_pdf` | already elsewhere or `transport` |
-| 7 modules -> `gpu_media` | `medium_after`, `sss_*`, `_sample_medium_core` | new `transport.medium` and `transport.walk` |
-| `bdpt_connect` -> `vcm_grid` | `_vcm_too_long`, `_vcm_eta_*` | strategy set, below |
-| `bdpt_eval`, `surface` -> `shading` | `_mnee_*`, `_shade_context`, texture lookup | `transport.manifold`, `transport.context` |
 
 ## Interfaces
 
@@ -55,9 +21,8 @@ Compile-time traits, so kernels stay monomorphized. Compiler problems get fixed 
 **`Hop`** is a walk from entry to exit: `begin(hit)`, `walk(...) -> HopExit` with weight, exit and normal, and the boundary
 densities `T(cos)` and exit lobe. Shared by PT, VCM, SPPM, and the BSSRDF photon map as a second implementation.
 
-**`StrategySet`** declares what exists at a vertex: `can_merge(v)`, `can_connect(v, lv)`, `can_splat(lv)`,
-`has_manifold(v)`, `past_cache(n)`. Carries take `eta` from it, and the weights are computed from it, so a share without a
-running strategy becomes impossible. This replaces `_vcm_eta_at`, `_vcm_too_long`, `_vcm_past_cache` and `mnee_rival`.
+**`StrategySet`** declares what exists at a vertex: `can_merge`, `merge_density`, `has_manifold`, `too_long`, `past_cache`.
+Carries take `eta` from it, and the weights are computed from it, so a share without a running strategy becomes impossible.
 
 **`PhotonEstimator`** is what merging needs: `store(vertex)`, `query(cv) -> radiance, eta`, `kernel_measure(v)`. Points on a
 surface, points in a medium, fibres, beams, planes and volumes are implementations. Integrators see only this.
@@ -68,20 +33,15 @@ surface, points in a medium, fibres, beams, planes and volumes are implementatio
 
 Each step is one or a few commits. Unit tests stay green and renders stay identical, checked against stored images.
 
-1. Layer check script, reporting today's violations; part of `make unittest`, allowed list shrinks to empty.
-2. Break the cycle and the small moves: `Ray`, hash, `GpuTexture`, `MisPolicy`.
-3. `estimators.grid`, out of `sppm`.
-4. `transport.medium` and `transport.walk`, out of `gpu_media`.
-5. `transport.manifold` and `context`, out of `shading`.
-6. Subpackages: move files, absolute imports, tests mirrored.
-6b. `cpu` beside `gpu`, both above `integrators`: `rendering`, `bdpt_render` and SPPM's CPU passes hold loops and threads, and `integrators` keeps the shared per-path logic. Read those files first, as some contents may be shared.
-7. `Medium` and `Hop` traits, PT, VCM and SPPM on them.
-8. `StrategySet`, VCM on it. The riskiest step: weights must not change except where a test shows a bug.
-9. `PhotonEstimator`, VCM and SPPM on it.
-10. Done: `shading.mojo` split, integrators as packages.
-11. New integrators, one module each.
+Done: layer check; `Ray`, hash, `GpuTexture` and `MisPolicy` moves; `estimators.photon_grid`; `transport.medium` and `sss_walk`; `transport.manifold`; subpackages with absolute imports; `cpu` beside `gpu`; `shading.mojo` split; CAMIS deleted.
+
+1. Tests mirrored to the package layout.
+2. `Medium` and `Hop`: `MediumView` and `sss_hop` serve VCM and SPPM. PT still has its own step-by-step walk.
+3. `StrategySet`: `VcmStrategies` gathers the rules in one place. It becomes a trait with its second user, UPBP, as a trait with one implementation only decorates.
+4. `PhotonEstimator`, VCM and SPPM on it.
+5. New integrators, one module each.
 
 ## Open questions
 
-- Whether kernel compile time stays acceptable with traits across packages. Step 7 measures it on the B580.
+- Whether kernel compile time stays acceptable with traits across packages. The `Medium` and `Hop` step measures it on the B580.
 - ReSTIR stays for now (user, 2026-10-31): it is woven through 18 modules, so it would be a re-port from history, not a revert.
