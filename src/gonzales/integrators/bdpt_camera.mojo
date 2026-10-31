@@ -5,7 +5,7 @@ from std.collections import Array
 from std.math import sqrt, cos, sin, log, exp, max, abs
 from gonzales.transport.medium import MediumView
 from gonzales.core.geometry import face_toward
-from gonzales.transport.sss_walk import SssExit, sss_entry_lobe, sss_walk_to_exit
+from gonzales.transport.sss_walk import SssExit, sss_entered, sss_hop
 from gonzales.transport.medium_interface import medium_after
 from gonzales.scene.appearance.materials import fr_dielectric, sss_boundary_lobe
 from gonzales.core.geometry import offset_eps, RGB, Point3f, Point2f, Vec3f, vec3f, point3f, dot, cross, PI, INV_FOUR_PI, INV_PI
@@ -45,7 +45,7 @@ from gonzales.paths.bdpt_eval import (
 from gonzales.paths.vcm_strategy import _vcm_depth, _VCM_MAX_STORED, _vcm_keep, _VCM_CAMIS, _CAMIS_CAM_RECS, _CAMIS_FORCE_C1, _vcm_eta_scale, _vcm_eta_at, _vcm_fibre_scale
 from gonzales.paths.bdpt_connect import _bdpt_connect_to_cache, _bdpt_connect_to_cache_deferred
 from gonzales.paths.vcm_merge import _bdpt_merge_from_cache
-from gonzales.transport.surface import sss_entry_tint, surface_hit
+from gonzales.transport.surface import surface_hit
 
 def _bdpt_trace_camera_and_connect[use_gpu: Bool](
     r2c:     Pointer[Float32, MutUntrackedOrigin],
@@ -271,10 +271,9 @@ def _vcm_sss_walk[use_gpu: Bool](
     Scenes/vcm_sss_hop_mis_derivation.py. The interior is one symmetric hop, so its density cancels between the
     subpaths, and nothing connects across it."""
     var gn = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
-    var wi = sss_entry_lobe(face_toward(gn, rd), mat.albedo.r, pcg)
-    var ex = sss_walk_to_exit(sd, mat, inter, hit.to_simd(), gn, wi, wl, pcg)
+    var ex = sss_hop[use_gpu](sd, mat, inter, hit.to_simd(), gn, rd, wl, pcg)
     if ex.ok:
-        beta *= ex.weight * sss_entry_tint[use_gpu](sd, mat, inter, wl)
+        beta *= ex.weight
         var cos_e = abs(dot(-ray_dir, gn))
         var (a_vcm, a_vc, a_vm) = vcm_arrival_carries(dvcm_in, dvc_in, dvm_in, cos_e)
         var inv_t = Float32(1) / max(Float32(1) - fr_dielectric(cos_e, mat.albedo.r), Float32(1e-6))
@@ -290,15 +289,6 @@ def _vcm_sss_walk[use_gpu: Bool](
         else:
             dvm = inv_t * (a_vm * pdf_rev + a_vcm * mis_vc)
     return ex
-
-
-@always_inline
-def _vcm_sss_entered(mat: Material, inter: Intersection, ray_dir: Vec3f, rd: Vec3f, med_before: Int32, ref sd: SceneView, hit: Point3f) -> Bool:
-    """Did this dielectric cross refract into a subsurface interior?"""
-    if not mat.sss_walk_interior() or inter.primId.type != Int8(0) or Int(med_before) >= 0:
-        return False
-    var gn = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
-    return dot(gn, ray_dir) * dot(gn, rd) > Float32(0)
 
 
 @always_inline
@@ -767,7 +757,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             var ior_cur = st.current_dielectric_ior; var ior_prev = st.previous_dielectric_ior
             var cross_scale = _vcm_dielectric_cross[use_gpu, True](sd, inter, mat, hit, ray_dir, vcm_cone_w, has_med, pcg,
                 st.ro, st.rd, st.current_dielectric_ior, st.previous_dielectric_ior, st.cur_med_idx, st.dvcm, st.dvc, st.dvm)
-            if _vcm_sss_entered(mat, inter, ray_dir, st.rd, med_in, sd, hit):
+            if sss_entered(mat, inter, ray_dir, st.rd, med_in, sd, hit.to_simd()):
                 st.cur_med_idx = med_in
                 st.current_dielectric_ior = ior_cur; st.previous_dielectric_ior = ior_prev
                 var ex = _vcm_sss_walk[use_gpu](sd, inter, mat, hit, ray_dir, st.rd, st.wl, mis_vc_weight_factor, pcg, st.beta,

@@ -9,6 +9,7 @@ from gonzales.core.geometry import Ray
 from gonzales.scene.shapes.primitives import mesh_pos
 from gonzales.transport.render_state import PathState, SssWalk
 from gonzales.core.rng import PCG32
+from gonzales.transport.surface import sss_entry_tint
 from gonzales.core.spectrum import SampledWavelengths, SpectralSample, rgb_bands_to_spectral_sample
 from std.collections import Array
 from std.math import abs, cos, exp, log, pow, sin, sqrt
@@ -283,3 +284,22 @@ def _sss_walk_step[steps: Int = 256](
     path_ptr[].volume_scattered = Int8(1)
     intersections[unsafe_offset=i].hit = Int8(0)
     path_ptr[].pcgState = pcg.state
+
+
+@always_inline
+def sss_entered(mat: Material, inter: Intersection, ray_dir: Vec3f, new_dir: Vec3f, med_before: Int32, ref sd: SceneView, hit: Vec3f) -> Bool:
+    """Did this dielectric crossing refract into a subsurface interior?"""
+    if not mat.sss_walk_interior() or inter.primId.type != Int8(0) or Int(med_before) >= 0:
+        return False
+    var gn = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit)
+    return dot(gn, ray_dir) * dot(gn, new_dir) > Float32(0)
+
+
+@always_inline
+def sss_hop[use_gpu: Bool](ref sd: SceneView, mat: Material, inter: Intersection, hit: Vec3f, gn: Vec3f, refracted: Vec3f,
+                           wl: SampledWavelengths, mut pcg: PCG32) -> SssExit:
+    """The whole hop for an integrator that does not walk across wavefront rounds: entry lobe, walk, surface tint."""
+    var ex = sss_walk_to_exit(sd, mat, inter, hit, gn, sss_entry_lobe(face_toward(gn, refracted), mat.albedo.r, pcg), wl, pcg)
+    if ex.ok:
+        ex.weight = ex.weight * sss_entry_tint[use_gpu](sd, mat, inter, wl)
+    return ex

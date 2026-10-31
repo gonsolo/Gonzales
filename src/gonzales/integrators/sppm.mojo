@@ -12,7 +12,7 @@ from std.atomic import Atomic
 from std.memory import bitcast
 from gonzales.transport.medium import MediumView
 from gonzales.core.geometry import face_toward
-from gonzales.transport.sss_walk import sss_entry_lobe, sss_walk_to_exit
+from gonzales.transport.sss_walk import sss_entered, sss_hop
 from gonzales.transport.medium_interface import default_emit_medium, medium_after
 from gonzales.core.geometry import offset_eps, TERMINAL_SEGMENT_GRACE_ROUNDS, RGB, Point3f, Point2f, Vec3f, vec3f, point3f, dot, cross, PI, INV_FOUR_PI, Frame, _is_real_ptr
 from gonzales.scene.appearance.materials import Material, MatKind, LobeKind, PhotonKind, fr_dielectric, resolve_mix
@@ -29,7 +29,7 @@ from gonzales.scene.accel.bvh import traverse_dispatch, any_hit_dispatch
 from gonzales.scene.accel.bvh import SceneView, curve_radius, _hair_sample_dir_u, _scene_bounding_sphere, _sample_disk_perpendicular, _sample_infinite_light_dir, _eval_infinite_light_and_pdf, _hair_precompute, LightSample, _sample_distant_light_nee, _sample_point_light_nee, _sample_sphere_light_nee, _sample_infinite_light_nee, light_path_pick
 from gonzales.transport.mis_policy import mis_policy_sole
 from gonzales.transport.bxdf import ggx_lambda, dielectric_interface, bxdf_sample_dielectric, bxdf_sample_thin_dielectric, BxDFFlags, GeomContext, bxdf_sample_conductor, BSDF, LobeTables
-from gonzales.transport.surface import sss_entry_tint, surface_hit
+from gonzales.transport.surface import surface_hit
 from gonzales.integrators.shading import area_light_hit_cos
 from gonzales.transport.texturing import apply_surface_maps_at_hit
 from gonzales.scene.shapes.geom_normal import _geom_normal, _shading_normal_at
@@ -911,24 +911,23 @@ def _sppm_trace_visible_point[use_gpu: Bool](
             var (new_dir, new_org, radiance_scale, new_cur_ior, new_prev_ior) = _dielectric_bounce(
                 ray_dir, hit.to_simd(), gn, ior, False, pcg, current_dielectric_ior, previous_dielectric_ior, mat.type == MatKind.thin_dielectric, True, True,
                 _vp_strat_u(vdc, pidx, bounce))
-            if mat.sss_walk_interior() and inter.primId.type == Int8(0) and Int(cur_med_idx) < 0:
+            if sss_entered(mat, inter, ray_dir, new_dir, cur_med_idx, sd, hit.to_simd()):
                 var g_w = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
-                if dot(g_w, ray_dir) * dot(g_w, new_dir) > Float32(0.0):
-                    # The path tracer's walk; its exit is an ordinary Lambertian visible point.
-                    var ex = sss_walk_to_exit(sd, mat, inter, hit.to_simd(), g_w, sss_entry_lobe(face_toward(g_w, new_dir), mat.albedo.r, pcg), vp.wavelengths, pcg)
-                    if not ex.ok:
-                        break
-                    vp.beta = vp.beta * _spectral_gain_rgb(sd, ex.weight * sss_entry_tint[use_gpu](sd, mat, inter, vp.wavelengths), vp.wavelengths)
-                    vp.pos = ex.x_o
-                    vp.normal = vec3f(ex.n_o)
-                    vp.geo_normal = vec3f(ex.n_o)
-                    vp.wo = vec3f(ex.n_o)
-                    vp.alb = RGB(Float32(1))
-                    vp.mat_kind = LobeKind.lambertian
-                    vp.mat_idx = Int32(mat_idx)
-                    vp.is_volume = PhotonKind.surface
-                    vp.valid = Int32(1)
+                # The path tracer's walk; its exit is an ordinary Lambertian visible point.
+                var ex = sss_hop[use_gpu](sd, mat, inter, hit.to_simd(), g_w, new_dir, vp.wavelengths, pcg)
+                if not ex.ok:
                     break
+                vp.beta = vp.beta * _spectral_gain_rgb(sd, ex.weight, vp.wavelengths)
+                vp.pos = ex.x_o
+                vp.normal = vec3f(ex.n_o)
+                vp.geo_normal = vec3f(ex.n_o)
+                vp.wo = vec3f(ex.n_o)
+                vp.alb = RGB(Float32(1))
+                vp.mat_kind = LobeKind.lambertian
+                vp.mat_idx = Int32(mat_idx)
+                vp.is_volume = PhotonKind.surface
+                vp.valid = Int32(1)
+                break
             current_dielectric_ior = new_cur_ior
             previous_dielectric_ior = new_prev_ior
             vp.beta *= radiance_scale  # camera-path (Radiance mode): apply non-symmetric-scattering correction
@@ -1311,22 +1310,21 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
                 sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
             var (new_dir, new_org, _, new_cur_ior, new_prev_ior) = _dielectric_bounce(
                 ray_dir, hit.to_simd(), gn, ior, False, pcg, current_dielectric_ior, previous_dielectric_ior, mat.type == MatKind.thin_dielectric, radiance_mode=False)
-            if mat.sss_walk_interior() and inter.primId.type == Int8(0) and Int(cur_med_idx) < 0:
+            if sss_entered(mat, inter, ray_dir, new_dir, cur_med_idx, sd, hit.to_simd()):
                 var g_w = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
-                if dot(g_w, ray_dir) * dot(g_w, new_dir) > Float32(0.0):
-                    # A visible point at a camera walk's exit gathers what lands here, then the photon walks on.
-                    if n_events - n_null > 1:
-                        _sppm_store_photon[use_gpu](
-                            SPPMPhoton(pos=hit, flux=flux, nxt=Int32(-1), is_volume=PhotonKind.surface, dir_in=rd,
-                                       wavelengths=ph_wavelengths, curve=Int32(-1)),
-                            photons, max_photons, counter)
-                    var ex = sss_walk_to_exit(sd, mat, inter, hit.to_simd(), g_w, sss_entry_lobe(face_toward(g_w, new_dir), mat.albedo.r, pcg), ph_wavelengths, pcg)
-                    if not ex.ok:
-                        break
-                    flux *= ex.weight * sss_entry_tint[tex_gpu](sd, mat, inter, ph_wavelengths)
-                    rd = vec3f(_cosine_hemisphere_sample(ex.n_o, pcg.next_float(), pcg.next_float()))
-                    ro = ex.x_o + rd * Float32(0.0002)
-                    continue
+                # A visible point at a camera walk's exit gathers what lands here, then the photon walks on.
+                if n_events - n_null > 1:
+                    _sppm_store_photon[use_gpu](
+                        SPPMPhoton(pos=hit, flux=flux, nxt=Int32(-1), is_volume=PhotonKind.surface, dir_in=rd,
+                                   wavelengths=ph_wavelengths, curve=Int32(-1)),
+                        photons, max_photons, counter)
+                var ex = sss_hop[tex_gpu](sd, mat, inter, hit.to_simd(), g_w, new_dir, ph_wavelengths, pcg)
+                if not ex.ok:
+                    break
+                flux *= ex.weight
+                rd = vec3f(_cosine_hemisphere_sample(ex.n_o, pcg.next_float(), pcg.next_float()))
+                ro = ex.x_o + rd * Float32(0.0002)
+                continue
             current_dielectric_ior = new_cur_ior
             previous_dielectric_ior = new_prev_ior
             # Light path (TransportMode::Importance): do NOT apply the

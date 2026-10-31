@@ -3,6 +3,7 @@
 
 from std.math import sqrt, cos, sin, log, exp, max
 from gonzales.transport.medium import MediumView
+from gonzales.transport.sss_walk import sss_entered
 from gonzales.transport.medium_interface import medium_after
 from gonzales.core.geometry import Point3f, Point2f, Vec3f, vec3f, point3f, dot, PI, INV_FOUR_PI
 from gonzales.scene.appearance.materials import MatKind, LobeKind, resolve_mix
@@ -25,7 +26,7 @@ from gonzales.paths.bdpt_eval import _bdpt_vertex_mis_scoped, _vcm_mnee_light_dv
 from gonzales.paths.vcm_strategy import _vcm_depth, _VCM_MAX_STORED, _vcm_keep, _VCM_CAMIS, _vcm_eta_scale, _vcm_eta_at, _vcm_fibre_scale
 from gonzales.paths.bdpt_connect import _bdpt_store_lvc_vertex
 from gonzales.integrators.bdpt_camera import (
-    _vcm_scatter, _vcm_lobe_vertex, _vcm_sss_walk, _vcm_sss_entered, _vcm_sss_exit_vertex,
+    _vcm_scatter, _vcm_lobe_vertex, _vcm_sss_walk, _vcm_sss_exit_vertex,
     _vcm_sss_exit_scatter, _vcm_dielectric_cross,
 )
 
@@ -463,7 +464,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
             var ior_cur = st.current_dielectric_ior; var ior_prev = st.previous_dielectric_ior
             _ = _vcm_dielectric_cross[use_gpu, False](sd, inter, mat, hit, ray_dir, Float32(-1.0), has_med, pcg,
                     st.ro, st.rd, st.current_dielectric_ior, st.previous_dielectric_ior, st.cur_med_idx, st.dvcm, st.dvc, st.dvm)
-            if _vcm_sss_entered(mat, inter, ray_dir, st.rd, med_in, sd, hit):
+            if sss_entered(mat, inter, ray_dir, st.rd, med_in, sd, hit.to_simd()):
                 comptime if _VCM_SSS_CAMERA_ONLY:
                     return False
                 st.cur_med_idx = med_in
