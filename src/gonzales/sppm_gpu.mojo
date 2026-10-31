@@ -6,7 +6,7 @@ from std.sys.info import size_of
 from max.gpu import block_dim
 from std.math import max, min, ceildiv
 from std.memory.alloc import unsafe_alloc
-from .gpu_media import default_emit_medium
+from .medium_interface import default_emit_medium
 from .materials import LobeKind
 from .primitives import Intersection
 from .media import Medium, SSS_WALK_ROUNDS, Grid, NvdbGrid

@@ -9,7 +9,7 @@ from .geometry import offset_point, offset_eps, RGB, Point3f, Point2f, Point2i, 
 from .geometry import point3f
 from .render_state import PDF_DROP_DIRECT
 from .materials import Material, MatKind, LobeKind, MeasuredBRDF, fr_dielectric, resolve_mix, sss_boundary_lobe
-from .gpu_media import sss_entry_lobe, sss_walk_start
+from .sss_walk import sss_entry_lobe, sss_walk_start
 from .render_state import PathState, SssWalk, ShadowTask, SuppressTask, SHADOW_SLOTS
 from .materials import GpuTexture, NormalSlopeMap, normal_slope_map_none
 from .primitives import (

@@ -7,7 +7,7 @@ from max.gpu import block_dim
 from max.gpu.host import DeviceBuffer
 from std.math import tan, max, abs, ceildiv
 from std.memory.alloc import unsafe_alloc
-from .gpu_media import default_emit_medium
+from .medium_interface import default_emit_medium
 from .geometry import RGB, PI
 from .primitives import Intersection
 from .vcm_camis import CamisLightRecord

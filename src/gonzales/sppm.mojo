@@ -11,7 +11,8 @@ from std.memory.alloc import unsafe_alloc
 from std.atomic import Atomic
 from std.memory import bitcast
 from .geometry import face_toward
-from .gpu_media import default_emit_medium, medium_after, sss_entry_lobe, sss_walk_to_exit
+from .sss_walk import sss_entry_lobe, sss_walk_to_exit
+from .medium_interface import default_emit_medium, medium_after
 from .geometry import offset_eps, TERMINAL_SEGMENT_GRACE_ROUNDS, RGB, Point3f, Point2f, Vec3f, vec3f, point3f, dot, cross, PI, INV_FOUR_PI, Frame, _is_real_ptr
 from .materials import Material, MatKind, LobeKind, PhotonKind, fr_dielectric, resolve_mix
 from .primitives import (

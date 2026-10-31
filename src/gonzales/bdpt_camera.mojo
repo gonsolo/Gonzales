@@ -4,7 +4,8 @@
 from std.collections import Array
 from std.math import sqrt, cos, sin, log, exp, max, abs
 from .geometry import face_toward
-from .gpu_media import SssExit, medium_after, sss_entry_lobe, sss_walk_to_exit
+from .sss_walk import SssExit, sss_entry_lobe, sss_walk_to_exit
+from .medium_interface import medium_after
 from .materials import fr_dielectric, sss_boundary_lobe
 from .geometry import offset_eps, RGB, Point3f, Point2f, Vec3f, vec3f, point3f, dot, cross, PI, INV_FOUR_PI, INV_PI
 from .render_state import PDF_DELTA_FULL, PDF_DROP_DIRECT

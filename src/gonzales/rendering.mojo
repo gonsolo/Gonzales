@@ -16,7 +16,7 @@ from .sampling import TileSamplerParams, encode_morton2, sobol_index_pixel_part,
 from .rng import mix_bits_u64
 from .guide import GuideGrid, guide_merge, null_guide
 from .spectrum import SpectralSample, spectral_sample_to_rgb
-from .gpu_media import _sample_medium_core, path_medium_after_shading
+from .volume_path import _sample_medium_core, path_medium_after_shading
 from .restir_di import ReservoirIO, reservoir_io_null
 from .restir_gi import GIReservoirIO, gi_reservoir_io_null
 from .restir_sms import SMSReservoirIO, sms_reservoir_io_null

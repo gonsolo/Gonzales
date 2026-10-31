@@ -3,7 +3,7 @@
 
 from std.collections import Array
 from std.math import abs
-from .gpu_media import medium_after
+from .medium_interface import medium_after
 from .geometry import Point3f, Vec3f, vec3f, dot
 from .materials import MatKind, fr_dielectric
 from .primitives import Intersection, PrimId

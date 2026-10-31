@@ -35,7 +35,7 @@ from std.atomic import Atomic
 from std.math import ceildiv, sqrt
 from std.sys import has_accelerator
 from .gpu_scene import GpuSceneHandle
-from .gpu_media import _sss_walk_step
+from .sss_walk import _sss_walk_step
 
 @__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
 @__llvm_metadata(`nvvm.minctasm`=SIMDLength(1))    # NVIDIA keeps its old register budget; AMD ignores this

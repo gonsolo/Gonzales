@@ -2,7 +2,7 @@
 # Part of the BDPT/VCM machinery that used to be one file (bdpt_*.mojo).
 
 from std.math import sqrt, cos, sin, log, exp, max
-from .gpu_media import medium_after
+from .medium_interface import medium_after
 from .geometry import Point3f, Point2f, Vec3f, vec3f, point3f, dot, PI, INV_FOUR_PI
 from .materials import MatKind, LobeKind, resolve_mix
 from .primitives import Intersection
