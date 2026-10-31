@@ -1,5 +1,5 @@
 from .materials import Material
-from .render_state import GpuTexture
+from .materials import GpuTexture
 from .os_thread import OsThread, ThreadArg
 from .geometry import _is_real_ptr
 from max.algorithm import parallelize

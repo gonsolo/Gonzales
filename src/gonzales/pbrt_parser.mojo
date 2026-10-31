@@ -18,7 +18,7 @@ from .parse_types import (SceneParseState, MeshAccum, NamedMaterial, scene_path,
                            ctm_push, ctm_pop, PSC_NAME_MAX, PSC_FILE_MAX)
 from .geometry import RGB, Point3f, Vec3f, dot, cross, PI, _is_real_ptr
 from .materials import Material, MatKind, MeasuredBRDF
-from .render_state import GpuTexture, NormalSlopeMap, normal_slope_map_none
+from .materials import GpuTexture, NormalSlopeMap, normal_slope_map_none
 from .host_textures import HostTextures, TexPrefetch, decode_host_textures, host_texture_table
 from .primitives import Sphere, TriangleMesh, PrimId, Instance, encode_normal, mesh_points_floats
 from .quad_pack import quantise_quads

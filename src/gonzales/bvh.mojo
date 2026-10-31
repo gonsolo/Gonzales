@@ -12,7 +12,7 @@ from .transform import Mat4
 from .geometry import dot, cross, Point3f, Point2f, Vec3f, Frame, RGB, PI, TWO_PI, INV_PI, safe_sqrt, _is_real_ptr, store_vec3, _atan2f, point3f, fast_sincos
 from .sampling import ThinLens
 from .materials import Material, fr_dielectric, MeasuredBRDF
-from .render_state import GpuTexture, NormalSlopeMap
+from .materials import GpuTexture, NormalSlopeMap
 from .primitives import (
     Intersection, PrimId, TriangleMesh, Sphere, intersect_triangle, intersect_triangle_edges, alpha_killed, Instance, sphere_outward_normal, mesh_vi, mesh_material,
 )

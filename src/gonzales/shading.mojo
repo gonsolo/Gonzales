@@ -10,7 +10,8 @@ from .geometry import point3f
 from .render_state import PDF_DROP_DIRECT
 from .materials import Material, MatKind, LobeKind, MeasuredBRDF, fr_dielectric, resolve_mix, sss_boundary_lobe
 from .gpu_media import sss_entry_lobe, sss_walk_start
-from .render_state import PathState, SssWalk, GpuTexture, NormalSlopeMap, normal_slope_map_none, ShadowTask, SuppressTask, SHADOW_SLOTS
+from .render_state import PathState, SssWalk, ShadowTask, SuppressTask, SHADOW_SLOTS
+from .materials import GpuTexture, NormalSlopeMap, normal_slope_map_none
 from .primitives import (
     Intersection, PrimId, TriangleMesh, Sphere, Instance, mesh_uv, mesh_has_uvs, mesh_normal, mesh_vi, mesh_face,
 )

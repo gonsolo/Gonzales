@@ -12,7 +12,8 @@ from .footprint import CameraFootprint
 from .media import Grid, MediumInterface, Medium, NvdbGrid
 from .primitives import Instance, Intersection, PrimId, Sphere, TriangleMesh, mesh_points_floats, mesh_pos, mesh_vi
 from .sampling import FILTER_LUT_N, fill_filter_lut, ThinLens
-from .render_state import FilmDims, FilterParams, GpuTexture, NormalSlopeMap, PathState, ShadowTask, SHADOW_SLOTS
+from .render_state import FilmDims, FilterParams, PathState, ShadowTask, SHADOW_SLOTS
+from .materials import GpuTexture, NormalSlopeMap
 from std.os import getenv
 from std.os.path import exists, getsize
 from .spectrum import SpectralHandle

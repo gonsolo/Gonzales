@@ -253,50 +253,6 @@ struct PathState(TrivialRegisterPassable):
 
 # ── GPU / render pipeline helpers ─────────────────────────────────────────────
 
-@fieldwise_init
-struct GpuTexture(TrivialRegisterPassable):
-    comptime FORMAT_F32 = 0   # data holds Float32 linear RGB
-    comptime FORMAT_U8 = 1    # data holds UInt8, decoded to linear through lut
-    comptime FORMAT_PTEX = 2  # packed Ptex: width = face count, height = paging id or -1; data = 8-byte face table + bordered RGB8 mip chains (see oiio.cc)
-    var data: Pointer[UInt8, MutUntrackedOrigin]    # device pointer: full mip pyramid, contiguous
-    var lut: Pointer[Float32, MutUntrackedOrigin]   # device pointer: 256-entry byte -> linear table (FORMAT_U8 only)
-    var pool: Pointer[UInt8, MutUntrackedOrigin]    # FORMAT_PTEX: the shared page pool (demand-loaded faces)
-    var width: Int32                                     # level-0 width
-    var height: Int32                                    # level-0 height
-    var n_levels: Int32                                  # number of mip levels stored in `data` (>=1)
-    var channels: Int32                                  # stored channels per texel: 1 (replicated to RGB) or 3
-    var format: Int32                                    # FORMAT_F32 or FORMAT_U8
-
-@fieldwise_init
-struct NormalSlopeMap(TrivialRegisterPassable):
-    """A normal map in LEAN SLOPE space, level 0 only -- the representation
-    the reference SMS renderer's manifold walk reads (render/normalmap.h
-    `eval_normal`/`eval_normal_derivatives` with `use_slopes=true`).
-
-    Ordinary shading samples a normal map through `sample_texture`, which is
-    enough when only the normal itself is needed. A manifold walk needs the
-    normal's DERIVATIVES too (they are what the specular constraint's
-    Jacobian is built from), and bilinear interpolation of the raw RGB gives
-    a derivative that disagrees with the reference's. So the map is stored a
-    second time, converted once at scene-build time:
-
-        n = normalize(2*rgb - 1);  slope = (-n.x/n.z, -n.y/n.z)
-
-    with the local normal recovered as the (unnormalized) `(-sx, -sy, 1)`.
-    Interpolating in slope space is what makes the derivative analytic and
-    exactly matches the reference; it is also invariant to the RGB
-    normalization, so both spellings agree texel-for-texel and differ only
-    BETWEEN texels.
-
-    Square, power-of-two maps only (the reference assumes the same).
-    `res <= 0` means "this texture has no slope map" -- always test that
-    before touching `slopes`, which is dangling in that case."""
-    var slopes: Pointer[Float32, MutUntrackedOrigin]  # 2 floats/texel, row-major
-    var res:    Int32                                      # 0 => absent
-
-@always_inline
-def normal_slope_map_none() -> NormalSlopeMap:
-    return NormalSlopeMap(Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(), Int32(0))
 
 # Deferred shadow rays per path (--rt-hardware, and the software BVH's sw_shadow): a bounce's NEE loops may add several
 # candidates (area, infinite, ...); the first SHADOW_SLOTS are deferred, any further one is traced inline (never in defer_only kernels).

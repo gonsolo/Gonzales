@@ -19,7 +19,7 @@ from .lights import AreaLight, InfiniteLight, LightSampler, LIGHT_BOUNDS_STRIDE
 from .materials import Material
 from .pbrt_parser import ParsedScene_Mojo, _plan_ptex_budget, mojo_parsed_free
 from .primitives import Instance, PrimId, Sphere, TriangleMesh, mesh_points_floats
-from .render_state import GpuTexture, NormalSlopeMap, normal_slope_map_none
+from .materials import GpuTexture, NormalSlopeMap, normal_slope_map_none
 from .host_textures import TexPrefetch
 from .fast_io import read_parallel, PARALLEL_MIN
 

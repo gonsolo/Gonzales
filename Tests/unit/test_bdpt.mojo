@@ -19,7 +19,7 @@ from gonzales.sampling import ThinLens
 from gonzales.footprint import CameraFootprint
 from gonzales.geometry import RGB, Point3f, Vec3f, INV_FOUR_PI, INV_PI
 from gonzales.materials import LobeKind, MeasuredBRDF
-from gonzales.render_state import GpuTexture, NormalSlopeMap
+from gonzales.materials import GpuTexture, NormalSlopeMap
 from gonzales.primitives import Intersection, Sphere, PrimId, Instance
 from gonzales.media import Medium, MediumInterface, Grid, NvdbGrid
 from gonzales.lights import LightSampler, AreaLight, DistantLight, PointLight, InfiniteLight

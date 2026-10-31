@@ -24,7 +24,7 @@ from gonzales.sampling import ThinLens
 from gonzales.footprint import CameraFootprint
 from gonzales.geometry import RGB, Point3f
 from gonzales.materials import MeasuredBRDF, Material, MatKind
-from gonzales.render_state import GpuTexture, NormalSlopeMap
+from gonzales.materials import GpuTexture, NormalSlopeMap
 from gonzales.primitives import Intersection, PrimId, Sphere, Instance, TriangleMesh
 from gonzales.geometry import Ray
 from gonzales.media import Medium, MediumInterface, Grid, NvdbGrid
