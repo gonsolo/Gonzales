@@ -8,7 +8,7 @@ from std.testing import assert_true, assert_false, TestSuite
 from gonzales.core.geometry import RGB, Vec3f
 from gonzales.scene.appearance.media import hg_phase
 from gonzales.core.reservoir import reservoir_update
-from gonzales.integrators.restir_vol import (
+from gonzales.integrators.pt.restir_vol import (
     VolReservoir, vol_reservoir_init, vol_target_pdf, vol_shift_scatter_vertex,
     VolShiftMode, VolReservoirIO, vol_reservoir_io_null,
     vol_temporal_spatial_combine, VOL_TR_UNIT, VOL_MAX_FINALIZED_WEIGHT,

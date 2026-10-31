@@ -4,8 +4,8 @@ from gonzales.scene.appearance.materials import MatKind
 from gonzales.scene.shapes.primitives import Intersection, Sphere
 from gonzales.transport.render_state import PathState, ShadowTask, SuppressTask, SHADOW_SLOTS
 from gonzales.scene.accel.hw_rt import hw_rt_active, hw_shadow_slots
-from gonzales.integrators.restir_di import DIReservoir
-from gonzales.integrators.restir_vol import VolReservoir
+from gonzales.transport.restir_di import DIReservoir
+from gonzales.integrators.pt.restir_vol import VolReservoir
 from gonzales.scene.accel.vulkaninterop import VulkanInteropRtSceneHandle
 from max.gpu import block_dim
 from max.gpu.host import DeviceBuffer
@@ -19,7 +19,7 @@ from gonzales.transport.shade_context import ShadeContext
 from gonzales.gpu.gpu_media import sample_medium_gpu, update_medium_gpu
 from gonzales.gpu.gpu_scene import GpuSceneHandle
 from gonzales.gpu.gpu_shade import shared_shade_context, resolve_suppress_gpu, shade_coated_conductor_gpu, shade_coated_diffuse_gpu, shade_conductor_gpu, shade_dielectric_gpu, shade_diffuse_gpu, shade_diffuse_transmit_gpu, shade_hair_gpu, shade_interface_gpu, shade_measured_gpu, shade_mix_gpu, shade_nee_preamble_gpu, shade_thin_dielectric_gpu
-from gonzales.paths.guide import guide_is_active
+from gonzales.transport.guide import guide_is_active
 from gonzales.gpu.gpu_wavefront import sw_pack_shadow_tasks_gpu, sw_add_shadow_gpu, sw_resolve_shadow_gpu, compact_active_paths_gpu, compact_by_kind_gpu, accumulate_cone_gpu, accumulate_film_gpu, accumulate_film_wavefront_gpu, clear_film_gpu, clear_scalar_film_gpu, compact_curve_paths_gpu, compact_walking_gpu, adaptive_converge_gpu, adaptive_dilate_gpu, sss_walk_gpu, deactivate_paths_past_maxdepth_gpu, gen_primary_rays_gpu, gen_primary_rays_wavefront_gpu, reset_curve_counter_gpu, reset_restir_reservoirs_gpu, reset_restir_vol_reservoirs_gpu, reset_shadow_tasks_gpu, read_counter, reset_vol_used_gpu, resolve_curve_candidates_gpu, traverse_paths_gpu, rtcore_closest_hit_gpu, rtcore_shadow_rays_compact_gpu, rtcore_sss_walk_gpu, vulkaninterop_rt_traverse_paths_gpu
 
 

@@ -19,8 +19,8 @@ from gonzales.paths.bdpt_vertex import _BDPT_MAX_VERTS, BDPTVertex
 from gonzales.paths.vcm_grid import _VCM_MN_STRIDE, _VCM_HEADS_SIZE, _vcm_grid_inv_cell, _bdpt_build_merge_grid, vcm_merge_radius
 from gonzales.paths.vcm_strategy import _CAMIS_LVC_PER_SLOT
 from gonzales.paths.bdpt_connect import _bdpt_splat_filtered, _bdpt_connect_to_camera
-from gonzales.integrators.bdpt_camera import _bdpt_trace_camera_and_connect
-from gonzales.integrators.bdpt_light import _bdpt_trace_light_path
+from gonzales.integrators.vcm.camera import _bdpt_trace_camera_and_connect
+from gonzales.integrators.vcm.light import _bdpt_trace_light_path
 from gonzales.integrators.film import _vcm_finalize_one_pixel
 
 

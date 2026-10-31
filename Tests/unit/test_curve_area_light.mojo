@@ -10,8 +10,8 @@ from gonzales.scene.appearance.lights import AreaLight, DistantLight, PointLight
 from gonzales.scene.shapes.curves import Curve, curve_bspline_point, curve_light_tube_area, _curve_perp_axis
 from gonzales.core.spectrum import SpectralSample, SampledWavelengths
 from gonzales.scene.accel.bvh import BVH2Node
-from gonzales.integrators.shading import shade_core_cpu_nee
-from gonzales.paths.guide import null_guide
+from gonzales.integrators.pt.shading import shade_core_cpu_nee
+from gonzales.transport.guide import null_guide
 
 comptime EPS: Float32 = 1e-4
 

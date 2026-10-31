@@ -20,12 +20,14 @@ from gonzales.scene.appearance.lights import LightSampler, AreaLight, DistantLig
 from gonzales.scene.shapes.curves import Curve
 from gonzales.core.spectrum import SpectralSample, null_spectral_handle, SampledWavelengths
 from gonzales.scene.accel.bvh import BVH4, BVH2Node
-from gonzales.paths.guide import null_guide
+from gonzales.transport.guide import null_guide
 from gonzales.scene.appearance.media import Medium, MediumInterface, Grid, NvdbGrid
-from gonzales.integrators.shading import gi_pending_x1_init, _gi_generate_recon_candidate, _shade_diffuse_nee
+from gonzales.integrators.pt.common import gi_pending_x1_init
+from gonzales.integrators.pt.restir import _gi_generate_recon_candidate
+from gonzales.integrators.pt.materials import _shade_diffuse_nee
 from gonzales.transport.shade_context import ShadeContext, LightContext, GIPendingX1
-from gonzales.integrators.restir_gi import gi_reservoir_io_null
-from gonzales.integrators.restir_di import reservoir_io_null
+from gonzales.transport.restir_gi import gi_reservoir_io_null
+from gonzales.transport.restir_di import reservoir_io_null
 from gonzales.core.rng import PCG32
 
 comptime EPS: Float32 = 1e-4

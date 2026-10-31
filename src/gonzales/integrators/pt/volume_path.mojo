@@ -10,7 +10,7 @@ from gonzales.core.geometry import Ray
 from gonzales.scene.shapes.primitives import mesh_pos
 from gonzales.transport.render_state import PathState
 from gonzales.core.reservoir import reservoir_finalize, reservoir_update
-from gonzales.integrators.restir_vol import VolReservoir, VOL_RIS_CANDIDATES, VOL_RIS_DISTANCE, VOL_TR_UNIT, VolShiftMode, vol_reservoir_init, vol_reservoir_io_null, vol_target_pdf, vol_temporal_spatial_combine
+from gonzales.integrators.pt.restir_vol import VolReservoir, VOL_RIS_CANDIDATES, VOL_RIS_DISTANCE, VOL_TR_UNIT, VolShiftMode, vol_reservoir_init, vol_reservoir_io_null, vol_target_pdf, vol_temporal_spatial_combine
 from gonzales.core.rng import PCG32
 from gonzales.core.sampling import power_heuristic
 from gonzales.core.spectrum import SpectralSample, rgb_bands_to_spectral_sample

@@ -49,7 +49,7 @@ from gonzales.core.spectrum import sample_wavelengths, null_spectral_handle
 from std.collections import Array
 from gonzales.paths.vcm_camis import CamisCamRecord, camis_cam_carry_init
 from gonzales.paths.bdpt_vertex import BDPTVertex, _BDPT_MAX_DEPTH
-from gonzales.integrators.bdpt_camera import _bdpt_trace_camera_and_connect, _bdpt_camera_path_init, _bdpt_camera_path_bounce
+from gonzales.integrators.vcm.camera import _bdpt_trace_camera_and_connect, _bdpt_camera_path_init, _bdpt_camera_path_bounce
 from gonzales.paths.vcm_strategy import _CAMIS_CAM_RECS
 
 comptime EPS: Float32 = 1e-3

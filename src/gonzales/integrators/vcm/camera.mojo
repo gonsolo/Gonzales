@@ -27,9 +27,9 @@ from gonzales.scene.accel.bvh import SceneView, test_spheres, _scene_bounding_sp
 from gonzales.core.sampling import power_heuristic, camera_ray_from_film_xy, FilmFilter, film_filter_offset, ThinLens
 from gonzales.core.rng import PCG32
 from gonzales.scene.shapes.geom_normal import _geom_normal, _shading_normal_at
-from gonzales.integrators.sppm import _dielectric_bounce, _cosine_hemisphere_sample
+from gonzales.integrators.sppm.sppm import _dielectric_bounce, _cosine_hemisphere_sample
 from gonzales.scene.appearance.lights import area_light_side_pdf
-from gonzales.integrators.shading import area_light_hit_cos, curve_light_hit
+from gonzales.integrators.pt.common import area_light_hit_cos, curve_light_hit
 from gonzales.transport.texturing import _get_tri_verts, apply_surface_maps_at_hit
 from gonzales.transport.bxdf import BSDF, LobeSample, LobeTables
 from gonzales.core.spectrum import (

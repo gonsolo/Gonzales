@@ -7,11 +7,11 @@ from std.math import sqrt
 from gonzales.scene.appearance.materials import MatKind, resolve_mix
 from gonzales.scene.shapes.primitives import Intersection
 from gonzales.transport.render_state import PathState, ShadowTask, SuppressTask
-from gonzales.integrators.restir_di import DIReservoir, ReservoirIO, reservoir_io_null
+from gonzales.transport.restir_di import DIReservoir, ReservoirIO, reservoir_io_null
 from gonzales.core.rng import PCG32
-from gonzales.integrators.shading import (
-    _shade_sss_exit, shade_coated_diffuse, shade_conductor, shade_dielectric, shade_diffuse, shade_diffuse_transmission, shade_hair, shade_interface, shade_measured, shade_nee_core, shade_thin_dielectric, _mnee_bsdf_weight,
-)
+from gonzales.integrators.pt.materials import _shade_sss_exit, shade_coated_diffuse, shade_conductor, shade_dielectric, shade_diffuse, shade_diffuse_transmission, shade_hair, shade_interface, shade_measured, shade_thin_dielectric
+from gonzales.integrators.pt.shading import shade_nee_core
+from gonzales.integrators.pt.nee import _mnee_bsdf_weight
 from gonzales.transport.manifold import _mnee_first_probe
 from gonzales.transport.shade_context import ShadeContext, _shade_context
 from max.gpu import block_dim, block_idx, thread_idx

@@ -9,9 +9,9 @@ from gonzales.scene.appearance.media import Medium, MediumInterface, Grid, NvdbG
 from gonzales.scene.shapes.curves import Curve
 from gonzales.scene.appearance.footprint import CameraFootprint
 from gonzales.scene.accel.bvh import BVH2Node, BVH4, SceneView
-from gonzales.paths.guide import GuideGrid, null_guide
+from gonzales.transport.guide import GuideGrid, null_guide
 from gonzales.core.spectrum import SpectralHandle, SpectralSample
-from gonzales.integrators.restir_gi import GIReservoirIO, gi_reservoir_io_null
+from gonzales.transport.restir_gi import GIReservoirIO, gi_reservoir_io_null
 
 
 @fieldwise_init

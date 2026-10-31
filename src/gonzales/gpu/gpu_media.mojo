@@ -5,9 +5,9 @@ from gonzales.scene.accel.bvh import SceneView
 from gonzales.core.geometry import _is_real_ptr
 from gonzales.scene.shapes.primitives import Intersection
 from gonzales.transport.render_state import PathState
-from gonzales.integrators.restir_vol import VolReservoir
+from gonzales.integrators.pt.restir_vol import VolReservoir
 from max.gpu import block_dim, block_idx, thread_idx
-from gonzales.integrators.volume_path import _sample_medium_core, path_medium_after_shading
+from gonzales.integrators.pt.volume_path import _sample_medium_core, path_medium_after_shading
 
 
 @__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))

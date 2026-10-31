@@ -30,7 +30,7 @@ from gonzales.scene.accel.bvh import SceneView, curve_radius, _hair_sample_dir_u
 from gonzales.transport.mis_policy import mis_policy_sole
 from gonzales.transport.bxdf import ggx_lambda, dielectric_interface, bxdf_sample_dielectric, bxdf_sample_thin_dielectric, BxDFFlags, GeomContext, bxdf_sample_conductor, BSDF, LobeTables
 from gonzales.transport.surface import surface_hit
-from gonzales.integrators.shading import area_light_hit_cos
+from gonzales.integrators.pt.common import area_light_hit_cos
 from gonzales.transport.texturing import apply_surface_maps_at_hit
 from gonzales.scene.shapes.geom_normal import _geom_normal, _shading_normal_at
 from gonzales.estimators.photon_grid import (

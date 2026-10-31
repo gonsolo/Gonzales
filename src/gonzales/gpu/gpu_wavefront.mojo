@@ -14,8 +14,8 @@ from gonzales.scene.shapes.primitives import (
 from gonzales.core.geometry import Ray
 from gonzales.scene.shapes.primitives import mesh_pos, mesh_point, mesh_material
 from gonzales.transport.render_state import PathState, MIN_RAY_PDF_NONE, SssWalk, ShadowTask, SHADOW_SLOTS
-from gonzales.integrators.restir_di import DIReservoir, di_reservoir_init
-from gonzales.integrators.restir_vol import VolReservoir, vol_reservoir_init
+from gonzales.transport.restir_di import DIReservoir, di_reservoir_init
+from gonzales.integrators.pt.restir_vol import VolReservoir, vol_reservoir_init
 from gonzales.core.sampling import gen_primary_ray_state, ThinLens
 from gonzales.core.spectrum import SpectralSample, spectral_sample_to_rgb
 from gonzales.core.transform import transform_normal, Mat4

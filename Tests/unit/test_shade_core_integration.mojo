@@ -7,7 +7,7 @@ from gonzales.transport.render_state import PathState, MIN_RAY_PDF_NONE, SssWalk
 from gonzales.scene.shapes.primitives import Intersection
 from gonzales.core.geometry import Ray
 from gonzales.core.spectrum import SpectralSample, SampledWavelengths, null_spectral_handle
-from gonzales.integrators.shading import shade_core
+from gonzales.integrators.pt.shading import shade_core
 from _scene_fixture import make_triangle_scene
 
 comptime EPS: Float32 = 1e-4

@@ -14,7 +14,7 @@ from gonzales.scene.accel.bvh import SceneView
 from gonzales.core.sampling import film_filter_of
 from gonzales.scene.appearance.footprint import camera_footprint
 from gonzales.scene.description.pbrt_parser import ParsedScene_Mojo
-from gonzales.integrators.sppm import SPPMPixel, SPPMPhoton, _vp_samples_for, _VP_SAMPLES, _photon_depth_cap
+from gonzales.integrators.sppm.sppm import SPPMPixel, SPPMPhoton, _vp_samples_for, _VP_SAMPLES, _photon_depth_cap
 from gonzales.estimators.photon_grid import _HSIZE
 from gonzales.gpu.gpu_scene import GpuSceneHandle
 from gonzales.core.progress import Progress

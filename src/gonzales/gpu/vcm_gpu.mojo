@@ -21,8 +21,8 @@ from gonzales.gpu.gpu_scene import GpuSceneHandle
 from gonzales.core.progress import Progress
 from gonzales.integrators.outputs import finish_render, _sidecar_name, _write_channels
 from gonzales.paths.bdpt_vertex import _vcm_walk_limit, _BDPT_MAX_VERTS, BDPTVertex
-from gonzales.integrators.bdpt_camera import VCMCameraPathState
-from gonzales.integrators.bdpt_light import VCMLightPathState
+from gonzales.integrators.vcm.camera import VCMCameraPathState
+from gonzales.integrators.vcm.light import VCMLightPathState
 from gonzales.core.spectrum import SpectralSample
 from gonzales.gpu.vcm_rt import VcmRt
 from gonzales.paths.vcm_grid import _VCM_MN_STRIDE, _VCM_HEADS_SIZE, _vcm_grid_inv_cell, _camera_typical_distance, vcm_merge_radius

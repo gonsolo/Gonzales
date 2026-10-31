@@ -11,7 +11,7 @@ from gonzales.core.geometry import RGB, Vec3f, dot, cross, reflect
 from gonzales.scene.shapes.primitives import PrimId, Intersection, TriangleMesh, encode_normal
 from gonzales.scene.appearance.media import Medium, sample_homogeneous_free_flight
 from gonzales.scene.appearance.lights import AreaLight
-from gonzales.integrators.sppm import _cosine_hemisphere_sample, sample_area_light_uniform, _shading_normal_at, _dielectric_bounce
+from gonzales.integrators.sppm.sppm import _cosine_hemisphere_sample, sample_area_light_uniform, _shading_normal_at, _dielectric_bounce
 from gonzales.scene.shapes.geom_normal import _geom_normal
 from gonzales.estimators.photon_grid import _hash_cell, _HSIZE
 from gonzales.core.rng import PCG32

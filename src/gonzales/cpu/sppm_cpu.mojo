@@ -13,7 +13,7 @@ from gonzales.scene.description.pbrt_parser import ParsedScene_Mojo
 from gonzales.core.progress import Progress
 from gonzales.integrators.outputs import finish_render
 from gonzales.core.spectrum import SampledWavelengths, pass_wavelengths
-from gonzales.integrators.sppm import _photon_depth_cap, _VP_SAMPLES, SPPMPixel, SPPMPhoton, _sppm_trace_visible_point, _sppm_trace_photon, _sppm_count_photon, _sppm_insert_photon, _sppm_gather_one, _sppm_nee_one, _sppm_flush_one, _sppm_finalize_albedo_one_pixel, _sppm_finalize_one_pixel
+from gonzales.integrators.sppm.sppm import _photon_depth_cap, _VP_SAMPLES, SPPMPixel, SPPMPhoton, _sppm_trace_visible_point, _sppm_trace_photon, _sppm_count_photon, _sppm_insert_photon, _sppm_gather_one, _sppm_nee_one, _sppm_flush_one, _sppm_finalize_albedo_one_pixel, _sppm_finalize_one_pixel
 
 
 def _sppm_camera_pass(

@@ -9,7 +9,7 @@ from gonzales.scene.appearance.media import Medium, Grid, NvdbGrid
 from gonzales.scene.accel.bvh import SceneView
 from gonzales.core.sampling import FilmFilter
 from gonzales.core.rng import PCG32
-from gonzales.integrators.sppm import _sppm_count_photon, SPPMPixel, SPPMPhoton, _sppm_insert_photon, _sppm_gather_one, _sppm_nee_one, _sppm_finalize_albedo_one_pixel, _sppm_finalize_one_pixel, _sppm_trace_visible_point, _sppm_trace_photon, _sppm_flush_one
+from gonzales.integrators.sppm.sppm import _sppm_count_photon, SPPMPixel, SPPMPhoton, _sppm_insert_photon, _sppm_gather_one, _sppm_nee_one, _sppm_finalize_albedo_one_pixel, _sppm_finalize_one_pixel, _sppm_trace_visible_point, _sppm_trace_photon, _sppm_flush_one
 from gonzales.estimators.photon_grid import grid_reset_cell
 from gonzales.core.spectrum import pass_wavelengths
 

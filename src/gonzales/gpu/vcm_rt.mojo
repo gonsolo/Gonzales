@@ -13,8 +13,8 @@ from gonzales.gpu.gpu_wavefront import (
 from gonzales.scene.accel.hw_rt import hw_alpha, hw_rt_active, hw_trace_interop
 from gonzales.scene.accel.vulkaninterop import VulkanInteropRtSceneHandle, vulkaninterop_rt_trace
 from max.gpu.host._nvidia_cuda import CUDA
-from gonzales.integrators.bdpt_camera import VCMCameraPathState
-from gonzales.integrators.bdpt_light import VCMLightPathState
+from gonzales.integrators.vcm.camera import VCMCameraPathState
+from gonzales.integrators.vcm.light import VCMLightPathState
 
 @__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
 @__llvm_metadata(`nvvm.minctasm`=SIMDLength(1))    # NVIDIA keeps its old register budget; AMD ignores this

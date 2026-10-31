@@ -78,7 +78,7 @@ Each step is one or a few commits. Unit tests stay green and renders stay identi
 7. `Medium` and `Hop` traits, PT, VCM and SPPM on them.
 8. `StrategySet`, VCM on it. The riskiest step: weights must not change except where a test shows a bug.
 9. `PhotonEstimator`, VCM and SPPM on it.
-10. Split `shading.mojo` (5,643 lines) by material and integrator.
+10. Done: `shading.mojo` split, integrators as packages.
 11. New integrators, one module each.
 
 ## Open questions

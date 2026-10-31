@@ -1,7 +1,7 @@
 from std.math import abs
 from std.testing import assert_true, TestSuite
 from gonzales.core.geometry import RGB, INV_PI, Vec3f
-from gonzales.integrators.restir_di import di_reservoir_init, di_target_pdf
+from gonzales.transport.restir_di import di_reservoir_init, di_target_pdf
 
 comptime EPS: Float32 = 1e-4
 

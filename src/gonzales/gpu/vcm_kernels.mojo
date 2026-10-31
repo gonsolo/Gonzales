@@ -26,10 +26,10 @@ from gonzales.paths.bdpt_nee import _visible_transmittance
 from gonzales.paths.vcm_grid import _bdpt_count_merge_vertex, _bdpt_insert_merge_vertex, _vcm_reset_cell
 from gonzales.paths.vcm_strategy import _CAMIS_CAM_RECS
 from gonzales.paths.bdpt_connect import _bdpt_splat_filtered, _bdpt_connect_to_camera
-from gonzales.integrators.bdpt_camera import (
+from gonzales.integrators.vcm.camera import (
     _bdpt_trace_camera_and_connect, VCMCameraPathState, _bdpt_camera_path_init, _bdpt_camera_path_bounce,
 )
-from gonzales.integrators.bdpt_light import VCMLightPathState, _bdpt_light_path_init, _bdpt_light_path_bounce, _bdpt_trace_light_path
+from gonzales.integrators.vcm.light import VCMLightPathState, _bdpt_light_path_init, _bdpt_light_path_bounce, _bdpt_trace_light_path
 
 @always_inline
 def _finite3(a: Float32, b: Float32, c: Float32) -> Bool:

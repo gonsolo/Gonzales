@@ -35,7 +35,7 @@ from gonzales.core.rng import PCG32
 from gonzales.core.spectrum import null_spectral_handle, sample_wavelengths
 from gonzales.paths.vcm_camis import camis_light_carry_off, CamisLightRecord
 from gonzales.paths.bdpt_vertex import BDPTVertex, _BDPT_MAX_VERTS, _BDPT_MAX_DEPTH
-from gonzales.integrators.bdpt_light import _bdpt_trace_light_path, _bdpt_light_path_init, _bdpt_light_path_bounce
+from gonzales.integrators.vcm.light import _bdpt_trace_light_path, _bdpt_light_path_init, _bdpt_light_path_bounce
 
 comptime EPS: Float32 = 1e-4
 

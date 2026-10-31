@@ -497,7 +497,7 @@ lowest-risk item here.
 
 ### Phase 2 — ReSTIR DI, interactive
 
-New file: `src/gonzales/integrators/restir_di.mojo`. Reconnection shift only.
+New file: `src/gonzales/transport/restir_di.mojo`. Reconnection shift only.
 
 - **2.1** Payload: light index, sampled point, light normal, `Le`. Target
   `p̂` = unshadowed contribution (BSDF × G × Le) — visibility deliberately
@@ -969,7 +969,7 @@ resolution ordering.
 Derived 2026-09-09 from gonzales's own `dVCM`/`dVC` recursion rather than
 from van Antwerpen 2011 (still not sourced; it turned out not to be
 needed). Implemented as executable, dependency-free reference math in
-`src/gonzales/integrators/restir_bdpt.mojo`, checked against a brute-force sum over
+`src/gonzales/integrators/vcm/restir.mojo`, checked against a brute-force sum over
 every strategy in `Tests/unit/test_restir_bdpt_mis.mojo`.
 
 Index a full path's vertices `x_0` (light) … `x_k` (camera). Strategy `s`

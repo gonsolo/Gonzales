@@ -5,7 +5,7 @@ from max.algorithm import parallelize
 from gonzales.scene.shapes.curves import CURVE_DEFER_K, Curve, CurveBvh, CurveSeg, curve_piece_endpoints
 from gonzales.scene.accel.curve_bvh import CurveBvhDev
 from gonzales.core.geometry import Point3f, _is_real_ptr
-from gonzales.paths.guide import GuideGrid, null_guide
+from gonzales.transport.guide import GuideGrid, null_guide
 from gonzales.scene.appearance.lights import AreaLight, DistantLight, InfiniteLight, PointLight, LightSampler, LIGHT_BOUNDS_STRIDE, env_build_cdf, env_downsample
 from gonzales.scene.appearance.materials import MatKind, Material, MeasuredBRDF
 from gonzales.scene.appearance.footprint import CameraFootprint
@@ -22,8 +22,8 @@ from gonzales.scene.accel.xert import xert_alignment, xert_heat_path
 from gonzales.scene.description.pbrt_parser import ParsedScene_Mojo
 from gonzales.scene.appearance.host_textures import decode_host_textures
 from gonzales.scene.appearance.ptex_cache import PtexCache, PTEX_QUEUE_CAP
-from gonzales.integrators.restir_di import DIReservoir
-from gonzales.integrators.restir_vol import VolReservoir
+from gonzales.transport.restir_di import DIReservoir
+from gonzales.integrators.pt.restir_vol import VolReservoir
 from max.gpu import block_dim, block_idx, thread_idx
 from max.gpu.host import DeviceBuffer, DeviceContext, HostBuffer
 from std.ffi import external_call

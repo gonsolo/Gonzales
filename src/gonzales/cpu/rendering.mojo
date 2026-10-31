@@ -11,17 +11,18 @@ from gonzales.core.progress import Progress
 from gonzales.scene.shapes.primitives import Intersection, TriangleMesh, mesh_vi
 from gonzales.scene.appearance.media import SSS_WALK_ROUNDS
 from gonzales.scene.accel.bvh import SceneView, traverse_dispatch, test_spheres
-from gonzales.integrators.shading import cpu_shade_context, shade_core_cpu_nee_ctx, gi_pending_x1_init
+from gonzales.integrators.pt.shading import cpu_shade_context, shade_core_cpu_nee_ctx
+from gonzales.integrators.pt.common import gi_pending_x1_init
 from gonzales.transport.shade_context import GIPendingX1
 from gonzales.core.sampling import TileSamplerParams, encode_morton2, sobol_index_pixel_part, gen_primary_ray_state
 from gonzales.core.rng import mix_bits_u64
-from gonzales.paths.guide import GuideGrid, guide_merge, null_guide
+from gonzales.transport.guide import GuideGrid, guide_merge, null_guide
 from gonzales.core.spectrum import SpectralSample, spectral_sample_to_rgb
-from gonzales.integrators.volume_path import _sample_medium_core, path_medium_after_shading
-from gonzales.integrators.restir_di import ReservoirIO, reservoir_io_null
-from gonzales.integrators.restir_gi import GIReservoirIO, gi_reservoir_io_null
-from gonzales.integrators.restir_sms import SMSReservoirIO, sms_reservoir_io_null
-from gonzales.integrators.restir_vol import VolReservoirIO, vol_reservoir_io_null
+from gonzales.integrators.pt.volume_path import _sample_medium_core, path_medium_after_shading
+from gonzales.transport.restir_di import ReservoirIO, reservoir_io_null
+from gonzales.transport.restir_gi import GIReservoirIO, gi_reservoir_io_null
+from gonzales.integrators.pt.restir_sms import SMSReservoirIO, sms_reservoir_io_null
+from gonzales.integrators.pt.restir_vol import VolReservoirIO, vol_reservoir_io_null
 
 
 @always_inline
