@@ -14,7 +14,8 @@ from .bvh import SceneView
 from .sampling import film_filter_of
 from .footprint import camera_footprint
 from .pbrt_parser import ParsedScene_Mojo
-from .sppm import _HSIZE, SPPMPixel, SPPMPhoton, _vp_samples_for, _VP_SAMPLES, _photon_depth_cap
+from .sppm import SPPMPixel, SPPMPhoton, _vp_samples_for, _VP_SAMPLES, _photon_depth_cap
+from .photon_grid import _HSIZE
 from .gpu_scene import GpuSceneHandle
 from .progress import Progress
 from .outputs import finish_render

@@ -9,7 +9,7 @@ LAYERS = {
              "mitsuba_parser quad_pack bvh rt_build rtcore rt_cache hw_rt xert optixcurves vulkanrt vulkaninterop gpu_bvh",
     "transport": "mis_policy bxdf measured_bxdf_eval layered surface sms shadow_media",
     "paths": "render_state vcm_mis bdpt_vertex bdpt_eval bdpt_nee bdpt_connect vcm_camis guide",
-    "estimators": "vcm_grid vcm_merge vcm_merge_weight",
+    "estimators": "photon_grid vcm_grid vcm_merge vcm_merge_weight",
     "integrators": "shading restir_di restir_gi restir_vol restir_sms restir_bdpt sppm bdpt_camera bdpt_light bdpt_render rendering outputs postprocess",
     "gpu": "gpu gpu_scene gpu_media gpu_shade gpu_wavefront gpu_denoise gpu_guide sppm_gpu sppm_kernels vcm_gpu vcm_kernels vcm_rt",
     "app": "pipeline __init__ viewer",
@@ -18,7 +18,7 @@ LAYERS = {
 ALLOWED = set("""
 bdpt_camera>gpu_media bdpt_light>gpu_media bdpt_render>gpu_media rendering>gpu_media shading>gpu_media sppm>gpu_media bdpt_nee>gpu_media
 
-bdpt_eval>shading surface>shading bdpt_eval>sppm bdpt_nee>sppm vcm_grid>sppm vcm_merge>sppm
+bdpt_eval>shading surface>shading bdpt_eval>sppm
 bdpt_connect>vcm_grid bdpt_connect>vcm_merge_weight 
 """.split())
 IMPORT = re.compile(r"^\s*from\s+(?:\.|gonzales\.)([A-Za-z_0-9]+)\s+import", re.M)

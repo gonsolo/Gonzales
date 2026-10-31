@@ -8,10 +8,7 @@ from .geometry import dot, PI
 from .materials import LobeKind
 from .vcm_camis import CamisCamRecord, CamisCamCarry, CamisLightRecord
 from .bvh import SceneView, _is_real_ptr, curve_radius
-from .sppm import (
-    _HSIZE, _hash_cell, _PHOTON_BUCKET_CAP, grid_keep, grid_weight, gather_disk_coverage,
-    gather_disk_contains,
-)
+from .photon_grid import _HSIZE, _hash_cell, _PHOTON_BUCKET_CAP, grid_keep, grid_weight, gather_disk_coverage, gather_disk_contains
 from .media import medium_inv_sigma_t_spectral
 from .spectrum import SpectralSample
 from .bdpt_vertex import _BDPT_MAX_VERTS, BDPTVertex

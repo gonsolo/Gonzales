@@ -10,9 +10,7 @@ from .primitives import Intersection, PrimId
 from .geometry import Ray
 from .bvh import traverse_dispatch
 from .bvh import SceneView, test_spheres, _is_real_ptr, curve_tangent, fibre_cos, curve_radius
-from .sppm import (
-    _HSIZE, _hash_cell, _PHOTON_BUCKET_CAP, grid_reset_cell, grid_count, grid_keep, grid_coin_bits, grid_push,
-)
+from .photon_grid import _HSIZE, _hash_cell, _PHOTON_BUCKET_CAP, grid_reset_cell, grid_count, grid_keep, grid_coin_bits, grid_push
 from .bdpt_vertex import _BDPT_MAX_VERTS, BDPTVertex
 from .bdpt_eval import _bdpt_vertex_mis_scoped, _vcm_cos_at
 from .media import medium_kernel_radius

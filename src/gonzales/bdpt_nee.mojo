@@ -15,7 +15,7 @@ from .bvh import (
     _sample_point_light_nee, _sample_sphere_light_nee,
 )
 from .rng import PCG32
-from .sppm import _geom_normal
+from .geom_normal import _geom_normal
 from .spectrum import SampledWavelengths, SpectralSample
 
 @always_inline

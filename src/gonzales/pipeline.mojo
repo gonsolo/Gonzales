@@ -1484,7 +1484,7 @@ def debug_trace_pixel(
     from .geometry import cross
     from .primitives import Intersection
     from .bxdf import dielectric_interface
-    from .sppm import _geom_normal
+    from .geom_normal import _geom_normal
 
     var psc = mojo_parse_scene_any(path)
     if not _is_real_ptr[ParsedScene_Mojo](psc):

@@ -16,7 +16,7 @@ from .sampling import film_filter_of, FilmFilter
 from .footprint import camera_footprint
 from .transform import matrix_invert
 from .pbrt_parser import ParsedScene_Mojo
-from .sppm import _HSIZE
+from .photon_grid import _HSIZE
 from .gpu_scene import GpuSceneHandle
 from .progress import Progress
 from .outputs import finish_render, _sidecar_name, _write_channels

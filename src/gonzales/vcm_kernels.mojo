@@ -19,7 +19,7 @@ from .bvh import traverse_dispatch
 from .bvh import SceneView, test_spheres, _is_real_ptr, ray_sphere_hit
 from .sampling import FilmFilter, ThinLens
 from .rng import PCG32
-from .sppm import _HSIZE, _PHOTON_BUCKET_CAP
+from .photon_grid import _HSIZE, _PHOTON_BUCKET_CAP
 from .spectrum import SpectralSample, pass_wavelengths, spectral_sample_to_rgb
 from .bdpt_vertex import _BDPT_MAX_VERTS, BDPTVertex
 from .bdpt_nee import _visible_transmittance
