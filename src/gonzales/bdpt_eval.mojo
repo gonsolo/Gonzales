@@ -8,9 +8,8 @@ from .materials import LobeKind
 from .primitives import Intersection, mesh_vi, mesh_pos
 from .lights import area_light_pick_triangle
 from .lights import area_light_side_pdf
-from .shading import (
-    _shade_context, _mnee_first_probe, _mnee_chain, _mnee_chain_t_eta, _mnee_reproduce, _emitter_face_normal,
-)
+from .manifold import _mnee_first_probe, _mnee_chain, _mnee_chain_t_eta, _mnee_reproduce, _emitter_face_normal
+from .shade_context import _shade_context
 from .mis_policy import MisPolicy
 from .bvh import curve_tangent, fibre_cos, SceneView, _scene_bounding_sphere, LightSample, _sample_infinite_light_nee, light_path_pick, light_path_pick_pdf
 from .rng import PCG32

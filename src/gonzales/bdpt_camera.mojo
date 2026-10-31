@@ -29,7 +29,8 @@ from .rng import PCG32
 from .geom_normal import _geom_normal, _shading_normal_at
 from .sppm import _dielectric_bounce, _cosine_hemisphere_sample
 from .lights import area_light_side_pdf
-from .shading import _get_tri_verts, apply_surface_maps_at_hit, area_light_hit_cos, curve_light_hit
+from .shading import area_light_hit_cos, curve_light_hit
+from .texturing import _get_tri_verts, apply_surface_maps_at_hit
 from .bxdf import BSDF, LobeSample, LobeTables
 from .spectrum import (
     SampledWavelengths, SpectralSample, spec_refl, spec_refl_unbounded, spec_illum,

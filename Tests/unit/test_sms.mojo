@@ -2,7 +2,7 @@ from std.collections import Array
 from std.math import abs, sqrt
 from std.testing import assert_true, TestSuite
 from gonzales.geometry import dot, cross, Vec3f
-from gonzales.shading import _mnee_walk2
+from gonzales.manifold import _mnee_walk2
 from gonzales.sms import (
     sms_walk, sms_solve_bernoulli, SMSVertex, MAX_SMS_VERTICES,
     sms_seed_randomize, sms_same_solution, sms_vertex_flat, sms_vertex_init,

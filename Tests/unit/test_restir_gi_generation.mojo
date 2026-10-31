@@ -22,7 +22,8 @@ from gonzales.spectrum import SpectralSample, null_spectral_handle, SampledWavel
 from gonzales.bvh import BVH4, BVH2Node
 from gonzales.guide import null_guide
 from gonzales.media import Medium, MediumInterface, Grid, NvdbGrid
-from gonzales.shading import ShadeContext, LightContext, GIPendingX1, gi_pending_x1_init, _gi_generate_recon_candidate, _shade_diffuse_nee
+from gonzales.shading import gi_pending_x1_init, _gi_generate_recon_candidate, _shade_diffuse_nee
+from gonzales.shade_context import ShadeContext, LightContext, GIPendingX1
 from gonzales.restir_gi import gi_reservoir_io_null
 from gonzales.restir_di import reservoir_io_null
 from gonzales.rng import PCG32

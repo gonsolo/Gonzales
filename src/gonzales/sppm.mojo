@@ -29,7 +29,8 @@ from .bvh import SceneView, curve_radius, _hair_sample_dir_u, _scene_bounding_sp
 from .mis_policy import mis_policy_sole
 from .bxdf import ggx_lambda, dielectric_interface, bxdf_sample_dielectric, bxdf_sample_thin_dielectric, BxDFFlags, GeomContext, bxdf_sample_conductor, BSDF, LobeTables
 from .surface import sss_entry_tint, surface_hit
-from .shading import apply_surface_maps_at_hit, area_light_hit_cos
+from .shading import area_light_hit_cos
+from .texturing import apply_surface_maps_at_hit
 from .geom_normal import _geom_normal, _shading_normal_at
 from .photon_grid import (
     _HSIZE, _hash_cell, _PHOTON_BUCKET_CAP, grid_reset_cell, grid_count, grid_keep, grid_coin_bits, grid_push, grid_weight,

@@ -15,7 +15,7 @@ from std.sys import has_accelerator, size_of
 from std.os import getenv
 from std.ffi import external_call
 from std.time import perf_counter_ns
-from .shading import ShadeContext
+from .shade_context import ShadeContext
 from .gpu_media import sample_medium_gpu, update_medium_gpu
 from .gpu_scene import GpuSceneHandle
 from .gpu_shade import shared_shade_context, resolve_suppress_gpu, shade_coated_conductor_gpu, shade_coated_diffuse_gpu, shade_conductor_gpu, shade_dielectric_gpu, shade_diffuse_gpu, shade_diffuse_transmit_gpu, shade_hair_gpu, shade_interface_gpu, shade_measured_gpu, shade_mix_gpu, shade_nee_preamble_gpu, shade_thin_dielectric_gpu

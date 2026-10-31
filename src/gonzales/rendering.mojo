@@ -11,7 +11,8 @@ from .primitives import sphere_outward_normal, Intersection, TriangleMesh, mesh_
 from .primitives import mesh_point
 from .media import SSS_WALK_ROUNDS
 from .bvh import SceneView, traverse_dispatch, test_spheres
-from .shading import cpu_shade_context, shade_core_cpu_nee_ctx, GIPendingX1, gi_pending_x1_init
+from .shading import cpu_shade_context, shade_core_cpu_nee_ctx, gi_pending_x1_init
+from .shade_context import GIPendingX1
 from .sampling import TileSamplerParams, encode_morton2, sobol_index_pixel_part, gen_primary_ray_state
 from .rng import mix_bits_u64
 from .guide import GuideGrid, guide_merge, null_guide

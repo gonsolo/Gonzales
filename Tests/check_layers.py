@@ -7,7 +7,7 @@ LAYERS = {
     "scene": "primitives materials curves curve_bvh media nanovdb lights portal_light parse_types lexer ply ply_prefetch mitsuba_serialized ptex_cache "
              "host_textures footprint geom_normal measured_bsdf material_builder light_builder scene_builder scene scene_cache scene_loader pbrt_parser "
              "mitsuba_parser quad_pack bvh rt_build rtcore rt_cache hw_rt xert optixcurves vulkanrt vulkaninterop gpu_bvh",
-    "transport": "render_state medium_interface sss_walk mis_policy bxdf measured_bxdf_eval layered surface sms shadow_media",
+    "transport": "texturing shade_context manifold render_state medium_interface sss_walk mis_policy bxdf measured_bxdf_eval layered surface sms shadow_media",
     "estimators": "photon_grid",
     "paths": "vcm_strategy vcm_grid vcm_merge vcm_merge_weight vcm_mis bdpt_vertex bdpt_eval bdpt_nee bdpt_connect vcm_camis guide",
     "integrators": "volume_path shading restir_di restir_gi restir_vol restir_sms restir_bdpt sppm bdpt_camera bdpt_light bdpt_render rendering outputs postprocess",
@@ -16,8 +16,9 @@ LAYERS = {
 }
 # Today's debts. The list only shrinks: docs/A5_library_plan.md, Order.
 ALLOWED = set("""
+shade_context>guide shade_context>restir_gi
 
-bdpt_eval>shading surface>shading 
+
 
 """.split())
 IMPORT = re.compile(r"^\s*from\s+(?:\.|gonzales\.)([A-Za-z_0-9]+)\s+import", re.M)

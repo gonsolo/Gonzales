@@ -24,10 +24,9 @@ from gonzales.spectrum import SpectralSample, SampledWavelengths, null_spectral_
 from gonzales.bvh import BVH4, BVH2Node
 from gonzales.guide import null_guide
 from gonzales.media import Medium, MediumInterface, Grid, NvdbGrid
-from gonzales.shading import (
-    ShadeContext, LightContext, _get_tri_verts, _apply_normal_map,
-    _build_geom_context_full, _shadow_contribute, GIPendingX1,
-)
+from gonzales.shading import _build_geom_context_full, _shadow_contribute
+from gonzales.shade_context import ShadeContext, LightContext, GIPendingX1
+from gonzales.texturing import _get_tri_verts, _apply_normal_map
 from gonzales.restir_gi import gi_reservoir_io_null
 
 comptime EPS: Float32 = 1e-3
