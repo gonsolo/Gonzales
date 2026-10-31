@@ -14,7 +14,6 @@ from gonzales.core.geometry import Point3f, Vec3f, RGB
 from gonzales.scene.appearance.materials import MatKind
 from gonzales.scene.shapes.primitives import Intersection
 from gonzales.core.geometry import Ray
-from gonzales.paths.vcm_camis import CamisCamRecord, CamisCamCarry, CamisLightRecord, camis_light_carry_off
 from gonzales.scene.accel.bvh import traverse_dispatch
 from gonzales.scene.accel.bvh import SceneView, test_spheres, _is_real_ptr, ray_sphere_hit
 from gonzales.core.sampling import FilmFilter, ThinLens
@@ -24,7 +23,6 @@ from gonzales.core.spectrum import SpectralSample, pass_wavelengths, spectral_sa
 from gonzales.paths.bdpt_vertex import _BDPT_MAX_VERTS, BDPTVertex
 from gonzales.paths.bdpt_nee import _visible_transmittance
 from gonzales.paths.vcm_grid import _bdpt_count_merge_vertex, _bdpt_insert_merge_vertex, _vcm_reset_cell
-from gonzales.paths.vcm_strategy import _CAMIS_CAM_RECS
 from gonzales.paths.bdpt_connect import _bdpt_splat_filtered, _bdpt_connect_to_camera
 from gonzales.integrators.vcm.camera import (
     _bdpt_trace_camera_and_connect, VCMCameraPathState, _bdpt_camera_path_init, _bdpt_camera_path_bounce,
@@ -57,7 +55,6 @@ def _accum_camera_sample(accum: Pointer[Float32, MutUntrackedOrigin], accum_merg
 def _bdpt_emit_light_paths_gpu(
     lvc: Pointer[BDPTVertex, MutUntrackedOrigin],
     lvc_path_len: Pointer[Int32, MutUntrackedOrigin],
-    lvc_camis: Pointer[CamisLightRecord, MutUntrackedOrigin],   # _VCM_CAMIS records, parallel to lvc
     mis_vc_weight_factor: Float32,
     mis_vm_weight_factor: Float32,
     inter_scratch: Pointer[Intersection, MutUntrackedOrigin],
@@ -84,7 +81,7 @@ def _bdpt_emit_light_paths_gpu(
     var scratch = inter_scratch.unsafe_offset(k)
     var pass_wl = pass_wavelengths(pass_idx)
     _bdpt_trace_light_path[True](sd, pcg, has_med, default_emit_med, scratch, lvc, k, lvc_path_len,
-                                 mis_vc_weight_factor, mis_vm_weight_factor, pass_wl, lvc_camis)
+                                 mis_vc_weight_factor, mis_vm_weight_factor, pass_wl)
 
 @__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
 @__llvm_metadata(`nvvm.minctasm`=SIMDLength(MINCTA_VCM_SPLAT))
@@ -106,8 +103,6 @@ def _bdpt_splat_light_paths_gpu(
     film_filter: FilmFilter,
     sd: SceneView,
     splat_clamp: Float32,   # pbrt's per-splat clamp, scaled by n_pix / n_light_paths
-    # _VCM_CAMIS: see _bdpt_merge_from_cache's matching parameter.
-    lvc_camis: Pointer[CamisLightRecord, MutUntrackedOrigin] = Pointer[CamisLightRecord, MutUntrackedOrigin].unsafe_dangling(),
 ):
     """GPU t=1 light tracing: one thread per light path, splatting each of
     its vertices onto the film through the same `_bdpt_connect_to_camera`"""
@@ -129,7 +124,7 @@ def _bdpt_splat_light_paths_gpu(
             lvc[unsafe_offset=base + local], sd, scratch, c2w,
             w2c, c2r, Int32(Int(fw_dp)), Int32(Int(fh_dp)), px_scale,
             Float32(n_light_paths), mis_vm_weight_factor,
-            lvc, lvc_camis, base + local)
+            lvc, base + local)
         if r[0]:
             var (cr, cg, cb) = spectral_sample_to_rgb(
                 spectral_coeffs, Int(spectral_res_dp), spectral_cie_x, spectral_cie_y,
@@ -155,7 +150,6 @@ def _bdpt_camera_connect_gpu(
     inter_scratch: Pointer[Intersection, MutUntrackedOrigin],
     lvc: Pointer[BDPTVertex, MutUntrackedOrigin],
     lvc_path_len: Pointer[Int32, MutUntrackedOrigin],
-    lvc_camis: Pointer[CamisLightRecord, MutUntrackedOrigin],   # _VCM_CAMIS records, parallel to lvc
     merge_next: Pointer[Int32, MutUntrackedOrigin],
     merge_heads: Pointer[Int32, MutUntrackedOrigin],
     merge_inv_cell: Float32,
@@ -197,8 +191,7 @@ def _bdpt_camera_connect_gpu(
     var (contrib, contrib_merge, alb, visit_naive, visit_footprint, visit_thin) = _bdpt_trace_camera_and_connect[True](
         r2c, c2w, px, py, sd, pcg, has_med, scratch, lvc, pix, Int(lvc_path_len[unsafe_offset=pix]),
         merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm,
-        px_scale, mis_vc_weight_factor, mis_vm_weight_factor, n_light_paths_f, pass_wl, film_filter,
-        lvc_camis=lvc_camis)
+        px_scale, mis_vc_weight_factor, mis_vm_weight_factor, n_light_paths_f, pass_wl, film_filter)
     # Benchmark instrumentation only -- see
     # _bdpt_merge_from_cache's docstring paragraph.
     visit_accum[unsafe_offset=pix*3]   += Float32(visit_naive)
@@ -299,11 +292,9 @@ def _bdpt_light_path_bounce_gpu(
     var pcg = PCG32(UInt64(0), UInt64(0))
     pcg.state = st.pcg_state
     pcg.inc = st.pcg_inc
-    # No _VCM_CAMIS on the wavefront driver (see its camera twin).
-    var camis_l = camis_light_carry_off()
     var cont = _bdpt_light_path_bounce[True](
         sd, pcg, has_med, results[unsafe_offset=k], lvc, k, mis_vc_weight_factor, mis_vm_weight_factor,
-        st, camis_l, Pointer[CamisLightRecord, MutUntrackedOrigin].unsafe_dangling(),
+        st,
     )
     lvc_path_len[unsafe_offset=k] = Int32(st.n_verts)
     st.active = Int8(1) if cont else Int8(0)
@@ -407,9 +398,6 @@ def _bdpt_camera_path_bounce_gpu(
     var pcg = PCG32(UInt64(0), UInt64(0))
     pcg.state = st.pcg_state
     pcg.inc = st.pcg_inc
-    var camis = CamisCamCarry(False, Int32(0), Float32(0), Float32(0), Float32(0), Float32(0), Float32(0))
-    var camis_recs = Array[CamisCamRecord, _CAMIS_CAM_RECS](
-        fill=CamisCamRecord(Float32(0), Float32(0), Float32(0), Float32(0), Float32(0)))
     var visit_naive = Int32(0)
     var visit_footprint = Int32(0)
     var visit_thin = Int32(0)
@@ -418,7 +406,7 @@ def _bdpt_camera_path_bounce_gpu(
         sd, pcg, has_med, results[unsafe_offset=pix], results.unsafe_offset(pix), lvc, pix, Int(lvc_path_len[unsafe_offset=pix]),
         merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm,
         mis_vc_weight_factor, mis_vm_weight_factor,
-        st, visit_naive, visit_footprint, visit_thin, camis, camis_recs,
+        st, visit_naive, visit_footprint, visit_thin,
         defer_shadow_rays != Int8(0), shadow_rays, shadow_pending, shadow_valid, shadow_seg_med,
     )
     st.active = Int8(1) if cont else Int8(0)

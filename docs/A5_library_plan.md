@@ -84,5 +84,4 @@ Each step is one or a few commits. Unit tests stay green and renders stay identi
 ## Open questions
 
 - Whether kernel compile time stays acceptable with traits across packages. Step 7 measures it on the B580.
-- How much of the ReSTIR code stays; it is large and little used.
-- CAMIS is compiled out by default and threads through every weight. Keep it behind `StrategySet` or drop it.
+- ReSTIR stays for now (user, 2026-10-31): it is woven through 18 modules, so it would be a re-port from history, not a revert.

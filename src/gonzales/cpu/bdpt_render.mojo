@@ -6,7 +6,6 @@ from std.memory.alloc import unsafe_alloc
 from gonzales.transport.medium_interface import default_emit_medium
 from gonzales.core.geometry import RGB, PI
 from gonzales.scene.shapes.primitives import Intersection
-from gonzales.paths.vcm_camis import CamisLightRecord
 from gonzales.scene.accel.bvh import SceneView, _scene_bounding_sphere
 from gonzales.core.sampling import film_filter_of
 from gonzales.core.rng import PCG32
@@ -17,7 +16,6 @@ from gonzales.integrators.outputs import finish_render
 from gonzales.core.spectrum import SpectralSample, pass_wavelengths, spectral_sample_to_rgb
 from gonzales.paths.bdpt_vertex import _BDPT_MAX_VERTS, BDPTVertex
 from gonzales.paths.vcm_grid import _VCM_MN_STRIDE, _VCM_HEADS_SIZE, _vcm_grid_inv_cell, _bdpt_build_merge_grid, vcm_merge_radius
-from gonzales.paths.vcm_strategy import _CAMIS_LVC_PER_SLOT
 from gonzales.paths.bdpt_connect import _bdpt_splat_filtered, _bdpt_connect_to_camera
 from gonzales.integrators.vcm.camera import _bdpt_trace_camera_and_connect
 from gonzales.integrators.vcm.light import _bdpt_trace_light_path
@@ -99,9 +97,6 @@ def _bdpt_render_core(
     var (_scene_center, scene_radius) = _scene_bounding_sphere(sd)
     var merge_heads = unsafe_alloc[Int32](_VCM_HEADS_SIZE)   # heads | counts | fine levels, see _VCM_FINE_LEVELS
     var merge_next = unsafe_alloc[Int32](max(lvc_cap, 1) * _VCM_MN_STRIDE)
-    # CAMIS light records (vcm_camis.CamisLightRecord), slot for slot with
-    # `lvc`. A single dummy element when the hybrid is compiled out.
-    var lvc_camis = unsafe_alloc[CamisLightRecord](max(lvc_cap * _CAMIS_LVC_PER_SLOT, 1))
     # t=1 splat records: one slot per potential light vertex.
     # Continuous raster position per splat record (x < 0 marks an empty slot)
     var splat_fx = unsafe_alloc[Float32](max(n_light_paths_merge * _BDPT_MAX_VERTS, 1))
@@ -136,7 +131,7 @@ def _bdpt_render_core(
                               UInt64(si * 2654435761 + 1))
             _bdpt_trace_light_path[False](sd, lpcg, has_med, default_emit_med,
                                          scratch_light.unsafe_offset(lp_idx), lvc, lp_idx, lvc_path_len,
-                                         mis_vc_weight_factor, mis_vm_weight_factor, pass_wl, lvc_camis)
+                                         mis_vc_weight_factor, mis_vm_weight_factor, pass_wl)
 
         parallelize(emit_light_path, n_light_paths_merge)
 
@@ -152,7 +147,7 @@ def _bdpt_render_core(
                     lvc[unsafe_offset=base + local], sd, scratch_light.unsafe_offset(lp_idx), c2w,
                     w2c, c2r, Int32(fw), Int32(fh), px_scale,
                     Float32(n_light_paths_merge), mis_vm_weight_factor,
-                    lvc, lvc_camis, base + local)
+                    lvc, base + local)
                 splat_fx[unsafe_offset=base + local] = r[1] if r[0] else Float32(-1)
                 splat_fy[unsafe_offset=base + local] = r[2]
                 splat_val[unsafe_offset=base + local] = r[3]
@@ -184,8 +179,7 @@ def _bdpt_render_core(
                 merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm,
                 px_scale, mis_vc_weight_factor, mis_vm_weight_factor, Float32(n_light_paths_merge), pass_wl,
                 film_filter_of(psc[unsafe_offset=0].filter_type, psc[unsafe_offset=0].filter_sigma,
-                               psc[unsafe_offset=0].filter_support_x, psc[unsafe_offset=0].filter_support_y),
-                lvc_camis=lvc_camis)
+                               psc[unsafe_offset=0].filter_support_x, psc[unsafe_offset=0].filter_support_y))
             # ── Output boundary: spectral transport -> RGB film ──────────
             var (cr, cg, cb) = spectral_sample_to_rgb(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, contrib, pass_wl)
             buf[unsafe_offset=pix] += RGB(cr, cg, cb)
@@ -201,7 +195,7 @@ def _bdpt_render_core(
     _ = prog.finish()
 
     scratch_light.unsafe_free(); scratch_cam.unsafe_free(); lvc.unsafe_free(); lvc_path_len.unsafe_free()
-    merge_heads.unsafe_free(); merge_next.unsafe_free(); lvc_camis.unsafe_free()
+    merge_heads.unsafe_free(); merge_next.unsafe_free()
     # Were never freed (the old splat_pix leaked the same way), once per render.
     splat_fx.unsafe_free(); splat_fy.unsafe_free(); splat_val.unsafe_free()
 

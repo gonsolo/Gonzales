@@ -105,24 +105,6 @@ comptime _MERGE_COVERAGE = True
 comptime _VCM_VISIT_INSTRUMENT = False
 
 
-comptime _VCM_CAMIS = False
-
-
-# Camera CAMIS records per path: one per stored vertex (_BDPT_MAX_VERTS bounds
-# those), or a 1-element stand-in when the hybrid is compiled out.
-comptime _CAMIS_CAM_RECS = _BDPT_MAX_VERTS if _VCM_CAMIS else 1
-
-
-# Light CAMIS records per `lvc` slot: 1, or 0 when compiled out (the drivers
-# then allocate a single dummy element).
-comptime _CAMIS_LVC_PER_SLOT = 1 if _VCM_CAMIS else 0
-
-
-# Stage S3 debug identity check: force every CAMIS c to 1 at every weight
-# site (camis_eval_*'s own force_c1 argument). With this True, a
-comptime _CAMIS_FORCE_C1 = False
-
-
 @always_inline
 def _vcm_budget_active(ref sd: SceneView) -> Bool:
     """Whether this pass thins by the per-cell budget (--vcm-budget, from the

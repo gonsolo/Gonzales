@@ -47,10 +47,8 @@ from gonzales.core.rng import PCG32
 from gonzales.core.sampling import film_filter_of
 from gonzales.core.spectrum import sample_wavelengths, null_spectral_handle
 from std.collections import Array
-from gonzales.paths.vcm_camis import CamisCamRecord, camis_cam_carry_init
 from gonzales.paths.bdpt_vertex import BDPTVertex, _BDPT_MAX_DEPTH
 from gonzales.integrators.vcm.camera import _bdpt_trace_camera_and_connect, _bdpt_camera_path_init, _bdpt_camera_path_bounce
-from gonzales.paths.vcm_strategy import _CAMIS_CAM_RECS
 
 comptime EPS: Float32 = 1e-3
 
@@ -203,10 +201,6 @@ def test_wavefront_split_matches_original_camera_path_closely() raises:
     pcg_bounce.inc = state.pcg_inc
 
 
-    # CAMIS state (inert unless _VCM_CAMIS), threaded like the carries.
-    var camis = camis_cam_carry_init()
-    var camis_recs = Array[CamisCamRecord, _CAMIS_CAM_RECS](
-        fill=CamisCamRecord(Float32(0), Float32(0), Float32(0), Float32(0), Float32(0)))
     # Benchmark instrumentation only (bdpt_*.mojo's
     # _bdpt_merge_from_cache docstring) -- not exercised by this test, just
     # needs a real lvalue to satisfy the shared function's signature.
@@ -231,7 +225,7 @@ def test_wavefront_split_matches_original_camera_path_closely() raises:
             Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
             Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
             Float32(0), Float32(0), Float32(0), Float32(0), Float32(0),
-            state, visit_naive, visit_footprint, visit_thin, camis, camis_recs,
+            state, visit_naive, visit_footprint, visit_thin,
         )
         active = Int8(1) if cont else Int8(0)
 

@@ -10,7 +10,6 @@ from std.memory.alloc import unsafe_alloc
 from gonzales.transport.medium_interface import default_emit_medium
 from gonzales.core.geometry import RGB, PI
 from gonzales.scene.shapes.primitives import Intersection
-from gonzales.paths.vcm_camis import CamisLightRecord
 from gonzales.scene.accel.bvh import SceneView, _scene_bounding_sphere
 from gonzales.core.sampling import film_filter_of, FilmFilter
 from gonzales.scene.appearance.footprint import camera_footprint
@@ -26,7 +25,7 @@ from gonzales.integrators.vcm.light import VCMLightPathState
 from gonzales.core.spectrum import SpectralSample
 from gonzales.gpu.vcm_rt import VcmRt
 from gonzales.paths.vcm_grid import _VCM_MN_STRIDE, _VCM_HEADS_SIZE, _vcm_grid_inv_cell, _camera_typical_distance, vcm_merge_radius
-from gonzales.paths.vcm_strategy import _VCM_VISIT_INSTRUMENT, _VCM_CAMIS, _CAMIS_LVC_PER_SLOT, _VCM_FOOTPRINT_PIXELS
+from gonzales.paths.vcm_strategy import _VCM_VISIT_INSTRUMENT, _VCM_FOOTPRINT_PIXELS
 from gonzales.integrators.film import _vcm_finalize_one_pixel
 from gonzales.gpu.vcm_kernels import (
     _bdpt_emit_light_paths_gpu, _bdpt_splat_light_paths_gpu, _bdpt_camera_connect_gpu,
@@ -84,7 +83,6 @@ struct VcmGpu(Movable):
     var stat_b: DeviceBuffer[DType.float32]
     var budget_red: DeviceBuffer[DType.float32]
     var merge_next: DeviceBuffer[DType.uint8]
-    var lvc_camis: DeviceBuffer[DType.uint8]
     var inter_light: DeviceBuffer[DType.uint8]
     var inter_cam: DeviceBuffer[DType.uint8]
     var accum: DeviceBuffer[DType.uint8]         # connect + t=1 splats of a batch render
@@ -154,8 +152,6 @@ struct VcmGpu(Movable):
         self.stat_b = ctx.enqueue_create_buffer[DType.float32](stat_n)
         self.budget_red = ctx.enqueue_create_buffer[DType.float32](2)
         self.merge_next = ctx.enqueue_create_buffer[DType.uint8](max(self.lvc_cap, 1) * _VCM_MN_STRIDE * size_of[Int32]())
-        # CAMIS light records, slot for slot with lvc -- one dummy element when the hybrid is compiled out.
-        self.lvc_camis = ctx.enqueue_create_buffer[DType.uint8](max(self.lvc_cap * _CAMIS_LVC_PER_SLOT, 1) * size_of[CamisLightRecord]())
         self.inter_light = ctx.enqueue_create_buffer[DType.uint8](max(self.n_light_paths, 1) * size_of[Intersection]())
         self.inter_cam = ctx.enqueue_create_buffer[DType.uint8](self.n_pix * size_of[Intersection]())
         self.accum = ctx.enqueue_create_buffer[DType.uint8](self.n_pix * 3 * size_of[Float32]())
@@ -294,12 +290,11 @@ struct VcmGpu(Movable):
         """t=1 light tracing after the camera paths, then --vcm-budget's lambda for the next pass."""
         comptime block_size = 256
         ref ctx = self.handle[].ctx
-        var lvc_camis = self.lvc_camis.unsafe_ptr().unsafe_bitcast[CamisLightRecord]()
         ctx.enqueue_function[_bdpt_splat_light_paths_gpu](
             film, self.lvc.unsafe_ptr().unsafe_bitcast[BDPTVertex](), self.path_len.unsafe_ptr().unsafe_bitcast[Int32](),
             Int64(self.n_light_paths), self.inter_light.unsafe_ptr().unsafe_bitcast[Intersection](), _f32(self.w2c),
             _f32(self.c2r), _f32(self.c2w), Int64(self.fw), Int64(self.fh), self.px_scale, p.mis_vm, p.filt, p.vsd,
-            self.sample_clamp * Float32(self.n_pix) / Float32(max(self.n_light_paths, 1)), lvc_camis,
+            self.sample_clamp * Float32(self.n_pix) / Float32(max(self.n_light_paths, 1)),
             grid_dim=ceildiv(max(self.n_light_paths, 1), block_size), block_dim=block_size)
         if self.budget:
             # The budget is the merge work the fixed cap would have spent, sum Q min(n, cap).
@@ -334,16 +329,15 @@ struct VcmGpu(Movable):
         var p = self._begin_pass(psc, si)
         var lvc = self.lvc.unsafe_ptr().unsafe_bitcast[BDPTVertex]()
         var path_len = self.path_len.unsafe_ptr().unsafe_bitcast[Int32]()
-        var lvc_camis = self.lvc_camis.unsafe_ptr().unsafe_bitcast[CamisLightRecord]()
         ctx.enqueue_function[_bdpt_emit_light_paths_gpu](
-            lvc, path_len, lvc_camis, p.mis_vc, p.mis_vm, self.inter_light.unsafe_ptr().unsafe_bitcast[Intersection](),
+            lvc, path_len, p.mis_vc, p.mis_vm, self.inter_light.unsafe_ptr().unsafe_bitcast[Intersection](),
             Int64(self.n_light_paths), self.default_emit_med, p.pass_seed, Int64(si), _f32(self.c2w), self.px_scale, p.vsd,
             grid_dim=ceildiv(max(self.n_light_paths, 1), block_size), block_dim=block_size)
         self._build_grid(p)
         ctx.enqueue_function[_bdpt_camera_connect_gpu](
             film, _f32(self.accum_merge), albedo, _f32(self.visit_accum), Int64(self.n_pix), Int64(self.fw),
             _f32(self.r2c), _f32(self.c2w), self.inter_cam.unsafe_ptr().unsafe_bitcast[Intersection](),
-            lvc, path_len, lvc_camis, p.merge_next, p.merge_heads, p.merge_inv_cell, p.merge_r2, p.merge_norm, self.px_scale,
+            lvc, path_len, p.merge_next, p.merge_heads, p.merge_inv_cell, p.merge_r2, p.merge_norm, self.px_scale,
             p.mis_vc, p.mis_vm, Float32(self.n_light_paths), p.filt, p.base_seed, Int64(si), p.vsd, self.sample_clamp,
             grid_dim=ceildiv(self.n_pix, block_size), block_dim=block_size)
         self._end_pass(p, film, verbose)
@@ -475,10 +469,6 @@ def vcm_render_gpu(
 ) -> Int32:
     """A batch VCM render: n_spp passes of VcmGpu, then the image written as the scene asks. `wavefront` runs the
     staged kernels, tracing through `rt` when it is active."""
-    comptime if _VCM_CAMIS:
-        if wavefront:   # the camera's CAMIS records would have to live in VCMCameraPathState across launches
-            print("VCM (GPU wavefront): not supported with _VCM_CAMIS; use --gpu --vcm")
-            return Int32(-1)
     var fw = Int(psc[unsafe_offset=0].film_w)
     var fh = Int(psc[unsafe_offset=0].film_h)
     var n_pix = fw * fh

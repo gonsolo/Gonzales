@@ -7,10 +7,6 @@ from std.atomic import Atomic
 from std.memory import bitcast
 from gonzales.core.geometry import Point3f, Vec3f, dot, PI, INV_FOUR_PI
 from gonzales.scene.shapes.primitives import Intersection
-from gonzales.paths.vcm_camis import (
-    CamisCamRecord, CamisCamCarry, CamisLightRecord, CAMIS_IN_CLASS, CAMIS_TAN_1DEG, camis_eval_connect,
-    camis_eval_connect_s1, camis_eval_splat,
-)
 from gonzales.scene.accel.bvh import SceneView
 from gonzales.core.sampling import power_heuristic, FilmFilter, filter_eval_2d, filter_integral_2d, sample_disk_concentric
 from gonzales.core.rng import PCG32
@@ -19,8 +15,7 @@ from gonzales.paths.bdpt_vertex import _BDPT_MAX_VERTS, BDPTVertex
 from gonzales.scene.appearance.materials import LobeKind
 from gonzales.paths.bdpt_nee import _visible_transmittance
 from gonzales.paths.bdpt_eval import _vcm_free_flight, _vcm_cos_at, _eval_vertex_spectral, _bdpt_vertex_pdfs, _bdpt_vertex_mis_scoped, _bdpt_connect_pair_weighted
-from gonzales.paths.vcm_strategy import _vcm_too_long, _vcm_keep, _VCM_CAMIS, _CAMIS_CAM_RECS, _CAMIS_FORCE_C1, _vcm_eta_scale, _vcm_eta_at, _vcm_on_fibre, _vcm_past_depth, _vcm_past_cache
-from gonzales.paths.vcm_camis import _camis_gather_light
+from gonzales.paths.vcm_strategy import _vcm_too_long, _vcm_keep, _vcm_eta_scale, _vcm_eta_at, _vcm_on_fibre, _vcm_past_depth, _vcm_past_cache
 
 
 @always_inline
@@ -128,10 +123,7 @@ def _bdpt_connect_to_camera(
     px_scale: Float32,
     n_light_paths_f: Float32,
     mis_vm_weight_factor: Float32,
-    # _VCM_CAMIS: lv's own light-path records, gathered via
-    # _camis_gather_light from `lvc_camis` at slot `k` -- see
     lvc: Pointer[BDPTVertex, MutUntrackedOrigin] = Pointer[BDPTVertex, MutUntrackedOrigin].unsafe_dangling(),
-    lvc_camis: Pointer[CamisLightRecord, MutUntrackedOrigin] = Pointer[CamisLightRecord, MutUntrackedOrigin].unsafe_dangling(),
     k: Int = 0,
 ) -> Tuple[Bool, Float32, Float32, SpectralSample]:
     """The t=1 strategy: connect a LIGHT-subpath vertex directly to the
@@ -199,31 +191,8 @@ def _bdpt_connect_to_camera(
     var camera_pdf_a = image_to_surface * _vcm_free_flight(sd, lv, Tr)
     var eta_lv_splat = _vcm_eta_at(sd, lv, mis_vm_weight_factor)
     var mis_weight: Float32
-    comptime if _VCM_CAMIS:
-        var light_arr = lvc_camis[unsafe_offset=k]
-        if (light_arr.flags & CAMIS_IN_CLASS) != Int32(0):
-            var lp_idx = k // _BDPT_MAX_VERTS
-            var base = lp_idx * _BDPT_MAX_VERTS
-            var lam = k % _BDPT_MAX_VERTS
-            var origin_in_class = (lvc_camis[unsafe_offset=base].flags & CAMIS_IN_CLASS) != Int32(0)
-            var lr = _camis_gather_light[_CAMIS_CAM_RECS](lvc, lvc_camis, base, lam)
-            # t=1's own "r": there is no stored camera subpath, so Eq. 17's
-            # radius uses the splatted light vertex's OWN distance to the
-            var r_splat = dist * CAMIS_TAN_1DEG
-            var log_k_splat = log(PI * r_splat * r_splat)
-            mis_weight = camis_eval_splat[_CAMIS_CAM_RECS](
-                light_arr, lr[0], lr[2],
-                lr[1], -log(lv.dVCM),
-                lr[3], origin_in_class,
-                lv.dVCM, lv.dVC, lv.dVM, eta_lv_splat,
-                log_k_splat, camera_pdf_a, rev_pdf_w, n_light_paths_f,
-                n_light_paths_f, True, _CAMIS_FORCE_C1)
-        else:
-            var w_light = (camera_pdf_a * inv_n) * (eta_lv_splat + lv.dVCM + lv.dVC * rev_pdf_w)
-            mis_weight = Float32(1) / (w_light + Float32(1))
-    else:
-        var w_light = (camera_pdf_a * inv_n) * (eta_lv_splat + lv.dVCM + lv.dVC * rev_pdf_w)
-        mis_weight = Float32(1) / (w_light + Float32(1))
+    var w_light = (camera_pdf_a * inv_n) * (eta_lv_splat + lv.dVCM + lv.dVC * rev_pdf_w)
+    mis_weight = Float32(1) / (w_light + Float32(1))
     contrib = contrib * mis_weight
 
     return (True, pr[1], pr[2], contrib)
@@ -238,11 +207,6 @@ def _bdpt_connect_to_cache(
     path_len: Int,
     mis_vm_weight_factor: Float32,
     cam_count: Int,   # cv's non-delta interior-vertex count (see _vcm_depth)
-    # _VCM_CAMIS: see _bdpt_merge_from_cache's matching parameters.
-    camis: CamisCamCarry = CamisCamCarry(False, Int32(0), Float32(0), Float32(0), Float32(0), Float32(0), Float32(0)),
-    camis_recs: Array[CamisCamRecord, _CAMIS_CAM_RECS] = Array[CamisCamRecord, _CAMIS_CAM_RECS](
-        fill=CamisCamRecord(Float32(0), Float32(0), Float32(0), Float32(0), Float32(0))),
-    lvc_camis: Pointer[CamisLightRecord, MutUntrackedOrigin] = Pointer[CamisLightRecord, MutUntrackedOrigin].unsafe_dangling(),
     n_light_paths_f: Float32 = Float32(0),
 ) -> SpectralSample:
     """VCM Stage 2b (2026-07-10): connect eye vertex `cv` to EVERY vertex of
@@ -263,7 +227,7 @@ def _bdpt_connect_to_cache(
                 continue
             took_unweighted = True
         sum += _connect(cv, lv, sd, has_med, scratch, mis_vm_weight_factor,
-            camis, camis_recs, cam_count - 1, lvc, lvc_camis, lp_idx * _BDPT_MAX_VERTS + local, n_light_paths_f, long_path=long_path)
+            cam_count - 1, lvc, lp_idx * _BDPT_MAX_VERTS + local, n_light_paths_f, long_path=long_path)
     return sum
 
 def _bdpt_connect_to_cache_deferred(
@@ -278,11 +242,6 @@ def _bdpt_connect_to_cache_deferred(
     shadow_valid: Pointer[Int8, MutUntrackedOrigin],
     shadow_seg_med: Pointer[Int32, MutUntrackedOrigin],
     cam_count: Int,
-    # _VCM_CAMIS: see _bdpt_merge_from_cache's matching parameters.
-    camis: CamisCamCarry = CamisCamCarry(False, Int32(0), Float32(0), Float32(0), Float32(0), Float32(0), Float32(0)),
-    camis_recs: Array[CamisCamRecord, _CAMIS_CAM_RECS] = Array[CamisCamRecord, _CAMIS_CAM_RECS](
-        fill=CamisCamRecord(Float32(0), Float32(0), Float32(0), Float32(0), Float32(0))),
-    lvc_camis: Pointer[CamisLightRecord, MutUntrackedOrigin] = Pointer[CamisLightRecord, MutUntrackedOrigin].unsafe_dangling(),
     n_light_paths_f: Float32 = Float32(0),
 ):
     """Task #163 stage 5: Vulkan-RT-batched counterpart to
@@ -304,7 +263,7 @@ def _bdpt_connect_to_cache_deferred(
                 continue
             took_unweighted = True
         var (contrib, valid) = _connect_unweighted(cv, lv, sd, mis_vm_weight_factor,
-            camis, camis_recs, cam_count - 1, lvc, lvc_camis, base + local, n_light_paths_f)
+            cam_count - 1, lvc, base + local, n_light_paths_f)
         if not valid:
             shadow_valid[unsafe_offset=base + local] = Int8(0)
             continue
@@ -331,14 +290,8 @@ def _connect(
     has_med: Bool,
     scratch: Pointer[Intersection, MutUntrackedOrigin],
     mis_vm_weight_factor: Float32,
-    # _VCM_CAMIS: a default of in_class=False (NOT camis_cam_carry_init(),
-    # whose default is True) so a call site that forgets to pass real state
-    camis: CamisCamCarry = CamisCamCarry(False, Int32(0), Float32(0), Float32(0), Float32(0), Float32(0), Float32(0)),
-    camis_recs: Array[CamisCamRecord, _CAMIS_CAM_RECS] = Array[CamisCamRecord, _CAMIS_CAM_RECS](
-        fill=CamisCamRecord(Float32(0), Float32(0), Float32(0), Float32(0), Float32(0))),
     num_cam_scat: Int = 0,
     lvc: Pointer[BDPTVertex, MutUntrackedOrigin] = Pointer[BDPTVertex, MutUntrackedOrigin].unsafe_dangling(),
-    lvc_camis: Pointer[CamisLightRecord, MutUntrackedOrigin] = Pointer[CamisLightRecord, MutUntrackedOrigin].unsafe_dangling(),
     k: Int = 0,
     n_light_paths_f: Float32 = Float32(0),
     long_path: Bool = False,
@@ -355,7 +308,7 @@ def _connect(
         if Tr.is_black():
             return SpectralSample(Float32(0))
     var (contrib, valid) = _connect_unweighted(cv, lv, sd, mis_vm_weight_factor,
-        camis, camis_recs, num_cam_scat, lvc, lvc_camis, k, n_light_paths_f, Tr, long_path)
+        num_cam_scat, lvc, k, n_light_paths_f, Tr, long_path)
     if not valid or contrib.is_black():
         return SpectralSample(Float32(0))
     if not has_med:
@@ -369,12 +322,8 @@ def _connect_unweighted(
     lv: BDPTVertex,  # light-subpath vertex (including light point itself)
     ref sd: SceneView,
     mis_vm_weight_factor: Float32,
-    camis: CamisCamCarry = CamisCamCarry(False, Int32(0), Float32(0), Float32(0), Float32(0), Float32(0), Float32(0)),
-    camis_recs: Array[CamisCamRecord, _CAMIS_CAM_RECS] = Array[CamisCamRecord, _CAMIS_CAM_RECS](
-        fill=CamisCamRecord(Float32(0), Float32(0), Float32(0), Float32(0), Float32(0))),
     num_cam_scat: Int = 0,
     lvc: Pointer[BDPTVertex, MutUntrackedOrigin] = Pointer[BDPTVertex, MutUntrackedOrigin].unsafe_dangling(),
-    lvc_camis: Pointer[CamisLightRecord, MutUntrackedOrigin] = Pointer[CamisLightRecord, MutUntrackedOrigin].unsafe_dangling(),
     k: Int = 0,
     n_light_paths_f: Float32 = Float32(0),
     tr: SpectralSample = SpectralSample(Float32(1)),
@@ -418,7 +367,7 @@ def _connect_unweighted(
     #
     var contrib = cv.beta * lv.beta * f_combined * (Float32(1) / dist2)
     contrib *= _bdpt_connect_mis_weight(cv, lv, sd, dir, dist2, mis_vm_weight_factor,
-        camis, camis_recs, num_cam_scat, lvc, lvc_camis, k, n_light_paths_f, tr, long_path)
+        num_cam_scat, lvc, k, n_light_paths_f, tr, long_path)
     return (contrib, True)
 
 
@@ -430,11 +379,8 @@ def _bdpt_connect_mis_weight(
     dir: Vec3f,        # unit direction cv -> lv
     dist2: Float32,    # |lv - cv|^2
     mis_vm_weight_factor: Float32,
-    camis: CamisCamCarry,
-    camis_recs: Array[CamisCamRecord, _CAMIS_CAM_RECS],
     num_cam_scat: Int,
     lvc: Pointer[BDPTVertex, MutUntrackedOrigin],
-    lvc_camis: Pointer[CamisLightRecord, MutUntrackedOrigin],
     k: Int,
     n_light_paths_f: Float32,
     tr: SpectralSample,
@@ -464,35 +410,6 @@ def _bdpt_connect_mis_weight(
         var camera_bsdf_dir_pdf_a = camera_bsdf_dir_pdf_w * cos_lv / dist2 * _vcm_free_flight(sd, lv, tr)
         var light_bsdf_dir_pdf_a = light_bsdf_dir_pdf_w * cos_cv / dist2 * _vcm_free_flight(sd, cv, tr)
         var eta_cv = _vcm_eta_at(sd, cv, mis_vm_weight_factor)
-        comptime if _VCM_CAMIS:
-            if camis.in_class:
-                if lv.is_light == Int32(1):
-                    var origin = lvc_camis[unsafe_offset=k]
-                    if (origin.flags & CAMIS_IN_CLASS) != Int32(0):
-                        return camis_eval_connect_s1[_CAMIS_CAM_RECS](
-                            camis, camis_recs, num_cam_scat,
-                            cv.dVCM, cv.dVC, cv.dVM, eta_cv, log(_vcm_keep(sd, cv.pos)),
-                            origin.log_pa_rev, lv.pdf_fwd, True,
-                            camera_bsdf_dir_pdf_a, camera_bsdf_rev_pdf_w, light_bsdf_dir_pdf_a,
-                            n_light_paths_f, True, _CAMIS_FORCE_C1)
-                else:
-                    var light_arr = lvc_camis[unsafe_offset=k]
-                    if (light_arr.flags & CAMIS_IN_CLASS) != Int32(0):
-                        var lp_idx = k // _BDPT_MAX_VERTS
-                        var base = lp_idx * _BDPT_MAX_VERTS
-                        var lam = k % _BDPT_MAX_VERTS
-                        var origin_in_class = (lvc_camis[unsafe_offset=base].flags & CAMIS_IN_CLASS) != Int32(0)
-                        var lr = _camis_gather_light[_CAMIS_CAM_RECS](lvc, lvc_camis, base, lam)
-                        var eta_lv_c = _vcm_eta_at(sd, lv, mis_vm_weight_factor)
-                        return camis_eval_connect[_CAMIS_CAM_RECS, _CAMIS_CAM_RECS](
-                            camis, camis_recs, num_cam_scat,
-                            cv.dVCM, cv.dVC, cv.dVM, eta_cv, log(_vcm_keep(sd, cv.pos)),
-                            light_arr, lr[0], lr[2],
-                            lr[1], -log(lv.dVCM),
-                            lr[3], origin_in_class,
-                            lv.dVCM, lv.dVC, lv.dVM, eta_lv_c,
-                            camera_bsdf_dir_pdf_a, camera_bsdf_rev_pdf_w, light_bsdf_dir_pdf_a, light_bsdf_rev_pdf_w,
-                            n_light_paths_f, True, _CAMIS_FORCE_C1)
         var w_light: Float32
         if lv.is_light == Int32(1):
             # s=1: this connection IS VCM's direct-light strategy for an area

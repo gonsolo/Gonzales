@@ -18,10 +18,6 @@ from gonzales.paths.vcm_mis import (
     vcm_arrival_carries, vcm_scatter_carries,
     vcm_env_escape_weight,
 )
-from gonzales.paths.vcm_camis import (
-    CamisCamRecord, CamisCamCarry, camis_cam_carry_init, camis_cam_arrive, camis_cam_scatter,
-    CamisLightRecord, camis_clamp_log_p, camis_eval_emission_hit,
-)
 from gonzales.scene.accel.bvh import traverse_dispatch
 from gonzales.scene.accel.bvh import SceneView, test_spheres, _scene_bounding_sphere, _eval_infinite_light_and_pdf, sphere_light_cone_pdf, _sample_infinite_light_nee, light_path_pick_pdf
 from gonzales.core.sampling import power_heuristic, camera_ray_from_film_xy, FilmFilter, film_filter_offset, ThinLens
@@ -42,7 +38,7 @@ from gonzales.paths.bdpt_eval import (
     _vcm_sphere_slot, _vcm_infinite_slot, _vcm_nee_surface, _vertex_ctx, _bdpt_vertex_mis_scoped, _vcm_mnee,
     _vcm_mnee_hit_term,
 )
-from gonzales.paths.vcm_strategy import vcm_camera_only, _vcm_depth, _VCM_MAX_STORED, _vcm_keep, _VCM_CAMIS, _CAMIS_CAM_RECS, _CAMIS_FORCE_C1, _vcm_eta_scale, _vcm_eta_at, _vcm_fibre_scale
+from gonzales.paths.vcm_strategy import vcm_camera_only, _vcm_depth, _VCM_MAX_STORED, _vcm_keep, _vcm_eta_scale, _vcm_eta_at, _vcm_fibre_scale
 from gonzales.paths.bdpt_connect import _bdpt_connect_to_cache, _bdpt_connect_to_cache_deferred
 from gonzales.paths.vcm_merge import _bdpt_merge_from_cache
 from gonzales.transport.surface import surface_hit
@@ -70,10 +66,6 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
     pass_wl: SampledWavelengths,
     film_filter: FilmFilter,
     start_med_idx: Int32 = Int32(-1),
-    # _VCM_CAMIS: the light subpaths' CAMIS records, parallel to `lvc`
-    # (vcm_camis.CamisLightRecord). Not read yet -- stage S3's weight sites
-    # will; plumbed now so S3 changes no signature.
-    lvc_camis: Pointer[CamisLightRecord, MutUntrackedOrigin] = Pointer[CamisLightRecord, MutUntrackedOrigin].unsafe_dangling(),
 ) -> Tuple[SpectralSample, SpectralSample, RGB, Int32, Int32, Int32]:
     """Trace one camera subpath from pixel (px,py). At each non-delta vertex,
     connect inline/synchronously to the shared Light Vertex Cache via"""
@@ -87,12 +79,6 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
     var visit_thin = Int32(0)
     if st.active == Int8(0):
         return (st.total, st.total_merge, st.first_alb, visit_naive, visit_footprint, visit_thin)
-    # CAMIS camera state (vcm_camis.mojo): live across the whole bounce loop,
-    # the same `mut` threading dvcm_carry uses. One element and never touched
-    # when _VCM_CAMIS is off.
-    var camis = camis_cam_carry_init()
-    var camis_recs = Array[CamisCamRecord, _CAMIS_CAM_RECS](
-        fill=CamisCamRecord(Float32(0), Float32(0), Float32(0), Float32(0), Float32(0)))
 
     for _ in range(_vcm_walk_limit(sd.vcmMaxDepth)):
         # The same intersect step _bdpt_camera_path_intersect_gpu performs;
@@ -108,8 +94,7 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
             sd, pcg, has_med, scratch[unsafe_offset=0], scratch, lvc, lp_idx, path_len,
             merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm,
             mis_vc_weight_factor, mis_vm_weight_factor,
-            st, visit_naive, visit_footprint, visit_thin, camis, camis_recs,
-            lvc_camis=lvc_camis, n_light_paths_f=n_light_paths_f):
+            st, visit_naive, visit_footprint, visit_thin, n_light_paths_f=n_light_paths_f):
             break
 
     return (st.total, st.total_merge, st.first_alb, visit_naive, visit_footprint, visit_thin)
@@ -243,7 +228,7 @@ def _vcm_scatter(
         dvc *= s.cos_out
         dvm *= s.cos_out
     else:
-        (dvcm, dvc, dvm) = vcm_scatter_carries[dvc0=_VCM_CAMIS](
+        (dvcm, dvc, dvm) = vcm_scatter_carries(
             dvcm, dvc, dvm, s.cos_out / s.pdf_fwd, s.pdf_fwd, s.pdf_rev,
             mis_vc_weight_factor, eta_x)
     return s
@@ -289,10 +274,7 @@ def _vcm_sss_walk[use_gpu: Bool](
             dvm = Float32(0)
             return ex
         dvc = inv_t * (a_vc * pdf_rev + a_vcm)
-        comptime if _VCM_CAMIS:
-            dvm = inv_t * (a_vm * pdf_rev + a_vcm)
-        else:
-            dvm = inv_t * (a_vm * pdf_rev + a_vcm * mis_vc)
+        dvm = inv_t * (a_vm * pdf_rev + a_vcm * mis_vc)
     return ex
 
 
@@ -327,7 +309,7 @@ def _vcm_sss_exit_scatter(
     ro = ex.x_o + rd * Float32(0.0002)
     var cos_out = abs(dot(rd.to_simd(), ex.n_o))
     beta *= SpectralSample(sss_boundary_lobe(cos_out, eta))
-    (dvcm, dvc, dvm) = vcm_scatter_carries[_VCM_CAMIS](dvcm, dvc, dvm, PI, cos_out / PI, Float32(1) - fr_dielectric(cos_out, eta),
+    (dvcm, dvc, dvm) = vcm_scatter_carries(dvcm, dvc, dvm, PI, cos_out / PI, Float32(1) - fr_dielectric(cos_out, eta),
                                                         mis_vc, Float32(0))   # an exit does not merge
     return cos_out
 
@@ -432,10 +414,6 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
     mut visit_naive: Int32,
     mut visit_footprint: Int32,
     mut visit_thin: Int32,
-    # _VCM_CAMIS camera state (vcm_camis.CamisCamCarry/CamisCamRecord), the
-    # records of every vertex stored so far. Untouched when the hybrid is compiled out.
-    mut camis: CamisCamCarry,
-    mut camis_recs: Array[CamisCamRecord, _CAMIS_CAM_RECS],
     # Task #163 stage 5: when set, the DIFFUSE branch's connect step queues
     # its shadow rays into these buffers (one _BDPT_MAX_VERTS-sized slice
     defer_shadow_rays: Bool = False,
@@ -443,10 +421,6 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
     shadow_pending: Pointer[SpectralSample, MutUntrackedOrigin] = Pointer[SpectralSample, MutUntrackedOrigin].unsafe_dangling(),
     shadow_valid: Pointer[Int8, MutUntrackedOrigin] = Pointer[Int8, MutUntrackedOrigin].unsafe_dangling(),
     shadow_seg_med: Pointer[Int32, MutUntrackedOrigin] = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
-    # _VCM_CAMIS: see _bdpt_trace_camera_and_connect's matching parameter.
-    lvc_camis: Pointer[CamisLightRecord, MutUntrackedOrigin] = Pointer[CamisLightRecord, MutUntrackedOrigin].unsafe_dangling(),
-    # _VCM_CAMIS: n_t in Eq. 17's clamp c >= 1/(n_t keep); see
-    # _bdpt_trace_camera_and_connect's matching parameter.
     n_light_paths_f: Float32 = Float32(0),
 ) -> Bool:
     """One bounce of a camera subpath, shared by the per-path loop and the wavefront kernels; False ends the path."""
@@ -488,11 +462,6 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
 
         # Volume free-flight
         if has_med and Int(st.cur_med_idx) >= 0:
-            comptime if _VCM_CAMIS:
-                # A medium segment (collision or pass-through, whose 1/FF
-                # enters dVCM) is outside CAMIS's Class: S0's harness models
-                # vacuum edges only. Legacy weights stay exact for it.
-                camis.in_class = False
             var med = MediumView.at(sd, st.cur_med_idx)
             # ONE shared sampler for both medium kinds (geometry.mojo):
             # homogeneous closed form, or delta tracking against the real
@@ -529,7 +498,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 # NOT `n_verts += 1`. _BDPT_MAX_VERTS is the light-vertex
                 # CACHE's per-path slot count, and the camera subpath stores
                 var eta_v = _vcm_eta_at(sd, v, mis_vm_weight_factor)
-                var (dvcm_v, dvc_v, dvm_v, wi_v) = vcm_phase_scatter[dvc0=_VCM_CAMIS](
+                var (dvcm_v, dvc_v, dvm_v, wi_v) = vcm_phase_scatter(
                     -ray_dir, med.med.g, pcg.next_float(), pcg.next_float(),
                     st.dvcm, st.dvc, st.dvm, mis_vc_weight_factor, eta_v)
                 st.dvcm = dvcm_v; st.dvc = dvc_v; st.dvm = dvm_v
@@ -539,8 +508,8 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                     # BUG FIX (found investigating volumetric-caustic's
                     # colored-blob fireflies): merge is only safe to run
                     if _bdpt_vertex_mis_scoped(v):
-                        st.total_merge += _bdpt_merge_from_cache(v, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm, mis_vc_weight_factor, st.cam_count(), camis, camis_recs, lvc_camis, n_light_paths_f, visit_naive=visit_naive, visit_footprint=visit_footprint, visit_thin=visit_thin)
-                    st.total += _bdpt_connect_to_cache(v, sd, has_med, scratch, lvc, lp_idx, path_len, mis_vm_weight_factor, st.cam_count(), camis, camis_recs, lvc_camis, n_light_paths_f)
+                        st.total_merge += _bdpt_merge_from_cache(v, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm, mis_vc_weight_factor, st.cam_count(), n_light_paths_f, visit_naive=visit_naive, visit_footprint=visit_footprint, visit_thin=visit_thin)
+                    st.total += _bdpt_connect_to_cache(v, sd, has_med, scratch, lvc, lp_idx, path_len, mis_vm_weight_factor, st.cam_count(), n_light_paths_f)
                 st.total += _vcm_nee_surface(sd, v, _vertex_ctx(v), sp, Vec3f(Float32(0)), st.beta, eta_v, v.dVCM, v.dVC,
                                              st.cur_med_idx, scratch, st.wl, pcg, Float32(0), False,
                                              vcm_camera_only(st.cam_count()))
@@ -638,28 +607,8 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                             var lp0_h = mesh_pos(lmesh_h, lv0_h)
                             mnee_t = _vcm_mnee_hit_term(sd, st.mnee.x0, st.mnee.pdf0, Int(st.mnee.n_glass), st.ro.to_simd(), hit.to_simd(),
                                                         mesh_pos(lmesh_h, lv1_h) - lp0_h, mesh_pos(lmesh_h, lv2_h) - lp0_h, p_a, pcg)
-                        comptime if _VCM_CAMIS:
-                            if camis.in_class:
-                                # This hit is not a stored vertex (the path
-                                # terminates), so camis is still the carry
-                                var dvcm_arr_al = st.dvcm / max(cos_l_hit, Float32(1e-6))
-                                var log_py_arr_al = camis.log_py + camis_clamp_log_p(
-                                    camis.log_k, -log(dvcm_arr_al))
-                                var log_g_prev_arr_al = log(camis.cos_out_prev / max(t_hit * t_hit, Float32(1e-12)))
-                                var cam_arr_al = CamisCamCarry(camis.in_class, camis.cut, camis.log_k,
-                                    log_py_arr_al, camis.rc, log_g_prev_arr_al, Float32(0))
-                                mis_w_al_hit = camis_eval_emission_hit[_CAMIS_CAM_RECS](
-                                    cam_arr_al, camis_recs, st.n_verts,
-                                    dvcm_arr_al, st.dvc / max(cos_l_hit, Float32(1e-6)),
-                                    st.dvm / max(cos_l_hit, Float32(1e-6)), log(_vcm_keep(sd, hit)),
-                                    p_a, emission_pdf_w, log(cos_l_hit * INV_PI),
-                                    n_light_paths_f, True, _CAMIS_FORCE_C1)
-                            else:
-                                var w_cam_hit_off = (p_a * st.dvcm + emission_pdf_w * st.dvc) / cos_l_hit + mnee_t
-                                mis_w_al_hit = Float32(1) / (Float32(1) + w_cam_hit_off)
-                        else:
-                            var w_cam_hit = (p_a * st.dvcm + (Float32(0) if long_hit else emission_pdf_w * st.dvc)) / cos_l_hit + mnee_t
-                            mis_w_al_hit = Float32(1) / (Float32(1) + w_cam_hit)
+                        var w_cam_hit = (p_a * st.dvcm + (Float32(0) if long_hit else emission_pdf_w * st.dvc)) / cos_l_hit + mnee_t
+                        mis_w_al_hit = Float32(1) / (Float32(1) + w_cam_hit)
                     elif st.last_bsdf_pdf < Float32(0):
                         pass   # delta bounce off a vertex with placeholder carries: unweighted, as before
                     elif cos_l_hit > Float32(0) and al_area > Float32(0):
@@ -702,21 +651,16 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 if st.cam_count() >= _vcm_depth(sd) or st.n_verts >= _VCM_MAX_STORED:
                     return False   # a vertex past d starts no strategy (see _vcm_depth)
                 st.n_verts += 1
-                comptime if _VCM_CAMIS:
-                    # Before merge/connect: S3's weights at this vertex read
-                    # its log P(y) and the finalised records below it.
-                    camis_cam_arrive(camis, camis_recs, st.n_verts - 1, st.dvcm, lh.cos_fix, t_hit,
-                                     _bdpt_vertex_mis_scoped(v))
                 # Merging queries the GLOBAL photon grid and does not use this
                 # pixel's own paired light path, so unlike the connect below it
-                st.total_merge += _bdpt_merge_from_cache(v, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm, mis_vc_weight_factor, st.cam_count(), camis, camis_recs, lvc_camis, n_light_paths_f, visit_naive=visit_naive, visit_footprint=visit_footprint, visit_thin=visit_thin)
+                st.total_merge += _bdpt_merge_from_cache(v, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm, mis_vc_weight_factor, st.cam_count(), n_light_paths_f, visit_naive=visit_naive, visit_footprint=visit_footprint, visit_thin=visit_thin)
                 if path_len > 0:
                     # Task #163 stage 5: the diffuse branch's connect shadow
                     # rays are the single highest-volume, cleanest shadow-ray
                     if defer_shadow_rays:
-                        _bdpt_connect_to_cache_deferred(v, sd, lvc, lp_idx, path_len, mis_vm_weight_factor, shadow_rays, shadow_pending, shadow_valid, shadow_seg_med, st.cam_count(), camis, camis_recs, lvc_camis, n_light_paths_f)
+                        _bdpt_connect_to_cache_deferred(v, sd, lvc, lp_idx, path_len, mis_vm_weight_factor, shadow_rays, shadow_pending, shadow_valid, shadow_seg_med, st.cam_count(), n_light_paths_f)
                     else:
-                        st.total += _bdpt_connect_to_cache(v, sd, has_med, scratch, lvc, lp_idx, path_len, mis_vm_weight_factor, st.cam_count(), camis, camis_recs, lvc_camis, n_light_paths_f)
+                        st.total += _bdpt_connect_to_cache(v, sd, has_med, scratch, lvc, lp_idx, path_len, mis_vm_weight_factor, st.cam_count(), n_light_paths_f)
 
                 # NEE to distant/point/sphere/infinite lights, via the shared
                 # Light interface (bvh.mojo's LightSample samplers) + BxDF
@@ -733,12 +677,6 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             var sc = _vcm_scatter(v, False, pcg, sd, st.wl, st.dvcm, st.dvc, st.dvm, mis_vc_weight_factor, eta_x)
             if not sc.valid:
                 return False
-            comptime if _VCM_CAMIS:
-                if v.is_delta != Int32(0) or sc.is_delta:
-                    camis.in_class = False   # a mirror vertex or a smooth coat's delta lobe
-                else:
-                    camis_cam_scatter(camis, camis_recs, st.n_verts - 1, eta_x, log(_vcm_keep(sd, hit)),
-                                      sc.cos_out / sc.pdf_fwd, sc.cos_out, sc.pdf_fwd, sc.pdf_rev)
             st.rd = vec3f(sc.wi)
             if on_curve:
                 st.ro = hit + vec3f(gn_geo) * (spawn_eps if dot(sc.wi, gn_geo) >= Float32(0) else -spawn_eps)
@@ -753,9 +691,6 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 st.mnee.pdf0 = Float32(0)
 
         elif mat.type == MatKind.dielectric or mat.type == MatKind.thin_dielectric:
-            comptime if _VCM_CAMIS:
-                # A subsurface walk and a delta dielectric are both outside the Class.
-                camis.in_class = False
             if st.cam_count() >= _vcm_depth(sd):
                 return False   # a delta vertex past d starts no strategy either
             var dvcm_in = st.dvcm; var dvc_in = st.dvc; var dvm_in = st.dvm; var med_in = st.cur_med_idx
@@ -779,9 +714,9 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 # A walk's exit does not merge: light and camera exits are two walks, not one.
                 if path_len > 0:
                     if defer_shadow_rays:
-                        _bdpt_connect_to_cache_deferred(v, sd, lvc, lp_idx, path_len, mis_vm_weight_factor, shadow_rays, shadow_pending, shadow_valid, shadow_seg_med, st.cam_count(), camis, camis_recs, lvc_camis, n_light_paths_f)
+                        _bdpt_connect_to_cache_deferred(v, sd, lvc, lp_idx, path_len, mis_vm_weight_factor, shadow_rays, shadow_pending, shadow_valid, shadow_seg_med, st.cam_count(), n_light_paths_f)
                     else:
-                        st.total += _bdpt_connect_to_cache(v, sd, has_med, scratch, lvc, lp_idx, path_len, mis_vm_weight_factor, st.cam_count(), camis, camis_recs, lvc_camis, n_light_paths_f)
+                        st.total += _bdpt_connect_to_cache(v, sd, has_med, scratch, lvc, lp_idx, path_len, mis_vm_weight_factor, st.cam_count(), n_light_paths_f)
                 var ctx_x = BSDF(LobeKind.sss_exit, True, False, n_o, n_o, RGB(Float32(1)), Int32(-1), mat.albedo.r,
                                     Float32(0), Int32(-1), Float32(0), Float32(0), True, False)
                 st.total += _vcm_nee_surface(sd, v, ctx_x, x_o, n_o, st.beta, Float32(0),
@@ -806,10 +741,6 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             st.mis_null_dist += t_hit + Float32(0.0002)   # see VCMCameraPathState.mis_null_dist
             # VCM Stage 2b: pure pass-through, carry unchanged (see
             # _bdpt_trace_light_path's matching interface-branch comment).
-            comptime if _VCM_CAMIS:
-                # A null crossing splits one edge in two (dVCM picks up both
-                # segments' d^2), which CAMIS's per-edge P does not model.
-                camis.in_class = False
 
         else:
             return False   # unhandled material type

@@ -35,7 +35,7 @@ def vcm_arrival_carries(dvcm: Float32, dvc: Float32, dvm: Float32,
 
 
 @always_inline
-def vcm_scatter_carries[dvc0: Bool = False](
+def vcm_scatter_carries(
                         dvcm: Float32, dvc: Float32, dvm: Float32,
                         cos_over_pdf: Float32, pdf_fwd_w: Float32, pdf_rev_w: Float32,
                         mis_vc_weight_factor: Float32,
@@ -54,41 +54,22 @@ def vcm_scatter_carries[dvc0: Bool = False](
     pdf_fwd_w/pdf_rev_w are the sampled direction's density and the density
     of sampling BACK toward the predecessor, both solid-angle. A degenerate
     forward density zeroes the carries: the strategies this vertex could
-    participate in have no density to weight them by.
-
-    `dvc0=True` (vcm_grid.mojo's _VCM_CAMIS build) repurposes the third slot as
-    dVC0, the dVC recursion run with w_vm = 0:
-
-        dVC0 = (cos_out/pdf_fwd) * (dVC0 * pdf_rev + dVCM)
-
-    dVM itself is never read (every merge weight forms dVC / eta at the merge
-    vertex instead, see _bdpt_merge_mis_weight), so its slot is free. dVC0 is
-    the pairing-independent half of CAMIS's split dVC(eta) = dVC0 + sum_i
-    eta_i mu_i (Scenes/vcm_camis_hybrid_derivation.py): dVC is AFFINE in the
-    per-vertex eta, so the same recursion at eta = 0 IS the constant term --
-    no second recursion and no closed form. The delta rule (scale by cos_out)
-    and the arrival divide are identical for all three carries, so only this
-    function needs the switch. Default False keeps the
-    legacy dVM, byte for byte."""
+    participate in have no density to weight them by."""
     if pdf_fwd_w <= Float32(1e-8):
         return (Float32(0.0), Float32(0.0), Float32(0.0))
-    comptime if dvc0:
-        return (Float32(1.0) / pdf_fwd_w,
-                cos_over_pdf * (dvc * pdf_rev_w + dvcm + mis_vm_weight_factor),
-                cos_over_pdf * (dvm * pdf_rev_w + dvcm))
     return (Float32(1.0) / pdf_fwd_w,
             cos_over_pdf * (dvc * pdf_rev_w + dvcm + mis_vm_weight_factor),
             cos_over_pdf * (dvm * pdf_rev_w + dvcm * mis_vc_weight_factor + Float32(1.0)))
 
 
 @always_inline
-def vcm_phase_scatter[dvc0: Bool = False](
+def vcm_phase_scatter(
                         wo: Vec3f, g: Float32, u1: Float32, u2: Float32,
                         dvcm: Float32, dvc: Float32, dvm: Float32,
                         mis_vc_weight_factor: Float32, eta: Float32) -> Tuple[Float32, Float32, Float32, Vec3f]:
     """A volume vertex's scatter: the carries and the new direction. No cosine, and the phase function is symmetric."""
     var hs = hg_sample(wo, g, u1, u2)
-    var (a, b, c) = vcm_scatter_carries[dvc0=dvc0](dvcm, dvc, dvm, Float32(1) / hs[3], hs[3], hs[3], mis_vc_weight_factor, eta)
+    var (a, b, c) = vcm_scatter_carries(dvcm, dvc, dvm, Float32(1) / hs[3], hs[3], hs[3], mis_vc_weight_factor, eta)
     return (a, b, c, Vec3f(hs[0], hs[1], hs[2]))
 
 

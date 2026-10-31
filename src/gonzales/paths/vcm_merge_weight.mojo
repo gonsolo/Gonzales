@@ -3,11 +3,10 @@
 
 from std.collections import Array
 from std.math import log
-from gonzales.paths.vcm_camis import _camis_gather_light, CamisCamRecord, CamisCamCarry, CamisLightRecord, CAMIS_IN_CLASS, camis_eval_merge
 from gonzales.scene.accel.bvh import SceneView
 from gonzales.paths.bdpt_vertex import _BDPT_MAX_VERTS, BDPTVertex
 from gonzales.paths.bdpt_eval import _bdpt_vertex_pdfs, _bdpt_vertex_mis_scoped
-from gonzales.paths.vcm_strategy import _vcm_keep, _VCM_CAMIS, _CAMIS_CAM_RECS, _CAMIS_FORCE_C1, _vcm_eta_scale
+from gonzales.paths.vcm_strategy import _vcm_keep, _vcm_eta_scale
 
 @always_inline
 def _bdpt_merge_mis_weight(
@@ -16,11 +15,8 @@ def _bdpt_merge_mis_weight(
     ref sd: SceneView,
     mis_vc_weight_factor: Float32,
     inv_eta_x: Float32,   # 1/eta at cv (_vcm_inv_eta_at), which a volume vertex pays a density lookup for
-    camis: CamisCamCarry,
-    camis_recs: Array[CamisCamRecord, _CAMIS_CAM_RECS],
     num_cam_scat: Int,
     lvc: Pointer[BDPTVertex, MutUntrackedOrigin],
-    lvc_camis: Pointer[CamisLightRecord, MutUntrackedOrigin],
     k: Int,
     n_light_paths_f: Float32,
 ) -> Float32:
@@ -31,23 +27,6 @@ def _bdpt_merge_mis_weight(
     var (camera_bsdf_dir_pdf_w, camera_bsdf_rev_pdf_w) = _bdpt_vertex_pdfs(cv, lv.wo.to_simd(), sd)
     # dVM is dVC / eta at the merge vertex. With one global eta that held by
     # construction (the carried dVM); with the variance-aware eta(x) it has
-    comptime if _VCM_CAMIS:
-        var light_arr = lvc_camis[unsafe_offset=k]
-        if camis.in_class and (light_arr.flags & CAMIS_IN_CLASS) != Int32(0):
-            var lp_idx = k // _BDPT_MAX_VERTS
-            var base = lp_idx * _BDPT_MAX_VERTS
-            var lam = k % _BDPT_MAX_VERTS
-            var origin_in_class = (lvc_camis[unsafe_offset=base].flags & CAMIS_IN_CLASS) != Int32(0)
-            var lr = _camis_gather_light[_CAMIS_CAM_RECS](lvc, lvc_camis, base, lam)
-            return camis_eval_merge[_CAMIS_CAM_RECS, _CAMIS_CAM_RECS](
-                camis, camis_recs, num_cam_scat,
-                cv.dVCM, cv.dVC, cv.dVM, Float32(1) / inv_eta_x, log(_vcm_keep(sd, cv.pos)),
-                light_arr, lr[0], lr[2],
-                lr[1], -log(lv.dVCM),
-                lr[3], origin_in_class,
-                lv.dVCM, lv.dVC, lv.dVM, _vcm_eta_scale(sd, lv.pos) / mis_vc_weight_factor,
-                camera_bsdf_dir_pdf_w, camera_bsdf_rev_pdf_w,
-                n_light_paths_f, True, _CAMIS_FORCE_C1)
     var w_light = (lv.dVCM + lv.dVC * camera_bsdf_dir_pdf_w) * inv_eta_x
     var w_camera = (cv.dVCM + cv.dVC * camera_bsdf_rev_pdf_w) * inv_eta_x
     return Float32(1) / (w_light + Float32(1) + w_camera)

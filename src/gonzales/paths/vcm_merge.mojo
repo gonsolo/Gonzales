@@ -6,7 +6,6 @@ from std.math import sqrt, floor, max, abs
 from std.atomic import Atomic
 from gonzales.core.geometry import dot, PI
 from gonzales.scene.appearance.materials import LobeKind
-from gonzales.paths.vcm_camis import CamisCamRecord, CamisCamCarry, CamisLightRecord
 from gonzales.scene.accel.bvh import SceneView, _is_real_ptr, curve_radius
 from gonzales.estimators.photon_grid import _HSIZE, _hash_cell, _PHOTON_BUCKET_CAP, grid_keep, grid_weight, gather_disk_coverage, gather_disk_contains
 from gonzales.transport.medium import MediumView
@@ -14,7 +13,7 @@ from gonzales.core.spectrum import SpectralSample
 from gonzales.paths.bdpt_vertex import _BDPT_MAX_VERTS, BDPTVertex
 from gonzales.paths.bdpt_eval import _lobe_eval, _bdpt_vertex_mis_scoped
 from gonzales.paths.vcm_grid import _VCM_FINE_LEVELS, _VCM_MN_STRIDE
-from gonzales.paths.vcm_strategy import vcm_can_merge, _vcm_too_long, _vcm_keep, _vcm_cap, _MERGE_COVERAGE, _VCM_VISIT_INSTRUMENT, _CAMIS_CAM_RECS, _vcm_budget_active, _vcm_merge_radius_at, _VCM_RADIUS_VOLUME_SCALE, _vcm_inv_eta_at, _vcm_volume_radius_at, _vcm_mergeable, _vcm_on_fibre
+from gonzales.paths.vcm_strategy import vcm_can_merge, _vcm_too_long, _vcm_keep, _vcm_cap, _MERGE_COVERAGE, _VCM_VISIT_INSTRUMENT, _vcm_budget_active, _vcm_merge_radius_at, _VCM_RADIUS_VOLUME_SCALE, _vcm_inv_eta_at, _vcm_volume_radius_at, _vcm_mergeable, _vcm_on_fibre
 from gonzales.paths.vcm_merge_weight import _bdpt_merge_mis_weight
 
 @always_inline
@@ -29,12 +28,6 @@ def _bdpt_merge_from_cache(
     norm_pass: Float32,
     mis_vc_weight_factor: Float32,
     cam_count: Int,   # cv's non-delta interior-vertex count (see _vcm_depth)
-    # _VCM_CAMIS: cv's own running camera-side CAMIS state (untouched when
-    # the hybrid is compiled out) and the light subpaths' records, parallel
-    camis: CamisCamCarry = CamisCamCarry(False, Int32(0), Float32(0), Float32(0), Float32(0), Float32(0), Float32(0)),
-    camis_recs: Array[CamisCamRecord, _CAMIS_CAM_RECS] = Array[CamisCamRecord, _CAMIS_CAM_RECS](
-        fill=CamisCamRecord(Float32(0), Float32(0), Float32(0), Float32(0), Float32(0))),
-    lvc_camis: Pointer[CamisLightRecord, MutUntrackedOrigin] = Pointer[CamisLightRecord, MutUntrackedOrigin].unsafe_dangling(),
     n_light_paths_f: Float32 = Float32(0),
     # Benchmark instrumentation only (not part of the real
     # estimator, never read by anything that affects `result`): three
@@ -153,7 +146,7 @@ def _bdpt_merge_from_cache(
                             else:
                                 f_cv = SpectralSample(Float32(0.0))
                             var w = _bdpt_merge_mis_weight(cv, lv, sd, mis_vc_weight_factor, inv_eta_cv,
-                                camis, camis_recs, cam_count - 1, lvc, lvc_camis, k, n_light_paths_f)
+                                cam_count - 1, lvc, k, n_light_paths_f)
                             # 1 / keep: the bucket's under the fixed cap; under
                             # the per-cell budget the vertex's own (_vcm_keep,
                             # the probability its insert survived).

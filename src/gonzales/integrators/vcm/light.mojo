@@ -10,10 +10,6 @@ from gonzales.scene.appearance.materials import MatKind, LobeKind, resolve_mix
 from gonzales.scene.shapes.primitives import Intersection
 from gonzales.core.geometry import Ray
 from gonzales.paths.vcm_mis import vcm_scatter_carries, vcm_phase_scatter
-from gonzales.paths.vcm_camis import (
-    CamisLightRecord, CamisLightCarry, camis_light_carry_off, camis_light_origin, camis_light_arrive,
-    camis_light_scatter,
-)
 from gonzales.scene.accel.bvh import traverse_dispatch
 from gonzales.scene.accel.bvh import SceneView, test_spheres, _scene_bounding_sphere, _sample_disk_perpendicular, _sample_infinite_light_dir, sphere_light_cone_pdf, light_path_pick
 from gonzales.core.rng import PCG32
@@ -23,7 +19,7 @@ from gonzales.core.spectrum import SampledWavelengths, SpectralSample, spec_refl
 from gonzales.scene.shapes.geom_normal import _geom_normal
 from gonzales.paths.bdpt_vertex import _VCM_SSS_CAMERA_ONLY, _vcm_walk_limit, _BDPT_MAX_VERTS, BDPTVertex, _null_vertex
 from gonzales.paths.bdpt_eval import _bdpt_vertex_mis_scoped, _vcm_mnee_light_dvcm
-from gonzales.paths.vcm_strategy import _vcm_depth, _VCM_MAX_STORED, _vcm_keep, _VCM_CAMIS, _vcm_eta_scale, _vcm_eta_at, _vcm_fibre_scale
+from gonzales.paths.vcm_strategy import _vcm_depth, _VCM_MAX_STORED, _vcm_keep, _vcm_eta_scale, _vcm_eta_at, _vcm_fibre_scale
 from gonzales.paths.bdpt_connect import _bdpt_store_lvc_vertex
 from gonzales.integrators.vcm.camera import (
     _vcm_scatter, _vcm_lobe_vertex, _vcm_sss_walk, _vcm_sss_exit_vertex,
@@ -173,13 +169,7 @@ def _bdpt_light_path_init[use_gpu: Bool](
         dvc_carry = cos_theta_emit / emission_pdf_w
         # SmallVCM vertexcm.hxx:856 -- light-origin dVM uses mMisVcWeightFactor,
         # NOT mMisVmWeightFactor (verified against the reference source; a
-        comptime if _VCM_CAMIS:
-            # The slot holds dVC0 instead (vcm_scatter_carries[dvc0]): there
-            # is no eta at the emitter, so dVC0 == dVC here (S0's
-            # trace_light_records).
-            dvm_carry = dvc_carry
-        else:
-            dvm_carry = dvc_carry * mis_vc_weight_factor
+        dvm_carry = dvc_carry * mis_vc_weight_factor
         lv0_vert.dVCM = dvcm_carry
         lv0_vert.dVC = dvc_carry
         lv0_vert.dVM = dvm_carry
@@ -206,10 +196,7 @@ def _bdpt_light_path_init[use_gpu: Bool](
         mnee_l = VCMMneeLightTrack(sp_l, sn_l, Float32(1), Vec3f(Float32(0)), Int32(0))
         dvcm_carry = PI * area_weight_s
         dvc_carry = PI * area_weight_s
-        comptime if _VCM_CAMIS:
-            dvm_carry = dvc_carry   # dVC0 == dVC at an origin, see the area branch
-        else:
-            dvm_carry = dvc_carry * mis_vc_weight_factor
+        dvm_carry = dvc_carry * mis_vc_weight_factor
     elif light_pick < n_area + n_sphere + n_distant:
         var dl = sd.distantLights[unsafe_offset=light_pick - n_area - n_sphere]
         var (center, radius) = _scene_bounding_sphere(sd)
@@ -249,10 +236,7 @@ def _bdpt_light_path_init[use_gpu: Bool](
         var disk_area = PI * radius * radius
         dvcm_carry = disk_area * inv_pick
         dvc_carry = disk_area * inv_pick / pdf_dir
-        comptime if _VCM_CAMIS:
-            dvm_carry = dvc_carry   # dVC0 == dVC at an origin, see the area branch
-        else:
-            dvm_carry = dvc_carry * mis_vc_weight_factor
+        dvm_carry = dvc_carry * mis_vc_weight_factor
     else:
         # Point light: a real finite position (unlike distant/infinite), but
         # still no NEE-equivalent cache vertex — see this function's own
@@ -293,11 +277,6 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
     mis_vc_weight_factor: Float32,
     mis_vm_weight_factor: Float32,
     mut st: VCMLightPathState,
-    # _VCM_CAMIS light state (vcm_camis.CamisLightCarry) and THIS path's
-    # slice of the record buffer (lvc_camis + lp_idx * _BDPT_MAX_VERTS, the
-    # same slots as `lvc`). Untouched when the hybrid is compiled out.
-    mut camis_l: CamisLightCarry,
-    camis_recs: Pointer[CamisLightRecord, MutUntrackedOrigin],
 ) -> Bool:
     """One bounce of a light subpath, shared by the per-path loop and the wavefront kernels; False ends the path."""
         if st.n_verts >= _BDPT_MAX_VERTS:
@@ -333,8 +312,6 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
 
         # Volume free-flight
         if has_med and Int(st.cur_med_idx) >= 0:
-            comptime if _VCM_CAMIS:
-                camis_l.in_class = False   # a medium segment: see the camera side
             var med = MediumView.at(sd, st.cur_med_idx)
             # ONE shared sampler for both medium kinds (geometry.mojo):
             # homogeneous closed form, or delta tracking against the real
@@ -373,14 +350,10 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
                 st.n_verts += 1
                 v.n_delta = Int32(st.n_delta)
                 _bdpt_store_lvc_vertex(v, lvc, lp_idx, st.n_verts - 1)
-                comptime if _VCM_CAMIS:
-                    # Every stored slot gets a record, out-of-Class ones too:
-                    # the buffer outlives the pass, and S3 reads the class bit.
-                    camis_light_arrive(camis_l, camis_recs, st.n_verts - 1, Float32(0), t_hit, Float32(0), False)
                 # Distant/infinite/point lights store NO lv0 (n_verts starts at
                 # 0 for them -- this function's own docstring: they have no
                 var eta_v = _vcm_eta_at(sd, v, mis_vm_weight_factor)
-                var (dvcm_v, dvc_v, dvm_v, wi_v) = vcm_phase_scatter[dvc0=_VCM_CAMIS](
+                var (dvcm_v, dvc_v, dvm_v, wi_v) = vcm_phase_scatter(
                     -ray_dir, med.med.g, pcg.next_float(), pcg.next_float(),
                     st.dvcm, st.dvc, st.dvm, mis_vc_weight_factor, eta_v)
                 st.dvcm = dvcm_v; st.dvc = dvc_v; st.dvm = dvm_v
@@ -437,19 +410,10 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
                 st.n_verts += 1
                 v.n_delta = Int32(st.n_delta)
                 _bdpt_store_lvc_vertex(v, lvc, lp_idx, st.n_verts - 1)
-                comptime if _VCM_CAMIS:
-                    camis_light_arrive(camis_l, camis_recs, st.n_verts - 1, lh.cos_fix, t_hit,
-                                       log(_vcm_keep(sd, hit)), _bdpt_vertex_mis_scoped(v))
             var sc = _vcm_scatter(v, True, pcg, sd, st.wl, st.dvcm, st.dvc, st.dvm, mis_vc_weight_factor, eta_x)
             st.mnee.side = Float32(0)
             if not sc.valid:
                 return False
-            comptime if _VCM_CAMIS:
-                if v.is_delta != Int32(0) or sc.is_delta:
-                    camis_l.in_class = False
-                else:
-                    camis_light_scatter(camis_l, st.n_verts - 1, eta_x, sc.cos_out / sc.pdf_fwd,
-                                        sc.cos_out, sc.pdf_fwd, sc.pdf_rev)
             st.rd = vec3f(sc.wi)
             if on_curve:
                 st.ro = hit + vec3f(gn_geo) * (spawn_eps if dot(sc.wi, gn_geo) >= Float32(0) else -spawn_eps)
@@ -458,8 +422,6 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
             st.flux *= sc.weight
 
         elif mat.type == MatKind.dielectric or mat.type == MatKind.thin_dielectric:
-            comptime if _VCM_CAMIS:
-                camis_l.in_class = False   # subsurface walk or delta dielectric: see the camera side
             var dvcm_in = st.dvcm; var dvc_in = st.dvc; var dvm_in = st.dvm; var med_in = st.cur_med_idx
             var ior_cur = st.current_dielectric_ior; var ior_prev = st.previous_dielectric_ior
             _ = _vcm_dielectric_cross[use_gpu, False](sd, inter, mat, hit, ray_dir, Float32(-1.0), has_med, pcg,
@@ -484,8 +446,6 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
                 st.n_verts += 1
                 v.n_delta = Int32(st.n_delta)
                 _bdpt_store_lvc_vertex(v, lvc, lp_idx, st.n_verts - 1)
-                comptime if _VCM_CAMIS:
-                    camis_light_arrive(camis_l, camis_recs, st.n_verts - 1, Float32(0), t_hit, Float32(0), False)
                 _ = _vcm_sss_exit_scatter(sd, ex, mat.albedo.r, mis_vc_weight_factor, mis_vm_weight_factor, pcg,
                                           st.ro, st.rd, st.flux, st.dvcm, st.dvc, st.dvm)
                 st.mnee.side = Float32(0)
@@ -504,8 +464,6 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
                 st.mis_null_dist += t_hit + Float32(0.0002)
             # VCM Stage 2b: pure medium-boundary pass-through, no direction
             # change/BSDF event -- carry state passes through as already
-            comptime if _VCM_CAMIS:
-                camis_l.in_class = False   # a split edge: see the camera side
 
         else:
             return False   # unhandled material type
@@ -525,9 +483,6 @@ def _bdpt_trace_light_path[use_gpu: Bool](
     mis_vc_weight_factor: Float32,
     mis_vm_weight_factor: Float32,
     pass_wl: SampledWavelengths,
-    # _VCM_CAMIS: CAMIS records parallel to `lvc` (vcm_camis.CamisLightRecord),
-    # written at every stored vertex -- required, like `lvc`, because with the
-    lvc_camis: Pointer[CamisLightRecord, MutUntrackedOrigin],
 ):
     """Emit a photon from a random light and trace a light subpath, storing
     every non-delta vertex (including the light-source point itself, the"""
@@ -538,21 +493,6 @@ def _bdpt_trace_light_path[use_gpu: Bool](
         sd, pcg, default_emit_med, lp_idx, lvc, lvc_path_len, mis_vc_weight_factor, pass_wl)
     if st.active == Int8(0):
         return
-    # CAMIS light state. Only an AREA light stores an origin vertex (n_verts
-    # starts at 1), and only an area light starts a path inside the Class;
-    # every other light's first stored vertex writes an out-of-Class record.
-    var camis_l = camis_light_carry_off()
-    var camis_recs: Pointer[CamisLightRecord, MutUntrackedOrigin]
-    comptime if _VCM_CAMIS:
-        camis_recs = lvc_camis.unsafe_offset(lp_idx * _BDPT_MAX_VERTS)
-        var lv0 = lvc[unsafe_offset=lp_idx * _BDPT_MAX_VERTS]
-        if st.n_verts == 1 and lv0.is_light == Int32(1):
-            # lv0.pdf_fwd is the origin's position density P_A (init, area
-            # branch), and the emission cosine is clamped as init clamps it.
-            camis_l = camis_light_origin(camis_recs, 0, log(lv0.pdf_fwd),
-                                         max(dot(st.rd.to_simd(), lv0.normal.to_simd()), Float32(0.0001)))
-    else:
-        camis_recs = lvc_camis   # never dereferenced
 
     for _ in range(_vcm_walk_limit(sd.vcmMaxDepth)):
         # The same intersect step _bdpt_light_path_intersect_gpu performs --
@@ -566,7 +506,7 @@ def _bdpt_trace_light_path[use_gpu: Bool](
         # A miss is handled inside the step (returns False).
         if not _bdpt_light_path_bounce[use_gpu](
             sd, pcg, has_med, scratch[unsafe_offset=0], lvc, lp_idx,
-            mis_vc_weight_factor, mis_vm_weight_factor, st, camis_l, camis_recs):
+            mis_vc_weight_factor, mis_vm_weight_factor, st):
             break
 
     lvc_path_len[unsafe_offset=lp_idx] = Int32(st.n_verts)
