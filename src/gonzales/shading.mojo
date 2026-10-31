@@ -1522,6 +1522,8 @@ def _shade_sss_exit[enqueue_shadow: Bool](
     var white = BSDF(LobeKind.sss_exit if interior else LobeKind.lambertian, True, False, n, n, RGB(Float32(1)), Int32(-1),
                      exit_mat.albedo.r if interior else Float32(0), Float32(0), Int32(-1), Float32(0), Float32(0), True, False)
     _lobe_nee[enqueue_shadow](path_ptr, ctx, white, hit_point, pcg)
+    if interior:
+        _mnee_at_walk_exit(path_ptr, ctx, n, hit_point, exit_mat.albedo.r, pcg)
     var (wi, pdf) = sample_cosine_hemisphere_world(pcg.next_float(), pcg.next_float(), n)
     path_ptr[].pcgState = pcg.state
     if pdf <= Float32(0) or dot(wi, gn) <= Float32(0):
@@ -3805,6 +3807,7 @@ def _mnee_area_light_contribute(
     al: AreaLight,
     inv_pdf_area: Float32,
     lobe_w: Float32,
+    exit_eta: Float32 = Float32(0),   # a walk's exit: its lobe (sss_boundary_lobe) on top of `alb`
 ) -> Bool:
     """MNEE glass-caustic probing for one already-chosen area-light sample,
     factored out of `_nee_area_lights` so ReSTIR's `di_resolve` can use the
@@ -3869,8 +3872,35 @@ def _mnee_area_light_contribute(
     # MIS against the BSDF path through the same chain (_mnee_bsdf_weight gives it the rest).
     var w_mnee = _mnee_mis_weight(normal, hit_point, c[3], c[2], c[5], Float32(1.0) / inv_pdf_area)
     var mnee_wt = _to_spec_diffuse_lit(ctx, alb, al.emission, path_ptr[].wavelengths) * (c[6] * c[5] * c[4] * lobe_w * inv_pdf_area * w_mnee)
+    if exit_eta > Float32(0):
+        mnee_wt *= sss_boundary_lobe(c[6], exit_eta)
     path_ptr[].estimate += _clamped(ctx, path_ptr[].throughput * mnee_wt, Int(path_ptr[].bounce))
     return True
+
+def _mnee_at_walk_exit(
+    path_ptr: Pointer[PathState, MutUntrackedOrigin], ctx: ShadeContext, n: Vec3f, hit_point: Vec3f, eta: Float32,
+    mut pcg: PCG32,
+):
+    """MNEE from a walk's exit, for skin seen through glass: _nee_area_lights' draw, without its plain shadow ray."""
+    if ctx.lights.area_light_count == 0:
+        return
+    path_ptr[].last_ns_n = n
+    path_ptr[].last_ns_p = hit_point
+    path_ptr[].ns_spec = Int8(0)
+    var (idx, sel_pdf) = light_sampler_sample_at(ctx.lights.light_sampler, hit_point, pcg.next_float())
+    if idx < 0:
+        return
+    var al = ctx.lights.area_lights[unsafe_offset=idx]
+    var (light_point, _, du, dv) = _sample_light_point_and_normal(ctx, al, pcg.next_float(), pcg.next_float(), pcg, hit_point)
+    var to_light = light_point - hit_point
+    var dist = sqrt(dot(to_light, to_light))
+    if dist <= Float32(0.0001) or al.total_area <= Float32(0) or sel_pdf <= Float32(0):
+        return
+    path_ptr[].pcgState = pcg.state
+    _ = _mnee_area_light_contribute(path_ptr, ctx, n, hit_point, RGB(Float32(1)), to_light * (Float32(1) / dist), dist,
+                                    light_point, du, dv, al, al.total_area / sel_pdf, Float32(1), eta)
+    pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
+
 
 # ── ReSTIR SMS (Phase 6's remaining first piece: candidate generation) ──────
 # Reuses _sms_probe_and_solve for the identical probe+Newton-solve logic
