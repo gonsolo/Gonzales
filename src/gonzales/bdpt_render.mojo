@@ -18,10 +18,8 @@ from .progress import Progress
 from .outputs import finish_render
 from .spectrum import SpectralSample, pass_wavelengths, spectral_sample_to_rgb
 from .bdpt_vertex import _BDPT_MAX_VERTS, BDPTVertex
-from .vcm_grid import (
-    _VCM_MN_STRIDE, _VCM_HEADS_SIZE, _CAMIS_LVC_PER_SLOT, _vcm_grid_inv_cell, _bdpt_build_merge_grid,
-    vcm_merge_radius,
-)
+from .vcm_grid import _VCM_MN_STRIDE, _VCM_HEADS_SIZE, _vcm_grid_inv_cell, _bdpt_build_merge_grid, vcm_merge_radius
+from .vcm_strategy import _CAMIS_LVC_PER_SLOT
 from .bdpt_connect import _bdpt_splat_filtered, _bdpt_connect_to_camera
 from .bdpt_camera import _bdpt_trace_camera_and_connect
 from .bdpt_light import _bdpt_trace_light_path

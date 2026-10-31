@@ -23,7 +23,8 @@ from .photon_grid import _HSIZE, _PHOTON_BUCKET_CAP
 from .spectrum import SpectralSample, pass_wavelengths, spectral_sample_to_rgb
 from .bdpt_vertex import _BDPT_MAX_VERTS, BDPTVertex
 from .bdpt_nee import _visible_transmittance
-from .vcm_grid import _CAMIS_CAM_RECS, _bdpt_count_merge_vertex, _bdpt_insert_merge_vertex, _vcm_reset_cell
+from .vcm_grid import _bdpt_count_merge_vertex, _bdpt_insert_merge_vertex, _vcm_reset_cell
+from .vcm_strategy import _CAMIS_CAM_RECS
 from .bdpt_connect import _bdpt_splat_filtered, _bdpt_connect_to_camera
 from .bdpt_camera import (
     _bdpt_trace_camera_and_connect, VCMCameraPathState, _bdpt_camera_path_init, _bdpt_camera_path_bounce,

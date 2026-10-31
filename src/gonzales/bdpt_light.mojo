@@ -16,12 +16,15 @@ from .vcm_camis import (
 from .bvh import traverse_dispatch
 from .bvh import SceneView, test_spheres, _scene_bounding_sphere, _sample_disk_perpendicular, _sample_infinite_light_dir, sphere_light_cone_pdf, light_path_pick
 from .rng import PCG32
-from .sppm import _cosine_hemisphere_sample, sample_area_light_point, sample_sphere_light_emission, area_light_emit_normal, area_light_side_pdf
+from .sppm import (
+    _cosine_hemisphere_sample, sample_area_light_point, sample_sphere_light_emission, area_light_emit_normal,
+)
+from .lights import area_light_side_pdf
 from .spectrum import SampledWavelengths, SpectralSample, spec_refl, spec_illum
 from .geom_normal import _geom_normal
 from .bdpt_vertex import _VCM_SSS_CAMERA_ONLY, _vcm_walk_limit, _BDPT_MAX_VERTS, BDPTVertex, _null_vertex
 from .bdpt_eval import _bdpt_vertex_mis_scoped, _vcm_mnee_light_dvcm
-from .vcm_grid import _vcm_depth, _VCM_MAX_STORED, _vcm_keep, _VCM_CAMIS, _vcm_eta_scale, _vcm_eta_at, _vcm_fibre_scale
+from .vcm_strategy import _vcm_depth, _VCM_MAX_STORED, _vcm_keep, _VCM_CAMIS, _vcm_eta_scale, _vcm_eta_at, _vcm_fibre_scale
 from .bdpt_connect import _bdpt_store_lvc_vertex
 from .bdpt_camera import (
     _vcm_scatter, _vcm_lobe_vertex, _vcm_sss_walk, _vcm_sss_entered, _vcm_sss_exit_vertex,

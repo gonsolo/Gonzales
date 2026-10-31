@@ -50,6 +50,7 @@ there and it clamps to 1 -- S0's P(lens edge) = 1 in all but tiny images.
 from std.math import log, min, max, exp, expm1, inf
 from std.collections import Array
 from .geometry import PI
+from .bdpt_vertex import BDPTVertex, _BDPT_MAX_VERTS
 
 # tan(1 degree), Grittmann et al.'s Eq. 17 radius angle.
 comptime CAMIS_TAN_1DEG = Float32(0.017455064928217585)
@@ -554,3 +555,22 @@ def camis_eval_emission_hit[NC: Int](
     else:
         dvc_c = cam_dvc_legacy
     return Float32(1) / (Float32(1) + direct_pdf_a * cam_dvcm + emission_pdf_w * dvc_c)
+
+
+@always_inline
+def _camis_gather_light[N: Int](
+    lvc: Pointer[BDPTVertex, MutUntrackedOrigin],
+    lvc_camis: Pointer[CamisLightRecord, MutUntrackedOrigin],
+    base: Int, lam: Int,
+) -> Tuple[Array[CamisLightRecord, N], Array[Float32, N], Int, Float32]:
+    """The light-side records a CAMIS evaluation at light-path-local index
+    `lam` needs, walked from the stored LVC slice starting at `base`:"""
+    var scat = Array[CamisLightRecord, N](fill=CamisLightRecord(
+        Float32(0), Float32(0), Float32(0), Float32(0), Float32(0), Int32(0), Int32(0)))
+    var log_pa_fwd = Array[Float32, N](fill=Float32(0))
+    var num_scat = lam - 1
+    for i in range(num_scat):
+        scat[i] = lvc_camis[unsafe_offset=base + i + 1]
+        log_pa_fwd[i] = -log(lvc[unsafe_offset=base + i + 1].dVCM)
+    var log_pa0 = lvc_camis[unsafe_offset=base].log_pa_rev
+    return (scat^, log_pa_fwd^, num_scat, log_pa0)

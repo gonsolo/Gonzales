@@ -3,30 +3,11 @@
 
 from std.collections import Array
 from std.math import log
-from .vcm_camis import CamisCamRecord, CamisCamCarry, CamisLightRecord, CAMIS_IN_CLASS, camis_eval_merge
+from .vcm_camis import _camis_gather_light, CamisCamRecord, CamisCamCarry, CamisLightRecord, CAMIS_IN_CLASS, camis_eval_merge
 from .bvh import SceneView
 from .bdpt_vertex import _BDPT_MAX_VERTS, BDPTVertex
 from .bdpt_eval import _bdpt_vertex_pdfs, _bdpt_vertex_mis_scoped
-from .vcm_grid import _vcm_keep, _VCM_CAMIS, _CAMIS_CAM_RECS, _CAMIS_FORCE_C1, _vcm_eta_scale
-
-@always_inline
-def _camis_gather_light[N: Int](
-    lvc: Pointer[BDPTVertex, MutUntrackedOrigin],
-    lvc_camis: Pointer[CamisLightRecord, MutUntrackedOrigin],
-    base: Int, lam: Int,
-) -> Tuple[Array[CamisLightRecord, N], Array[Float32, N], Int, Float32]:
-    """The light-side records a CAMIS evaluation at light-path-local index
-    `lam` needs, walked from the stored LVC slice starting at `base`:"""
-    var scat = Array[CamisLightRecord, N](fill=CamisLightRecord(
-        Float32(0), Float32(0), Float32(0), Float32(0), Float32(0), Int32(0), Int32(0)))
-    var log_pa_fwd = Array[Float32, N](fill=Float32(0))
-    var num_scat = lam - 1
-    for i in range(num_scat):
-        scat[i] = lvc_camis[unsafe_offset=base + i + 1]
-        log_pa_fwd[i] = -log(lvc[unsafe_offset=base + i + 1].dVCM)
-    var log_pa0 = lvc_camis[unsafe_offset=base].log_pa_rev
-    return (scat^, log_pa_fwd^, num_scat, log_pa0)
-
+from .vcm_strategy import _vcm_keep, _VCM_CAMIS, _CAMIS_CAM_RECS, _CAMIS_FORCE_C1, _vcm_eta_scale
 
 @always_inline
 def _bdpt_merge_mis_weight(

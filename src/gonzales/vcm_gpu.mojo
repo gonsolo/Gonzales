@@ -25,11 +25,8 @@ from .bdpt_camera import VCMCameraPathState
 from .bdpt_light import VCMLightPathState
 from .spectrum import SpectralSample
 from .vcm_rt import VcmRt
-from .vcm_grid import (
-    _VCM_VISIT_INSTRUMENT, _VCM_CAMIS,
-    _VCM_MN_STRIDE, _VCM_HEADS_SIZE, _CAMIS_LVC_PER_SLOT, _VCM_FOOTPRINT_PIXELS, _vcm_grid_inv_cell,
-    _camera_typical_distance, vcm_merge_radius,
-)
+from .vcm_grid import _VCM_MN_STRIDE, _VCM_HEADS_SIZE, _vcm_grid_inv_cell, _camera_typical_distance, vcm_merge_radius
+from .vcm_strategy import _VCM_VISIT_INSTRUMENT, _VCM_CAMIS, _CAMIS_LVC_PER_SLOT, _VCM_FOOTPRINT_PIXELS
 from .bdpt_render import _vcm_finalize_one_pixel
 from .vcm_kernels import (
     _bdpt_emit_light_paths_gpu, _bdpt_splat_light_paths_gpu, _bdpt_camera_connect_gpu,

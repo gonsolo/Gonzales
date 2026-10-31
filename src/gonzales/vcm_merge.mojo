@@ -13,11 +13,8 @@ from .media import medium_inv_sigma_t_spectral
 from .spectrum import SpectralSample
 from .bdpt_vertex import _BDPT_MAX_VERTS, BDPTVertex
 from .bdpt_eval import _lobe_eval, _bdpt_vertex_mis_scoped
-from .vcm_grid import (
-    _vcm_too_long, _vcm_keep, _vcm_cap, _MERGE_COVERAGE, _VCM_FINE_LEVELS, _VCM_MN_STRIDE,
-    _VCM_VISIT_INSTRUMENT, _CAMIS_CAM_RECS, _vcm_budget_active, _vcm_merge_radius_at,
-    _VCM_RADIUS_VOLUME_SCALE, _vcm_inv_eta_at, _vcm_volume_radius_at, _vcm_mergeable, _vcm_on_fibre,
-)
+from .vcm_grid import _VCM_FINE_LEVELS, _VCM_MN_STRIDE
+from .vcm_strategy import _vcm_too_long, _vcm_keep, _vcm_cap, _MERGE_COVERAGE, _VCM_VISIT_INSTRUMENT, _CAMIS_CAM_RECS, _vcm_budget_active, _vcm_merge_radius_at, _VCM_RADIUS_VOLUME_SCALE, _vcm_inv_eta_at, _vcm_volume_radius_at, _vcm_mergeable, _vcm_on_fibre
 from .vcm_merge_weight import _bdpt_merge_mis_weight
 
 @always_inline

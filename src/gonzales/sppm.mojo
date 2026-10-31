@@ -22,7 +22,7 @@ from .geometry import Ray
 from .primitives import mesh_pos
 from .media import medium_inv_sigma_t_spectral, medium_kernel_radius, hg_phase, hg_sample
 from .media import Medium, Grid, NvdbGrid, sample_free_flight, medium_is_heterogeneous, medium_sigma_t_spectral, medium_grid_for, medium_nvdb_for, grid_sample_density, nvdb_sample_density, SSS_WALK_ROUNDS, spectral_free_flight_weight
-from .lights import area_light_pick_triangle, AreaLight
+from .lights import area_light_pick_triangle, area_light_side_pdf, AreaLight
 from .curves import Curve, curve_at, curve_piece_endpoints, _curve_perp_axis
 from .bvh import traverse_dispatch, any_hit_dispatch
 from .bvh import SceneView, curve_radius, _hair_sample_dir_u, _scene_bounding_sphere, _sample_disk_perpendicular, _sample_infinite_light_dir, _eval_infinite_light_and_pdf, _hair_precompute, LightSample, _sample_distant_light_nee, _sample_point_light_nee, _sample_sphere_light_nee, _sample_infinite_light_nee, light_path_pick
@@ -374,12 +374,6 @@ struct AreaLightSample(TrivialRegisterPassable):
     var light:  AreaLight
     var point:  Vec3f
     var normal: Vec3f
-
-@always_inline
-def area_light_side_pdf(al: AreaLight) -> Float32:
-    """Probability of the emission side a TWO-SIDED mesh light (pbrt
-    "twosided") picks: 1/2, since both faces emit; 1 for one-sided."""
-    return Float32(0.5) if (al.kind == Int8(0) and al._pad0 != Int8(0)) else Float32(1.0)
 
 
 @always_inline

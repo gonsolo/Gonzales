@@ -19,11 +19,8 @@ from .bdpt_vertex import _BDPT_MAX_VERTS, BDPTVertex
 from .materials import LobeKind
 from .bdpt_nee import _visible_transmittance
 from .bdpt_eval import _vcm_free_flight, _vcm_cos_at, _eval_vertex_spectral, _bdpt_vertex_pdfs, _bdpt_vertex_mis_scoped, _bdpt_connect_pair_weighted
-from .vcm_grid import (
-    _vcm_too_long, _vcm_keep, _VCM_CAMIS, _CAMIS_CAM_RECS, _CAMIS_FORCE_C1, _vcm_eta_scale,
-    _vcm_eta_at, _vcm_on_fibre, _vcm_past_depth, _vcm_past_cache,
-)
-from .vcm_merge_weight import _camis_gather_light
+from .vcm_strategy import _vcm_too_long, _vcm_keep, _VCM_CAMIS, _CAMIS_CAM_RECS, _CAMIS_FORCE_C1, _vcm_eta_scale, _vcm_eta_at, _vcm_on_fibre, _vcm_past_depth, _vcm_past_cache
+from .vcm_camis import _camis_gather_light
 
 
 @always_inline

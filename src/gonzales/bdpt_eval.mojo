@@ -7,7 +7,7 @@ from .geometry import Point3f, Point2f, Vec3f, RGB, dot, cross, PI, _is_real_ptr
 from .materials import LobeKind
 from .primitives import Intersection, mesh_vi, mesh_pos
 from .lights import area_light_pick_triangle
-from .sppm import area_light_side_pdf
+from .lights import area_light_side_pdf
 from .shading import (
     _shade_context, _mnee_first_probe, _mnee_chain, _mnee_chain_t_eta, _mnee_reproduce, _emitter_face_normal,
 )

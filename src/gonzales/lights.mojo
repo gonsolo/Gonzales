@@ -312,3 +312,8 @@ def light_sampler_pdf(ls: LightSampler, light_idx: Int32) -> Float32:
     return max(ls.cdf[unsafe_offset=i + 1] - ls.cdf[unsafe_offset=i], Float32(1e-6))
 
 
+@always_inline
+def area_light_side_pdf(al: AreaLight) -> Float32:
+    """Probability of the emission side a TWO-SIDED mesh light (pbrt
+    "twosided") picks: 1/2, since both faces emit; 1 for one-sided."""
+    return Float32(0.5) if (al.kind == Int8(0) and al._pad0 != Int8(0)) else Float32(1.0)

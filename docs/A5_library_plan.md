@@ -3,7 +3,7 @@
 Plan for splitting `src/gonzales` into layered subpackages with shared transport interfaces, so that new integrators
 (UPBP, photon planes, guiding, Metropolis) are thin modules and a feature cannot exist in one integrator only.
 
-**Status (2026-10-31): draft for review, nothing moved.** Counts come from a scan of `from .x import` lines. Interfaces
+**Status (2026-10-31): draft for review; moves under way on branch `library`.** Counts come from a scan of `from .x import` lines. Interfaces
 below are proposals and have not been compiled for the GPU.
 
 ## Why
@@ -21,8 +21,8 @@ Each layer imports only from layers above it. 97 modules, 61,774 lines.
 | `core` | geometry, spectra, sampling, random numbers | 4,672 |
 | `scene` | primitives, materials, media, lights, BVH, parsers | 22,251 |
 | `transport` | lobes, phase functions, light sampling, walks, MNEE, SMS | 4,627 |
-| `paths` | subpaths, vertices, connections, MIS | 2,885 |
-| `estimators` | photon stores and density estimates | 663 |
+| `estimators` | generic photon stores and density estimates, no path vertices | 663 |
+| `paths` | subpaths, vertices, connections, MIS, VCM's strategies and vertex grid | 2,885 |
 | `integrators` | PT, VCM, SPPM, ReSTIR, then the new ones | 12,684 |
 | `gpu` | kernels and drivers | 9,527 |
 | `app` | pipeline, command line, viewer | 4,465 |

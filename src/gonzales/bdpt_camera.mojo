@@ -27,7 +27,8 @@ from .bvh import SceneView, test_spheres, _scene_bounding_sphere, _eval_infinite
 from .sampling import power_heuristic, camera_ray_from_film_xy, FilmFilter, film_filter_offset, ThinLens
 from .rng import PCG32
 from .geom_normal import _geom_normal, _shading_normal_at
-from .sppm import _dielectric_bounce, _cosine_hemisphere_sample, area_light_side_pdf
+from .sppm import _dielectric_bounce, _cosine_hemisphere_sample
+from .lights import area_light_side_pdf
 from .shading import _get_tri_verts, apply_surface_maps_at_hit, area_light_hit_cos, curve_light_hit
 from .bxdf import BSDF, LobeSample, LobeTables
 from .spectrum import (
@@ -40,7 +41,7 @@ from .bdpt_eval import (
     _vcm_sphere_slot, _vcm_infinite_slot, _vcm_nee_surface, _vertex_ctx, _bdpt_vertex_mis_scoped, _vcm_mnee,
     _vcm_mnee_hit_term,
 )
-from .vcm_grid import _vcm_depth, _VCM_MAX_STORED, _vcm_keep, _VCM_CAMIS, _CAMIS_CAM_RECS, _CAMIS_FORCE_C1, _vcm_eta_scale, _vcm_eta_at, _vcm_fibre_scale
+from .vcm_strategy import _vcm_depth, _VCM_MAX_STORED, _vcm_keep, _VCM_CAMIS, _CAMIS_CAM_RECS, _CAMIS_FORCE_C1, _vcm_eta_scale, _vcm_eta_at, _vcm_fibre_scale
 from .bdpt_connect import _bdpt_connect_to_cache, _bdpt_connect_to_cache_deferred
 from .vcm_merge import _bdpt_merge_from_cache
 from .surface import sss_entry_tint, surface_hit
