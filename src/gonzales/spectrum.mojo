@@ -14,7 +14,7 @@
 # genuinely has three authored channels.
 
 from std.math import exp, log, max
-from gonzales.sampling import mix_bits_u64
+from gonzales.rng import mix_bits_u64
 from gonzales.rgb2spec import SpectrumTable, CieXyzTables, rgb_to_coeffs_table_lookup_ptr, eval_sigmoid_spectrum, rgb_illuminant_to_coeffs_ptr, eval_illuminant_spectrum, build_cie_xyz_tables, cie_xyz_at_ptr, xyz_to_srgb, load_default_spectrum_table, CIE_Y_INTEGRAL
 from gonzales.sensors import named_sensor_srgb_matrix
 

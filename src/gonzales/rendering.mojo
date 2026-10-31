@@ -12,7 +12,8 @@ from .primitives import mesh_point
 from .media import SSS_WALK_ROUNDS
 from .bvh import SceneView, traverse_dispatch, test_spheres
 from .shading import cpu_shade_context, shade_core_cpu_nee_ctx, GIPendingX1, gi_pending_x1_init
-from .sampling import TileSamplerParams, encode_morton2, sobol_index_pixel_part, mix_bits_u64, gen_primary_ray_state
+from .sampling import TileSamplerParams, encode_morton2, sobol_index_pixel_part, gen_primary_ray_state
+from .rng import mix_bits_u64
 from .guide import GuideGrid, guide_merge, null_guide
 from .spectrum import SpectralSample, spectral_sample_to_rgb
 from .gpu_media import _sample_medium_core, path_medium_after_shading

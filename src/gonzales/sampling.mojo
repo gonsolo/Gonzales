@@ -1,5 +1,6 @@
 from std.math import sqrt, log, exp, cos, sin
 from std.bit import count_trailing_zeros
+from .rng import mix_bits_u64
 from .geometry import Vec3f, Point3f, dot, cross, Frame, PI, TWO_PI, _is_real_ptr, fast_sincos
 from .primitives import Ray
 from .spectrum import SampledWavelengths, sample_wavelengths
@@ -182,17 +183,6 @@ def fast_owen_scramble(value_in: UInt32, seed: UInt32) -> UInt32:
     v ^= v * UInt32(0x05526c56)
     v ^= v * UInt32(0x53a22864)
     return reverse_bits32(v)
-
-@always_inline
-def mix_bits_u64(v: UInt64) -> UInt32:
-    var v32 = UInt32(v & UInt64(0xFFFFFFFF))
-    v32 ^= UInt32(v >> 32)
-    v32 ^= v32 >> 16
-    v32 *= UInt32(0x85ebca77)
-    v32 ^= v32 >> 13
-    v32 *= UInt32(0xc2b2ae35)
-    v32 ^= v32 >> 16
-    return v32
 
 @always_inline
 def encode_morton2(x: UInt32, y: UInt32) -> UInt64:

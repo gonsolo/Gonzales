@@ -18,7 +18,8 @@ from .primitives import Ray, PrimId, TriangleMesh, Instance, mesh_vi, mesh_pos
 from .curves import CurveBvh, curve_at, curve_piece_bounds
 from .postprocess import denoise, write_image, write_image_cropped
 from .transform import Mat4, matrix_invert
-from .sampling import TileSamplerParams, ThinLens, mix_bits_u64, camera_ray_from_film_xy
+from .sampling import TileSamplerParams, ThinLens, camera_ray_from_film_xy
+from .rng import mix_bits_u64
 from .bvh import SceneView, render_aux_buffers, _scene_bounding_sphere
 from .sppm import sppm_render
 from .sppm_gpu import sppm_render_gpu

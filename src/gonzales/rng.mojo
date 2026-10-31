@@ -20,3 +20,15 @@ struct PCG32:
 
     def next_float(mut self) -> Float32:
         return Float32(self.next_uint() >> 8) * (1.0 / 16777216.0)
+
+
+@always_inline
+def mix_bits_u64(v: UInt64) -> UInt32:
+    var v32 = UInt32(v & UInt64(0xFFFFFFFF))
+    v32 ^= UInt32(v >> 32)
+    v32 ^= v32 >> 16
+    v32 *= UInt32(0x85ebca77)
+    v32 ^= v32 >> 13
+    v32 *= UInt32(0xc2b2ae35)
+    v32 ^= v32 >> 16
+    return v32
