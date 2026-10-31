@@ -16,9 +16,7 @@ from gonzales.paths.vcm_camis import (
 from gonzales.scene.bvh import traverse_dispatch
 from gonzales.scene.bvh import SceneView, test_spheres, _scene_bounding_sphere, _sample_disk_perpendicular, _sample_infinite_light_dir, sphere_light_cone_pdf, light_path_pick
 from gonzales.core.rng import PCG32
-from gonzales.integrators.sppm import (
-    _cosine_hemisphere_sample, sample_area_light_point, sample_sphere_light_emission, area_light_emit_normal,
-)
+from gonzales.integrators.sppm import _cosine_hemisphere_sample, sample_area_light_point, sample_sphere_light_emission, area_light_emit_normal
 from gonzales.scene.lights import area_light_side_pdf
 from gonzales.core.spectrum import SampledWavelengths, SpectralSample, spec_refl, spec_illum
 from gonzales.scene.geom_normal import _geom_normal

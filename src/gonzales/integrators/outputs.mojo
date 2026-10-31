@@ -19,7 +19,7 @@ from max.algorithm import parallelize
 from gonzales.scene.bvh import SceneView, render_aux_buffers
 from gonzales.scene.pbrt_parser import ParsedScene_Mojo
 from gonzales.integrators.postprocess import denoise, write_image_cropwindow
-from gonzales.integrators.rendering import apply_film_sensor
+from gonzales.integrators.film import apply_film_sensor
 from gonzales.core.geometry import RGB, _is_real_ptr
 
 

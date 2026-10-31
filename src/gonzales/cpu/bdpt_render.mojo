@@ -1,6 +1,4 @@
-# BDPT/VCM CPU render driver.
-# Part of the BDPT/VCM machinery that used to be one file (bdpt_*.mojo).
-
+"""VCM on the CPU."""
 from std.sys.info import size_of
 from max.algorithm import parallelize
 from std.math import tan, max, abs
@@ -23,21 +21,7 @@ from gonzales.paths.vcm_strategy import _CAMIS_LVC_PER_SLOT
 from gonzales.paths.bdpt_connect import _bdpt_splat_filtered, _bdpt_connect_to_camera
 from gonzales.integrators.bdpt_camera import _bdpt_trace_camera_and_connect
 from gonzales.integrators.bdpt_light import _bdpt_trace_light_path
-
-def _vcm_finalize_one_pixel(
-    connect: RGB, merge: RGB, inv_spp: Float32,
-) -> Tuple[RGB, RGB]:
-    """Averages one pixel's accumulated connect+splat and vertex-merging
-    sums over the render's spp samples, returning them SEPARATELY --"""
-    var c = connect * inv_spp
-    var m = merge * inv_spp
-    if c.r != c.r: c.r = Float32(0)
-    if c.g != c.g: c.g = Float32(0)
-    if c.b != c.b: c.b = Float32(0)
-    if m.r != m.r: m.r = Float32(0)
-    if m.g != m.g: m.g = Float32(0)
-    if m.b != m.b: m.b = Float32(0)
-    return (c, m)
+from gonzales.integrators.film import _vcm_finalize_one_pixel
 
 
 def _bdpt_render_core(
@@ -246,6 +230,7 @@ def _bdpt_render_core(
     albedo_buf.unsafe_free()
 
     return Tuple[Pointer[Float32, MutUntrackedOrigin], Pointer[Float32, MutUntrackedOrigin], Pointer[Float32, MutUntrackedOrigin]](pixels, caustic_pixels, albedo_pixels)
+
 
 def vcm_render(
     psc:      Pointer[ParsedScene_Mojo, MutUntrackedOrigin],

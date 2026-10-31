@@ -74,6 +74,7 @@ Each step is one or a few commits. Unit tests stay green and renders stay identi
 4. `transport.medium` and `transport.walk`, out of `gpu_media`.
 5. `transport.manifold` and `context`, out of `shading`.
 6. Subpackages: move files, absolute imports, tests mirrored.
+6b. `cpu` beside `gpu`, both above `integrators`: `rendering`, `bdpt_render` and SPPM's CPU passes hold loops and threads, and `integrators` keeps the shared per-path logic. Read those files first, as some contents may be shared.
 7. `Medium` and `Hop` traits, PT, VCM and SPPM on them.
 8. `StrategySet`, VCM on it. The riskiest step: weights must not change except where a test shows a bug.
 9. `PhotonEstimator`, VCM and SPPM on it.
