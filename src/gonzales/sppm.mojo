@@ -25,7 +25,7 @@ from .lights import area_light_pick_triangle, AreaLight
 from .curves import Curve, curve_at, curve_piece_endpoints, _curve_perp_axis
 from .bvh import traverse_dispatch, any_hit_dispatch
 from .bvh import SceneView, curve_radius, _hair_sample_dir_u, _scene_bounding_sphere, _sample_disk_perpendicular, _sample_infinite_light_dir, _eval_infinite_light_and_pdf, _hair_precompute, LightSample, _sample_distant_light_nee, _sample_point_light_nee, _sample_sphere_light_nee, _sample_infinite_light_nee, light_path_pick
-from .vcm_mis import mis_policy_sole
+from .mis_policy import mis_policy_sole
 from .bxdf import ggx_lambda, dielectric_interface, bxdf_sample_dielectric, bxdf_sample_thin_dielectric, BxDFFlags, GeomContext, bxdf_sample_conductor, BSDF, LobeTables
 from .surface import sss_entry_tint, surface_hit
 from .shading import apply_surface_maps_at_hit, area_light_hit_cos
