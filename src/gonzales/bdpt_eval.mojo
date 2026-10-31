@@ -311,6 +311,8 @@ def _vcm_mnee(
     if cos_y <= Float32(0):
         return z
     var w0 = verts[0].pos - hit_v
+    if v.mat_kind == LobeKind.sss_exit and dot(w0, gn) <= Float32(0):
+        return z   # the exit lobe takes |cos|: a light behind the surface is not its own to reject
     var le = _lobe_eval[want_pdfs=True](v, w0 * (Float32(1) / sqrt(dot(w0, w0))), sd, sd.spectral.coeffs, sd.spectral.res,
         sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wl)
     var (t_ch, eta_ch) = _mnee_chain_t_eta(hit_v, verts, n)

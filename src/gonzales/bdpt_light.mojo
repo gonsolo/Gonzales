@@ -17,6 +17,7 @@ from .bvh import SceneView, test_spheres, _scene_bounding_sphere, _sample_disk_p
 from .rng import PCG32
 from .sppm import _cosine_hemisphere_sample, sample_area_light_point, sample_sphere_light_emission, area_light_emit_normal, area_light_side_pdf
 from .spectrum import SampledWavelengths, SpectralSample, spec_refl, spec_illum
+from .geom_normal import _geom_normal
 from .bdpt_vertex import _VCM_SSS_CAMERA_ONLY, _vcm_walk_limit, _BDPT_MAX_VERTS, BDPTVertex, _null_vertex
 from .bdpt_eval import _bdpt_vertex_mis_scoped, _vcm_mnee_light_dvcm
 from .vcm_grid import _vcm_depth, _VCM_MAX_STORED, _vcm_keep, _VCM_CAMIS, _vcm_eta_scale, _vcm_eta_at, _vcm_fibre_scale
@@ -466,6 +467,13 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
                     return False
                 st.cur_med_idx = med_in
                 st.current_dielectric_ior = ior_cur; st.previous_dielectric_ior = ior_prev
+                if st.mnee.side > Float32(0) and st.mnee.n_glass > Int32(0):
+                    # Reached through glass only: the camera exit's MNEE samples this entry too.
+                    var gn_e = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
+                    var d_m = _vcm_mnee_light_dvcm(sd, hit.to_simd(), gn_e, st.mnee.y, st.mnee.ny, st.mnee.side,
+                                                   Int(st.mnee.n_glass), st.mnee.first_glass, pcg)
+                    if d_m > Float32(0):
+                        dvcm_in = d_m * abs(dot(ray_dir, gn_e))   # the walk applies the arrival cosine
                 var ex = _vcm_sss_walk[use_gpu](sd, inter, mat, hit, ray_dir, st.rd, st.wl, mis_vc_weight_factor, pcg, st.flux,
                                                 st.dvcm, st.dvc, st.dvm, dvcm_in, dvc_in, dvm_in)
                 if not ex.ok:

@@ -453,6 +453,8 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
     """One bounce of a camera subpath, shared by the per-path loop and the wavefront kernels; False ends the path."""
         if st.n_verts >= _BDPT_MAX_VERTS:
             return False   # mirrors the original loop's top-of-iteration guard
+        # Zero carries do not mean no competitor: a walk's exit behind glass has none, and MNEE still samples this path.
+        var mnee_rival = st.last_bsdf_pdf == PDF_DELTA_FULL and st.mnee.pdf0 > Float32(0)
         # Past the cache only camera strategies exist: see _vcm_past_cache.
         var long_hit = st.n_verts + st.n_vol + st.n_delta > _VCM_MAX_STORED
         if inter.hit == Int8(0):
@@ -588,7 +590,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                     # this ray, so its cone pdf is measured from there -- not
                     var x_nee = st.ro.to_simd() - ray_dir * st.mis_null_dist
                     var pdf_cone = sphere_light_cone_pdf(sph_hit, x_nee)
-                    if st.dvcm > Float32(0) or st.dvc > Float32(0):
+                    if st.dvcm > Float32(0) or st.dvc > Float32(0) or mnee_rival:
                         # SmallVCM's GetLightRadiance, the balance weight over
                         # EVERY strategy now that sphere lights start light
                         var aw_hit = Float32(4) * PI * sph_hit.radius * sph_hit.radius / light_path_pick_pdf(sd, _vcm_sphere_slot(sd, Int(inter.primId.id1)))
@@ -629,7 +631,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 elif st.last_bsdf_pdf >= Float32(0) or st.last_bsdf_pdf == _VOL_PHASE_HIT or (st.n_verts + st.n_vol > 0 and st.last_bsdf_pdf == PDF_DELTA_FULL):
                     # A DELTA last bounce (glass, mirror: last_bsdf_pdf = -1)
                     # is weighted too once a real vertex is stored -- the
-                    if cos_l_hit > Float32(0) and al_area > Float32(0) and (st.dvcm > Float32(0) or st.dvc > Float32(0)):
+                    if cos_l_hit > Float32(0) and al_area > Float32(0) and (st.dvcm > Float32(0) or st.dvc > Float32(0) or mnee_rival):
                         # SmallVCM's GetLightRadiance, the balance weight over
                         # EVERY strategy -- not the 2-strategy power heuristic
                         var p_a = light_path_pick_pdf(sd, al_slot) / al_area
@@ -789,10 +791,11 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 st.total += _vcm_nee_surface(sd, v, ctx_x, x_o, n_o, st.beta, Float32(0),
                                           v.dVCM, v.dVC, st.cur_med_idx, scratch, st.wl, pcg,
                                           offset_eps(x_o.x, x_o.y, x_o.z), False)
+                st.total += _vcm_mnee(sd, v, x_o.to_simd(), n_o, st.beta, pcg, st.wl, Float32(0), v.dVCM, v.dVC)
                 var cos_out_x = _vcm_sss_exit_scatter(sd, ex, mat.albedo.r, mis_vc_weight_factor, mis_vm_weight_factor, pcg,
                                                       st.ro, st.rd, st.beta, st.dvcm, st.dvc, st.dvm)
                 st.last_bsdf_pdf = cos_out_x * INV_PI
-                st.mnee.pdf0 = Float32(0)
+                st.mnee = VCMMneeTrack(x_o.to_simd(), cos_out_x * INV_PI, Int32(0))
             else:
                 st.n_delta += 1
                 st.mnee.n_glass += 1
