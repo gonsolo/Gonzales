@@ -178,6 +178,8 @@ struct Material(TrivialRegisterPassable):
     @always_inline
     def is_specular_glass(self) -> Bool:
         """Glass a specular chain passes through: a smooth or a thin dielectric. What MNEE and SMS walk."""
+        if self.sss_walk_interior():
+            return False   # skin is built on the dielectric, but light leaves it by the walk
         return (self.type == MatKind.dielectric and not self.is_rough_dielectric()) or self.type == MatKind.thin_dielectric
 
     @always_inline
