@@ -776,7 +776,7 @@ def _mnee_reproduce(
         return (0, n, verts^, Float32(0.0))
     var d = verts[n-1].pos - last_spec
     var r = last_spec - x0
-    if dot(d, d) > Float32(1e-4) * dot(r, r):   # 1% of the distance: another root of the same chain is further away
+    if dot(d, d) > Float32(1e-7) * dot(r, r):   # 0.03% of the distance: another root of the same chain is further away
         return (0, n, verts^, Float32(0.0))
     var g = _mnee_chain_g(x0, verts, res[5])
     return (1, n, verts^, g)
