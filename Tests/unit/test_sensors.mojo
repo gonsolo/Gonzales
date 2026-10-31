@@ -19,13 +19,13 @@
 
 from std.math import abs
 from std.testing import assert_true, TestSuite
-from gonzales.sensors import (
+from gonzales.core.sensors import (
     named_sensor_is_supported, named_sensor_srgb_matrix, scan_film_sensor_params,
     _CIE_X, _CIE_Y, _CIE_Z, _swatch, N_SWATCHES,
     _project_reflectance_sensor, _project_reflectance_xyz,
     _solve_xyz_from_sensor_rgb, _mat3_inverse, _mat3_mul,
 )
-from gonzales.rgb2spec import (
+from gonzales.core.rgb2spec import (
     CIE_LAMBDA_MIN, CIE_LAMBDA_MAX, CIE_SAMPLES,
     _XYZ_TO_SRGB00, _XYZ_TO_SRGB01, _XYZ_TO_SRGB02,
     _XYZ_TO_SRGB10, _XYZ_TO_SRGB11, _XYZ_TO_SRGB12,

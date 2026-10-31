@@ -5,11 +5,11 @@ from std.testing import assert_true, TestSuite
 from std.math import abs, sin, cos
 from max.gpu.host import DeviceContext
 from max.gpu.host._nvidia_cuda import CUDA
-from gonzales.primitives import TriangleMesh
-from gonzales.vulkanrt import (
+from gonzales.scene.primitives import TriangleMesh
+from gonzales.scene.vulkanrt import (
     vulkanrt_build_scene, vulkanrt_trace_rays, vulkanrt_destroy_scene, vulkanrt_debug_read_as,
 )
-from gonzales.rtcore import (
+from gonzales.scene.rtcore import (
     rtcore_create, rtcore_trace, rtcore_destroy,
     RTCORE_MISS, RTCORE_PRIM_MASK,
 )

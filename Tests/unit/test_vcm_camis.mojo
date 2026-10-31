@@ -20,7 +20,7 @@ harness) vs. Float32 (here) rounding -- both comfortably inside 1e-4.
 """
 from std.testing import TestSuite
 from std.collections import Array
-from gonzales.vcm_camis import (
+from gonzales.paths.vcm_camis import (
     CamisCamCarry, CamisCamRecord, CamisLightRecord, CAMIS_IN_CLASS,
     camis_eval_merge,
 )

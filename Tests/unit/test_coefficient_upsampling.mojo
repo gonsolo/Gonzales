@@ -1,6 +1,6 @@
 from std.math import abs, min, max
 from std.testing import assert_true, TestSuite
-from gonzales.spectrum import (
+from gonzales.core.spectrum import (
     load_spectral_context, spectral_handle, sample_wavelengths,
     spec_refl, spec_refl_unbounded, rgb_bands_to_spectral_sample,
 )

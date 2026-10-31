@@ -1,12 +1,12 @@
 from std.math import abs
 from std.testing import assert_true, TestSuite
-from gonzales.geometry import RGB, INV_PI, Vec3f
-from gonzales.reservoir import reservoir_update
-from gonzales.restir_gi import (
+from gonzales.core.geometry import RGB, INV_PI, Vec3f
+from gonzales.core.reservoir import reservoir_update
+from gonzales.integrators.restir_gi import (
     GIReservoir, gi_reservoir_init, gi_target_pdf,
     GIReservoirIO, gi_reservoir_io_null, gi_temporal_spatial_combine,
 )
-from gonzales.rng import PCG32
+from gonzales.core.rng import PCG32
 
 comptime EPS: Float32 = 1e-4
 

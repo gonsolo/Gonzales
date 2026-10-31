@@ -9,13 +9,13 @@
 from std.math import abs, sqrt, cos, sin
 from std.memory.alloc import unsafe_alloc
 from std.testing import assert_true, TestSuite
-from gonzales.geometry import RGB, Vec3f, PI
-from gonzales.materials import Material, MatKind, LobeKind, MeasuredBRDF
-from gonzales.curves import Curve
-from gonzales.bxdf import BSDF, LobeTables
-from gonzales.rng import PCG32
-from gonzales.spectrum import sample_wavelengths, SpectralContext, spectral_handle, SpectralHandle
-from gonzales.rgb2spec import build_spectrum_table, build_cie_xyz_tables, SpectrumTable
+from gonzales.core.geometry import RGB, Vec3f, PI
+from gonzales.scene.materials import Material, MatKind, LobeKind, MeasuredBRDF
+from gonzales.scene.curves import Curve
+from gonzales.transport.bxdf import BSDF, LobeTables
+from gonzales.core.rng import PCG32
+from gonzales.core.spectrum import sample_wavelengths, SpectralContext, spectral_handle, SpectralHandle
+from gonzales.core.rgb2spec import build_spectrum_table, build_cie_xyz_tables, SpectrumTable
 
 comptime _curves = Pointer[Curve, MutUntrackedOrigin].unsafe_dangling()
 comptime _mbrdfs = Pointer[MeasuredBRDF, MutUntrackedOrigin].unsafe_dangling()

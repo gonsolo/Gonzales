@@ -4,15 +4,15 @@ from std.sys.info import _accelerator_arch
 from std.time import perf_counter_ns
 from std.os import getenv, setenv
 from std.memory.alloc import unsafe_alloc
-from gonzales.pipeline import _generate_sobol_matrices, parse_and_render, render_interactive, debug_trace_pixel, debug_render_vulkanrt, bake_scene
-from gonzales.spectrum import load_spectral_context, spectral_handle, SpectralContext
-from gonzales.pbrt_parser import ParsedScene_Mojo
-from gonzales.ply_prefetch import PlyPrefetch, scan_plys
-from gonzales.os_thread import OsThread, ThreadArg
-from gonzales.scene_loader import mojo_parse_scene_any
-from gonzales.gpu_scene import gpu_available
+from gonzales.app.pipeline import _generate_sobol_matrices, parse_and_render, render_interactive, debug_trace_pixel, debug_render_vulkanrt, bake_scene
+from gonzales.core.spectrum import load_spectral_context, spectral_handle, SpectralContext
+from gonzales.scene.pbrt_parser import ParsedScene_Mojo
+from gonzales.scene.ply_prefetch import PlyPrefetch, scan_plys
+from gonzales.core.os_thread import OsThread, ThreadArg
+from gonzales.scene.scene_loader import mojo_parse_scene_any
+from gonzales.gpu.gpu_scene import gpu_available
 from max.gpu.host import DeviceContext
-from gonzales.sensors import scan_film_sensor_params
+from gonzales.core.sensors import scan_film_sensor_params
 
 def _parse_int32(s: String, start: Int) -> Int32:
     var v = Int32(0)

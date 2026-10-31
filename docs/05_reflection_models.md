@@ -66,7 +66,7 @@ glossy reflections.
 Real materials often have multiple layers — a clear coat over diffuse paint,
 lacquer over wood, a wet or oxidized metal surface. `coateddiffuse` is a
 smooth or rough dielectric coat over a Lambertian base, and
-`src/gonzales/layered.mojo` is a line-by-line port of PBRT's `LayeredBxDF`
+`src/gonzales/transport/layered.mojo` is a line-by-line port of PBRT's `LayeredBxDF`
 for it: the rough `DielectricBxDF`, the Trowbridge-Reitz distribution, coat
 thickness 0.01 with `exp(−thickness/|cos θ|)` attenuation per crossing, and
 a random walk of at most ten interface events. All three integrators use it

@@ -95,7 +95,7 @@ LLDB			= lldb
 
 BUILD_DIR		= build
 GONZALES		= $(BUILD_DIR)/gonzales
-MOJO_SRCS		:= $(wildcard src/gonzales/*.mojo)
+MOJO_SRCS		:= $(wildcard src/gonzales/*.mojo src/gonzales/*/*.mojo)
 GONZALES_RELEASE	= $(GONZALES)
 GONZALES_DEBUG		= $(GONZALES)
 

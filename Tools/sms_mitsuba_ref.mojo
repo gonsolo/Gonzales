@@ -4,7 +4,7 @@
 # (Zeltner et al. 2020, "Specular Manifold Sampling for Rendering
 # High-Frequency Caustics and Glints").
 #
-# WHY THIS EXISTS: gonzales's own SMS (src/gonzales/sms.mojo +
+# WHY THIS EXISTS: gonzales's own SMS (src/gonzales/transport/sms.mojo +
 # shading.mojo's _sms_probe_and_solve) uses the GENERALIZED HALF-VECTOR
 # constraint formulation, while sphere_sms.xml sets
 # `caustics_halfvector_constraints = false` -- so the reference render we
@@ -59,8 +59,8 @@ from std.math import sqrt, sin, cos, acos, asin, floor, abs, min, max
 from std.sys import argv
 from std.ffi import external_call
 from max.algorithm import parallelize
-from gonzales.geometry import Vec3f, dot, cross, _atan2f
-from gonzales.rng import PCG32
+from gonzales.core.geometry import Vec3f, dot, cross, _atan2f
+from gonzales.core.rng import PCG32
 from std.memory.alloc import unsafe_alloc
 
 comptime PI_F: Float32 = 3.14159265358979323846

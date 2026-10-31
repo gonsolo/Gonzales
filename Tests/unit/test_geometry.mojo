@@ -1,9 +1,9 @@
 from std.math import abs, sqrt
 from std.testing import assert_true, assert_false, TestSuite
-from gonzales.geometry import Vec3f, Point3f, Frame, RGB, reflect, refract, safe_sqrt, dot, cross, spherical_direction, vec3f, point3f
-from gonzales.materials import schlick_fresnel, fr_dielectric
-from gonzales.primitives import sphere_outward_normal
-from gonzales.curves import Curve, curve_bspline_point, curve_light_tube_area
+from gonzales.core.geometry import Vec3f, Point3f, Frame, RGB, reflect, refract, safe_sqrt, dot, cross, spherical_direction, vec3f, point3f
+from gonzales.scene.materials import schlick_fresnel, fr_dielectric
+from gonzales.scene.primitives import sphere_outward_normal
+from gonzales.scene.curves import Curve, curve_bspline_point, curve_light_tube_area
 
 comptime EPS: Float32 = 1e-4
 

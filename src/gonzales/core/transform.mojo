@@ -1,0 +1,230 @@
+from std.collections import Array
+from gonzales.core.geometry import Vec3f, Point3f
+
+# Matrix math. 4x4 matrices are 16 Float32 in column-major order:
+# flat[col*4 + row] = matrix[row, col], matching Transform.columnMajorFloats().
+
+
+@fieldwise_init
+struct Mat4(TrivialRegisterPassable):
+    """A 4x4 col-major matrix as a value, for the world_to_light/raster_to_
+    camera/camera_to_world family -- the transforms this codebase keeps
+    hand-rolling inline (element-by-element against a raw Pointer[Float32] or
+    SIMD[DType.float32, 16]) instead of calling one shared type.
+
+    NOT the only matrix representation in this codebase, and deliberately
+    not trying to be: Instance.objToWorld/worldToObj are already
+    SIMD[DType.float32, 16] for GPU throughput reasons of their own (many
+    per scene, TrivialRegisterPassable so they cross kernel boundaries by
+    value), and transform.mojo's transform_points/transform_normals below
+    stay array-in/array-out for bulk mesh preprocessing. Mat4 is for the
+    single-point/single-vector call sites -- camera rays, per-sample env
+    light transforms -- that had no shared type at all and so reimplemented
+    the same handful of lines repeatedly, each a chance to drift.
+
+    Two multiplies, not one, because they are NOT interchangeable and a
+    single overloaded `*` would hide which one a call site means:
+      - `mat * v`            ordinary forward multiply (rotation part only,
+                              no translation): world_to_light * dir_world,
+                              turning a WORLD direction into the light's
+                              local frame.
+      - `mat.transpose_mul(v)` the TRANSPOSE multiply: for an orthogonal
+                              (rotation) matrix, M^T == M^-1, so this is how
+                              bvh.mojo already recovers light_to_world from
+                              world_to_light without storing a second matrix
+                              -- local light-space direction back to world,
+                              e.g. photon emission. Conflating the two once
+                              already produced a scene-dependent sign/axis
+                              bug class in this codebase's history
+                              (env-map shadow-direction row-flip, see
+                              project_infinite_light_shadows); keeping them
+                              as differently-named operations makes that
+                              mistake a type-level question again, not a
+                              silent one.
+    """
+    var m: SIMD[DType.float32, 16]
+
+    @staticmethod
+    def load(ptr: Pointer[Float32, MutUntrackedOrigin]) -> Mat4:
+        var v = SIMD[DType.float32, 16](0)
+        for i in range(16):
+            v[i] = ptr[unsafe_offset=i]
+        return Mat4(v)
+
+    @always_inline
+    def __mul__(self, v: Vec3f) -> Vec3f:
+        return Vec3f(
+            self.m[0]*v.x + self.m[4]*v.y + self.m[8]*v.z,
+            self.m[1]*v.x + self.m[5]*v.y + self.m[9]*v.z,
+            self.m[2]*v.x + self.m[6]*v.y + self.m[10]*v.z,
+        )
+
+    @always_inline
+    def transpose_mul(self, v: Vec3f) -> Vec3f:
+        return Vec3f(
+            self.m[0]*v.x + self.m[1]*v.y + self.m[2]*v.z,
+            self.m[4]*v.x + self.m[5]*v.y + self.m[6]*v.z,
+            self.m[8]*v.x + self.m[9]*v.y + self.m[10]*v.z,
+        )
+
+    @always_inline
+    def transform_point(self, p: Point3f) -> Point3f:
+        """Forward transform of a POINT: the rotation/scale part `mat * v`
+        already provides, plus the translation column, plus the perspective
+        divide a projective matrix (raster_to_camera and friends) needs. The
+        missing half of what this struct's own docstring calls out --
+        `mat * v` and `transpose_mul` cover vectors, but every point-transform
+        call site (a hit position, a camera-ray origin, a light position)
+        still hand-rolled `m0*px + m4*py + m8*pz + m12` (and the w-divide)
+        itself. Mirrors transform_points' per-point math below exactly, so a
+        single point and a bulk array agree by construction."""
+        var rx = self.m[0]*p.x + self.m[4]*p.y + self.m[8]*p.z + self.m[12]
+        var ry = self.m[1]*p.x + self.m[5]*p.y + self.m[9]*p.z + self.m[13]
+        var rz = self.m[2]*p.x + self.m[6]*p.y + self.m[10]*p.z + self.m[14]
+        var rw = self.m[3]*p.x + self.m[7]*p.y + self.m[11]*p.z + self.m[15]
+        if rw != Float32(1) and rw != Float32(0):
+            var inv_rw = Float32(1) / rw
+            rx *= inv_rw; ry *= inv_rw; rz *= inv_rw
+        return Point3f(rx, ry, rz)
+
+def _write_identity(result: Pointer[Float32, MutUntrackedOrigin]) -> Int32:
+    for i in range(16):
+        result[unsafe_offset=i] = Float32(0)
+    result[unsafe_offset=0] = Float32(1)
+    result[unsafe_offset=5] = Float32(1)
+    result[unsafe_offset=10] = Float32(1)
+    result[unsafe_offset=15] = Float32(1)
+    return Int32(0)
+
+
+def matrix_multiply(
+    a: Pointer[Float32, MutUntrackedOrigin],
+    b: Pointer[Float32, MutUntrackedOrigin],
+    result: Pointer[Float32, MutUntrackedOrigin],
+):
+    # result[i, j] = sum_k a[i, k] * b[k, j]   (column-major)
+    for j in range(4):
+        for i in range(4):
+            var s = Float32(0)
+            for k in range(4):
+                s += a[unsafe_offset=k * 4 + i] * b[unsafe_offset=j * 4 + k]
+            result[unsafe_offset=j * 4 + i] = s
+
+
+def matrix_invert(
+    m: Pointer[Float32, MutUntrackedOrigin],
+    result: Pointer[Float32, MutUntrackedOrigin],
+) -> Int32:
+    # Gauss-Jordan elimination with full pivoting (mirrors Matrix.invert).
+    # On a singular matrix, writes the identity and returns 0.
+    var minv = Array[Float32, 16](fill=0)
+    for i in range(16):
+        minv[i] = m[unsafe_offset=i]
+    var indxc = Array[Int, 4](fill=0)
+    var indxr = Array[Int, 4](fill=0)
+    var ipiv = Array[Int, 4](fill=0)
+
+    for iteration in range(4):
+        var big = Float32(0)
+        var irow = 0
+        var icol = 0
+        for row in range(4):
+            if ipiv[row] != 1:
+                for col in range(4):
+                    if ipiv[col] == 0:
+                        var v = minv[col * 4 + row]
+                        if v < Float32(0):
+                            v = -v
+                        if v >= big:
+                            big = v
+                            irow = row
+                            icol = col
+                    elif ipiv[col] > 1:
+                        return _write_identity(result)
+        ipiv[icol] += 1
+        if irow != icol:
+            for colIndex in range(4):
+                var tmp = minv[colIndex * 4 + irow]
+                minv[colIndex * 4 + irow] = minv[colIndex * 4 + icol]
+                minv[colIndex * 4 + icol] = tmp
+        indxr[iteration] = irow
+        indxc[iteration] = icol
+        if minv[icol * 4 + icol] == Float32(0):
+            return _write_identity(result)
+        var pivinv = Float32(1) / minv[icol * 4 + icol]
+        minv[icol * 4 + icol] = Float32(1)
+        for colIndex in range(4):
+            minv[colIndex * 4 + icol] *= pivinv
+        for rowIndex in range(4):
+            if rowIndex != icol:
+                var save = minv[icol * 4 + rowIndex]
+                minv[icol * 4 + rowIndex] = Float32(0)
+                for colIndex in range(4):
+                    minv[colIndex * 4 + rowIndex] -= minv[colIndex * 4 + icol] * save
+
+    for ci in range(4):
+        var colIndex = 3 - ci
+        if indxr[colIndex] != indxc[colIndex]:
+            var rs = indxr[colIndex]
+            var cs = indxc[colIndex]
+            for rowIndex in range(4):
+                var tmp = minv[rs * 4 + rowIndex]
+                minv[rs * 4 + rowIndex] = minv[cs * 4 + rowIndex]
+                minv[cs * 4 + rowIndex] = tmp
+
+    for i in range(16):
+        result[unsafe_offset=i] = minv[i]
+    return Int32(1)
+
+
+# Bulk geometry transform.
+# Points are 4 floats each (SIMD4 layout: x,y,z,w=1). Normals are 3 floats each.
+# matrix / inv_matrix are 16-float column-major (flat[col*4+row] = m[row,col]).
+
+def transform_points(
+    matrix: Pointer[Float32, MutUntrackedOrigin],
+    points_in: Pointer[Float32, MutUntrackedOrigin],
+    count: Int32,
+    points_out: Pointer[Float32, MutUntrackedOrigin],
+):
+    var m0 = matrix[unsafe_offset=0];  var m1 = matrix[unsafe_offset=1];  var m2 = matrix[unsafe_offset=2];  var m3 = matrix[unsafe_offset=3]
+    var m4 = matrix[unsafe_offset=4];  var m5 = matrix[unsafe_offset=5];  var m6 = matrix[unsafe_offset=6];  var m7 = matrix[unsafe_offset=7]
+    var m8 = matrix[unsafe_offset=8];  var m9 = matrix[unsafe_offset=9];  var m10 = matrix[unsafe_offset=10]; var m11 = matrix[unsafe_offset=11]
+    var m12 = matrix[unsafe_offset=12]; var m13 = matrix[unsafe_offset=13]; var m14 = matrix[unsafe_offset=14]; var m15 = matrix[unsafe_offset=15]
+    for i in range(Int(count)):
+        var b = i * 4
+        var px = points_in[unsafe_offset=b];  var py = points_in[unsafe_offset=b+1];  var pz = points_in[unsafe_offset=b+2]
+        var rx = m0*px + m4*py + m8*pz + m12
+        var ry = m1*px + m5*py + m9*pz + m13
+        var rz = m2*px + m6*py + m10*pz + m14
+        var rw = m3*px + m7*py + m11*pz + m15
+        if rw != Float32(1) and rw != Float32(0):
+            var inv_rw = Float32(1) / rw
+            rx *= inv_rw; ry *= inv_rw; rz *= inv_rw
+        points_out[unsafe_offset=b] = rx;  points_out[unsafe_offset=b+1] = ry;  points_out[unsafe_offset=b+2] = rz;  points_out[unsafe_offset=b+3] = Float32(1)
+
+
+@always_inline
+def transform_normal(inv: Mat4, n: Vec3f) -> Vec3f:
+    """A normal transforms by the transpose of the inverse: inv^T . n, with
+    `inv` the inverse of the point transform (an Instance's worldToObj, a
+    shape's ctm_inv). THE one formula: it used to exist twice, and the copy
+    for instances kept the untransposed inv . n after the other was fixed,
+    so every rotated instance got its normals rotated backwards (a 45-degree
+    instanced quad facing a distant light rendered black)."""
+    return inv.transpose_mul(n)
+
+
+def transform_normals(
+    inv_matrix: Pointer[Float32, MutUntrackedOrigin],
+    normals_in: Pointer[Float32, MutUntrackedOrigin],
+    count: Int32,
+    normals_out: Pointer[Float32, MutUntrackedOrigin],
+):
+    var inv = Mat4.load(inv_matrix)
+    for i in range(Int(count)):
+        var b = i * 3
+        var n = transform_normal(inv, Vec3f(normals_in[unsafe_offset=b], normals_in[unsafe_offset=b+1], normals_in[unsafe_offset=b+2]))
+        normals_out[unsafe_offset=b] = n.x
+        normals_out[unsafe_offset=b+1] = n.y
+        normals_out[unsafe_offset=b+2] = n.z

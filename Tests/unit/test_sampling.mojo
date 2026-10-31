@@ -1,10 +1,10 @@
 from std.math import abs, sqrt, sin, cos
 from std.testing import assert_true, TestSuite
-from gonzales.sampling import (
+from gonzales.core.sampling import (
     power_heuristic, sample_cosine_hemisphere, reverse_bits32, encode_morton2, fast_owen_scramble, sobol_get_sample_index, sobol_index_pixel_part, sobol_index_sample_part, sobol_perm_lookup,
 )
-from gonzales.rng import mix_bits_u64
-from gonzales.geometry import fast_sincos
+from gonzales.core.rng import mix_bits_u64
+from gonzales.core.geometry import fast_sincos
 
 comptime EPS: Float32 = 1e-5
 

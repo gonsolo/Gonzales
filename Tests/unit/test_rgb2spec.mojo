@@ -6,7 +6,7 @@
 # memory) and shipped as src/gonzales/data/rgb2spectrum_table.bin.
 from std.math import abs
 from std.testing import assert_true, TestSuite
-from gonzales.rgb2spec import (
+from gonzales.core.rgb2spec import (
     build_quadrature_tables, gauss_newton_solve, eval_sigmoid_spectrum,
     RGBSigmoidCoeffs, _QuadratureTables, build_spectrum_table,
     rgb_to_coeffs_table_lookup, save_spectrum_table, load_spectrum_table,

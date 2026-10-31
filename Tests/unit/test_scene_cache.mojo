@@ -1,6 +1,6 @@
 from std.os import setenv, unsetenv
 from std.testing import assert_equal, assert_not_equal, TestSuite
-from gonzales.scene_cache import scene_cache_variant
+from gonzales.scene.scene_cache import scene_cache_variant
 
 
 def test_culling_changes_the_variant() raises:

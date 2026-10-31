@@ -14,22 +14,22 @@
 from std.math import abs
 from std.memory.alloc import unsafe_alloc
 from std.testing import assert_true, TestSuite
-from gonzales.curves import CurveBvh
-from gonzales.sampling import ThinLens
-from gonzales.footprint import CameraFootprint
-from gonzales.geometry import RGB, Point3f, Vec3f, INV_FOUR_PI, INV_PI
-from gonzales.materials import LobeKind, MeasuredBRDF
-from gonzales.materials import GpuTexture, NormalSlopeMap
-from gonzales.primitives import Intersection, Sphere, PrimId, Instance
-from gonzales.media import Medium, MediumInterface, Grid, NvdbGrid
-from gonzales.lights import LightSampler, AreaLight, DistantLight, PointLight, InfiniteLight
-from gonzales.bvh import BVH4, SceneView, BVH2Node
-from gonzales.bxdf import ggx_D, ggx_G2, ggx_albedo_avg, ggx_ms_shape, ggx_ms_tint
-from gonzales.bdpt_vertex import BDPTVertex
-from gonzales.bdpt_connect import _pdf_solid_to_area, _bdpt_connect_to_cache
-from gonzales.bdpt_eval import _eval_vertex_spectral
-from gonzales.bxdf import _eval_conductor_ggx_spectral
-from gonzales.spectrum import SampledWavelengths, SpectralSample, null_spectral_handle
+from gonzales.scene.curves import CurveBvh
+from gonzales.core.sampling import ThinLens
+from gonzales.scene.footprint import CameraFootprint
+from gonzales.core.geometry import RGB, Point3f, Vec3f, INV_FOUR_PI, INV_PI
+from gonzales.scene.materials import LobeKind, MeasuredBRDF
+from gonzales.scene.materials import GpuTexture, NormalSlopeMap
+from gonzales.scene.primitives import Intersection, Sphere, PrimId, Instance
+from gonzales.scene.media import Medium, MediumInterface, Grid, NvdbGrid
+from gonzales.scene.lights import LightSampler, AreaLight, DistantLight, PointLight, InfiniteLight
+from gonzales.scene.bvh import BVH4, SceneView, BVH2Node
+from gonzales.transport.bxdf import ggx_D, ggx_G2, ggx_albedo_avg, ggx_ms_shape, ggx_ms_tint
+from gonzales.paths.bdpt_vertex import BDPTVertex
+from gonzales.paths.bdpt_connect import _pdf_solid_to_area, _bdpt_connect_to_cache
+from gonzales.paths.bdpt_eval import _eval_vertex_spectral
+from gonzales.transport.bxdf import _eval_conductor_ggx_spectral
+from gonzales.core.spectrum import SampledWavelengths, SpectralSample, null_spectral_handle
 from _scene_fixture import make_triangle_scene
 
 comptime EPS: Float32 = 1e-3

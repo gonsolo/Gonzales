@@ -1,11 +1,11 @@
 from std.math import abs
 from std.memory.alloc import unsafe_alloc
 from std.testing import assert_true, TestSuite
-from gonzales.lexer import PbrtScanner, scanner_free
-from gonzales.parse_types import SceneParseState
-from gonzales.light_builder import handle_light_source, _psc_handle_area_light_source
-from gonzales.material_builder import _psc_handle_make_named_material
-from gonzales.materials import MatKind
+from gonzales.scene.lexer import PbrtScanner, scanner_free
+from gonzales.scene.parse_types import SceneParseState
+from gonzales.scene.light_builder import handle_light_source, _psc_handle_area_light_source
+from gonzales.scene.material_builder import _psc_handle_make_named_material
+from gonzales.scene.materials import MatKind
 
 comptime EPS: Float32 = 1e-4
 

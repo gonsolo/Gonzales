@@ -1,14 +1,14 @@
 from std.collections import Array
 from std.math import abs, sqrt
 from std.testing import assert_true, TestSuite
-from gonzales.geometry import dot, cross, Vec3f
-from gonzales.manifold import _mnee_walk2
-from gonzales.sms import (
+from gonzales.core.geometry import dot, cross, Vec3f
+from gonzales.transport.manifold import _mnee_walk2
+from gonzales.transport.sms import (
     sms_walk, sms_solve_bernoulli, SMSVertex, MAX_SMS_VERTICES,
     sms_seed_randomize, sms_same_solution, sms_vertex_flat, sms_vertex_init,
     sms_vertex_sphere, _sms_reproject_onto_sphere, _sms_eval_vertex,
 )
-from gonzales.rng import PCG32
+from gonzales.core.rng import PCG32
 
 comptime EPS: Float32 = 1e-4
 

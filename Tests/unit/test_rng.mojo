@@ -1,5 +1,5 @@
 from std.testing import assert_true, assert_false, TestSuite
-from gonzales.rng import PCG32
+from gonzales.core.rng import PCG32
 
 # ── PCG32 ────────────────────────────────────────────────────────────────────
 

@@ -1,13 +1,13 @@
 from std.math import abs
 from std.memory.alloc import unsafe_alloc
 from std.testing import assert_true, TestSuite
-from gonzales.geometry import Point3f, Vec3f, RGB
-from gonzales.materials import Material, MatKind
-from gonzales.render_state import PathState, MIN_RAY_PDF_NONE, SssWalk
-from gonzales.primitives import Intersection
-from gonzales.geometry import Ray
-from gonzales.spectrum import SpectralSample, SampledWavelengths, null_spectral_handle
-from gonzales.shading import shade_core
+from gonzales.core.geometry import Point3f, Vec3f, RGB
+from gonzales.scene.materials import Material, MatKind
+from gonzales.transport.render_state import PathState, MIN_RAY_PDF_NONE, SssWalk
+from gonzales.scene.primitives import Intersection
+from gonzales.core.geometry import Ray
+from gonzales.core.spectrum import SpectralSample, SampledWavelengths, null_spectral_handle
+from gonzales.integrators.shading import shade_core
 from _scene_fixture import make_triangle_scene
 
 comptime EPS: Float32 = 1e-4

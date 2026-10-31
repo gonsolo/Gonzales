@@ -1,0 +1,589 @@
+from std.math import ceildiv, max
+from std.memory.alloc import unsafe_alloc
+from max.algorithm import parallelize
+from std.atomic import Atomic
+from std.sys import prefetch
+from std.sys.info import num_performance_cores
+from gonzales.core.geometry import RGB, Vec3f, INV_FOUR_PI, _is_real_ptr
+from gonzales.transport.render_state import PathState, MIN_RAY_PDF_NONE, SssWalk, TileResult
+from gonzales.core.progress import Progress
+from gonzales.scene.primitives import sphere_outward_normal, Intersection, TriangleMesh, mesh_vi
+from gonzales.scene.primitives import mesh_point
+from gonzales.scene.media import SSS_WALK_ROUNDS
+from gonzales.scene.bvh import SceneView, traverse_dispatch, test_spheres
+from gonzales.integrators.shading import cpu_shade_context, shade_core_cpu_nee_ctx, gi_pending_x1_init
+from gonzales.transport.shade_context import GIPendingX1
+from gonzales.core.sampling import TileSamplerParams, encode_morton2, sobol_index_pixel_part, gen_primary_ray_state
+from gonzales.core.rng import mix_bits_u64
+from gonzales.paths.guide import GuideGrid, guide_merge, null_guide
+from gonzales.core.spectrum import SpectralSample, spectral_sample_to_rgb
+from gonzales.integrators.volume_path import _sample_medium_core, path_medium_after_shading
+from gonzales.integrators.restir_di import ReservoirIO, reservoir_io_null
+from gonzales.integrators.restir_gi import GIReservoirIO, gi_reservoir_io_null
+from gonzales.integrators.restir_sms import SMSReservoirIO, sms_reservoir_io_null
+from gonzales.integrators.restir_vol import VolReservoirIO, vol_reservoir_io_null
+
+
+@always_inline
+def _tri_slot(inter: Intersection) -> Tuple[Int, Int]:
+    """(mesh index, base vertex-index offset) of a triangle hit, or (-1, 0)."""
+    if inter.hit == Int8(0):
+        return (-1, 0)
+    if inter.primId.type == 0:
+        return (Int(inter.primId.id1), Int(inter.primId.id2))
+    if inter.primId.type == 1 or inter.primId.type == 2 or inter.primId.type == 3:
+        return (Int(inter.primId.id2 >> 32), Int(inter.primId.id2 & 0xFFFFFFFF) * 3)
+    return (-1, 0)
+
+
+@always_inline
+def _prefetch_hit_indices(inter: Intersection, meshes: Pointer[TriangleMesh, MutUntrackedOrigin]):
+    """Software prefetch, stage 1: the hit triangle's vertex indices (shading reads them first)."""
+    var (mi, bv) = _tri_slot(inter)
+    if mi >= 0:
+        if meshes[unsafe_offset=mi].quads == Int32(0):
+            prefetch(meshes[unsafe_offset=mi].vertexIndices.unsafe_offset(bv))
+
+
+@always_inline
+def _prefetch_hit_vertices(inter: Intersection, meshes: Pointer[TriangleMesh, MutUntrackedOrigin]):
+    """Stage 2 (indices already prefetched): the triangle's positions, uvs and shading normals."""
+    var (mi, bv) = _tri_slot(inter)
+    if mi >= 0:
+        var m = meshes[unsafe_offset=mi]
+        comptime for k in range(3):
+            var v = Int(mesh_vi(m, bv + k))
+            prefetch(m.points.unsafe_offset((v >> 8) * 390 + 6 + (v & 255) * 3 // 2 if m.quads == Int32(2) else v * 4))
+            if _is_real_ptr(m.uvs):
+                prefetch(m.uvs.unsafe_offset(v * 2))
+            if _is_real_ptr(m.normals):
+                prefetch(m.normals.unsafe_offset(v))
+
+
+def render_tile[Osp: Origin[mut=True], Oc2w: Origin[mut=True]](
+    rasterToCamera: Pointer[Float32, MutUntrackedOrigin],
+    cameraToWorld: Pointer[Float32, Oc2w],
+    tileMinX: Int32, tileMinY: Int32, tileMaxX: Int32, tileMaxY: Int32,
+    samplerParamsPtr: Pointer[TileSamplerParams, Osp],
+    scenePtr: Pointer[SceneView, MutUntrackedOrigin],
+    resultsPtr: Pointer[TileResult, MutUntrackedOrigin],
+    maxDepth: Int32,
+    guide_read: GuideGrid,
+    guide_write: GuideGrid,
+    use_restir: Bool = False,
+    frame_w: Int32 = Int32(0),
+    restir_io: ReservoirIO = reservoir_io_null(),
+    # Phase 4 (docs/A2_restir_migration_plan.md), INDEPENDENT of use_restir
+    # on purpose: `use_restir` alone must keep meaning exactly what it
+    # already means to every existing --restir (DI-only) render. Below,
+    # the per-path-slot GIPendingX1 scratch buffer is only allocated (a
+    # real, non-dangling pointer) when `use_gi=True` -- it used to be
+    # allocated unconditionally, which silently activated
+    # _shade_diffuse_nee's GI generate/combine/resolve block (gated only
+    # on that pointer being real, not on any flag) for every ordinary
+    # --restir CPU render. Caught by A/B rendering cornell-box (mean error
+    # 0.0054, far above the ~0.0005 noise floor) before it shipped any
+    # further -- see project_restir_migration memory. `gi_io` is the
+    # frame-wide, caller-owned read/write reservoir buffers + shared
+    # G-buffer (same role as restir_io above); harmless if non-null with
+    # use_gi=False, since the dangling gi_pending buffer already gates the
+    # whole GI block off regardless.
+    use_gi: Bool = False,
+    gi_io: GIReservoirIO = gi_reservoir_io_null(),
+    # Phase 6 (docs/A2_restir_migration_plan.md): ReSTIR SMS temporal reuse
+    # for glass-caustic MNEE probing, INDEPENDENT of use_restir (unlike
+    # use_gi, which requires it) -- SMS-ReSTIR only ever touches
+    # _nee_area_lights' own glass-probing branch, which runs whenever
+    # ReSTIR DI ISN'T handling bounce 0 (see _shade_diffuse_nee's own
+    # docstring for the known use_restir-combination gap). sms_io is the
+    # frame-wide, caller-owned read/write SMSReservoir buffer (no G-buffer
+    # fields yet -- temporal-only, no spatial reuse).
+    use_sms_restir: Bool = False,
+    sms_io: SMSReservoirIO = sms_reservoir_io_null(),
+    # Phase 7.3 (docs/A2_restir_migration_plan.md, project_restir_migration
+    # memory): volume-scatter TEMPORAL reuse, CPU side. INDEPENDENT of
+    # use_restir (this is the medium sampler's own NEE, a different call
+    # site from DI's diffuse-material NEE, see _sample_medium_core below).
+    # vol_io is the frame-wide, caller-owned read/write VolReservoir buffer
+    # pair (same role as restir_io above); harmless if non-real, since
+    # _sample_medium_core's own `_is_real_ptr` check already gates the
+    # whole reuse path off.
+    vol_io: VolReservoirIO = vol_reservoir_io_null(),
+):
+    var sp = samplerParamsPtr[unsafe_offset=0]
+    var scene = scenePtr[unsafe_offset=0]
+    # `maxD` (the outer loop's iteration budget) is padded beyond the scene's
+    # own `maxDepth` -- see the deactivation check inside the loop for why.
+    # Cheap and safe for a scene with no participating media: a null
+    # interface never occurs there, so every path already reaches its true
+    # `maxDepth` at round `maxDepth` exactly, the deactivation check fires at
+    # the same round it always would have, and the padding costs at most one
+    # extra empty round before `anyActive` goes false.
+    comptime _MEDIUM_INTERFACE_MARGIN = 20
+    var trueMaxDepth = Int(maxDepth)
+    var maxD = trueMaxDepth + _MEDIUM_INTERFACE_MARGIN
+    # A `Material "subsurface"` interior is walked step by step, and those
+    # steps are deliberately not charged to maxDepth (see _sample_medium_core
+    # in gpu.mojo). The loop's own round count is then the only thing bounding
+    # the walk, so it has to be able to accommodate one: a dense preset like
+    # Skin1 needs tens to hundreds of steps before a path escapes or is
+    # absorbed. Paid for only by scenes that actually contain such a medium --
+    # elsewhere `anyActive` goes false long before these rounds are reached,
+    # and each extra round then costs one cheap inactive-path scan.
+    var has_sss = False
+    for mi in range(Int(scene.mediumCount)):
+        if scene.mediums[unsafe_offset=mi].is_sss != Int32(0):
+            has_sss = True
+            break
+    if has_sss:
+        maxD += SSS_WALK_ROUNDS
+    var tileW = Int(tileMaxX - tileMinX)
+    var tileH = Int(tileMaxY - tileMinY)
+    var spp = Int(sp.samplesPerPixel)
+    var n = tileW * tileH * spp
+    var log2spp = Int(sp.log2SamplesPerPixel)
+    var n_base4 = Int(sp.nBase4Digits)
+    var matrices = sp.sobolMatrices
+
+    var hash_bits = UInt64(mix_bits_u64(UInt64(0) ^ UInt64(sp.sobolSeed)))
+    var seed_dim0 = UInt32(hash_bits & UInt64(0xFFFFFFFF))
+    # Per-dimension Owen-scramble seed, same shape as dimension 0's above.
+    # This was a hardcoded 0, which left dimension 1's scramble independent
+    # of sobolSeed -- so --seed decorrelated the x filter offset but never
+    # the y one, leaving two "independent" runs partially correlated.
+    var hash_bits1 = UInt64(mix_bits_u64(UInt64(1) ^ UInt64(sp.sobolSeed)))
+    var seed_dim1 = UInt32(hash_bits1 & UInt64(0xFFFFFFFF))
+
+    var paths = unsafe_alloc[PathState](n)
+    var intersections = unsafe_alloc[Intersection](n)
+    # Global (frame-wide) pixel index per path -- needed only for ReSTIR DI's
+    # temporal reservoir buffer (Phase 2.3, docs/A2_restir_migration_plan.md),
+    # which persists across frames and so must be indexed by a stable,
+    # tile-independent key, not the tile-local `idx` below. -1 (never a
+    # valid buffer index) whenever frame_w wasn't supplied -- matches
+    # di_temporal_step's own "no temporal reuse" fallback.
+    var pixel_idx_buf = unsafe_alloc[Int](n)
+
+    # Phase 7.3: per-PATH-SLOT "already combined this frame" guard (indexed
+    # by the local `i` used for paths/intersections, NOT pixel_idx_buf's
+    # frame-wide id -- one render_tile call already IS one frame's worth of
+    # work for its own paths at spp=1). See _sample_medium_core's own
+    # vol_used comment for the real multi-scatter-per-frame bug this fixes.
+    # Tile-call-local like gi_pending_buf below, zeroed unconditionally
+    # (cheap, and harmless when vol_io isn't real -- _sample_medium_core's
+    # own `_is_real_ptr(vol_read)` check gates the whole path off first).
+    var vol_used_buf = unsafe_alloc[Int8](n)
+    var act_idx = unsafe_alloc[Int32](n)   # compacted indices of this round's active paths
+    for vu_i in range(n):
+        vol_used_buf[unsafe_offset=vu_i] = Int8(0)
+
+    # Phase 4's per-path-slot scratch (GIPendingX1), tile-call-local like
+    # `paths`/`intersections` above -- NOT frame-wide like gi_io.
+    # unsafe_alloc() doesn't zero memory, so every slot needs an explicit inactive
+    # init; otherwise a path that never reaches bounce 1 (miss, RR kill, or
+    # a non-diffuse x2) would leave garbage that a later stray read could
+    # misinterpret as a real pending snapshot.
+    var gi_pending_buf = Pointer[GIPendingX1, MutUntrackedOrigin].unsafe_dangling()
+    if use_gi:
+        gi_pending_buf = unsafe_alloc[GIPendingX1](n)
+        for gi_i in range(n):
+            gi_pending_buf[unsafe_offset=gi_i] = gi_pending_x1_init()
+
+    # Generate primary rays from Sobol film samples
+    var idx = 0
+    var rng_seed = sp.rngSeed
+    for iy in range(tileH):
+        for ix in range(tileW):
+            var px = Int32(tileMinX) + Int32(ix)
+            var py = Int32(tileMinY) + Int32(iy)
+            var this_pixel_idx = Int(py * frame_w + px) if frame_w > Int32(0) else -1
+            var pixel_sobol = Int64(sobol_index_pixel_part(encode_morton2(UInt32(px), UInt32(py)) << UInt64(log2spp), 0, log2spp, n_base4))
+            for si in range(spp):
+                var (ray, pcg_state, pcg_inc, sobol_idx, wavelengths, sobol_seed) = gen_primary_ray_state(
+                    px, py, Int32(si) + sp.sampleIndexOffset,
+                    log2spp, n_base4,
+                    seed_dim0, seed_dim1, rng_seed, matrices,
+                    rasterToCamera, cameraToWorld,
+                    sp.filterNormX, sp.filterSigma, sp.filterSupportX,
+                    sp.filterNormY, sp.filterSupportY,
+                    sp.filterType,
+                    sobol_pixel_part=pixel_sobol,
+                    lens=sp.lens,
+                )
+                paths[unsafe_offset=idx] = PathState(
+                    ray,
+                    SpectralSample(Float32(1.0)),
+                    SpectralSample(Float32(0.0)),
+                    RGB(Float32(0.0)),
+                    Int32(0), pcg_state, pcg_inc,
+                    Int8(1), Int8(0), Int8(0), Int8(0), Int8(0), Vec3f(Float32(0.0)), Vec3f(Float32(0.0)),
+                    Float32(0.0),
+                    Int32(-1),
+                    Float32(1.0),   # current_dielectric_ior (vacuum)
+                    Float32(1.0),   # previous_dielectric_ior (vacuum)
+                    Float32(1.0),   # eta_scale
+                    sp.lens.first_dim(), sobol_idx,
+                    wavelengths,
+                    Float32(0.0),   # mis_null_dist
+                    INV_FOUR_PI,    # lastEnvNeePdf (see PathState)
+                    Float32(0.0),   # cone_len: total path length, accumulated per bounce
+                    Int8(0),   # ptex_missed
+                    MIN_RAY_PDF_NONE,   # min_ray_pdf
+                    SIMD[DType.uint8, 4](0),   # kind_bounces
+                    sobol_seed,
+                    Int8(0),   # ns_spec
+                    SssWalk.none(),
+                )
+                pixel_idx_buf[unsafe_offset=idx] = this_pixel_idx
+                idx += 1
+
+    var shade_ctx = cpu_shade_context(
+        scene.bvh2Nodes, scene.primIds, scene.meshes, scene.curves, scene.materials,
+        scene.areaLights, Int(scene.areaLightCount), scene.textures,
+        scene.distantLights, Int(scene.distantLightCount), scene.pointLights, Int(scene.pointLightCount),
+        scene.infiniteLights, Int(scene.infiniteLightCount), scene.spheres, Int(scene.sphereCount),
+        scene.lightSampler, sp.sobolMatrices, guide_read,
+        blasNodesArr=scene.blasNodesArr, blasPrimIdsArr=scene.blasPrimIdsArr,
+        instances=scene.instances, guide_write=guide_write, spectral=scene.spectral,
+        measured_brdfs=scene.measuredBrdfs, use_restir=use_restir,
+        gi_pending=gi_pending_buf, gi_io=gi_io,
+        nmaps=scene.normalSlopeMaps,
+        textures=scene.gpuTextures, n_textures=Int(scene.gpuTextureCount),
+        has_glass=scene.hasGlass != Int32(0), mnee_stats=scene.mneeStats, bvh4=scene.bvh4, filter_glossy=scene.filterGlossy, clamp=scene.clamp, cycles=scene.cycles)
+
+    # Multi-bounce path trace
+    for _ in range(maxD):
+        # A NULL INTERFACE crossing (entering/leaving a medium) does not
+        # increment `path_ptr[].bounce` -- correctly, since pbrt does not
+        # count it as a bounce either -- but nothing else previously stopped
+        # a path once its OWN bounce count reached the scene's real
+        # `maxDepth`: this loop's fixed round count was the ENTIRE
+        # termination mechanism, and every kind of round (real scatter OR
+        # free interface pass-through) consumed one of those rounds equally.
+        # For any volumetric scene, that silently granted one fewer REAL
+        # bounce than requested for every interface the path had to cross.
+        # Measured on a homogeneous slab (PT, one interface crossing to enter
+        # the medium): gonzales at maxDepth=N matched pbrt at maxDepth=N-1
+        # almost exactly, e.g. gz(3)=0.03257 vs pbrt(2)=0.03256.
+        var na = 0
+        for i in range(n):
+            # MARK, do not kill. pbrt terminates at the NEXT real scattering
+            # event, not before the segment that leaves the last allowed one --
+            # so the capped path still gets one intersect, may cross null
+            # interfaces, and may land on an emitter and collect it. Killing it
+            # here (what this line used to do) dropped exactly that segment's
+            # emission, which is the MIS partner of the last vertex's own NEE:
+            # invisible when the light is far (that share is ~0) and dominant
+            # when it is close, where MIS gives BSDF sampling nearly all the
+            # weight. `at_cap` is consumed by _shade_dispatch and
+            # _sample_medium_core, which refuse NEE and refuse to scatter.
+            if paths[unsafe_offset=i].active != 0 and paths[unsafe_offset=i].bounce >= Int32(trueMaxDepth):
+                paths[unsafe_offset=i].at_cap = Int8(1)
+            if paths[unsafe_offset=i].active != 0:
+                act_idx[unsafe_offset=na] = Int32(i)
+                na += 1
+        if na == 0:
+            break
+        for ak in range(na):
+            var i = Int(act_idx[unsafe_offset=ak])
+            if paths[unsafe_offset=i].active == 0:
+                continue
+            traverse_dispatch(scene.bvh4, scene.bvh2Nodes, scene.primIds, scene.meshes, scene.curves,
+                               paths[unsafe_offset=i].ray, Float32(1.0e38), intersections.unsafe_offset(i),
+                               scene.blasNodesArr, scene.blasPrimIdsArr, scene.instances)
+            if scene.sphereCount > 0:
+                test_spheres(scene.spheres, Int(scene.sphereCount), paths[unsafe_offset=i].ray, intersections.unsafe_offset(i))
+            # Same per-bounce cone growth the GPU does in accumulate_cone_gpu,
+            # including the specular-chain gate (see that kernel's comment).
+            if intersections[unsafe_offset=i].hit != Int8(0) and paths[unsafe_offset=i].cone_len >= Float32(0.0):
+                if paths[unsafe_offset=i].bounce == Int32(0) or paths[unsafe_offset=i].specularBounce != Int8(0):
+                    paths[unsafe_offset=i].cone_len += intersections[unsafe_offset=i].tHit
+                else:
+                    paths[unsafe_offset=i].cone_len = Float32(-1.0)
+        for ak in range(na):
+            var i = Int(act_idx[unsafe_offset=ak])
+            if paths[unsafe_offset=i].active == 0:
+                continue
+            # ── Volume transmittance sampling ──────────────────────────
+            # Shared with the GPU wavefront path (gpu.mojo's
+            # sample_medium_gpu kernel) via _sample_medium_core — staged
+            # spectral rendering rollout, Stage 5a (unify before
+            # spectralize), see project_spectral_rendering memory. See that
+            # function's own docstring for the two real CPU/GPU behavioral
+            # divergences this unification found and fixed (bounce/
+            # lastBsdfPdf not set on CPU volume-scatter; reversed NEE-vs-
+            # scatter-direction RNG draw order), not preserved as
+            # intentional per-backend differences.
+            _sample_medium_core(
+                paths, intersections, i, scene,
+                vol_read=vol_io.read,
+                vol_write=vol_io.write,
+                pixel_idx=pixel_idx_buf[unsafe_offset=i],
+                vol_used=vol_used_buf,
+            )
+        for ak in range(na):
+            var i = Int(act_idx[unsafe_offset=ak])
+            if paths[unsafe_offset=i].active == 0:
+                continue
+            if ak + 8 < na:
+                _prefetch_hit_indices(intersections[unsafe_offset=Int(act_idx[unsafe_offset=ak + 8])], scene.meshes)
+            if ak + 4 < na:
+                _prefetch_hit_vertices(intersections[unsafe_offset=Int(act_idx[unsafe_offset=ak + 4])], scene.meshes)
+            shade_core_cpu_nee_ctx(paths, intersections, i, shade_ctx, guide_write, restir_io, pixel_idx_buf[unsafe_offset=i], sms_io)
+        # ── Medium interface transitions ──────────────────────────
+        for ak in range(na):
+            var i = Int(act_idx[unsafe_offset=ak])
+            if paths[unsafe_offset=i].active == 0:
+                continue
+            path_medium_after_shading(paths.unsafe_offset(i), intersections[unsafe_offset=i], scene)
+
+    # Accumulate the spp samples per pixel and emit one result per pixel.
+    idx = 0
+    var out = 0
+    for iy in range(tileH):
+        for ix in range(tileW):
+            var px = Int32(tileMinX) + Int32(ix)
+            var py = Int32(tileMinY) + Int32(iy)
+            var sumL = RGB(Float32(0.0))
+            var sumA = RGB(Float32(0.0))
+            var sumW = Float32(0.0)
+            for _ in range(spp):
+                # ── Output boundary: spectral transport -> RGB film ──────
+                # This is the ONLY place a finished path's radiance leaves
+                # the spectral domain. Each sample converts with its OWN
+                # hero wavelengths, which is why it happens per sample here
+                # rather than once on an accumulated total.
+                var est_rgb = spectral_sample_to_rgb(
+                    scene.spectral.coeffs, scene.spectral.res,
+                    scene.spectral.cie_x, scene.spectral.cie_y,
+                    scene.spectral.cie_z, scene.spectral.d65,
+                    paths[unsafe_offset=idx].estimate, paths[unsafe_offset=idx].wavelengths)
+                sumL += RGB(est_rgb[0], est_rgb[1], est_rgb[2])
+                sumA += paths[unsafe_offset=idx].albedo
+                sumW += sp.filterWeight
+                idx += 1
+            resultsPtr[unsafe_offset=out] = TileResult(sumL, sumA, sumW, px, py)
+            out += 1
+
+    intersections.unsafe_free()
+    paths.unsafe_free()
+    pixel_idx_buf.unsafe_free()
+    vol_used_buf.unsafe_free()
+    act_idx.unsafe_free()
+    if use_gi:
+        gi_pending_buf.unsafe_free()
+
+
+
+def render_all_tiles[Osp: Origin[mut=True], Oc2w: Origin[mut=True], Ores: Origin[mut=True]](
+    raster_to_camera: Pointer[Float32, MutUntrackedOrigin],
+    camera_to_world: Pointer[Float32, Oc2w],
+    min_x: Int32, min_y: Int32, max_x: Int32, max_y: Int32,
+    tile_w: Int32, tile_h: Int32,
+    sampler_params: Pointer[TileSamplerParams, Osp],
+    scene: Pointer[SceneView, MutUntrackedOrigin],
+    results: Pointer[TileResult, Ores],
+    max_depth: Int32,
+    quiet: Bool = False,
+    guide_read: GuideGrid = null_guide(),
+    write_guides: Pointer[GuideGrid, MutUntrackedOrigin] = Pointer[GuideGrid, MutUntrackedOrigin].unsafe_dangling(),
+    n_write_guides: Int = 0,
+    use_restir: Bool = False,
+    frame_w: Int32 = Int32(0),
+    restir_io: ReservoirIO = reservoir_io_null(),
+    use_gi: Bool = False,
+    gi_io: GIReservoirIO = gi_reservoir_io_null(),
+    use_sms_restir: Bool = False,
+    sms_io: SMSReservoirIO = sms_reservoir_io_null(),
+    vol_io: VolReservoirIO = vol_reservoir_io_null(),
+):
+    var res_x = Int(max_x - min_x)
+    var tw = Int(tile_w)
+    var th = Int(tile_h)
+    var max_tile_pixels = tw * th
+
+    var n_tiles_x = ceildiv(Int(max_x) - Int(min_x), tw)
+    var n_tiles_y = ceildiv(Int(max_y) - Int(min_y), th)
+    var n_tiles = n_tiles_x * n_tiles_y
+
+    # One scratch buffer per tile so threads never alias each other's writes.
+    var tile_bufs = unsafe_alloc[TileResult](n_tiles * max_tile_pixels)
+
+    # Progress counter — incremented after each tile (racy, display-only).
+    var done_ptr = unsafe_alloc[Int32](1)
+    done_ptr[unsafe_offset=0] = Int32(0)
+    var prog = Progress(n_tiles, "tiles", quiet=quiet)
+    # Print every ~5% of tiles (at least every 1 tile).
+    var print_step = max(n_tiles // 20, 1)
+
+    def render_one(tile_idx: Int) {imm}:
+        var ty_i = tile_idx // n_tiles_x
+        var tx_i = tile_idx % n_tiles_x
+        var tx = Int(min_x) + tx_i * tw
+        var ty = Int(min_y) + ty_i * th
+        var tx_max = Int32(min(tx + tw, Int(max_x)))
+        var ty_max = Int32(min(ty + th, Int(max_y)))
+        var tw_actual = Int(tx_max) - tx
+        var th_actual = Int(ty_max) - ty
+        var tile_buf = tile_bufs.unsafe_offset(tile_idx * max_tile_pixels)
+        var gw = null_guide()
+        if n_write_guides > 0:
+            # Range-based assignment: tiles [k*stride, (k+1)*stride) → write_guides[k].
+            # This guarantees no two concurrently running tiles (on different cores)
+            # ever write to the same shard, eliminating all cross-core cache ping-pong.
+            var stride = max(n_tiles // n_write_guides, 1)
+            var shard_idx = min(tile_idx // stride, n_write_guides - 1)
+            gw = write_guides[unsafe_offset=shard_idx]
+        render_tile(
+            raster_to_camera, camera_to_world,
+            Int32(tx), Int32(ty), tx_max, ty_max,
+            sampler_params, scene, tile_buf, max_depth, guide_read, gw, use_restir,
+            frame_w, restir_io, use_gi, gi_io, use_sms_restir, sms_io, vol_io)
+        for iy in range(th_actual):
+            for ix in range(tw_actual):
+                var src = iy * tw_actual + ix
+                var dst = (ty + iy - Int(min_y)) * res_x + (tx + ix - Int(min_x))
+                results[unsafe_offset=dst] = tile_buf[unsafe_offset=src]
+        done_ptr[unsafe_offset=0] += Int32(1)
+        var d = Int(done_ptr[unsafe_offset=0])
+        if d % print_step == 0 or d == n_tiles:
+            prog.update(d)
+
+    # Tile scheduling. `parallelize` splits its range STATICALLY, so worker k
+    # gets one contiguous run of tile indices -- i.e. a horizontal band of the
+    # image. That is fine when every pixel costs about the same, and terrible
+    # here: an SMS caustic concentrates almost all of the work into whichever
+    # tiles contain the caustic caster, so a couple of workers render the
+    # sphere while the rest finish their sky and idle. Measured on
+    # sphere_sms.xml at 270x270: 30m36 of CPU time in 319s of wall time, i.e.
+    # 5.75 of 24 cores busy, against the reference renderer's 18.4 -- most of
+    # that frame's wall-clock gap was this, not the algorithm.
+    #
+    # So hand out tiles from a shared atomic cursor instead: every worker
+    # takes the next unclaimed tile the moment it is free, and the frame ends
+    # when the last tile ends rather than when the unluckiest band does.
+    #
+    # Guided rendering keeps the static split. Its per-tile-group guide shards
+    # are assigned by tile INDEX RANGE precisely so that concurrently-running
+    # tiles never touch the same shard (see the shard_idx comment above), and
+    # dynamic claiming would break that invariant and race. Fixing it properly
+    # means sharding per WORKER, which needs at least as many shards as
+    # workers -- worth doing, but it belongs with --guide, not here.
+    if n_write_guides > 0:
+        parallelize(render_one, n_tiles)
+    else:
+        var next_tile = unsafe_alloc[Int32](1)
+        next_tile[unsafe_offset=0] = Int32(0)
+
+        def tile_worker(_worker_idx: Int) {imm}:
+            while True:
+                var idx = Int(Atomic.fetch_add(next_tile, Int32(1)))
+                if idx >= n_tiles:
+                    break
+                render_one(idx)
+
+        # One worker per core; each drains the queue, so the count only needs
+        # to be enough to saturate the machine, not to match the tile count.
+        parallelize(tile_worker, min(num_performance_cores(), n_tiles))
+        next_tile.unsafe_free()
+    # Merge per-tile-group write guides into [0] so caller gets unified result.
+    if n_write_guides > 1:
+        for i in range(1, n_write_guides):
+            guide_merge(write_guides[unsafe_offset=0], write_guides[unsafe_offset=i])
+    _ = prog.finish()
+    done_ptr.unsafe_free()
+    tile_bufs.unsafe_free()
+
+
+# Shoot one unjittered center ray per pixel; record geometric normal and depth.
+# normals_out: n_pixels*3 floats (Nx,Ny,Nz unit vectors; background = (0,0,1)).
+# depth_out:   n_pixels floats (first-hit tHit; background = 1e38).
+# Normalize TileResult[] → per-pixel float RGB arrays.
+def apply_film_sensor[Ob: Origin[mut=True]](
+    buf: Pointer[Float32, Ob],
+    n_pixels: Int,
+    exposure_time: Float32,
+    wb: SIMD[DType.float32, 16],
+):
+    """The rest of pbrt's PixelSensor, applied to a finished RGB buffer.
+
+    ISO is already folded in by whichever normalizer produced `buf` (CPU
+    normalize_film, GPU normalize_beauty_albedo_gpu), so this adds only the
+    remaining two terms: the exposure half of pbrt's imaging ratio
+    (exposuretime * iso / 100), and the sensor white-balance/colour-response
+    matrix built by pbrt_parser (_film_white_balance_matrix, or
+    sensors.named_sensor_srgb_matrix for a supported named sensor). Kept as
+    ONE post-pass over the final buffer rather than duplicated into both
+    normalizers, so the CPU and GPU paths cannot drift apart on it -- the
+    same discipline _sample_medium_core already applies to medium sampling.
+
+    This is the ONLY place `buf` gets clamped to non-negative: both
+    normalizers upstream now do a NaN guard only, on purpose. `buf` can
+    legitimately go negative per-channel here (sRGB, or a named sensor's
+    substituted-curve equivalent, both have out-of-gamut colours that dot
+    negative against the XYZ->sRGB matrix), and for a non-identity `wb` that
+    negative value is real information the matrix multiply below needs --
+    clamping it away first and THEN mixing channels through `wb` silently
+    drops a colour-correcting term, which measurably discolours the image
+    (caught on explosion.pbrt's nikon_d850: a flat mid-grey "rgb L" test
+    light rendered R:G:B = 0.80:0.56:0.52 instead of pbrt's near-neutral
+    0.47:0.50:0.53, traced to exactly this -- buf.r was hard 0.0 going into
+    the wb multiply, where it should have been negative)."""
+    var wb_identity = (wb[0] == Float32(1) and wb[4] == Float32(1) and wb[8] == Float32(1)
+                       and wb[1] == Float32(0) and wb[2] == Float32(0) and wb[3] == Float32(0)
+                       and wb[5] == Float32(0) and wb[6] == Float32(0) and wb[7] == Float32(0))
+    var trivial = wb_identity and exposure_time == Float32(1.0)
+    for i in range(n_pixels):
+        var r = buf[unsafe_offset=i*3+0]
+        var g = buf[unsafe_offset=i*3+1]
+        var b = buf[unsafe_offset=i*3+2]
+        if not trivial:
+            r *= exposure_time; g *= exposure_time; b *= exposure_time
+            if not wb_identity:
+                var nr = wb[0]*r + wb[1]*g + wb[2]*b
+                var ng = wb[3]*r + wb[4]*g + wb[5]*b
+                var nb = wb[6]*r + wb[7]*g + wb[8]*b
+                r = nr; g = ng; b = nb
+        buf[unsafe_offset=i*3+0] = max(Float32(0), r)
+        buf[unsafe_offset=i*3+1] = max(Float32(0), g)
+        buf[unsafe_offset=i*3+2] = max(Float32(0), b)
+
+
+def normalize_film[Ores: Origin[mut=True], Obo: Origin[mut=True], Oao: Origin[mut=True]](
+    results: Pointer[TileResult, Ores],
+    count: Int32,
+    iso: Float32,
+    max_component_value: Float32,
+    beauty_out: Pointer[Float32, Obo],
+    albedo_out: Pointer[Float32, Oao],
+):
+    var scale = iso / Float32(100)
+    for i in range(Int(count)):
+        var r = results[unsafe_offset=i]
+        var w = r.filterWeight
+        if w == Float32(0):
+            beauty_out[unsafe_offset=i * 3 + 0] = Float32(0)
+            beauty_out[unsafe_offset=i * 3 + 1] = Float32(0)
+            beauty_out[unsafe_offset=i * 3 + 2] = Float32(0)
+            albedo_out[unsafe_offset=i * 3 + 0] = Float32(0)
+            albedo_out[unsafe_offset=i * 3 + 1] = Float32(0)
+            albedo_out[unsafe_offset=i * 3 + 2] = Float32(0)
+            continue
+        var b = RGB(r.estimate.r / w * scale, r.estimate.g / w * scale, r.estimate.b / w * scale)
+        # NaN guard only -- NOT a negative clamp. A negative component here is
+        # real (out-of-gamut colour) information apply_film_sensor's wb matrix
+        # multiply still needs; clamping it away here discolours the image
+        # for any non-identity wb (named sensor or explicit whitebalance).
+        # See apply_film_sensor's docstring for the measured symptom.
+        if b.r != b.r: b.r = Float32(0)
+        if b.g != b.g: b.g = Float32(0)
+        if b.b != b.b: b.b = Float32(0)
+        b = b.sensor_clamped(max_component_value)
+        beauty_out[unsafe_offset=i * 3 + 0] = b.r
+        beauty_out[unsafe_offset=i * 3 + 1] = b.g
+        beauty_out[unsafe_offset=i * 3 + 2] = b.b
+        var a = r.albedo / w
+        albedo_out[unsafe_offset=i * 3 + 0] = a.r
+        albedo_out[unsafe_offset=i * 3 + 1] = a.g
+        albedo_out[unsafe_offset=i * 3 + 2] = a.b
+

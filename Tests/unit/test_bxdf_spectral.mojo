@@ -4,11 +4,11 @@
 # rendering rollout, see project_spectral_rendering memory.
 from std.math import abs
 from std.testing import assert_true, TestSuite
-from gonzales.geometry import RGB, Vec3f
-from gonzales.materials import Material, MeasuredBRDF
-from gonzales.curves import Curve
-from gonzales.bxdf import bxdf_eval_conductor_ggx, bxdf_eval_any, BSDF, LobeTables, ggx_D, ggx_G2, ggx_albedo_avg, ggx_ms_shape, ggx_ms_tint, _nee_weight_simple, _nee_weight_simple_spectral
-from gonzales.bvh import LightSample
+from gonzales.core.geometry import RGB, Vec3f
+from gonzales.scene.materials import Material, MeasuredBRDF
+from gonzales.scene.curves import Curve
+from gonzales.transport.bxdf import bxdf_eval_conductor_ggx, bxdf_eval_any, BSDF, LobeTables, ggx_D, ggx_G2, ggx_albedo_avg, ggx_ms_shape, ggx_ms_tint, _nee_weight_simple, _nee_weight_simple_spectral
+from gonzales.scene.bvh import LightSample
 
 # These tests only exercise the lambertian/ggx kinds, which never touch the
 # material tables -- lobe_eval reads them for hair and measured only. Dangling
@@ -16,8 +16,8 @@ from gonzales.bvh import LightSample
 comptime _mats = Pointer[Material, MutUntrackedOrigin].unsafe_dangling()
 comptime _curves = Pointer[Curve, MutUntrackedOrigin].unsafe_dangling()
 comptime _mbrdfs = Pointer[MeasuredBRDF, MutUntrackedOrigin].unsafe_dangling()
-from gonzales.spectrum import SpectralHandle, SampledWavelengths, sample_wavelengths, spectral_sample_to_rgb, rgb_illuminant_to_spectral_sample, SpectralContext, spectral_handle, SpectralSample
-from gonzales.rgb2spec import build_spectrum_table, build_cie_xyz_tables, SpectrumTable
+from gonzales.core.spectrum import SpectralHandle, SampledWavelengths, sample_wavelengths, spectral_sample_to_rgb, rgb_illuminant_to_spectral_sample, SpectralContext, spectral_handle, SpectralSample
+from gonzales.core.rgb2spec import build_spectrum_table, build_cie_xyz_tables, SpectrumTable
 
 comptime EPS: Float32 = 1e-4
 comptime TEST_RES = 16

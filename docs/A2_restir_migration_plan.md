@@ -463,7 +463,7 @@ mode nothing catches. Check that whitelist whenever a kind is added.
 
 ### Phase 0 — Infrastructure
 
-New file: `src/gonzales/reservoir.mojo`. No behavior change.
+New file: `src/gonzales/core/reservoir.mojo`. No behavior change.
 
 - **0.1** `Reservoir` struct (`sample`, `w_sum`, `m`, `w`) +
   `reservoir_update` (weighted reservoir sampling) + `reservoir_combine`.
@@ -497,7 +497,7 @@ lowest-risk item here.
 
 ### Phase 2 — ReSTIR DI, interactive
 
-New file: `src/gonzales/restir_di.mojo`. Reconnection shift only.
+New file: `src/gonzales/integrators/restir_di.mojo`. Reconnection shift only.
 
 - **2.1** Payload: light index, sampled point, light normal, `Le`. Target
   `p̂` = unshadowed contribution (BSDF × G × Le) — visibility deliberately
@@ -573,7 +573,7 @@ later phases become worth their risk.
 
 ### Phase 5 — SMS: generalize MNEE
 
-New file: `src/gonzales/sms.mojo`. Independent of the ReSTIR track.
+New file: `src/gonzales/transport/sms.mojo`. Independent of the ReSTIR track.
 
 - **5.1** Generalize the manifold walk to N vertices — `_mnee_walk2`'s
   block-tridiagonal solve extends naturally. Keep the existing convergence
@@ -969,7 +969,7 @@ resolution ordering.
 Derived 2026-09-09 from gonzales's own `dVCM`/`dVC` recursion rather than
 from van Antwerpen 2011 (still not sourced; it turned out not to be
 needed). Implemented as executable, dependency-free reference math in
-`src/gonzales/restir_bdpt.mojo`, checked against a brute-force sum over
+`src/gonzales/integrators/restir_bdpt.mojo`, checked against a brute-force sum over
 every strategy in `Tests/unit/test_restir_bdpt_mis.mojo`.
 
 Index a full path's vertices `x_0` (light) … `x_k` (camera). Strategy `s`

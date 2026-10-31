@@ -1,11 +1,11 @@
 from std.math import abs, sqrt
 from std.memory.alloc import unsafe_alloc
 from std.testing import assert_true, assert_equal, TestSuite
-from gonzales.geometry import Point3f, Vec3f
-from gonzales.materials import MatKind
-from gonzales.primitives import Intersection
-from gonzales.geometry import Ray
-from gonzales.bvh import build_bvh4, free_bvh4, traverse_bvh2_core, traverse_bvh4_core, any_hit_bvh2_core, any_hit_bvh4_core
+from gonzales.core.geometry import Point3f, Vec3f
+from gonzales.scene.materials import MatKind
+from gonzales.scene.primitives import Intersection
+from gonzales.core.geometry import Ray
+from gonzales.scene.bvh import build_bvh4, free_bvh4, traverse_bvh2_core, traverse_bvh4_core, any_hit_bvh2_core, any_hit_bvh4_core
 from _scene_fixture import make_triangle_scene
 
 # BVH4 (a collapse of the BVH2) must give the same closest hit and the same

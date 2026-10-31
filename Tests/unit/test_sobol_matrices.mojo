@@ -18,8 +18,8 @@
 # matrix above the parse loop, so x was unaffected and the image still
 # looked plausible.
 from std.testing import assert_true, assert_equal, TestSuite
-from gonzales.pipeline import _generate_sobol_matrices
-from gonzales.sampling import sobol_sample
+from gonzales.app.pipeline import _generate_sobol_matrices
+from gonzales.core.sampling import sobol_sample
 
 comptime N_BITS = 52
 comptime DATA = "src/gonzales/data/new-joe-kuo-6.21201"

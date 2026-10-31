@@ -1,7 +1,7 @@
 from std.math import abs
 from std.testing import assert_true, TestSuite
-from gonzales.spectrum import sample_wavelengths, visible_wavelength_pdf, rgb_to_spectral_sample, rgb_illuminant_to_spectral_sample, spectral_sample_to_rgb, SpectralContext, spectral_handle, LAMBDA_MIN, LAMBDA_MAX, N_SPECTRAL_SAMPLES
-from gonzales.rgb2spec import build_spectrum_table, build_cie_xyz_tables, SpectrumTable
+from gonzales.core.spectrum import sample_wavelengths, visible_wavelength_pdf, rgb_to_spectral_sample, rgb_illuminant_to_spectral_sample, spectral_sample_to_rgb, SpectralContext, spectral_handle, LAMBDA_MIN, LAMBDA_MAX, N_SPECTRAL_SAMPLES
+from gonzales.core.rgb2spec import build_spectrum_table, build_cie_xyz_tables, SpectrumTable
 
 comptime EPS: Float32 = 1e-3
 

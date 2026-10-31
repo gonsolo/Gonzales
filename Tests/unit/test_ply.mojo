@@ -2,7 +2,7 @@ from std.math import abs
 from std.memory.alloc import unsafe_alloc
 from std.os import remove
 from std.testing import assert_true, TestSuite
-from gonzales.ply import load_ply
+from gonzales.scene.ply import load_ply
 
 comptime EPS: Float32 = 1e-4
 

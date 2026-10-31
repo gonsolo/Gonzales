@@ -31,26 +31,26 @@
 
 from std.memory.alloc import unsafe_alloc
 from std.testing import assert_true, TestSuite
-from gonzales.curves import CurveBvh
-from gonzales.sampling import ThinLens
-from gonzales.footprint import CameraFootprint
-from gonzales.geometry import RGB, Point3f
-from gonzales.materials import MeasuredBRDF, Material, MatKind
-from gonzales.materials import GpuTexture, NormalSlopeMap
-from gonzales.primitives import Intersection, PrimId, Sphere, Instance, TriangleMesh
-from gonzales.geometry import Ray
-from gonzales.media import Medium, MediumInterface, Grid, NvdbGrid
-from gonzales.lights import LightSampler, AreaLight, DistantLight, PointLight, InfiniteLight
-from gonzales.curves import Curve
-from gonzales.bvh import BVH4, SceneView, BVH2Node, build_bvh2, traverse_bvh2_core, test_spheres
-from gonzales.rng import PCG32
-from gonzales.sampling import film_filter_of
-from gonzales.spectrum import sample_wavelengths, null_spectral_handle
+from gonzales.scene.curves import CurveBvh
+from gonzales.core.sampling import ThinLens
+from gonzales.scene.footprint import CameraFootprint
+from gonzales.core.geometry import RGB, Point3f
+from gonzales.scene.materials import MeasuredBRDF, Material, MatKind
+from gonzales.scene.materials import GpuTexture, NormalSlopeMap
+from gonzales.scene.primitives import Intersection, PrimId, Sphere, Instance, TriangleMesh
+from gonzales.core.geometry import Ray
+from gonzales.scene.media import Medium, MediumInterface, Grid, NvdbGrid
+from gonzales.scene.lights import LightSampler, AreaLight, DistantLight, PointLight, InfiniteLight
+from gonzales.scene.curves import Curve
+from gonzales.scene.bvh import BVH4, SceneView, BVH2Node, build_bvh2, traverse_bvh2_core, test_spheres
+from gonzales.core.rng import PCG32
+from gonzales.core.sampling import film_filter_of
+from gonzales.core.spectrum import sample_wavelengths, null_spectral_handle
 from std.collections import Array
-from gonzales.vcm_camis import CamisCamRecord, camis_cam_carry_init
-from gonzales.bdpt_vertex import BDPTVertex, _BDPT_MAX_DEPTH
-from gonzales.bdpt_camera import _bdpt_trace_camera_and_connect, _bdpt_camera_path_init, _bdpt_camera_path_bounce
-from gonzales.vcm_strategy import _CAMIS_CAM_RECS
+from gonzales.paths.vcm_camis import CamisCamRecord, camis_cam_carry_init
+from gonzales.paths.bdpt_vertex import BDPTVertex, _BDPT_MAX_DEPTH
+from gonzales.integrators.bdpt_camera import _bdpt_trace_camera_and_connect, _bdpt_camera_path_init, _bdpt_camera_path_bounce
+from gonzales.paths.vcm_strategy import _CAMIS_CAM_RECS
 
 comptime EPS: Float32 = 1e-3
 

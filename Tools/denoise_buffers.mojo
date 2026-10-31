@@ -30,7 +30,7 @@ Output blob: denoised RGB, n*3 float32, no header.
 """
 from std.sys import argv
 from std.memory import alloc
-from gonzales.postprocess import denoise
+from gonzales.integrators.postprocess import denoise
 
 
 # The exact parameters pipeline.mojo passes on the denoised render path. If

@@ -46,9 +46,9 @@ plain floor(mu*10)/floor(alpha*10) instead of searching unevenly spaced
 knots.
 """
 from std.math import sqrt, sin, cos, min, max
-from gonzales.geometry import Vec3f, RGB, dot, PI
-from gonzales.rng import PCG32
-from gonzales.bxdf import (
+from gonzales.core.geometry import Vec3f, RGB, dot, PI
+from gonzales.core.rng import PCG32
+from gonzales.transport.bxdf import (
     CoatWalk, coat_walk_begin, coat_walk_enter, coat_walk_at_base,
     coat_walk_scatter, coat_eval_smooth,
     COAT_WALKING, COAT_REFLECT, COAT_EXIT, COAT_ABSORB,

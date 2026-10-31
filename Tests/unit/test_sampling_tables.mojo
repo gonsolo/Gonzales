@@ -1,7 +1,7 @@
 from std.math import abs
 from std.memory.alloc import unsafe_alloc
 from std.testing import assert_equal, assert_true, TestSuite
-from gonzales.sampling import (
+from gonzales.core.sampling import (
     sobol_perm_lookup, fill_filter_lut, filter_lut_lookup, FILTER_LUT_N,
     gaussian_filter_sample_1d,
 )

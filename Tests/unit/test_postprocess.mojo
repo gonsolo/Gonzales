@@ -1,7 +1,7 @@
 from std.math import abs
 from std.collections import List
 from std.testing import assert_true, TestSuite
-from gonzales.postprocess import denoise
+from gonzales.integrators.postprocess import denoise
 
 comptime EPS: Float32 = 1e-4
 

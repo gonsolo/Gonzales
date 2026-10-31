@@ -3,11 +3,11 @@ from std.sys.info import size_of
 from std.testing import assert_true, TestSuite
 from std.sys import has_accelerator
 from max.gpu.host import DeviceContext
-from gonzales.gpu_wavefront import clear_film_gpu, accumulate_film_gpu
-from gonzales.geometry import RGB, Point3f, Vec3f
-from gonzales.render_state import PathState, MIN_RAY_PDF_NONE, SssWalk
-from gonzales.geometry import Ray
-from gonzales.spectrum import SpectralSample, SampledWavelengths
+from gonzales.gpu.gpu_wavefront import clear_film_gpu, accumulate_film_gpu
+from gonzales.core.geometry import RGB, Point3f, Vec3f
+from gonzales.transport.render_state import PathState, MIN_RAY_PDF_NONE, SssWalk
+from gonzales.core.geometry import Ray
+from gonzales.core.spectrum import SpectralSample, SampledWavelengths
 
 comptime EPS: Float32 = 1e-4
 

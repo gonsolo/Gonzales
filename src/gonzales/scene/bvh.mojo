@@ -1,0 +1,3584 @@
+from std.collections import Array
+from std.memory import bitcast
+from std.sys import is_gpu
+from std.builtin.device_passable import DevicePassable, DeviceTypeEncoder
+from std.memory.alloc import unsafe_alloc
+from std.math import sqrt, cos, sin, max, min, exp, floor, log
+from max.algorithm import parallelize
+from std.atomic import Atomic
+from std.sys.info import num_performance_cores
+from std.bit import count_trailing_zeros
+from gonzales.core.transform import Mat4
+from gonzales.core.geometry import dot, cross, Point3f, Point2f, Vec3f, Frame, RGB, PI, TWO_PI, INV_PI, safe_sqrt, _is_real_ptr, store_vec3, _atan2f, point3f, fast_sincos
+from gonzales.core.sampling import ThinLens
+from gonzales.scene.materials import Material, fr_dielectric, MeasuredBRDF
+from gonzales.scene.materials import GpuTexture, NormalSlopeMap
+from gonzales.scene.primitives import (
+    Intersection, PrimId, TriangleMesh, Sphere, intersect_triangle, intersect_triangle_edges, alpha_killed, Instance, sphere_outward_normal, mesh_vi, mesh_material,
+)
+from gonzales.core.geometry import Ray
+from gonzales.scene.primitives import mesh_pos, mesh_point
+from gonzales.scene.media import Medium, MediumInterface, Grid, NvdbGrid
+from gonzales.scene.lights import AreaLight, DistantLight, PointLight, InfiniteLight, LightSampler, il_rgb
+from gonzales.scene.curves import Curve, curve_at, CurveBvh, intersect_curve, CURVE_DEFER_K, curve_piece_endpoints, curve_view_frame, curve_hit_normal
+from gonzales.core.rng import PCG32
+from gonzales.scene.footprint import CameraFootprint
+from gonzales.core.spectrum import SpectralHandle
+
+# ── BVH2 Compact Nodes (32 bytes per node, 1 cache line) ──────────────────────
+# Layout: Point3f min (12 B) + Point3f max (12 B) + Int32 offset (4 B) + Int32 count (4 B) = 32 B
+
+@fieldwise_init
+struct BVH2Node(TrivialRegisterPassable):
+    var min: Point3f        # AABB minimum corner
+    var max: Point3f        # AABB maximum corner
+    var offset: Int32       # interior: right child index, leaf: primIds offset
+    var count: Int32        # 0 = interior, >0 = leaf primitive count
+
+@always_inline
+def intersect_aabb(
+    bmin: Point3f, bmax: Point3f,
+    rdir: Vec3f,
+    org: Vec3f,
+    nearXIsMin: Bool, nearYIsMin: Bool, nearZIsMin: Bool,
+    tMax: Float32
+) -> Tuple[Bool, Float32]:
+    var nearX = bmin.x if nearXIsMin else bmax.x
+    var farX  = bmax.x if nearXIsMin else bmin.x
+    var nearY = bmin.y if nearYIsMin else bmax.y
+    var farY  = bmax.y if nearYIsMin else bmin.y
+    var nearZ = bmin.z if nearZIsMin else bmax.z
+    var farZ  = bmax.z if nearZIsMin else bmin.z
+
+    # (near - org) * rdir, NOT near*rdir - org*rdir: algebraically identical
+    # for finite rdir, but for an axis-aligned ray (rdir.x = +/-inf) the two
+    # separately-computed infinite products in the old form were routinely
+    # like-signed, so subtracting them produced inf-inf = NaN and a false
+    # miss even for rays that truly passed through the box. Subtracting the
+    # (finite) coordinates FIRST and only then multiplying by the infinite
+    # rdir keeps the arithmetic finite until the last step, so it only
+    # degenerates to 0*inf=NaN in the genuinely ambiguous case of the ray
+    # origin sitting exactly on the box face — same per-node op count either
+    # way (one subtract + one multiply per axis), so this costs nothing.
+    var tNearX = (nearX - org.x) * rdir.x
+    var tNearY = (nearY - org.y) * rdir.y
+    var tNearZ = (nearZ - org.z) * rdir.z
+
+    var tFarX = (farX - org.x) * rdir.x
+    var tFarY = (farY - org.y) * rdir.y
+    var tFarZ = (farZ - org.z) * rdir.z
+
+    # tNear = max(tNearX, tNearY, tNearZ, 0)
+    var tNear = tNearX if tNearX > tNearY else tNearY
+    tNear = tNearZ if tNearZ > tNear else tNear
+    tNear = Float32(0.0) if Float32(0.0) > tNear else tNear
+
+    # tFar = min(tFarX, tFarY, tFarZ, tMax) * gamma
+    var tFar = tFarX if tFarX < tFarY else tFarY
+    tFar = tFarZ if tFarZ < tFar else tFar
+    tFar = tMax if tMax < tFar else tFar
+    tFar = tFar * Float32(1.0000003)
+
+    return (tNear <= tFar, tNear)
+
+
+# Nodes load as two 16-byte vectors; a child's offset/count come with its box, so a descent never re-reads the node.
+comptime _VEC_ALIGN = 16 if is_gpu() else 4
+
+@always_inline
+def _node_lo(nf: Pointer[Float32, MutUntrackedOrigin], idx: Int) -> SIMD[DType.float32, 4]:
+    return nf.unsafe_load[width=4, alignment=_VEC_ALIGN, invariant=True](idx * 8)
+
+@always_inline
+def _node_hi(nf: Pointer[Float32, MutUntrackedOrigin], idx: Int) -> SIMD[DType.float32, 4]:
+    return nf.unsafe_load[width=4, alignment=_VEC_ALIGN, invariant=True](idx * 8 + 4)
+
+@always_inline
+def _node_box_hit(
+    lo: SIMD[DType.float32, 4], hi: SIMD[DType.float32, 4],
+    rdir: Vec3f, org: Vec3f,
+    nearXIsMin: Bool, nearYIsMin: Bool, nearZIsMin: Bool,
+    tMax: Float32
+) -> Tuple[Bool, Float32]:
+    return intersect_aabb(
+        Point3f(lo[0], lo[1], lo[2]), Point3f(lo[3], hi[0], hi[1]),
+        rdir, org, nearXIsMin, nearYIsMin, nearZIsMin, tMax)
+
+@always_inline
+def _node_oc(hi: SIMD[DType.float32, 4]) -> SIMD[DType.int32, 2]:
+    return bitcast[DType.int32, 4](hi).slice[2, offset=2]()
+
+@always_inline
+def _bvh_has_nodes(root_oc: SIMD[DType.int32, 2]) -> Bool:
+    """False for the all-zero root of a scene with nothing in its BVH (only analytic spheres, say). A real
+    root is a leaf (count > 0) or has a right child (offset >= 2); traversing the empty one would read
+    children that do not exist."""
+    return root_oc[0] != 0 or root_oc[1] != 0
+
+@fieldwise_init
+struct SceneView(TrivialRegisterPassable, DevicePassable):
+    comptime device_type: AnyType = Self
+
+    def _to_device_type(
+        self, mut encoder: Some[DeviceTypeEncoder], target: MutOpaquePointer[_]
+    ):
+        encoder.encode(self, target)
+
+    @staticmethod
+    def get_type_name() -> String:
+        return "SceneView"
+
+    def with_vcm_budget(
+        self,
+        stat_in: Pointer[Float32, MutUntrackedOrigin],
+        stat_out: Pointer[Float32, MutUntrackedOrigin],
+        lam: Float32,
+    ) -> Self:
+        """This scene plus one VCM pass's per-cell budget state."""
+        var s = self
+        s.vcmStatIn = stat_in
+        s.vcmStatOut = stat_out
+        s.vcmLambda = lam
+        return s
+
+    def with_vcm_cap(self, cap: Int32) -> Self:
+        """This scene with VCM's merge-bucket cap overridden (0 = default)."""
+        var s = self
+        s.vcmBucketCap = cap
+        return s
+
+    def with_camera_footprint(self, cam: CameraFootprint) -> Self:
+        """This scene with the camera data every integrator's texture/bump
+        footprint needs (footprint.mojo), for one render's spp."""
+        var s = self
+        s.camFp = cam
+        return s
+
+    def with_vcm(
+        self,
+        keep_counts: Pointer[Int32, MutUntrackedOrigin],
+        keep_inv_cell: Float32,
+        keep_scale: Float32,
+        max_depth: Int32,
+        cam: SIMD[DType.float32, 4],
+        footprint: Float32,
+        merge_r: Float32,
+    ) -> Self:
+        """This scene plus one VCM pass's MIS state (merge radius, camera,
+        last pass's cell counts)."""
+        var s = self
+        s.vcmKeepCounts = keep_counts
+        s.vcmKeepInvCell = keep_inv_cell
+        s.vcmKeepScale = keep_scale
+        s.vcmMaxDepth = max_depth
+        s.vcmCamX = cam[0]
+        s.vcmCamY = cam[1]
+        s.vcmCamZ = cam[2]
+        s.vcmFootprint = footprint
+        s.vcmMergeR = merge_r
+        return s
+
+    var bvh2Nodes: Pointer[BVH2Node, MutUntrackedOrigin]
+    var primIds: Pointer[PrimId, MutUntrackedOrigin]
+    var meshes: Pointer[TriangleMesh, MutUntrackedOrigin]
+    var meshCount: Int64
+    var materials: Pointer[Material, MutUntrackedOrigin]
+    var materialCount: Int64
+    var areaLights: Pointer[AreaLight, MutUntrackedOrigin]
+    var areaLightCount: Int64
+    var textures: Pointer[Pointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin]
+    var textureCount: Int64
+    var distantLights: Pointer[DistantLight, MutUntrackedOrigin]
+    var distantLightCount: Int64
+    var pointLights: Pointer[PointLight, MutUntrackedOrigin]
+    var pointLightCount: Int64
+    var infiniteLights: Pointer[InfiniteLight, MutUntrackedOrigin]
+    var infiniteLightCount: Int64
+    var spheres: Pointer[Sphere, MutUntrackedOrigin]
+    var sphereCount: Int64
+    var curves: Pointer[Curve, MutUntrackedOrigin]
+    var curveCount: Int64
+    var mediums: Pointer[Medium, MutUntrackedOrigin]
+    var mediumCount: Int64
+    var mediumInterfaces: Pointer[MediumInterface, MutUntrackedOrigin]
+    var mediumIfaceCount: Int64
+    var grids: Pointer[Grid, MutUntrackedOrigin]
+    var gridCount: Int64
+    var nvdbGrids: Pointer[NvdbGrid, MutUntrackedOrigin]
+    var nvdbGridCount: Int64
+    var lightSampler: LightSampler
+
+    # Object instancing: one private BVH2 ("BLAS") per template, each a
+    # separate allocation reachable via Instance.blasIdx, plus TLAS instance
+    # placements. See geometry.mojo's Instance docs. instanceCount == 0 for
+    # scenes with no ObjectInstance usage (the blas*/instances pointers may
+    # then be dangling — never dereferenced since no PrimId.type==6 leaf
+    # exists in that case).
+    var blasNodesArr:   Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin]
+    var blasPrimIdsArr: Pointer[Pointer[PrimId, MutUntrackedOrigin], MutUntrackedOrigin]
+    var blasCount:      Int64
+    var instances:      Pointer[Instance, MutUntrackedOrigin]
+    var instanceCount:  Int64
+
+    # "measured" materials: one MeasuredBRDF per distinct .bsdf file
+    # (deduped at scene-build time), referenced by Material.measured_idx.
+    # See measured_bsdf.mojo's loader / pbrt_parser.mojo's finalize_scene.
+    var measuredBrdfs:      Pointer[MeasuredBRDF, MutUntrackedOrigin]
+    var measuredBrdfCount:  Int64
+
+    # Staged spectral rendering rollout (see project_spectral_rendering memory
+    # / lovely-dazzling-meteor plan, Stage 2c). Loaded once per render and
+    # threaded through here so render_tile/shade_core_cpu_nee need no new
+    # parameter of their own — they already carry a SceneView.
+    # Dangling (null_spectral_handle()) for test fixtures that don't supply
+    # a real loaded table.
+    var spectral: SpectralHandle
+
+    # GPU-resident image textures (one GpuTexture per distinct file,
+    # mip-chained device buffers — see gpu.mojo's GpuSceneHandle.textures_buf,
+    # the only real producer of this array). `textures`/`textureCount` above
+    # are the CPU-only tex_filenames path (OIIO bridge lookups); this is the
+    # separate GPU-only path shading.mojo's _tex_lookup[True] branch needs.
+    # Dangling/0 for BDPT/SPPM CPU callers (scene.mojo's scene_descriptor(),
+    # which has no GPU buffers to offer) and any caller that never reaches a
+    # material with an image-texture reflectance.
+    var gpuTextures: Pointer[GpuTexture, MutUntrackedOrigin]
+    var gpuTextureCount: Int64
+
+    # One NormalSlopeMap per entry of `textures` (same indices, so a
+    # material's `normal_tex_idx` addresses both), built once at scene-build
+    # time for every texture some material uses as a NORMAL map. Only the
+    # SMS/MNEE manifold walk reads these -- ordinary shading samples the
+    # normal map through the usual texture path; the walk additionally needs
+    # the normal's analytic DERIVATIVES, which only the slope-space form
+    # provides (see geometry.mojo's NormalSlopeMap). Entries for textures
+    # that are not normal maps have `res == 0`; the whole array is dangling
+    # for callers that never built one, which every reader tolerates by
+    # checking `res` first.
+    var normalSlopeMaps: Pointer[NormalSlopeMap, MutUntrackedOrigin]
+
+    # VCM's variance-aware merge MIS (vcm_grid.mojo's _vcm_keep): the PREVIOUS
+    # pass's per-bucket light-vertex counts, the cell size they were hashed
+    # with, and the factor that rescales a count to this pass's radius.
+    # Dangling for every non-VCM caller and for a VCM pass with no previous
+    # pass yet, in which case every keep-probability reads as 1.
+    var vcmKeepCounts:  Pointer[Int32, MutUntrackedOrigin]
+    var vcmKeepInvCell: Float32
+    var vcmKeepScale:   Float32
+    # VCM's full-path length limit: every strategy produces only paths with at
+    # most this many non-delta interior vertices (vcm_grid.mojo's _vcm_depth).
+    var vcmMaxDepth:    Int32
+    # VCM's per-vertex merge radius (vcm_grid.mojo's _vcm_merge_radius_at): the
+    # camera position, the world size of `_VCM_FOOTPRINT_PIXELS` pixels at unit
+    # distance (0 = off, one global radius), and this pass's global radius.
+    var vcmCamX:        Float32
+    var vcmCamY:        Float32
+    var vcmCamZ:        Float32
+    var vcmFootprint:   Float32
+    var vcmMergeR:      Float32
+    # VCM pass 0 counts MNEE probes and their glass hits here, to switch MNEE off where glass is rare.
+    var vcmMneeStats:   Pointer[Int32, MutUntrackedOrigin]
+    # pbrt's texture/bump footprint camera data (footprint.mojo); none() =
+    # every map at LOD 0 with pbrt's fixed bump step.
+    var camFp:          CameraFootprint
+    # How many of `spheres` are emitters (isAreaLight). Every other light
+    # type has its own lights-only array whose length is its count; analytic
+    # sphere lights live among all the spheres, and the VCM light pick needs
+    # their count per sample, so it is counted once at upload.
+    var sphereLightCount: Int64
+    # VCM's power-proportional light pick over every light (gpu_scene's
+    # _light_pick_cdf, n+1 entries in the order area, sphere, distant,
+    # infinite, point); dangling = the uniform pick.
+    var lightPickCdf: Pointer[Float32, MutUntrackedOrigin]
+    # VCM's per-cell photon budget (--vcm-budget, bdpt_*.mojo _vcm_keep): the
+    # previous pass's per-bucket statistics [Q, V] (merge queries, second
+    # moment of their contribution at full keep), this pass's accumulator,
+    # and the Lagrange multiplier that meets the work budget. Dangling / 0 =
+    # the fixed-cap thinning.
+    var vcmStatIn:    Pointer[Float32, MutUntrackedOrigin]
+    var vcmStatOut:   Pointer[Float32, MutUntrackedOrigin]
+    var vcmLambda:    Float32
+    # VCM's merge-bucket cap (--vcm-cap); 0 = _PHOTON_BUCKET_CAP.
+    var vcmBucketCap: Int32
+    # 0 when no material is smooth glass, so MNEE's per-sample probe toward the light can be skipped; 1 otherwise (always on the CPU).
+    var hasGlass: Int32
+    var lens: ThinLens
+    var filterGlossy: Float32   # Cycles' Filter Glossy; 0 = off
+    var clamp: SIMD[DType.float32, 2]   # Cycles' Clamp Direct and Clamp Indirect (shading._clamped); 0 = off
+    var cycles: SIMD[DType.int32, 4]    # Cycles' diffuse, glossy and transmission bounce limits, w = 1 to use them
+    var curveRoot: Int32        # bvh2Nodes' curve-only subtree (ParsedScene_Mojo.curve_root); -1: none
+    var curveBvh: CurveBvh      # the curve leaves in fiber-aligned clusters (curve_bvh.mojo); n_clusters 0: none
+    # Per-mesh BVHs for subsurface walks (gpu_scene.WalkBvhBuffers); walkBvhOfMesh dangling = walk the scene BVH.
+    var walkNodesArr: Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin]
+    var walkPrimsArr: Pointer[Pointer[PrimId, MutUntrackedOrigin], MutUntrackedOrigin]
+    var walkBvhOfMesh: Pointer[Int32, MutUntrackedOrigin]
+    # [MNEE probes, probes that found glass, switched-off flag]; dangling = MNEE always on
+    var mneeStats: Pointer[Int32, MutUntrackedOrigin]
+    # CPU-only 4-wide collapse of bvh2Nodes (build_bvh4); BVH4.none() = use the BVH2.
+    var bvh4: BVH4
+
+# ── Infinite/distant-light emission + NEE sampling (shared by bdpt_*.mojo and
+#    sppm.mojo — lives here, not shading.mojo, to avoid an import cycle:
+#    shading.mojo already imports helpers FROM sppm.mojo, so sppm.mojo can't
+#    import back from shading.mojo. guide.mojo hit this exact same
+#    constraint earlier and solved it by duplicating the two small equal-
+#    area-mapping helpers below rather than sharing them — same approach
+#    here.) ────────────────────────────────────────────────────────────────
+
+@always_inline
+def _scene_bounding_sphere(ref sd: SceneView) -> Tuple[Point3f, Float32]:
+    """Scene bounding sphere derived from the top-level BVH's root AABB.
+    Infinite/distant lights have no position of their own — emitting a
+    light-path/photon from one requires an arbitrary point outside the
+    scene to start from; a disk of this radius (see
+    _sample_disk_perpendicular) centered on the scene gives every emitted
+    ray a chance to actually enter the scene, same technique pbrt uses
+    (DistantLight::SampleLe / ImageInfiniteLight::SampleLe)."""
+    var root = sd.bvh2Nodes[unsafe_offset=0]
+    var lo = root.min
+    var hi = root.max
+    # Analytic spheres are not BVH prims; a zero-extent root means an empty BVH.
+    if (hi - lo).length() <= Float32(0.0):
+        lo = Point3f(Float32(1e30)); hi = Point3f(Float32(-1e30))
+    for si in range(Int(sd.sphereCount)):
+        var sph = sd.spheres[unsafe_offset=si]
+        for a in range(3):
+            lo[a] = min(lo[a], sph.center[a] - sph.radius)
+            hi[a] = max(hi[a], sph.center[a] + sph.radius)
+    if hi[0] < lo[0]:
+        lo = root.min; hi = root.max
+    var diag = hi - lo
+    var center = lo + diag * Float32(0.5)
+    var radius = diag.length() * Float32(0.5)
+    if radius < Float32(1e-4):
+        radius = Float32(1.0)
+    return (center, radius)
+
+@always_inline
+def _sample_disk_perpendicular(
+    dir: Vec3f,   # the ray's travel direction
+    center: Point3f, radius: Float32,
+    u: Point2f,
+) -> Point3f:
+    """Uniform point on a disk of `radius` centered at `center - dir*radius`
+    (i.e. on the near side of the bounding sphere, facing back along `dir`)
+    and oriented perpendicular to `dir` — so a ray started here travelling
+    along `dir` is guaranteed to cross the whole bounding sphere."""
+    var frame = Frame.from_z(dir)
+    var r = radius * sqrt(u.x)
+    var theta = Float32(2) * PI * u.y
+    var dx = r * cos(theta)
+    var dy = r * sin(theta)
+    var disk_center = center + dir * (-radius)
+    return disk_center + (frame.x * dx + frame.y * dy)
+
+@always_inline
+def _equal_area_square_to_sphere(u: Float32, v: Float32) -> Vec3f:
+    """PBRT v4's equal-area octahedral mapping (Clarberg 2008): [0,1]^2 UV ->
+    unit sphere direction. THE single shared implementation — bvh.mojo is
+    the only one of {shading.mojo, guide.mojo, bvh.mojo} with no import-
+    cycle constraint against the other two (shading.mojo and guide.mojo
+    both already import from bvh.mojo; bvh.mojo imports from neither), so
+    this lives here and they import it, instead of each keeping its own
+    copy. That prior 3-way duplication is exactly how a real bug survived
+    undetected in 2 of the 3 copies after being found and fixed in the
+    first: an extra `elif up >= vp: phi = (vp/r)*PI/4` branch that doesn't
+    exist in pbrt-v4's own EqualAreaSquareToSphere (util/math.cpp) and
+    computes a completely wrong angle for ~half of all directions —
+    confirmed via a numerical round-trip test against
+    _equal_area_sphere_to_square (max error 0.66 on the unit sphere before
+    the fix, ~1e-6 after). This single formula (no up>=vp branch) matches
+    pbrt exactly; r==0 fallback is PI/4, matching pbrt's `r==0 ? 1 : ...`
+    ternary."""
+    var uu = Float32(2) * u - Float32(1)
+    var vv = Float32(2) * v - Float32(1)
+    var up = uu if uu >= Float32(0) else -uu
+    var vp = vv if vv >= Float32(0) else -vv
+    var signed_dist = Float32(1) - (up + vp)
+    var d = signed_dist if signed_dist >= Float32(0) else -signed_dist
+    var r = Float32(1) - d
+    var phi: Float32
+    if r == Float32(0):
+        phi = PI / Float32(4)
+    else:
+        phi = ((vp - up) / r + Float32(1)) * PI / Float32(4)
+    var r2 = r * r
+    var z = Float32(1) - r2
+    if signed_dist < Float32(0): z = -z
+    var cp = cos(phi)
+    var sp = sin(phi)
+    if uu < Float32(0): cp = -cp
+    if vv < Float32(0): sp = -sp
+    var xy_scale = r * sqrt(max(Float32(0), Float32(2) - r2))
+    return Vec3f(cp * xy_scale, sp * xy_scale, z)
+
+@always_inline
+def _lower_bound_bvh(arr: Pointer[Float32, MutUntrackedOrigin], lo: Int, hi: Int, val: Float32) -> Int:
+    """Binary search: first index i in [lo, hi) s.t. arr[i] >= val; returns
+    hi if all < val. Used only by _sample_infinite_light_textured below —
+    the sole remaining copy after unifying the 3 duplicate CDF-walk sites
+    (project_equal_area_mapping_bug memory, bug #4)."""
+    var l = lo; var h = hi
+    while l < h:
+        var mid = (l + h) // 2
+        if arr[unsafe_offset=mid] < val:
+            l = mid + 1
+        else:
+            h = mid
+    return l
+
+@always_inline
+def _sample_infinite_light_textured(
+    ilight: InfiniteLight,
+    u: Point2f,
+) -> Tuple[Vec3f, RGB, Float32]:
+    """CDF-importance-sample a TEXTURED environment light, returning
+    (world-space direction, radiance there, solid-angle pdf). Callers must
+    already know `ilight` has a valid texture+CDF (see the guard every call
+    site checks: `tex_idx>=0 and pixels_ptr/cdf_ptr allocated and cdf_w>0`).
+
+    THE single shared implementation of this CDF walk — previously
+    duplicated byte-for-byte in 3 places (this function, shading.mojo's
+    _nee_infinite_light, and shading.mojo's shade_coated_diffuse env-NEE
+    block), which is exactly how an off-by-one bug in the CDF bucket lookup
+    survived undetected: fixed in one copy without realizing 2 others
+    existed. See project_equal_area_mapping_bug memory (bug #4) for the
+    off-by-one's diagnosis — `_lower_bound`/`_lower_bound_bvh` return the
+    first index i with cdf[i] >= val (the END of the bucket containing val),
+    so the bucket index itself is i-1; every caller needs `- 1` (clamped to
+    0) on both the row and column lookup."""
+    var w2l = ilight.world_to_light
+    var iw = Int(ilight.cdf_w); var ih = Int(ilight.cdf_h)
+    var row_idx = _lower_bound_bvh(ilight.cdf_ptr, 0, ih, u.x) - 1
+    row_idx = max(0, min(row_idx, ih - 1))
+    var dp_row = ilight.cdf_ptr[unsafe_offset=row_idx + 1] - ilight.cdf_ptr[unsafe_offset=row_idx]
+    var cond_base = (ih + 1) + row_idx * (iw + 1)
+    var col_idx = _lower_bound_bvh(ilight.cdf_ptr, cond_base, cond_base + iw, u.y) - cond_base - 1
+    col_idx = max(0, min(col_idx, iw - 1))
+    var dp_col = ilight.cdf_ptr[unsafe_offset=cond_base + col_idx + 1] - ilight.cdf_ptr[unsafe_offset=cond_base + col_idx]
+
+    # Continuous within-bucket offset, matching pbrt-v4's
+    # PiecewiseConstant1D::Sample (util/sampling.h:657-674) exactly: `du = (u
+    # - cdf[o]) / (cdf[o+1]-cdf[o])`, NOT a fixed bucket centre. Was
+    # `(idx + 0.5)/size` -- every sample landing in a given bucket picked the
+    # EXACT SAME direction, regardless of where its own random number fell
+    # within the bucket's probability mass. See project_house_envmap_-
+    # brightness_gap memory for the empirical trail that led here.
+    var du_row = (u.x - ilight.cdf_ptr[unsafe_offset=row_idx]) / dp_row if dp_row > Float32(0) else Float32(0.5)
+    var du_col = (u.y - ilight.cdf_ptr[unsafe_offset=cond_base + col_idx]) / dp_col if dp_col > Float32(0) else Float32(0.5)
+    var sample_u = (Float32(col_idx) + du_col) / Float32(iw)
+    var sample_v = (Float32(row_idx) + du_row) / Float32(ih)
+    var local_d_s = _equal_area_square_to_sphere(sample_u, sample_v)
+    var local_d = Vec3f(local_d_s[0], local_d_s[1], local_d_s[2])
+
+    var env_dir = Mat4.load(w2l).transpose_mul(local_d)
+
+    var px = min(iw - 1, max(0, Int(sample_u * Float32(iw))))
+    var py = min(ih - 1, max(0, Int(sample_v * Float32(ih))))
+    var env_rgb = il_rgb(ilight, py * iw + px) * ilight.scale
+
+    var pdf_light: Float32
+    if dp_row > Float32(0) and dp_col > Float32(0):
+        pdf_light = dp_row * dp_col * Float32(iw * ih) / (Float32(4) * PI)
+    else:
+        pdf_light = Float32(1) / (Float32(4) * PI)
+    return (env_dir, env_rgb, pdf_light)
+
+@always_inline
+def _sample_infinite_light_dir(
+    ilight: InfiniteLight,
+    u: Point2f,
+) -> Tuple[Vec3f, RGB, Float32]:
+    """Sample an emission direction from an environment (infinite) light,
+    returning (world-space direction, radiance there, solid-angle pdf).
+    Used for BOTH light-path/photon emission (bdpt_*.mojo/sppm.mojo) and NEE
+    toward the light (same distribution works for both — the only
+    difference is which end of the ray you start from)."""
+    if ilight.tex_idx >= Int32(0) and _is_real_ptr(ilight.pixels_ptr) and _is_real_ptr(ilight.cdf_ptr) and ilight.cdf_w > Int32(0):
+        return _sample_infinite_light_textured(ilight, u)
+    else:
+        # No texture: uniform sphere sampling, constant radiance.
+        var cosT = Float32(2) * u.x - Float32(1)
+        var sinT = sqrt(max(Float32(0), Float32(1) - cosT*cosT))
+        var phi = Float32(2) * PI * u.y
+        var dir = Vec3f(sinT * cos(phi), sinT * sin(phi), cosT)
+        return (dir, ilight.scale, Float32(1) / (Float32(4) * PI))
+
+@fieldwise_init
+struct LightSample(Copyable, Movable):
+    """Uniform result of sampling ONE non-area light toward a shading point,
+    for NEE — the "Light interface" this codebase's distant/point/sphere/
+    infinite lights all present, so a single generic NEE-weight function
+    (bxdf.mojo's _nee_weight_simple/_nee_weight_hair) can consume any of
+    them. `valid=False` means "skip this sample" (degenerate distance,
+    light behind the visible horizon, etc). `is_delta=True` (distant/point)
+    means no competing BSDF-sampling strategy exists, so the caller applies
+    MIS weight 1; `is_delta=False` (sphere/infinite) means the caller must
+    weight against the material's own pdf via the power heuristic. Area
+    lights are NOT covered here — their NEE is entangled with MNEE glass-
+    refraction probing (see shading.mojo's _nee_area_lights) and stays a
+    separate, diffuse-specific path."""
+    var wi:       Vec3f
+    var Li:       RGB
+    var pdf:      Float32
+    var dist:     Float32
+    var is_delta: Bool
+    var valid:    Bool
+
+@always_inline
+def _invalid_light_sample() -> LightSample:
+    return LightSample(Vec3f(0, 0, 0), RGB(0.0), Float32(1.0), Float32(0.0), True, False)
+
+@always_inline
+def _sample_distant_light_nee(dl: DistantLight) -> LightSample:
+    """Distant (directional) light: delta position AND direction, same (wi,
+    Li) everywhere in the scene. pdf=1 by convention (is_delta=True tells
+    the caller to skip MIS entirely, so the value of pdf itself never
+    matters beyond being nonzero)."""
+    var ldir = Vec3f(dl.direction.x, dl.direction.y, dl.direction.z)
+    var wi = -ldir
+    return LightSample(wi, dl.emission, Float32(1.0), Float32(2000.0), True, True)
+
+@always_inline
+def _sample_point_light_nee(
+    pl: PointLight,
+    hit_point: Vec3f,
+) -> LightSample:
+    """Point light: delta position, 1/dist² falloff folded into Li so
+    callers never need dist² separately."""
+    var lpos = Vec3f(pl.position.x, pl.position.y, pl.position.z)
+    var to_light = lpos - hit_point
+    var dist_sq = dot(to_light, to_light)
+    var dist = sqrt(dist_sq)
+    if dist <= Float32(0.0001):
+        return _invalid_light_sample()
+    var wi = to_light * (Float32(1.0) / dist)
+    var Li = pl.intensity * (Float32(1.0) / dist_sq)
+    return LightSample(wi, Li, Float32(1.0), dist, True, True)
+
+@always_inline
+def light_path_count(ref sd: SceneView) -> Int:
+    """How many lights a light path (VCM) or photon (SPPM) can start from:
+    area, emitting sphere, distant, infinite, point -- the pick's slot order."""
+    return (Int(sd.areaLightCount) + Int(sd.sphereLightCount) + Int(sd.distantLightCount)
+            + Int(sd.infiniteLightCount) + Int(sd.pointLightCount))
+
+
+@always_inline
+def light_path_pick(ref sd: SceneView, u: Float32) -> Tuple[Int, Float32]:
+    """The light a light path or photon starts from, and its probability:
+    power-proportional through sd.lightPickCdf (pbrt_parser's
+    _light_pick_cdf), in light_path_count's slot order; the uniform pick
+    where no table exists. Shared by VCM and SPPM so both emit alike."""
+    var n = light_path_count(sd)
+    if not _is_real_ptr(sd.lightPickCdf):
+        return (min(Int(u * Float32(n)), n - 1), Float32(1) / Float32(max(n, 1)))
+    var lo = 0
+    var hi = n - 1
+    while lo < hi:
+        var mid = (lo + hi) >> 1
+        if sd.lightPickCdf[unsafe_offset=mid + 1] <= u:
+            lo = mid + 1
+        else:
+            hi = mid
+    return (lo, sd.lightPickCdf[unsafe_offset=lo + 1] - sd.lightPickCdf[unsafe_offset=lo])
+
+
+@always_inline
+def light_path_pick_pdf(ref sd: SceneView, slot: Int) -> Float32:
+    """The probability light_path_pick starts at light `slot` -- the one
+    value every VCM emission density on BOTH subpaths must use for that
+    light, or the MIS weights stop summing to 1. Floored so a light that
+    emits nothing cannot divide by zero; it contributes nothing."""
+    if not _is_real_ptr(sd.lightPickCdf):
+        return Float32(1) / Float32(max(light_path_count(sd), 1))
+    return max(sd.lightPickCdf[unsafe_offset=slot + 1] - sd.lightPickCdf[unsafe_offset=slot], Float32(1e-12))
+
+
+@always_inline
+def sphere_light_cone_pdf(sph: Sphere, p: Vec3f) -> Float32:
+    """The solid-angle density _sample_sphere_light_nee draws with from `p`:
+    1 / (the cone the sphere subtends there), or 0 where it cannot sample at
+    all (p on or inside the sphere). One definition, because VCM's MIS needs
+    this exact density in three places -- the NEE itself, a BSDF ray landing
+    on the sphere, and a sphere light path's first vertex."""
+    var to_c = sph.center.to_simd() - p
+    var dc_sq = dot(to_c, to_c)
+    if dc_sq <= sph.radius * sph.radius:
+        return Float32(0.0)
+    var cos_max = sqrt(Float32(1.0) - sph.radius * sph.radius / dc_sq)
+    var solid_angle = TWO_PI * (Float32(1.0) - cos_max)
+    return Float32(1.0) / solid_angle if solid_angle > Float32(0.0) else Float32(0.0)
+
+@always_inline
+def _sample_sphere_light_nee(
+    sph: Sphere,
+    n_sphere_lights: Int,
+    hit_point: Vec3f,
+    mut pcg: PCG32,
+) -> LightSample:
+    """Analytic sphere area light: uniform cone sampling over the visible
+    solid angle (pbrt's Sphere::Sample(refPoint) technique). Ported verbatim
+    from shading.mojo's/sppm.mojo's own (formerly duplicated 3x) sphere-
+    light NEE block — a real (non-delta) pdf, caller must apply MIS."""
+    if sph.isAreaLight == Int8(0):
+        return _invalid_light_sample()
+    var to_cx = sph.center.x - hit_point[0]
+    var to_cy = sph.center.y - hit_point[1]
+    var to_cz = sph.center.z - hit_point[2]
+    var dc_sq = to_cx*to_cx + to_cy*to_cy + to_cz*to_cz
+    var dc = sqrt(dc_sq)
+    if dc < sph.radius or dc_sq == Float32(0.0):
+        return _invalid_light_sample()
+    var sin2_max = sph.radius * sph.radius / dc_sq
+    if sin2_max >= Float32(1.0):
+        return _invalid_light_sample()
+    var cos_max = sqrt(Float32(1.0) - sin2_max)
+    var zc = Vec3f(to_cx / dc, to_cy / dc, to_cz / dc)
+    var xc: Vec3f
+    if (zc[0] if zc[0] >= Float32(0.0) else -zc[0]) < Float32(0.9):
+        xc = cross(zc, Vec3f(Float32(1), Float32(0), Float32(0)))
+    else:
+        xc = cross(zc, Vec3f(Float32(0), Float32(1), Float32(0)))
+    var xlen = dot(xc, xc)
+    if xlen > Float32(0.0):
+        xc = xc * (Float32(1.0) / sqrt(xlen))
+    var yc = cross(zc, xc)
+    var r1s = pcg.next_float()
+    var r2s = pcg.next_float()
+    var cos_th = Float32(1.0) - r1s * (Float32(1.0) - cos_max)
+    var sin_th = sqrt(max(Float32(0.0), Float32(1.0) - cos_th * cos_th))
+    var phis = TWO_PI * r2s
+    var (sphis, cphis) = fast_sincos(phis)
+    var wi = xc * (sin_th * cphis) + yc * (sin_th * sphis) + zc * cos_th
+    var wlen = dot(wi, wi)
+    if wlen > Float32(0.0):
+        wi = wi * (Float32(1.0) / sqrt(wlen))
+    # NO 1/n_sphere_lights selection factor. That factor belongs to a sampler
+    # that picks ONE light at random, and every caller here instead ENUMERATES
+    # every sphere and sums (`for sph_i in range(sphereCount)`, in shading.mojo,
+    # sppm.mojo and bdpt_*.mojo alike). Dividing each enumerated light's pdf by
+    # the count multiplies each contribution BY the count, so N sphere lights
+    # came out N times too bright -- veach-mis, which is built from exactly
+    # three sphere lights, rendered ~3x too bright over most of the frame. A
+    # scene with a single sphere light cannot show this (N=1), which is how it
+    # survived the sphere-light fix in bba82627.
+    # `n_sphere_lights` is deliberately left in the signature: it is what the
+    # emitter-hit MIS on the other side keys its own spelling off, and both
+    # halves must agree that the factor is absent.
+    var pdf_light = sphere_light_cone_pdf(sph, hit_point)
+    if pdf_light <= Float32(0.0):
+        return _invalid_light_sample()
+    # `dist` must be the distance to the sphere's SURFACE along wi, not to its
+    # CENTER. Every caller uses it as the shadow ray's tmax (dist*0.9999), so
+    # returning the centre distance made the ray overshoot the near surface by
+    # a whole radius -- it hit the light's own geometry and reported occlusion
+    # EVERY time, at every distance. Sphere area lights therefore illuminated
+    # nothing at all: a sphere light over a diffuse floor rendered the sphere
+    # itself correctly and left the floor black (0.00001 against an analytic
+    # 0.164). Cone sampling guarantees dc*sin_th <= radius, so the discriminant
+    # below is non-negative; the max() is belt-and-braces against rounding.
+    var sin2_th = max(Float32(0.0), Float32(1.0) - cos_th * cos_th)
+    var disc = max(Float32(0.0), sph.radius * sph.radius - dc_sq * sin2_th)
+    var d_surf = dc * cos_th - sqrt(disc)
+    return LightSample(wi, sph.emission, pdf_light, max(d_surf, Float32(0.0)), False, True)
+
+@always_inline
+def _sample_infinite_light_nee(ilight: InfiniteLight, u: Point2f, origin: Point3f) -> LightSample:
+    """Samples the whole env map; a direction outside this light's portal carries nothing, as in the escape gate."""
+    var (dir, Li, pdf) = _sample_infinite_light_dir(ilight, u)
+    if not ilight.portal_admits(origin, dir):
+        return LightSample(dir.to_simd(), RGB(Float32(0)), pdf, Float32(100000.0), False, False)
+    return LightSample(dir.to_simd(), Li, pdf, Float32(100000.0), False, True)
+
+@always_inline
+def _equal_area_sphere_to_square(dx: Float32, dy: Float32, dz: Float32) -> SIMD[DType.float32, 2]:
+    """Inverse of _equal_area_square_to_sphere — see that function's
+    docstring for why this is THE single shared implementation (bvh.mojo),
+    imported by shading.mojo/guide.mojo rather than duplicated."""
+    var x = dx if dx >= Float32(0) else -dx
+    var y = dy if dy >= Float32(0) else -dy
+    var z = dz if dz >= Float32(0) else -dz
+    var r = sqrt(max(Float32(0), Float32(1) - z))
+    var a = max(x, y)
+    var b: Float32
+    if a == Float32(0):
+        b = Float32(0)
+    else:
+        b = min(x, y) / a
+    var t1 = Float32(0.406758566246788489601959989e-5)
+    var t2 = Float32(0.636226545274016134946890922156)
+    var t3 = Float32(0.61572017898280213493197203466e-2)
+    var t4 = Float32(-0.247333733281268944196501420480)
+    var t5 = Float32(0.881770664775316294736387951347e-1)
+    var t6 = Float32(0.419038818029165735901852432784e-1)
+    var t7 = Float32(-0.251390972343483509333252996350e-1)
+    var phi = t1 + b*(t2 + b*(t3 + b*(t4 + b*(t5 + b*(t6 + b*t7)))))
+    if x < y:
+        phi = Float32(1) - phi
+    var v = phi * r
+    var u = r - v
+    if dz < Float32(0):
+        var tmp = u
+        u = Float32(1) - v
+        v = Float32(1) - tmp
+    if dx < Float32(0): u = -u
+    if dy < Float32(0): v = -v
+    u = Float32(0.5) * (u + Float32(1))
+    v = Float32(0.5) * (v + Float32(1))
+    return SIMD[DType.float32, 2](u, v)
+
+@always_inline
+def _eval_infinite_light_and_pdf(ilight: InfiniteLight, dir_world: Vec3f, origin: Vec3f) -> Tuple[RGB, Float32]:
+    """Radiance AND solid-angle sampling pdf an infinite (environment) light
+    contributes along a ray travelling in `dir_world` — used for the
+    camera-ray miss case (bdpt_*.mojo/sppm.mojo don't otherwise add any
+    infinite-light contribution when a traced ray leaves the scene, unlike
+    the ordinary unidirectional path tracer's own miss handler in
+    shading.mojo, which this mirrors with a nearest-texel lookup instead of
+    shading.mojo's bilinear one — consistent with _sample_infinite_light_dir's
+    own nearest-texel sampling above, and a fine approximation for a single
+    miss-ray sample). The pdf is needed to MIS-weight this escape strategy
+    against NEE sampling the same light from the previous vertex — see
+    bdpt_*.mojo's `last_bsdf_pdf` bookkeeping for why (getting this wrong
+    double-counts unoccluded env light, the exact bug documented in
+    [[project_infinite_light_shadows]]).
+
+    `origin` gates a portal-restricted light (ilight.has_portal != 0) the
+    same way shading.mojo's PT miss handler does: this escape strategy only
+    pays out where a real window opening would actually be visible. Missing
+    here (and in sppm.mojo/bdpt_*.mojo, the only two callers) until found via
+    a corpus-wide gallery comparison: SPPM/VCM kept the OLD full-sphere
+    watercolor/kroken leak (1.46x/1.50x) after the PT-only portal fix, the
+    exact "PT-only feature gap" bug class this project keeps re-finding --
+    see project_pt_only_feature_gaps memory."""
+    if not ilight.portal_admits(point3f(origin), dir_world):
+        return (RGB(Float32(0)), Float32(1) / (Float32(4) * PI))
+    if ilight.tex_idx < Int32(0) or not _is_real_ptr(ilight.pixels_ptr) or ilight.cdf_w <= Int32(0):
+        return (ilight.scale, Float32(1) / (Float32(4) * PI))
+    var local_dir = Mat4.load(ilight.world_to_light) * dir_world
+    var uv = _equal_area_sphere_to_square(local_dir.x, local_dir.y, local_dir.z)
+    var iw = Int(ilight.cdf_w); var ih = Int(ilight.cdf_h)
+    var px = min(iw - 1, max(0, Int(uv[0] * Float32(iw))))
+    var py = min(ih - 1, max(0, Int(uv[1] * Float32(ih))))
+    var radiance = il_rgb(ilight, py * iw + px) * ilight.scale
+    var dp_row = ilight.cdf_ptr[unsafe_offset=py + 1] - ilight.cdf_ptr[unsafe_offset=py]
+    var cond_base = (ih + 1) + py * (iw + 1)
+    var dp_col = ilight.cdf_ptr[unsafe_offset=cond_base + px + 1] - ilight.cdf_ptr[unsafe_offset=cond_base + px]
+    var pdf: Float32
+    if dp_row > Float32(0) and dp_col > Float32(0):
+        pdf = dp_row * dp_col * Float32(iw * ih) / (Float32(4) * PI)
+    else:
+        pdf = Float32(1) / (Float32(4) * PI)
+    return (radiance, pdf)
+
+# ── Marschner/Chiang 3-lobe hair BSDF — shared math ───────────────────────────
+# Lives here (not shading.mojo) for an import-cycle reason:
+# shading.mojo already imports helpers FROM sppm.mojo, so
+# sppm.mojo (and bdpt_*.mojo, which imports from sppm.mojo) can't import back
+# from shading.mojo. shading.mojo's own shade_hair imports these from here
+# instead of defining them locally — this is a pure relocation, no behavior
+# change (same functions, same formulas).
+
+@always_inline
+def _hair_wrap(x: Float32) -> Float32:
+    """Wrap angle to [-PI, PI] — GPU-safe, no unbounded loops."""
+    return x - TWO_PI * floor((x + PI) / TWO_PI)
+
+@always_inline
+def _hair_asin(x: Float32) -> Float32:
+    """Polynomial asin(x) for x in [-1,1] — avoids std.math asin which may not link on GPU.
+    Uses sqrt-reflection for |x|>0.5, asin(1-t) = pi/2 - sqrt(2t) * sum C(2n,n) t^n / (8^n (2n+1)); max error ~5e-6."""
+    var ax = abs(x)
+    var result: Float32
+    if ax > Float32(0.5):
+        var t = Float32(1.0) - ax
+        var r = sqrt(Float32(2.0) * t)
+        var c = Float32(0.0055803571) + t * (Float32(0.0018988715) + t * Float32(0.00069913))
+        result = Float32(1.5707963) - r * (Float32(1.0) + t * (Float32(0.083333333) + t * (Float32(0.01875) + t * c)))
+    else:
+        var x2 = ax * ax
+        result = ax * (Float32(1.0) + x2 * (Float32(0.16666667) + x2 * (Float32(0.075) + x2 * Float32(0.04464286))))
+    return -result if x < Float32(0.0) else result
+
+@always_inline
+def _hair_logistic(x: Float32, s: Float32) -> Float32:
+    """Logistic distribution PDF centered at 0: exp(-|x|/s) / (s*(1+exp(-|x|/s))^2).
+    Numerically stable via |x| form."""
+    var e = exp(-abs(x) / s)
+    return e / (s * (Float32(1.0) + e) * (Float32(1.0) + e))
+
+@always_inline
+def _hair_I0_poly(t: Float32) -> Float32:
+    """9-term Taylor series for I0(x) where t = x*x/4. Accurate to 0.15% for t≤16 (x≤8)."""
+    var t2 = t * t; var t3 = t2 * t; var t4 = t2 * t2; var t5 = t4 * t
+    var t6 = t5 * t; var t7 = t6 * t; var t8 = t7 * t
+    return Float32(1.0) + t + t2*Float32(0.25) + t3*Float32(0.027778) + t4*Float32(0.001736) + t5*Float32(6.944e-5) + t6*Float32(1.929e-6) + t7*Float32(3.930e-8) + t8*Float32(6.151e-10)
+
+@always_inline
+def _hair_mp_c(v: Float32) -> Float32:
+    """Mp's normalization 1/(2v sinh(1/v)); for v <= 0.1, where sinh overflows, pbrt's exp(-1/v)/v."""
+    if v <= Float32(0.1):
+        return exp(-Float32(1.0) / v) / v
+    var inv = Float32(1.0) / v
+    return Float32(1.0) / ((exp(inv) - exp(-inv)) * v)
+
+@always_inline
+def _hair_Mp(cos_ti: Float32, cos_to: Float32, sin_ti: Float32, sin_to: Float32, inv_v: Float32, mp_c: Float32) -> Float32:
+    """von Mises-Fisher Mp with the precomputed constant mp_c = _hair_mp_c(v). inv_v = 1/v."""
+    var a = cos_ti * cos_to * inv_v
+    var b = sin_ti * sin_to * inv_v
+    if a > Float32(8.0):
+        # Asymptotic: I0(a) ≈ exp(a)/sqrt(2πa), so Mp ≈ mp_c * exp(a-b)/sqrt(2πa)
+        return mp_c * exp(a - b) / sqrt(Float32(2.0) * PI * a)
+    return mp_c * _hair_I0_poly(a * a * Float32(0.25)) * exp(-b)
+
+@always_inline
+def _hair_eval_lobes(
+    wi: Vec3f,
+    tangent: Vec3f,
+    b_perp: Vec3f,
+    n_perp: Vec3f,
+    phi_o: Float32,
+    dphi0: Float32, dphi1: Float32, dphi2: Float32,
+    cos_tp0_o: Float32, sin_tp0_o: Float32,
+    cos_tp1_o: Float32, sin_tp1_o: Float32,
+    cos_tp2_o: Float32, sin_tp2_o: Float32,
+    cos_theta_o: Float32, sin_theta_o: Float32,
+    inv_vm0: Float32, inv_vm1: Float32, inv_vm2: Float32,
+    mp_c0: Float32, mp_c1: Float32, mp_c2: Float32,
+    s: Float32,
+    A0: RGB, A1: RGB, A2: RGB, A3: RGB,
+    lum0: Float32, lum1: Float32, lum2: Float32, lum3: Float32, total_lum: Float32,
+) -> Tuple[Float32, RGB, Float32]:
+    """Shared Marschner 3-lobe (R/TT/TRT) evaluation at an arbitrary direction
+    wi. Returns (cos_ti, f, pdf_over_cos); pdf_over_cos is the lum-weighted
+    M*N sum (already has the /cos_ti baked into M — multiply by cos_ti for
+    the solid-angle PDF, as both NEE call sites and the indirect sampler do)."""
+    var sin_ti = dot(wi, tangent)
+    var cos_ti = max(safe_sqrt(Float32(1.0) - sin_ti * sin_ti), Float32(1e-5))
+    var wi_perp = wi - sin_ti * tangent
+    var phi_i = _atan2f(dot(wi_perp, b_perp), dot(wi_perp, n_perp))
+    var dphi_i = phi_i - phi_o
+    var x0 = _hair_wrap(dphi_i - dphi0)
+    var x1 = _hair_wrap(dphi_i - dphi1)
+    var x2 = _hair_wrap(dphi_i - dphi2)
+    var M0 = _hair_Mp(cos_ti, cos_tp0_o, sin_ti, sin_tp0_o, inv_vm0, mp_c0) / cos_ti
+    var M1 = _hair_Mp(cos_ti, cos_tp1_o, sin_ti, sin_tp1_o, inv_vm1, mp_c1) / cos_ti
+    var M2 = _hair_Mp(cos_ti, cos_tp2_o, sin_ti, sin_tp2_o, inv_vm2, mp_c2) / cos_ti
+    var M3 = _hair_Mp(cos_ti, cos_theta_o, sin_ti, sin_theta_o, inv_vm2, mp_c2) / cos_ti
+    var N0 = _hair_logistic(x0, s)
+    var N1 = _hair_logistic(x1, s)
+    var N2 = _hair_logistic(x2, s)
+    var N3 = Float32(0.5) * INV_PI
+    var f = A0*(M0*N0) + A1*(M1*N1) + A2*(M2*N2) + A3*(M3*N3)
+    var pdf_over_cos = (lum0*M0*N0 + lum1*M1*N1 + lum2*M2*N2 + lum3*M3*N3) / total_lum
+    return (cos_ti, f, pdf_over_cos)
+
+@fieldwise_init
+struct HairLobeConstants(TrivialRegisterPassable):
+    """Precomputed per-hit Marschner/Chiang 3-lobe hair BSDF constants —
+    everything _hair_eval_lobes/_hair_sample_dir need that depends only on
+    the hit geometry + wo + material, NOT on wi. Recomputed fresh at each
+    connect/gather/NEE call site (via _hair_precompute) from a handful of
+    persisted scalars (curve index, h, v, wo, material index) rather than
+    stored inline in BDPTVertex/SPPMPixel — those structs stay small, and
+    this recompute is the same cost class as bdpt_*.mojo's own
+    _eval_conductor_ggx per-call GGX evaluation."""
+    var tangent: Vec3f
+    var b_perp:  Vec3f
+    var n_perp:  Vec3f
+    var geo_normal: Vec3f
+    var phi_o: Float32
+    var dphi0: Float32
+    var dphi1: Float32
+    var dphi2: Float32
+    var cos_tp0_o: Float32
+    var sin_tp0_o: Float32
+    var cos_tp1_o: Float32
+    var sin_tp1_o: Float32
+    var cos_tp2_o: Float32
+    var sin_tp2_o: Float32
+    var cos_theta_o: Float32
+    var sin_theta_o: Float32
+    var vm0: Float32
+    var vm1: Float32
+    var vm2: Float32
+    var inv_vm0: Float32
+    var inv_vm1: Float32
+    var inv_vm2: Float32
+    var mp_c0: Float32
+    var mp_c1: Float32
+    var mp_c2: Float32
+    var e2vm0: Float32
+    var e2vm1: Float32
+    var e2vm2: Float32
+    var s: Float32
+    var A0: RGB
+    var A1: RGB
+    var A2: RGB
+    var A3: RGB
+    var lum0: Float32
+    var lum1: Float32
+    var lum2: Float32
+    var lum3: Float32
+    var total_lum: Float32
+    var radius: Float32   # local curve radius at the hit piece; scales self-intersection offset epsilon
+
+@always_inline
+def curve_tangent(curves: Pointer[Curve, MutUntrackedOrigin], curve_idx: Int, v_global: Float32) -> Vec3f:
+    """The unit tangent of the curve piece at parameter v_global."""
+    var curve = curve_at(curves, curve_idx)
+    var piece = min(Int(curve.n_pieces) - 1, max(0, Int(v_global * Float32(curve.n_pieces))))
+    var (q0, q1, _, _) = curve_piece_endpoints(curve, piece)
+    var seg_axis = q1 - q0
+    var seg_len = sqrt(dot(seg_axis, seg_axis))
+    return seg_axis * (Float32(1.0) / seg_len) if seg_len > Float32(1e-8) else Vec3f(Float32(1), Float32(0), Float32(0))
+
+
+@always_inline
+def curve_radius(curves: Pointer[Curve, MutUntrackedOrigin], curve_idx: Int, v_global: Float32) -> Float32:
+    """The curve piece's mean radius at parameter v_global."""
+    var curve = curve_at(curves, curve_idx)
+    var piece = min(Int(curve.n_pieces) - 1, max(0, Int(v_global * Float32(curve.n_pieces))))
+    var (_, _, r0, r1) = curve_piece_endpoints(curve, piece)
+    return (r0 + r1) * Float32(0.5)
+
+
+@always_inline
+def fibre_cos(tangent: Vec3f, w: Vec3f) -> Float32:
+    """|cos| of w against a fibre's normal plane: the measure a ray-facing ribbon presents to w."""
+    var s = dot(w, tangent)
+    return sqrt(max(Float32(0), Float32(1) - s * s))
+
+
+@always_inline
+def curve_hit_frame(curves: Pointer[Curve, MutUntrackedOrigin], curve_idx: Int, v_global: Float32, h_raw: Float32,
+                    wo: Vec3f) -> Tuple[Vec3f, Vec3f, Vec3f, Vec3f, Float32]:
+    """A curve hit's tangent, view frame (n_perp, b_perp), outward normal and local radius."""
+    var h = max(Float32(-0.99), min(Float32(0.99), h_raw))
+    var curve = curve_at(curves, curve_idx)
+    var piece = min(Int(curve.n_pieces) - 1, max(0, Int(v_global * Float32(curve.n_pieces))))
+    var (q0, q1, r0, r1) = curve_piece_endpoints(curve, piece)
+    var seg_axis = q1 - q0
+    var seg_len = sqrt(dot(seg_axis, seg_axis))
+    var tangent = Vec3f(Float32(1), Float32(0), Float32(0))
+    if seg_len > Float32(1e-8):
+        tangent = seg_axis * (Float32(1.0) / seg_len)
+    var (n_perp, b_perp) = curve_view_frame(tangent, wo)
+    var geo_normal = n_perp * h + b_perp * sqrt(max(Float32(0.0), Float32(1.0) - h*h))
+    return (tangent, n_perp, b_perp, geo_normal, (r0 + r1) * Float32(0.5))
+
+
+@always_inline
+def _hair_precompute(
+    mat: Material,
+    curves: Pointer[Curve, MutUntrackedOrigin],
+    curve_idx: Int,
+    v_global: Float32,
+    h_raw: Float32,
+    wo: Vec3f,
+) -> HairLobeConstants:
+    """Recomputes shading.mojo's shade_hair Steps 1-10 (fiber frame, optical
+    quantities, per-lobe attenuation/variance/azimuthal-peak precompute) from
+    just the curve hit + wo + material. Material packing (matches shade_hair):
+    albedo = sigma_a (RGB absorption), emission.r = eta (IOR), emission.g = scale tilt (degrees), roughU = betaM
+    (longitudinal), roughV = betaN (azimuthal). Shared verbatim by
+    shading.mojo's own shade_hair (the primary path tracer) and
+    bdpt_*.mojo/sppm.mojo's connectible-vertex/gather/NEE evaluation of a
+    stored hair vertex."""
+    var h = max(Float32(-0.99), min(Float32(0.99), h_raw))
+    var (tangent, n_perp, b_perp, geo_normal, radius) = curve_hit_frame(curves, curve_idx, v_global, h_raw, wo)
+
+    var sin_theta_o = dot(wo, tangent)
+    var cos_theta_o = safe_sqrt(Float32(1.0) - sin_theta_o * sin_theta_o)
+    cos_theta_o = max(cos_theta_o, Float32(1e-5))
+
+    var wo_perp = wo - sin_theta_o * tangent
+    var phi_o = _atan2f(dot(wo_perp, b_perp), dot(wo_perp, n_perp))
+
+    var eta = mat.emission.r
+    var sigma_a = mat.albedo
+    var betaM = mat.roughU
+    var betaN = mat.roughV
+
+    var h_clamped = max(Float32(-1.0) + Float32(1e-5), min(Float32(1.0) - Float32(1e-5), h))
+    var gamma_o = _hair_asin(h_clamped)
+
+    var eta_sq = eta * eta
+    var sin_to_sq = sin_theta_o * sin_theta_o
+    var eta_perp_num = max(Float32(0.0), eta_sq - sin_to_sq)
+    var eta_perp = safe_sqrt(eta_perp_num) / cos_theta_o
+
+    var sin_gamma_t_raw = sin(gamma_o) / max(eta_perp, Float32(1.0))
+    var sin_gamma_t = max(Float32(-1.0) + Float32(1e-5), min(Float32(1.0) - Float32(1e-5), sin_gamma_t_raw))
+    var gamma_t = _hair_asin(sin_gamma_t)
+    var cos_gamma_t = safe_sqrt(Float32(1.0) - sin_gamma_t * sin_gamma_t)
+
+    var sin_theta_t = sin_theta_o / eta
+    var cos_theta_t = max(safe_sqrt(Float32(1.0) - sin_theta_t * sin_theta_t), Float32(1e-5))
+    var inv_cos_theta_t = Float32(1.0) / cos_theta_t
+    var T = RGB(
+        exp(-sigma_a.r * Float32(2.0) * cos_gamma_t * inv_cos_theta_t),
+        exp(-sigma_a.g * Float32(2.0) * cos_gamma_t * inv_cos_theta_t),
+        exp(-sigma_a.b * Float32(2.0) * cos_gamma_t * inv_cos_theta_t),
+    )
+
+    var cos_gamma_o = safe_sqrt(Float32(1.0) - h_clamped * h_clamped)
+    var fr = fr_dielectric(cos_theta_o * cos_gamma_o, eta)
+    var omfr = Float32(1.0) - fr
+
+    var A0 = RGB(fr, fr, fr)
+    var A1 = T * (omfr * omfr)
+    var A2 = T * T * (omfr * omfr * fr)
+    var A3 = RGB(
+        A2.r * fr * T.r / max(Float32(1e-6), Float32(1.0) - fr * T.r),
+        A2.g * fr * T.g / max(Float32(1e-6), Float32(1.0) - fr * T.g),
+        A2.b * fr * T.b / max(Float32(1e-6), Float32(1.0) - fr * T.b),
+    )
+
+    var alpha = mat.emission.g * Float32(PI / 180)
+    var sin2k_0 = sin(alpha)
+    var cos2k_0 = cos(alpha)
+    var sin2k_1 = Float32(2.0) * cos2k_0 * sin2k_0
+    var cos2k_1 = cos2k_0 * cos2k_0 - sin2k_0 * sin2k_0
+    var sin2k_2 = Float32(2.0) * cos2k_1 * sin2k_1
+    var cos2k_2 = cos2k_1 * cos2k_1 - sin2k_1 * sin2k_1
+    var sin_tp0_o = sin_theta_o * cos2k_1 - cos_theta_o * sin2k_1
+    var cos_tp0_o = cos_theta_o * cos2k_1 + sin_theta_o * sin2k_1
+    var sin_tp1_o = sin_theta_o * cos2k_0 + cos_theta_o * sin2k_0
+    var cos_tp1_o = cos_theta_o * cos2k_0 - sin_theta_o * sin2k_0
+    var sin_tp2_o = sin_theta_o * cos2k_2 + cos_theta_o * sin2k_2
+    var cos_tp2_o = cos_theta_o * cos2k_2 - sin_theta_o * sin2k_2
+
+    var bm2 = betaM * betaM
+    var bm4 = bm2 * bm2; var bm8 = bm4 * bm4; var bm16 = bm8 * bm8
+    var bm20 = bm16 * bm4
+    var tmp_v = Float32(0.726) * betaM + Float32(0.812) * bm2 + Float32(3.7) * bm20
+    var vm0 = max(max(tmp_v * tmp_v, Float32(0.0001)), mat.emission.b)   # emission.b: Filter Glossy's blur
+    var vm1 = max(vm0 * Float32(0.25), Float32(0.0001))
+    var vm2 = max(vm0 * Float32(4.0), Float32(0.0001))
+    var inv_vm0 = Float32(1.0) / vm0; var inv_vm1 = Float32(1.0) / vm1; var inv_vm2 = Float32(1.0) / vm2
+    var mp_c0 = _hair_mp_c(vm0)
+    var mp_c1 = _hair_mp_c(vm1)
+    var mp_c2 = _hair_mp_c(vm2)
+    var e2vm0 = exp(-Float32(2.0) * inv_vm0)
+    var e2vm1 = exp(-Float32(2.0) * inv_vm1)
+    var e2vm2 = exp(-Float32(2.0) * inv_vm2)
+
+    var dphi0 = -Float32(2.0) * gamma_o
+    var dphi1 = -PI + Float32(2.0) * (gamma_t - gamma_o)
+    var dphi2 = Float32(4.0) * gamma_t - Float32(2.0) * gamma_o
+
+    # pbrt's azimuthal logistic scale from betaN
+    var bn2 = betaN * betaN; var bn4 = bn2 * bn2; var bn8 = bn4 * bn4; var bn16 = bn8 * bn8
+    var s = max(Float32(0.626657069) * (Float32(0.265) * betaN + Float32(1.194) * bn2 + Float32(5.372) * bn16 * bn4 * bn2), mat.emission.b)
+
+    var lum0 = A0.luma() + Float32(1e-6)
+    var lum1 = A1.luma() + Float32(1e-6)
+    var lum2 = A2.luma() + Float32(1e-6)
+    var lum3 = A3.luma() + Float32(1e-6)
+    var total_lum = lum0 + lum1 + lum2 + lum3
+
+    return HairLobeConstants(
+        tangent=tangent, b_perp=b_perp, n_perp=n_perp, geo_normal=geo_normal,
+        radius=radius,
+        phi_o=phi_o, dphi0=dphi0, dphi1=dphi1, dphi2=dphi2,
+        cos_tp0_o=cos_tp0_o, sin_tp0_o=sin_tp0_o,
+        cos_tp1_o=cos_tp1_o, sin_tp1_o=sin_tp1_o,
+        cos_tp2_o=cos_tp2_o, sin_tp2_o=sin_tp2_o,
+        cos_theta_o=cos_theta_o, sin_theta_o=sin_theta_o,
+        vm0=vm0, vm1=vm1, vm2=vm2,
+        inv_vm0=inv_vm0, inv_vm1=inv_vm1, inv_vm2=inv_vm2,
+        mp_c0=mp_c0, mp_c1=mp_c1, mp_c2=mp_c2,
+        e2vm0=e2vm0, e2vm1=e2vm1, e2vm2=e2vm2,
+        s=s, A0=A0, A1=A1, A2=A2, A3=A3,
+        lum0=lum0, lum1=lum1, lum2=lum2, lum3=lum3, total_lum=total_lum,
+    )
+
+@always_inline
+def curve_offset_eps(radius: Float32) -> Float32:
+    """Self-intersection offset for hair/curve shadow-ray origins and bounce
+    continuations, scaled to the local fiber radius rather than a fixed
+    universal constant. A flat `0.0001` offset was wrong in both directions
+    depending on the scene's fiber radius (too small relative to thick
+    strands to reliably clear the fiber's own curved surface; too large
+    relative to fine strands, jumping clear outside a fiber's silhouette).
+    A full local radius overshoots the other way in densely-packed fur/hair
+    (bunny-fur, curly-hair): adjacent strands are typically only a few
+    radii apart, so offsetting by a whole radius routinely lands the ray
+    origin inside a *neighboring* strand instead of just clearing the
+    current one, causing systematic over-occlusion (verified empirically —
+    1.0x turned the "hair" scene solid black and "bunny-fur" bald/smooth).
+    A small fraction of the radius is enough to escape the current fiber's
+    own surface (the self-intersection problem this exists to solve) without
+    reaching far enough to routinely hit a neighbor; the floor guards the
+    degenerate near-zero-radius case."""
+    return max(radius, Float32(1e-6))
+
+@always_inline
+def _hair_sample_dir(
+    hc: HairLobeConstants,
+    mut pcg: PCG32,
+) -> Tuple[Vec3f, RGB, Float32, Float32]:
+    """Importance-samples a continuation direction from the 3-lobe hair BSDF
+    (lobe picked proportional to luminance, vMF longitudinal + logistic
+    azimuthal sampling) — extracted from shading.mojo's shade_hair Step 15
+    verbatim, same RNG draw order (r_lobe, u_th, u_phi_v, u3), so it's a
+    drop-in replacement there and reusable by bdpt_*.mojo/sppm.mojo for
+    continuing a path through a stored hair vertex (mirrors
+    bxdf_sample_conductor's role for conductor). Returns
+    (wi, f, pdf_over_cos, cos_ti); pdf_over_cos already has the /cos_ti
+    baked in (see _hair_eval_lobes), so the correct importance-sampling
+    throughput update is `beta *= f / pdf_over_cos` — cos_ti cancels, same
+    as shade_hair's own `throughput *= f * (1/pdf)`."""
+    var u_lobe = pcg.next_float()
+    var u_th = pcg.next_float()
+    var u_phi_v = pcg.next_float()
+    var u3 = pcg.next_float()
+    return _hair_sample_dir_u(hc, u_lobe, u_th, u_phi_v, u3)
+
+
+def _hair_sample_dir_u(
+    hc: HairLobeConstants,
+    u_lobe: Float32, u_th_in: Float32, u_phi_v: Float32, u3_in: Float32,
+) -> Tuple[Vec3f, RGB, Float32, Float32]:
+    """_hair_sample_dir with its four random numbers passed in, in the same
+    order (lobe, theta, phi_v, logistic phi), so bxdf.mojo's lobe_sample can
+    drive it."""
+    var r_lobe = u_lobe * hc.total_lum
+    var vm_p: Float32
+    var e2vm_p: Float32
+    var dphi_p: Float32
+    var sin_tp_o_s: Float32
+    var cos_tp_o_s: Float32
+    var uniform_phi_s = False
+    if r_lobe < hc.lum0:
+        vm_p = hc.vm0; e2vm_p = hc.e2vm0; dphi_p = hc.dphi0
+        sin_tp_o_s = hc.sin_tp0_o; cos_tp_o_s = hc.cos_tp0_o
+    elif r_lobe < hc.lum0 + hc.lum1:
+        vm_p = hc.vm1; e2vm_p = hc.e2vm1; dphi_p = hc.dphi1
+        sin_tp_o_s = hc.sin_tp1_o; cos_tp_o_s = hc.cos_tp1_o
+    elif r_lobe < hc.lum0 + hc.lum1 + hc.lum2:
+        vm_p = hc.vm2; e2vm_p = hc.e2vm2; dphi_p = hc.dphi2
+        sin_tp_o_s = hc.sin_tp2_o; cos_tp_o_s = hc.cos_tp2_o
+    else:
+        vm_p = hc.vm2; e2vm_p = hc.e2vm2; dphi_p = Float32(0.0)
+        sin_tp_o_s = hc.sin_theta_o; cos_tp_o_s = hc.cos_theta_o
+        uniform_phi_s = True
+
+    var u_th = max(u_th_in, Float32(1e-6))
+    var cos_th = Float32(1.0) + vm_p * log(u_th + (Float32(1.0) - u_th) * e2vm_p)
+    cos_th = max(Float32(-1.0), min(Float32(1.0), cos_th))
+    var sin_th = safe_sqrt(Float32(1.0) - cos_th * cos_th)
+    var cos_phi_v = cos(TWO_PI * u_phi_v)
+    var sin_ti_s = max(Float32(-1.0), min(Float32(1.0), -cos_th * sin_tp_o_s + sin_th * cos_phi_v * cos_tp_o_s))
+    var cos_ti_s = safe_sqrt(Float32(1.0) - sin_ti_s * sin_ti_s)
+    cos_ti_s = max(cos_ti_s, Float32(1e-5))
+
+    var u3 = max(u3_in, Float32(1e-6))
+    var phi_i_s: Float32
+    if uniform_phi_s:
+        phi_i_s = hc.phi_o + TWO_PI * u3 - PI
+    else:
+        phi_i_s = hc.phi_o + dphi_p + hc.s * log(u3 / max(Float32(1.0) - u3, Float32(1e-6)))
+
+    var wi_s = sin_ti_s * hc.tangent + cos(phi_i_s) * cos_ti_s * hc.n_perp + sin(phi_i_s) * cos_ti_s * hc.b_perp
+    var wi_len = dot(wi_s, wi_s)
+    if wi_len > Float32(0.0):
+        wi_s = wi_s * (Float32(1.0) / sqrt(wi_len))
+
+    var (cos_ti_s2, f_s, pdf_over_cos_s) = _hair_eval_lobes(
+        wi_s, hc.tangent, hc.b_perp, hc.n_perp, hc.phi_o,
+        hc.dphi0, hc.dphi1, hc.dphi2,
+        hc.cos_tp0_o, hc.sin_tp0_o, hc.cos_tp1_o, hc.sin_tp1_o, hc.cos_tp2_o, hc.sin_tp2_o,
+        hc.cos_theta_o, hc.sin_theta_o, hc.inv_vm0, hc.inv_vm1, hc.inv_vm2, hc.mp_c0, hc.mp_c1, hc.mp_c2, hc.s,
+        hc.A0, hc.A1, hc.A2, hc.A3, hc.lum0, hc.lum1, hc.lum2, hc.lum3, hc.total_lum,
+    )
+    var pdf = max(pdf_over_cos_s, Float32(1e-6))
+    return (wi_s, f_s, pdf, cos_ti_s2)
+
+# ── Analytical sphere intersection ────────────────────────────────────────────
+
+@always_inline
+def ray_sphere_hit(center: Point3f, radius: Float32,
+                  ray: Ray, t_min: Float32, t_max: Float32) -> Float32:
+    """Exact ray-sphere intersection. Returns t of first hit in (t_min, t_max), or -1."""
+    var ocx = ray.origin.x - center.x
+    var ocy = ray.origin.y - center.y
+    var ocz = ray.origin.z - center.z
+    # Use half-b form to avoid catastrophic cancellation
+    var a = ray.direction.x*ray.direction.x + ray.direction.y*ray.direction.y + ray.direction.z*ray.direction.z
+    var half_b = ocx*ray.direction.x + ocy*ray.direction.y + ocz*ray.direction.z
+    var c = ocx*ocx + ocy*ocy + ocz*ocz - radius * radius
+    var disc = half_b * half_b - a * c
+    if disc < Float32(0.0):
+        return Float32(-1.0)
+    var sqrtd = sqrt(disc)
+    var t = (-half_b - sqrtd) / a
+    if t >= t_min and t < t_max:
+        return t
+    t = (-half_b + sqrtd) / a
+    if t >= t_min and t < t_max:
+        return t
+    return Float32(-1.0)
+
+@always_inline
+def test_spheres(
+    spheres: Pointer[Sphere, MutUntrackedOrigin],
+    n_spheres: Int,
+    ray: Ray,
+    result: Pointer[Intersection, MutUntrackedOrigin],
+):
+    """Test all analytical spheres against the ray, updating result if closer.
+    Sets primId.type = 4 and primId.id1 = sphere_index on a sphere hit.
+    """
+    var t_max = Float32(1.0e38)
+    if result[unsafe_offset=0].hit != Int8(0):
+        t_max = result[unsafe_offset=0].tHit
+    for i in range(n_spheres):
+        var t = ray_sphere_hit(spheres[unsafe_offset=i].center, spheres[unsafe_offset=i].radius, ray, Float32(1e-4), t_max)
+        if t > Float32(0.0):
+            t_max = t
+            result[unsafe_offset=0].hit = Int8(1)
+            result[unsafe_offset=0].tHit = t
+            result[unsafe_offset=0].primId.type = Int8(4)
+            result[unsafe_offset=0].primId.id1 = Int64(i)
+            result[unsafe_offset=0].primId.materialIndex = Int64(spheres[unsafe_offset=i].materialIndex)
+            result[unsafe_offset=0].primId.instanceIdx = Int32(-1)  # spheres are never instanced; clear any stale value
+
+# ── Object-instance BLAS walk ──────────────────────────────────────────────
+# A BLAS only ever contains ordinary type==0 triangles (built by finalize_scene
+# from one template's mesh range), so this is a plain single-level walk — never
+# recurses into another BLAS or handles spheres/curves/instances. Called from
+# the type==6 branch below with a ray already transformed into the instance's
+# object space (direction NOT renormalized, so tHit stays comparable to the
+# caller's world-space ray parameterization).
+
+# ---- Wide nodes: eight children, boxes quantised to the node's own box ----
+# 96 bytes, three BVH2Node slots, read as six 4-word loads: origin (3 floats) and three scale exponents,
+# eight child refs, eight words (lo x y z, hi x), eight byte pairs (hi y z). A ref is 0 (none), a node
+# index, or negative: a leaf, count << 27 | offset.
+comptime _WIDE_WORDS = 24
+comptime _WIDE_STACK = 96
+comptime _WIDE_CAND = 32     # instances collected before they are walked
+
+@always_inline
+def _pow2(eb: Int32) -> Float32:
+    return bitcast[DType.float32, 1](SIMD[DType.int32, 1](eb << Int32(23)))[0]
+
+# A stack entry: the child ref and its entry distance in one word.
+@always_inline
+def _wide_pack(cref: Int32, t: Float32) -> Int64:
+    return bitcast[DType.int64, 1](SIMD[DType.int32, 2](cref, bitcast[DType.int32, 1](SIMD[DType.float32, 1](t))[0]))[0]
+
+@always_inline
+def _wide_unpack(e: Int64) -> Tuple[Int32, Float32]:
+    var v = bitcast[DType.int32, 2](SIMD[DType.int64, 1](e))
+    return (v[0], bitcast[DType.float32, 1](SIMD[DType.int32, 1](v[1]))[0])
+
+# One child: test its box; a hit nearer than the best so far takes its place, the other goes on the stack.
+@always_inline
+def _wide_child[O: Origin[mut=True]](
+    cref: Int32, qw: Int32, qh: Int32, o: SIMD[DType.float32, 4], sx: Float32, sy: Float32, sz: Float32,
+    rdir: Vec3f, org: Vec3f, nearXIsMin: Bool, nearYIsMin: Bool, nearZIsMin: Bool, tMax: Float32,
+    stk: Pointer[Int64, O], state: Tuple[Int, Int32, Float32],
+) -> Tuple[Int, Int32, Float32]:
+    var lo = Point3f(o[0] + Float32(qw & Int32(0xFF)) * sx, o[1] + Float32((qw >> Int32(8)) & Int32(0xFF)) * sy,
+                     o[2] + Float32((qw >> Int32(16)) & Int32(0xFF)) * sz)
+    var hi = Point3f(o[0] + Float32((qw >> Int32(24)) & Int32(0xFF)) * sx, o[1] + Float32(qh & Int32(0xFF)) * sy,
+                     o[2] + Float32((qh >> Int32(8)) & Int32(0xFF)) * sz)
+    var h = intersect_aabb(lo, hi, rdir, org, nearXIsMin, nearYIsMin, nearZIsMin, tMax)
+    if cref == Int32(0) or not h[0]:
+        return state
+    var sp = state[0]
+    if state[1] == Int32(0):
+        return (sp, cref, h[1])
+    var nearer = h[1] < state[2]
+    if sp < _WIDE_STACK - 1:
+        stk[unsafe_offset=sp] = _wide_pack(state[1] if nearer else cref, state[2] if nearer else h[1])
+        sp += 1
+    return (sp, cref if nearer else state[1], h[1] if nearer else state[2])
+
+# Pushes the children of `node` the ray enters, the nearest on top. Returns the new stack height.
+@always_inline
+def _wide_push_hits[O: Origin[mut=True]](
+    nw: Pointer[Int32, MutUntrackedOrigin], node: Int,
+    rdir: Vec3f, org: Vec3f, nearXIsMin: Bool, nearYIsMin: Bool, nearZIsMin: Bool, tMax: Float32,
+    stk: Pointer[Int64, O], sp0: Int,
+) -> Int:
+    var b = node * _WIDE_WORDS
+    var w0 = nw.unsafe_load[width=4, alignment=_VEC_ALIGN, invariant=True](b)
+    var r0 = nw.unsafe_load[width=4, alignment=_VEC_ALIGN, invariant=True](b + 4)
+    var r1 = nw.unsafe_load[width=4, alignment=_VEC_ALIGN, invariant=True](b + 8)
+    var q0 = nw.unsafe_load[width=4, alignment=_VEC_ALIGN, invariant=True](b + 12)
+    var q1 = nw.unsafe_load[width=4, alignment=_VEC_ALIGN, invariant=True](b + 16)
+    var qh = nw.unsafe_load[width=4, alignment=_VEC_ALIGN, invariant=True](b + 20)
+    var o = bitcast[DType.float32, 4](w0)
+    var e = w0[3]
+    var sx = _pow2(e & Int32(0xFF)); var sy = _pow2((e >> Int32(8)) & Int32(0xFF)); var sz = _pow2((e >> Int32(16)) & Int32(0xFF))
+    var st = (sp0, Int32(0), Float32(0))
+    st = _wide_child(r0[0], q0[0], qh[0], o, sx, sy, sz, rdir, org, nearXIsMin, nearYIsMin, nearZIsMin, tMax, stk, st)
+    st = _wide_child(r0[1], q0[1], qh[0] >> Int32(16), o, sx, sy, sz, rdir, org, nearXIsMin, nearYIsMin, nearZIsMin, tMax, stk, st)
+    st = _wide_child(r0[2], q0[2], qh[1], o, sx, sy, sz, rdir, org, nearXIsMin, nearYIsMin, nearZIsMin, tMax, stk, st)
+    st = _wide_child(r0[3], q0[3], qh[1] >> Int32(16), o, sx, sy, sz, rdir, org, nearXIsMin, nearYIsMin, nearZIsMin, tMax, stk, st)
+    st = _wide_child(r1[0], q1[0], qh[2], o, sx, sy, sz, rdir, org, nearXIsMin, nearYIsMin, nearZIsMin, tMax, stk, st)
+    st = _wide_child(r1[1], q1[1], qh[2] >> Int32(16), o, sx, sy, sz, rdir, org, nearXIsMin, nearYIsMin, nearZIsMin, tMax, stk, st)
+    st = _wide_child(r1[2], q1[2], qh[3], o, sx, sy, sz, rdir, org, nearXIsMin, nearYIsMin, nearZIsMin, tMax, stk, st)
+    st = _wide_child(r1[3], q1[3], qh[3] >> Int32(16), o, sx, sy, sz, rdir, org, nearXIsMin, nearYIsMin, nearZIsMin, tMax, stk, st)
+    var sp = st[0]
+    if st[1] != Int32(0):
+        stk[unsafe_offset=sp] = _wide_pack(st[1], st[2])
+        sp += 1
+    return sp
+
+@always_inline
+def _mesh_tri_hit(
+    mesh: TriangleMesh, mesh_idx: Int, base_vidx: Int, ray_org: Vec3f, ray_dir: Vec3f, tMax: Float32,
+) -> Tuple[Bool, Float32, Float32, Float32]:
+    var v0 = Int(mesh_vi(mesh, base_vidx))
+    var v1 = Int(mesh_vi(mesh, base_vidx + 1))
+    var v2 = Int(mesh_vi(mesh, base_vidx + 2))
+    var hit_res = intersect_triangle(ray_org, ray_dir, mesh_pos(mesh, v0), mesh_pos(mesh, v1), mesh_pos(mesh, v2), tMax)
+    if hit_res[0] and not alpha_killed(mesh, v0, v1, v2, hit_res[2], hit_res[3], ray_org, ray_dir, (mesh_idx << 32) | base_vidx):
+        return (True, hit_res[1], hit_res[2], hit_res[3])
+    return (False, tMax, Float32(0), Float32(0))
+
+# A merged template's triangles through wide nodes. Returns (hit, tHit, u, v, triangle).
+@always_inline
+def _traverse_blas_wide(
+    blasNodes: Pointer[BVH2Node, MutUntrackedOrigin], meshes: Pointer[TriangleMesh, MutUntrackedOrigin], mesh_idx: Int, per_leaf: Int,
+    ray_org: Vec3f, ray_dir: Vec3f, tMax: Float32, cnt: Pointer[Int32, MutUntrackedOrigin], first_hit: Bool = False,
+) -> Tuple[Bool, Float32, Float32, Float32, Int]:
+    var rdir = Vec3f(Float32(1.0) / ray_dir[0], Float32(1.0) / ray_dir[1], Float32(1.0) / ray_dir[2])
+    var nx = rdir.x >= Float32(0.0); var ny = rdir.y >= Float32(0.0); var nz = rdir.z >= Float32(0.0)
+    var hasHit = False
+    var localTHit = tMax
+    var bestU: Float32 = 0.0
+    var bestV: Float32 = 0.0
+    var hitTri = 0
+    var stack = Array[Int64, _WIDE_STACK](uninitialized=True)
+    var stk = stack.unsafe_ptr()
+    var nw = blasNodes.unsafe_bitcast[Int32]()
+    var mesh = meshes[unsafe_offset=mesh_idx]
+    var sp = _wide_push_hits(nw, 0, rdir, ray_org, nx, ny, nz, localTHit, stk, 0)
+    while sp > 0:
+        sp -= 1
+        var (cref, t_in) = _wide_unpack(stk[unsafe_offset=sp])
+        if t_in > localTHit:
+            continue
+        if cref < Int32(0):
+            var first_tri = Int(cref & Int32(0x7FFFFFF)) * per_leaf
+            for j in range(Int((cref >> Int32(27)) & Int32(0xF)) * per_leaf):
+                if _is_real_ptr(cnt): cnt[unsafe_offset=5] += Int32(1)
+                var h = _mesh_tri_hit(mesh, mesh_idx, (first_tri + j) * 3, ray_org, ray_dir, localTHit)
+                if h[0]:
+                    localTHit = h[1]; bestU = h[2]; bestV = h[3]
+                    hitTri = first_tri + j
+                    hasHit = True
+                    if first_hit:
+                        return (True, localTHit, bestU, bestV, hitTri)
+        else:
+            if _is_real_ptr(cnt): cnt[unsafe_offset=4] += Int32(1)
+            sp = _wide_push_hits(nw, Int(cref), rdir, ray_org, nx, ny, nz, localTHit, stk, sp)
+    return (hasHit, localTHit, bestU, bestV, hitTri)
+
+@always_inline
+def _traverse_blas_triangles[wide_on: Bool = True](
+    blasNodes: Pointer[BVH2Node, MutUntrackedOrigin],
+    blasPrimIds: Pointer[PrimId, MutUntrackedOrigin],
+    meshes: Pointer[TriangleMesh, MutUntrackedOrigin],
+    ray_org: Vec3f,
+    ray_dir: Vec3f,
+    tMax: Float32,
+    cnt: Pointer[Int32, MutUntrackedOrigin] = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
+    first_hit: Bool = False,
+) -> Tuple[Bool, Float32, Float32, Float32, PrimId]:
+    """Returns (hit, tHit, u, v, primId) — primId is the winning BLAS-local
+    type==0 entry as-is (mesh_idx/base_vidx/materialIndex already correct
+    against the shared global `meshes` array); the caller overwrites its
+    `instanceIdx` field before use."""
+    var rdir = Vec3f(Float32(1.0) / ray_dir[0], Float32(1.0) / ray_dir[1], Float32(1.0) / ray_dir[2])
+    var org = Vec3f(ray_org[0], ray_org[1], ray_org[2])
+    var nearXIsMin = rdir.x >= Float32(0.0)
+    var nearYIsMin = rdir.y >= Float32(0.0)
+    var nearZIsMin = rdir.z >= Float32(0.0)
+
+    var hasHit = False
+    var hitPrim = PrimId(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
+    var localTHit = tMax
+    var bestU: Float32 = 0.0
+    var bestV: Float32 = 0.0
+
+    # Only slots below toVisit are ever read, so nothing needs zeroing.
+    var stack = Array[Int32, 64](uninitialized=True)
+    var stack_ptr = stack.unsafe_ptr()
+    var toVisit = 0
+    var current = 0
+    # A merged template (type 7) has one record naming its single mesh, whose triangles are stored in
+    # leaf order: a leaf's (offset, count) is a triangle range and no per-triangle record exists.
+    var first = blasPrimIds[unsafe_offset=0]
+    var merged = first.type == Int8(7)
+    var hitTri = 0
+    if merged and first.id1 < Int64(0):
+        return (False, tMax, Float32(0), Float32(0), hitPrim)   # a template of curves only
+    # A quad soup's leaves count quads: two triangles each.
+    var per_leaf = 1
+    if merged and meshes[unsafe_offset=Int(first.id1)].quads != Int32(0):
+        per_leaf = 2
+    if wide_on and merged and first._pad0 != Int8(0):
+        var w = _traverse_blas_wide(blasNodes, meshes, Int(first.id1), per_leaf, ray_org, ray_dir, tMax, cnt, first_hit)
+        if w[0]:
+            hitPrim = PrimId(first.id1, Int64(w[4] * 3), Int64(mesh_material(meshes[unsafe_offset=Int(first.id1)], w[4])),
+                             Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
+        return (w[0], w[1], w[2], w[3], hitPrim)
+
+    while True:
+        var node = blasNodes[unsafe_offset=current]
+        if node.count > 0:
+            var offset = Int(node.offset)
+            var count = Int(node.count)
+            for j in range(count * per_leaf):
+                var prim = first
+                var mesh_idx = Int(first.id1)
+                var base_vidx = (offset * per_leaf + j) * 3
+                if not merged:
+                    prim = blasPrimIds[unsafe_offset=offset + j]
+                    if prim.type != Int8(0):
+                        continue
+                    mesh_idx = Int(prim.id1)
+                    base_vidx = Int(prim.id2)
+                if _is_real_ptr(cnt): cnt[unsafe_offset=5] += Int32(1)
+                var h = _mesh_tri_hit(meshes[unsafe_offset=mesh_idx], mesh_idx, base_vidx, ray_org, ray_dir, localTHit)
+                if h[0]:
+                    localTHit = h[1]
+                    bestU = h[2]
+                    bestV = h[3]
+                    hitPrim = prim
+                    hitTri = offset * per_leaf + j
+                    hasHit = True
+                    if first_hit:
+                        break
+            if toVisit == 0 or (first_hit and hasHit):
+                break
+            toVisit -= 1
+            current = Int(stack_ptr[unsafe_offset=toVisit])
+        else:
+            var leftIdx = current + 1
+            var rightIdx = Int(node.offset)
+            if _is_real_ptr(cnt): cnt[unsafe_offset=4] += Int32(1)
+            var leftNode = blasNodes[unsafe_offset=leftIdx]
+            var rightNode = blasNodes[unsafe_offset=rightIdx]
+            var leftHit = intersect_aabb(
+                leftNode.min, leftNode.max,
+                rdir, org,
+                nearXIsMin, nearYIsMin, nearZIsMin, localTHit
+            )
+            var rightHit = intersect_aabb(
+                rightNode.min, rightNode.max,
+                rdir, org,
+                nearXIsMin, nearYIsMin, nearZIsMin, localTHit
+            )
+            var leftIsHit = leftHit[0]
+            var rightIsHit = rightHit[0]
+            if leftIsHit and rightIsHit:
+                if leftHit[1] <= rightHit[1]:
+                    current = leftIdx
+                    stack_ptr[unsafe_offset=toVisit] = Int32(rightIdx)
+                else:
+                    current = rightIdx
+                    stack_ptr[unsafe_offset=toVisit] = Int32(leftIdx)
+                toVisit += 1
+            elif leftIsHit:
+                current = leftIdx
+            elif rightIsHit:
+                current = rightIdx
+            else:
+                if toVisit == 0:
+                    break
+                toVisit -= 1
+                current = Int(stack_ptr[unsafe_offset=toVisit])
+
+    if merged and hasHit:
+        hitPrim = PrimId(first.id1, Int64(hitTri * 3), Int64(mesh_material(meshes[unsafe_offset=Int(first.id1)], hitTri)),
+                         Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
+    return (hasHit, localTHit, bestU, bestV, hitPrim)
+
+
+@always_inline
+def _traverse_instance[wide_on: Bool = True](
+    inst_idx: Int,
+    meshes: Pointer[TriangleMesh, MutUntrackedOrigin],
+    blasNodesArr: Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin],
+    blasPrimIdsArr: Pointer[Pointer[PrimId, MutUntrackedOrigin], MutUntrackedOrigin],
+    instances: Pointer[Instance, MutUntrackedOrigin],
+    ray_org: Vec3f,
+    ray_dir: Vec3f,
+    tMax: Float32,
+    curves: Pointer[Curve, MutUntrackedOrigin],
+    cnt: Pointer[Int32, MutUntrackedOrigin] = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
+    first_hit: Bool = False,
+) -> Tuple[Bool, Float32, Float32, Float32, PrimId]:
+    """One instance: transform the ray into its object space and walk its BLAS, and its curve BVH if the
+    template has curves (the template record's id2). Returns (hit, tHit, u, v, primId) with
+    primId.instanceIdx set to this instance."""
+    var inst = instances[unsafe_offset=inst_idx]
+    var (o_org, o_dir) = _transform_ray_to_instance_space(inst.world_to_obj(), ray_org, ray_dir)
+    var blas_nodes = blasNodesArr[unsafe_offset=Int(inst.blasIdx)]
+    var blas_prim_ids = blasPrimIdsArr[unsafe_offset=Int(inst.blasIdx)]
+    if _is_real_ptr(cnt): cnt[unsafe_offset=3] += Int32(1)
+    var sub = _traverse_blas_triangles[wide_on](blas_nodes, blas_prim_ids, meshes, o_org, o_dir, tMax, cnt, first_hit)
+    var hit = sub[0]
+    var t = sub[1]; var u = sub[2]; var v = sub[3]
+    var hit_prim = sub[4]
+    var rec = blas_prim_ids[unsafe_offset=0]
+    if rec.type == Int8(7) and rec.id2 > Int64(0) and _is_real_ptr(curves) and not (first_hit and hit):
+        var cs = _traverse_blas_curves(blasNodesArr[unsafe_offset=Int(rec.id2)], blasPrimIdsArr[unsafe_offset=Int(rec.id2)],
+                                       curves, o_org, o_dir, t)
+        if cs[0]:
+            hit = True
+            t = cs[1]; u = cs[2]; v = cs[3]; hit_prim = cs[4]
+    if hit:
+        hit_prim.instanceIdx = Int32(inst_idx)
+        return (True, t, u, v, hit_prim)
+    return (False, tMax, Float32(0), Float32(0), hit_prim)
+
+
+@always_inline
+def _traverse_blas_curves(
+    nodes: Pointer[BVH2Node, MutUntrackedOrigin],
+    prims: Pointer[PrimId, MutUntrackedOrigin],
+    curves: Pointer[Curve, MutUntrackedOrigin],
+    ray_org: Vec3f,
+    ray_dir: Vec3f,
+    tMax: Float32,
+) -> Tuple[Bool, Float32, Float32, Float32, PrimId]:
+    """A template's curve BVH, for a ray already in its object space: leaves hold PrimId.type 5 records
+    (curve, first piece * 8 + piece count) as the top level does. The object-space direction is not unit
+    length, so the curve test runs on the normalized ray and its distance is scaled back."""
+    var hitPrim = PrimId(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
+    var len2 = ray_dir[0] * ray_dir[0] + ray_dir[1] * ray_dir[1] + ray_dir[2] * ray_dir[2]
+    if len2 <= Float32(0):
+        return (False, tMax, Float32(0), Float32(0), hitPrim)
+    var dlen = sqrt(len2)
+    var unit = ray_dir * (Float32(1) / dlen)
+    var rdir = Vec3f(Float32(1.0) / ray_dir[0], Float32(1.0) / ray_dir[1], Float32(1.0) / ray_dir[2])
+    var org = Vec3f(ray_org[0], ray_org[1], ray_org[2])
+    var nearXIsMin = rdir.x >= Float32(0.0)
+    var nearYIsMin = rdir.y >= Float32(0.0)
+    var nearZIsMin = rdir.z >= Float32(0.0)
+    var hasHit = False
+    var localTHit = tMax
+    var bestU: Float32 = 0.0
+    var bestV: Float32 = 0.0
+    var stack = Array[Int32, 64](uninitialized=True)
+    var stack_ptr = stack.unsafe_ptr()
+    var toVisit = 0
+    var current = 0
+    while True:
+        var node = nodes[unsafe_offset=current]
+        if node.count > 0:
+            for j in range(Int(node.count)):
+                var prim = prims[unsafe_offset=Int(node.offset) + j]
+                var ch = intersect_curve(ray_org, unit, curve_at(curves, Int(prim.id1)), Int(prim.id2) // 8, Int(prim.id2) % 8,
+                                         localTHit * dlen)
+                if ch[0]:
+                    hasHit = True
+                    localTHit = ch[1] / dlen; bestU = ch[2]; bestV = ch[3]; hitPrim = prim
+            if toVisit == 0:
+                break
+            toVisit -= 1
+            current = Int(stack_ptr[unsafe_offset=toVisit])
+        else:
+            var leftIdx = current + 1
+            var rightIdx = Int(node.offset)
+            var leftNode = nodes[unsafe_offset=leftIdx]
+            var rightNode = nodes[unsafe_offset=rightIdx]
+            var leftHit = intersect_aabb(leftNode.min, leftNode.max, rdir, org, nearXIsMin, nearYIsMin, nearZIsMin, localTHit)
+            var rightHit = intersect_aabb(rightNode.min, rightNode.max, rdir, org, nearXIsMin, nearYIsMin, nearZIsMin, localTHit)
+            if leftHit[0] and rightHit[0]:
+                var near = leftIdx if leftHit[1] <= rightHit[1] else rightIdx
+                if toVisit < 64:
+                    stack_ptr[unsafe_offset=toVisit] = Int32(rightIdx if near == leftIdx else leftIdx)
+                    toVisit += 1
+                current = near
+            elif leftHit[0]:
+                current = leftIdx
+            elif rightHit[0]:
+                current = rightIdx
+            else:
+                if toVisit == 0:
+                    break
+                toVisit -= 1
+                current = Int(stack_ptr[unsafe_offset=toVisit])
+    return (hasHit, localTHit, bestU, bestV, hitPrim)
+
+
+@always_inline
+def _traverse_instances[wide_on: Bool = True](
+    prim: PrimId,
+    meshes: Pointer[TriangleMesh, MutUntrackedOrigin],
+    blasNodesArr: Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin],
+    blasPrimIdsArr: Pointer[Pointer[PrimId, MutUntrackedOrigin], MutUntrackedOrigin],
+    instances: Pointer[Instance, MutUntrackedOrigin],
+    ray_org: Vec3f,
+    ray_dir: Vec3f,
+    tMax: Float32,
+    first_hit: Bool = False,   # a shadow ray: any hit will do
+    curves: Pointer[Curve, MutUntrackedOrigin] = Pointer[Curve, MutUntrackedOrigin].unsafe_dangling(),
+    cnt: Pointer[Int32, MutUntrackedOrigin] = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
+) -> Tuple[Bool, Float32, Float32, Float32, PrimId]:
+    """Handle the PrimId.type==8 leaf that stands for the scene's instances: walk the BVH over them
+    (blasNodesArr[prim.id1]; the instances are stored in its leaf order, so a leaf is an instance range) and
+    each one's BLAS. Returns the nearest (hit, tHit, u, v, primId). Shared by every top-level traversal.
+    Returns hit=False without dereferencing anything if a caller passed no instance data."""
+    var hitPrim = PrimId(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
+    if not _is_real_ptr(instances) or not _is_real_ptr(blasNodesArr) or not _is_real_ptr(blasPrimIdsArr):
+        return (False, tMax, Float32(0), Float32(0), hitPrim)
+    var nodes = blasNodesArr[unsafe_offset=Int(prim.id1)]
+    var rdir = Vec3f(Float32(1.0) / ray_dir[0], Float32(1.0) / ray_dir[1], Float32(1.0) / ray_dir[2])
+    var org = Vec3f(ray_org[0], ray_org[1], ray_org[2])
+    var nearXIsMin = rdir.x >= Float32(0.0)
+    var nearYIsMin = rdir.y >= Float32(0.0)
+    var nearZIsMin = rdir.z >= Float32(0.0)
+    var hasHit = False
+    var localTHit = tMax
+    var bestU: Float32 = 0.0
+    var bestV: Float32 = 0.0
+    if wide_on and prim._pad0 != Int8(0):
+        # The tree walk only collects the instances the ray enters; they are walked afterwards, so a warp's
+        # threads are in the same loop at the same time.
+        var wstack = Array[Int64, _WIDE_STACK](uninitialized=True)
+        var stk = wstack.unsafe_ptr()
+        var clist = Array[Int64, _WIDE_CAND](uninitialized=True)
+        var cand = clist.unsafe_ptr()
+        var n_cand = 0
+        var nw = nodes.unsafe_bitcast[Int32]()
+        var sp = _wide_push_hits(nw, 0, rdir, org, nearXIsMin, nearYIsMin, nearZIsMin, localTHit, stk, 0)
+        while sp > 0 or n_cand > 0:
+            while sp > 0 and n_cand <= _WIDE_CAND - 15:
+                sp -= 1
+                var (cref, t_in) = _wide_unpack(stk[unsafe_offset=sp])
+                if t_in > localTHit:
+                    continue
+                if cref < Int32(0):
+                    for j in range(Int((cref >> Int32(27)) & Int32(0xF))):
+                        cand[unsafe_offset=n_cand] = _wide_pack((cref & Int32(0x7FFFFFF)) + Int32(j), t_in)
+                        n_cand += 1
+                else:
+                    if _is_real_ptr(cnt): cnt[unsafe_offset=2] += Int32(1)
+                    sp = _wide_push_hits(nw, Int(cref), rdir, org, nearXIsMin, nearYIsMin, nearZIsMin, localTHit, stk, sp)
+            for k in range(n_cand):
+                var (inst_idx, t_c) = _wide_unpack(cand[unsafe_offset=k])
+                if t_c > localTHit:
+                    continue
+                var sub = _traverse_instance[wide_on](Int(inst_idx), meshes, blasNodesArr, blasPrimIdsArr, instances,
+                                             ray_org, ray_dir, localTHit, curves, cnt, first_hit)
+                if sub[0]:
+                    hasHit = True
+                    localTHit = sub[1]; bestU = sub[2]; bestV = sub[3]; hitPrim = sub[4]
+                    if first_hit:
+                        return (True, localTHit, bestU, bestV, hitPrim)
+            n_cand = 0
+        return (hasHit, localTHit, bestU, bestV, hitPrim)
+    var stack = Array[Int32, 64](uninitialized=True)
+    var stack_ptr = stack.unsafe_ptr()
+    var toVisit = 0
+    var current = 0
+    while True:
+        var node = nodes[unsafe_offset=current]
+        if node.count > 0:
+            for j in range(Int(node.count)):
+                var sub = _traverse_instance[wide_on](Int(node.offset) + j, meshes, blasNodesArr, blasPrimIdsArr, instances,
+                                             ray_org, ray_dir, localTHit, curves, cnt, first_hit)
+                if sub[0]:
+                    hasHit = True
+                    localTHit = sub[1]; bestU = sub[2]; bestV = sub[3]; hitPrim = sub[4]
+                    if first_hit:
+                        return (True, localTHit, bestU, bestV, hitPrim)
+            if toVisit == 0:
+                break
+            toVisit -= 1
+            current = Int(stack_ptr[unsafe_offset=toVisit])
+        else:
+            var leftIdx = current + 1
+            var rightIdx = Int(node.offset)
+            if _is_real_ptr(cnt): cnt[unsafe_offset=2] += Int32(1)
+            var leftNode = nodes[unsafe_offset=leftIdx]
+            var rightNode = nodes[unsafe_offset=rightIdx]
+            var leftHit = intersect_aabb(leftNode.min, leftNode.max, rdir, org, nearXIsMin, nearYIsMin, nearZIsMin, localTHit)
+            var rightHit = intersect_aabb(rightNode.min, rightNode.max, rdir, org, nearXIsMin, nearYIsMin, nearZIsMin, localTHit)
+            if leftHit[0] and rightHit[0]:
+                # The far child is dropped rather than pushed past the stack's end: a missed hit, never corruption.
+                var near = leftIdx if leftHit[1] <= rightHit[1] else rightIdx
+                if toVisit < 64:
+                    stack_ptr[unsafe_offset=toVisit] = Int32(rightIdx if near == leftIdx else leftIdx)
+                    toVisit += 1
+                current = near
+            elif leftHit[0]:
+                current = leftIdx
+            elif rightHit[0]:
+                current = rightIdx
+            else:
+                if toVisit == 0:
+                    break
+                toVisit -= 1
+                current = Int(stack_ptr[unsafe_offset=toVisit])
+    return (hasHit, localTHit, bestU, bestV, hitPrim)
+
+
+@always_inline
+def _transform_ray_to_instance_space(
+    worldToObj: SIMD[DType.float32, 16],
+    ray_org: Vec3f,
+    ray_dir: Vec3f,
+) -> Tuple[Vec3f, Vec3f]:
+    """Transform a world-space ray into an instance's object space. The
+    direction is rotated/scaled but NOT renormalized and the origin is NOT
+    re-based on it — this preserves the ray parameterization so a `tHit` found
+    in object space is directly usable as the world-space `tHit` (same trick
+    pbrt's TransformedPrimitive uses)."""
+    var m = Mat4(worldToObj)
+    var o = m.transform_point(point3f(ray_org))
+    var d = m * ray_dir
+    return (Vec3f(o.x, o.y, o.z), d)
+
+
+# ── Unified traversal core (CPU + GPU) ────────────────────────────────────────
+
+@always_inline
+def traverse_bvh2_core[Or: Origin[mut=True]](
+    bvh2Nodes: Pointer[BVH2Node, MutUntrackedOrigin],
+    primIds: Pointer[PrimId, MutUntrackedOrigin],
+    meshes: Pointer[TriangleMesh, MutUntrackedOrigin],
+    curves: Pointer[Curve, MutUntrackedOrigin],
+    ray: Ray,
+    tMax: Float32,
+    resultPtr: Pointer[Intersection, Or],
+    blasNodesArr: Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin] = Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
+    blasPrimIdsArr: Pointer[Pointer[PrimId, MutUntrackedOrigin], MutUntrackedOrigin] = Pointer[Pointer[PrimId, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
+    instances: Pointer[Instance, MutUntrackedOrigin] = Pointer[Instance, MutUntrackedOrigin].unsafe_dangling(),
+    spheres: Pointer[Sphere, MutUntrackedOrigin] = Pointer[Sphere, MutUntrackedOrigin].unsafe_dangling(),
+    n_spheres: Int = 0,
+    root: Int = 0,
+):
+    # Callers that never populate any PrimId.type==6 leaf (GPU kernels, which
+    # upload their own device-side scene copy with no instance data at all) can
+    # omit blasNodesArr/blasPrimIdsArr/instances entirely — the dangling
+    # defaults above are never dereferenced since no such leaf will exist.
+    # Same for spheres/n_spheres (default n_spheres=0 never dereferences the
+    # dangling pointer) — see any_hit_bvh2_core's own sphere test for why
+    # this is baked directly into the traversal rather than left as a
+    # separate test_spheres() call callers must remember to make (that
+    # exact "caller forgets the second call" pattern is what let analytic
+    # spheres go untested by every closest-hit caller that didn't already
+    # know to call test_spheres itself — see _sms_probe_and_solve's own
+    # probe rays in shading.mojo, which found glass spheres via neither
+    # this function nor any_hit_bvh2_core until both were fixed).
+
+    var rdir = Vec3f(Float32(1.0) / ray.direction.x, Float32(1.0) / ray.direction.y, Float32(1.0) / ray.direction.z)
+    var org = Vec3f(ray.origin.x, ray.origin.y, ray.origin.z)
+    var nearXIsMin = rdir.x >= Float32(0.0)
+    var nearYIsMin = rdir.y >= Float32(0.0)
+    var nearZIsMin = rdir.z >= Float32(0.0)
+
+    var hitIndex: Int = -1
+    var localTHit = tMax
+    var bestU: Float32 = 0.0
+    var bestV: Float32 = 0.0
+    var instHit = False
+    var instHitPrim = PrimId(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
+
+    # Only slots below toVisit are ever read, so nothing needs zeroing.
+    var stack = Array[Int32, 64](uninitialized=True)
+    var stack_ptr = stack.unsafe_ptr()
+    var toVisit = 0
+    var current = root
+    var nodes_f = bvh2Nodes.unsafe_bitcast[Float32]()
+    var cur_oc = _node_oc(_node_hi(nodes_f, root))
+
+    var ray_org = Vec3f(ray.origin.x, ray.origin.y, ray.origin.z)
+    var ray_dir = Vec3f(ray.direction.x, ray.direction.y, ray.direction.z)
+
+    var has_nodes = _bvh_has_nodes(cur_oc)
+    while has_nodes:
+        if cur_oc[1] > 0:
+            # Leaf node — intersect primitives
+            var offset = Int(cur_oc[0])
+            var count = Int(cur_oc[1])
+            for j in range(count):
+                var prim = primIds[unsafe_offset=offset + j]
+                var mesh_idx: Int
+                var base_vidx: Int
+
+                if prim.type == 0:
+                    mesh_idx = Int(prim.id1)
+                    base_vidx = Int(prim.id2)
+                elif prim.type == 1 or prim.type == 2 or prim.type == 3:
+                    if prim.id2 == -1:
+                        continue # GPU cannot intersect non-triangle shapes directly yet
+                    mesh_idx = Int(prim.id2 >> 32)
+                    base_vidx = Int(prim.id2 & 0xFFFFFFFF) * 3
+                elif prim.type == 5:
+                    var curve = curve_at(curves, Int(prim.id1))
+                    var curve_hit = intersect_curve(ray_org, ray_dir, curve, Int(prim.id2) // 8, Int(prim.id2) % 8, localTHit)
+                    if curve_hit[0]:
+                        localTHit = curve_hit[1]
+                        bestU = curve_hit[2]
+                        bestV = curve_hit[3]
+                        hitIndex = offset + j
+                        instHit = False
+                    continue
+                elif prim.type == 8:
+                    var sub = _traverse_instances[True](prim, meshes, blasNodesArr, blasPrimIdsArr, instances, ray_org, ray_dir, localTHit, False, curves)
+                    if sub[0]:
+                        localTHit = sub[1]
+                        bestU = sub[2]
+                        bestV = sub[3]
+                        instHitPrim = sub[4]
+                        instHit = True
+                    continue
+                else:
+                    continue
+
+                var mesh = meshes[unsafe_offset=mesh_idx]
+                var v0_idx = Int(mesh_vi(mesh, base_vidx))
+                var v1_idx = Int(mesh_vi(mesh, base_vidx + 1))
+                var v2_idx = Int(mesh_vi(mesh, base_vidx + 2))
+
+                var p0 = mesh_pos(mesh, v0_idx)
+                var p1 = mesh_pos(mesh, v1_idx)
+                var p2 = mesh_pos(mesh, v2_idx)
+
+                var hit_res = intersect_triangle(ray_org, ray_dir, p0, p1, p2, localTHit)
+                if hit_res[0] and not alpha_killed(mesh, v0_idx, v1_idx, v2_idx, hit_res[2], hit_res[3],
+                                                   ray_org, ray_dir, (mesh_idx << 32) | base_vidx):
+                    localTHit = hit_res[1]
+                    bestU = hit_res[2]
+                    bestV = hit_res[3]
+                    hitIndex = offset + j
+                    instHit = False
+
+            # Pop next node from stack
+            if toVisit == 0:
+                break
+            toVisit -= 1
+            current = Int(stack_ptr[unsafe_offset=toVisit])
+            cur_oc = _node_oc(_node_hi(nodes_f, current))
+        else:
+            # Interior node — test both children, visit nearer first
+            var leftIdx = current + 1
+            var rightIdx = Int(cur_oc[0])
+
+            var leftLo = _node_lo(nodes_f, leftIdx)
+            var leftHi = _node_hi(nodes_f, leftIdx)
+            var rightLo = _node_lo(nodes_f, rightIdx)
+            var rightHi = _node_hi(nodes_f, rightIdx)
+
+            var leftHit = _node_box_hit(leftLo, leftHi, rdir, org, nearXIsMin, nearYIsMin, nearZIsMin, localTHit)
+            var rightHit = _node_box_hit(rightLo, rightHi, rdir, org, nearXIsMin, nearYIsMin, nearZIsMin, localTHit)
+
+            var leftIsHit = leftHit[0]
+            var rightIsHit = rightHit[0]
+
+            if leftIsHit and rightIsHit:
+                # Both hit — visit nearer first, push farther
+                var leftTNear = leftHit[1]
+                var rightTNear = rightHit[1]
+                # Bound the push against the 64-entry stack. Overflowing it
+                # writes past the Array and corrupts whatever follows
+                # it in the frame; dropping the far child instead can only
+                # cost a missed intersection, never memory corruption.
+                if leftTNear <= rightTNear:
+                    current = leftIdx
+                    cur_oc = _node_oc(leftHi)
+                    if toVisit < 64:
+                        stack_ptr[unsafe_offset=toVisit] = Int32(rightIdx)
+                        toVisit += 1
+                else:
+                    current = rightIdx
+                    cur_oc = _node_oc(rightHi)
+                    if toVisit < 64:
+                        stack_ptr[unsafe_offset=toVisit] = Int32(leftIdx)
+                        toVisit += 1
+            elif leftIsHit:
+                current = leftIdx
+                cur_oc = _node_oc(leftHi)
+            elif rightIsHit:
+                current = rightIdx
+                cur_oc = _node_oc(rightHi)
+            else:
+                # Neither child hit — pop from stack
+                if toVisit == 0:
+                    break
+                toVisit -= 1
+                current = Int(stack_ptr[unsafe_offset=toVisit])
+                cur_oc = _node_oc(_node_hi(nodes_f, current))
+
+    var sphereHit = False
+    var sphereIdx = -1
+    for i in range(n_spheres):
+        var t = ray_sphere_hit(spheres[unsafe_offset=i].center, spheres[unsafe_offset=i].radius, ray, Float32(1e-4), localTHit)
+        if t > Float32(0.0):
+            localTHit = t
+            sphereHit = True
+            sphereIdx = i
+
+    if sphereHit:
+        var spId = PrimId(Int64(sphereIdx), Int64(-1), Int64(spheres[unsafe_offset=sphereIdx].materialIndex), Int32(-1), Int8(4), Int8(0), Int8(0), Int8(0))
+        resultPtr[unsafe_offset=0] = Intersection(spId, localTHit, Float32(0), Float32(0), Int8(1), 0, 0, 0)
+    elif instHit:
+        resultPtr[unsafe_offset=0] = Intersection(instHitPrim, localTHit, bestU, bestV, Int8(1), 0, 0, 0)
+    elif hitIndex != -1:
+        resultPtr[unsafe_offset=0] = Intersection(primIds[unsafe_offset=hitIndex], localTHit, bestU, bestV, Int8(1), 0, 0, 0)
+    else:
+        var dummyId = PrimId(-1, -1, 0, -1, 0, 0, 0, 0)
+        resultPtr[unsafe_offset=0] = Intersection(dummyId, tMax, 0.0, 0.0, Int8(0), 0, 0, 0)
+
+
+# Divergence-mitigation experiment for traverse_paths_gpu: identical traversal to
+# traverse_bvh2_core, except curve leaves are not intersected inline. Instead, up
+# to CURVE_DEFER_K candidate prim indices are recorded per ray (curve_cand_prim/
+# curve_cand_count, both already offset to this ray's slot by the caller) so the
+# expensive ray-vs-cylinder math can run later in a compacted kernel over just the
+# rays that actually touched curve geometry, instead of scattered across every
+# warp in the main traversal kernel. ncu profiling showed traverse_paths_gpu on
+# fur scenes averaging 2.63/32 active threads per warp and 73% uncoalesced global
+# sectors — both are classic per-ray-scalar-divergent-leaf-work symptoms, not
+# register pressure (three register/inlining fixes measured no improvement).
+# On overflow (>CURVE_DEFER_K candidates for one ray) this falls back to the
+# immediate intersect_curve call, so correctness never depends on K being large
+# enough — it only affects how many rays get the compaction benefit.
+@always_inline
+def traverse_bvh2_core_defer_curves[curves_on: Bool = True, inst_on: Bool = True, alpha_on: Bool = True, count_on: Bool = False](
+    bvh2Nodes: Pointer[BVH2Node, MutUntrackedOrigin],
+    primIds: Pointer[PrimId, MutUntrackedOrigin],
+    meshes: Pointer[TriangleMesh, MutUntrackedOrigin],
+    curves: Pointer[Curve, MutUntrackedOrigin],
+    ray: Ray,
+    tMax: Float32,
+    resultPtr: Pointer[Intersection, MutUntrackedOrigin],
+    curve_cand_prim: Pointer[Int32, MutUntrackedOrigin],
+    curve_cand_count: Pointer[Int32, MutUntrackedOrigin],
+    blasNodesArr: Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin] = Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
+    blasPrimIdsArr: Pointer[Pointer[PrimId, MutUntrackedOrigin], MutUntrackedOrigin] = Pointer[Pointer[PrimId, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
+    instances: Pointer[Instance, MutUntrackedOrigin] = Pointer[Instance, MutUntrackedOrigin].unsafe_dangling(),
+):
+
+    var rdir = Vec3f(Float32(1.0) / ray.direction.x, Float32(1.0) / ray.direction.y, Float32(1.0) / ray.direction.z)
+    var org = Vec3f(ray.origin.x, ray.origin.y, ray.origin.z)
+    var nearXIsMin = rdir.x >= Float32(0.0)
+    var nearYIsMin = rdir.y >= Float32(0.0)
+    var nearZIsMin = rdir.z >= Float32(0.0)
+
+    var hitIndex: Int = -1
+    var localTHit = tMax
+    var bestU: Float32 = 0.0
+    var bestV: Float32 = 0.0
+    var instHit = False
+    var instHitPrim = PrimId(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
+
+    # Only slots below toVisit are ever read, so nothing needs zeroing.
+    var stack = Array[Int32, 64](uninitialized=True)
+    var stack_ptr = stack.unsafe_ptr()
+    var toVisit = 0
+    var current = 0
+    var nodes_f = bvh2Nodes.unsafe_bitcast[Float32]()
+    var cur_oc = _node_oc(_node_hi(nodes_f, 0))
+
+    var ray_org = Vec3f(ray.origin.x, ray.origin.y, ray.origin.z)
+    var ray_dir = Vec3f(ray.direction.x, ray.direction.y, ray.direction.z)
+
+    var has_nodes = _bvh_has_nodes(cur_oc)
+    var inst_leaf = PrimId(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
+    # Counting: the result slot itself holds the counters (twelve Int32), so nothing lives on the kernel stack.
+    var cnt = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling()
+    comptime if count_on:
+        cnt = resultPtr.unsafe_bitcast[Int32]()
+        for k in range(12): cnt[unsafe_offset=k] = Int32(0)
+    while has_nodes:
+        if cur_oc[1] > 0:
+            # Leaf node — intersect primitives
+            var offset = Int(cur_oc[0])
+            var count = Int(cur_oc[1])
+            for j in range(count):
+                var prim = primIds[unsafe_offset=offset + j]
+                var mesh_idx: Int
+                var base_vidx: Int
+
+                if prim.type == 0:
+                    mesh_idx = Int(prim.id1)
+                    base_vidx = Int(prim.id2)
+                elif prim.type == 1 or prim.type == 2 or prim.type == 3:
+                    if prim.id2 == -1:
+                        continue # GPU cannot intersect non-triangle shapes directly yet
+                    mesh_idx = Int(prim.id2 >> 32)
+                    base_vidx = Int(prim.id2 & 0xFFFFFFFF) * 3
+                elif curves_on and prim.type == 5:
+                    comptime if count_on: cnt[unsafe_offset=6] += Int32(1)
+                    var slot = curve_cand_count[unsafe_offset=0]
+                    if slot < Int32(CURVE_DEFER_K):
+                        curve_cand_prim[unsafe_offset=Int(slot)] = Int32(offset + j)
+                        curve_cand_count[unsafe_offset=0] = slot + Int32(1)
+                    else:
+                        var curve = curve_at(curves, Int(prim.id1))
+                        var curve_hit = intersect_curve(ray_org, ray_dir, curve, Int(prim.id2) // 8, Int(prim.id2) % 8, localTHit)
+                        if curve_hit[0]:
+                            localTHit = curve_hit[1]
+                            bestU = curve_hit[2]
+                            bestV = curve_hit[3]
+                            hitIndex = offset + j
+                            instHit = False
+                    continue
+                elif inst_on and prim.type == 8:
+                    inst_leaf = prim      # walked after this loop, so a warp's threads walk the instances together
+                    continue
+                else:
+                    continue
+
+                comptime if count_on: cnt[unsafe_offset=1] += Int32(1)
+                var mesh = meshes[unsafe_offset=mesh_idx]
+                var v0_idx = Int(mesh_vi(mesh, base_vidx))
+                var v1_idx = Int(mesh_vi(mesh, base_vidx + 1))
+                var v2_idx = Int(mesh_vi(mesh, base_vidx + 2))
+
+                var p0 = mesh_pos(mesh, v0_idx)
+                var p1 = mesh_pos(mesh, v1_idx)
+                var p2 = mesh_pos(mesh, v2_idx)
+
+                var hit_res = intersect_triangle(ray_org, ray_dir, p0, p1, p2, localTHit)
+                if hit_res[0] and (not alpha_on or not alpha_killed(mesh, v0_idx, v1_idx, v2_idx, hit_res[2], hit_res[3],
+                                                   ray_org, ray_dir, (mesh_idx << 32) | base_vidx)):
+                    localTHit = hit_res[1]
+                    bestU = hit_res[2]
+                    bestV = hit_res[3]
+                    hitIndex = offset + j
+                    instHit = False
+
+            # Pop next node from stack
+            if toVisit == 0:
+                break
+            toVisit -= 1
+            current = Int(stack_ptr[unsafe_offset=toVisit])
+            cur_oc = _node_oc(_node_hi(nodes_f, current))
+        else:
+            # Interior node — test both children, visit nearer first
+            comptime if count_on: cnt[unsafe_offset=0] += Int32(1)
+            var leftIdx = current + 1
+            var rightIdx = Int(cur_oc[0])
+
+            var leftLo = _node_lo(nodes_f, leftIdx)
+            var leftHi = _node_hi(nodes_f, leftIdx)
+            var rightLo = _node_lo(nodes_f, rightIdx)
+            var rightHi = _node_hi(nodes_f, rightIdx)
+
+            var leftHit = _node_box_hit(leftLo, leftHi, rdir, org, nearXIsMin, nearYIsMin, nearZIsMin, localTHit)
+            var rightHit = _node_box_hit(rightLo, rightHi, rdir, org, nearXIsMin, nearYIsMin, nearZIsMin, localTHit)
+
+            var leftIsHit = leftHit[0]
+            var rightIsHit = rightHit[0]
+
+            if leftIsHit and rightIsHit:
+                # Both hit — visit nearer first, push farther
+                var leftTNear = leftHit[1]
+                var rightTNear = rightHit[1]
+                # Bound the push against the 64-entry stack. Overflowing it
+                # writes past the Array and corrupts whatever follows
+                # it in the frame; dropping the far child instead can only
+                # cost a missed intersection, never memory corruption.
+                if leftTNear <= rightTNear:
+                    current = leftIdx
+                    cur_oc = _node_oc(leftHi)
+                    if toVisit < 64:
+                        stack_ptr[unsafe_offset=toVisit] = Int32(rightIdx)
+                        toVisit += 1
+                else:
+                    current = rightIdx
+                    cur_oc = _node_oc(rightHi)
+                    if toVisit < 64:
+                        stack_ptr[unsafe_offset=toVisit] = Int32(leftIdx)
+                        toVisit += 1
+            elif leftIsHit:
+                current = leftIdx
+                cur_oc = _node_oc(leftHi)
+            elif rightIsHit:
+                current = rightIdx
+                cur_oc = _node_oc(rightHi)
+            else:
+                # Neither child hit — pop from stack
+                if toVisit == 0:
+                    break
+                toVisit -= 1
+                current = Int(stack_ptr[unsafe_offset=toVisit])
+                cur_oc = _node_oc(_node_hi(nodes_f, current))
+
+    comptime if inst_on:
+        if inst_leaf.type == Int8(8):
+            var sub = _traverse_instances[True](inst_leaf, meshes, blasNodesArr, blasPrimIdsArr, instances, ray_org, ray_dir, localTHit, False, curves, cnt)
+            if sub[0]:
+                localTHit = sub[1]
+                bestU = sub[2]
+                bestV = sub[3]
+                instHitPrim = sub[4]
+                instHit = True
+    comptime if count_on:
+        cnt[unsafe_offset=11] = Int32(2)   # top nodes, top triangles, instance nodes, instances, bottom nodes, bottom triangles, curves
+        return
+    if instHit:
+        resultPtr[unsafe_offset=0] = Intersection(instHitPrim, localTHit, bestU, bestV, Int8(1), 0, 0, 0)
+    elif hitIndex != -1:
+        resultPtr[unsafe_offset=0] = Intersection(primIds[unsafe_offset=hitIndex], localTHit, bestU, bestV, Int8(1), 0, 0, 0)
+    else:
+        var dummyId = PrimId(-1, -1, 0, -1, 0, 0, 0, 0)
+        resultPtr[unsafe_offset=0] = Intersection(dummyId, tMax, 0.0, 0.0, Int8(0), 0, 0, 0)
+
+
+# Shadow-ray traversal: returns True if anything is hit within tMax (early exit).
+@always_inline
+@always_inline
+def _shadow_is_null_material(
+    materials: Pointer[Material, MutUntrackedOrigin], mat_idx: Int64
+) -> Bool:
+    """True if this primitive carries pbrt's "interface" (null) material, which
+    has NO BSDF: it exists only to mark a medium boundary and must be invisible
+    to shadow rays. Without this, the big invisible sphere that bounds a
+    volumetric medium ("MediumInterface .. Shape sphere", the standard pbrt
+    idiom used by bunny-cloud/explosion/disney-cloud) cast a hard opaque
+    circular shadow onto everything below it AND blocked every NEE ray leaving
+    the medium, so the volume lit only via rare BSDF-sampled escapes -- which
+    is what produced the sparse-bright-dot fireflies on those scenes.
+
+    `materials` is optional: callers that don't have the array pass nothing and
+    get the old material-blind behavior, so this is opt-in per call site rather
+    than a signature change rippling through all 17 callers."""
+    if not _is_real_ptr[Material](materials):
+        return False
+    if mat_idx < Int64(0):
+        return False
+    return materials[unsafe_offset=Int(mat_idx)].passes_rays()
+
+def any_hit_bvh2_core[wide_on: Bool = True](
+    bvh2Nodes: Pointer[BVH2Node, MutUntrackedOrigin],
+    primIds: Pointer[PrimId, MutUntrackedOrigin],
+    meshes: Pointer[TriangleMesh, MutUntrackedOrigin],
+    curves: Pointer[Curve, MutUntrackedOrigin],
+    ray: Ray,
+    tMax: Float32,
+    blasNodesArr: Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin] = Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
+    blasPrimIdsArr: Pointer[Pointer[PrimId, MutUntrackedOrigin], MutUntrackedOrigin] = Pointer[Pointer[PrimId, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
+    instances: Pointer[Instance, MutUntrackedOrigin] = Pointer[Instance, MutUntrackedOrigin].unsafe_dangling(),
+    spheres: Pointer[Sphere, MutUntrackedOrigin] = Pointer[Sphere, MutUntrackedOrigin].unsafe_dangling(),
+    n_spheres: Int = 0,
+    ignore_sphere_center: Vec3f = Vec3f(Float32(0.0), Float32(0.0), Float32(0.0)),
+    ignore_sphere_radius: Float32 = Float32(-1.0),
+    materials: Pointer[Material, MutUntrackedOrigin] = Pointer[Material, MutUntrackedOrigin].unsafe_dangling(),
+    root: Int = 0,
+) -> Bool:
+    # Analytic spheres live in their own flat array, not the mesh/curve BVH
+    # this function walks, so they need their own (cheap, since n_spheres
+    # is typically single digits) any-hit test -- baked in HERE rather than
+    # left as a second call the caller must remember to also make: that's
+    # exactly the shape of bug that let every analytic sphere in gonzales
+    # silently cast no shadow via NEE, in any render mode, until this was
+    # found (see project_sms_restir_phase6/project_mitsuba_parser memory).
+    # Order doesn't matter for a pure any-hit query (we only need ONE
+    # blocker, not the closest), so check spheres first as a cheap
+    # rejection before the heavier BVH walk.
+    #
+    # `ignore_sphere_radius >= 0.0` opts in to skipping ONE specific sphere
+    # (matched by center+radius) -- used by SMS's single-vertex sphere-
+    # caustic model (shading.mojo's `_mnee_area_light_contribute`/
+    # `sms_resolve`): that model solves exactly ONE refraction event at a
+    # point on the caustic caster's OWN sphere, so the straight segment
+    # from that solved vertex onward to the light necessarily re-crosses
+    # the SAME sphere's far side (the unmodeled exit refraction) -- a real
+    # geometric fact, not an occluder distinct from the one already
+    # accounted for at the solved vertex. Without this, that self-crossing
+    # was silently rejecting essentially every solved caustic path in
+    # `sphere_sms.xml` (see project_sms_restir_phase6 memory).
+    for i in range(n_spheres):
+        if ignore_sphere_radius >= Float32(0.0):
+            var sc = Vec3f(spheres[unsafe_offset=i].center.x, spheres[unsafe_offset=i].center.y, spheres[unsafe_offset=i].center.z)
+            var dc = sc - ignore_sphere_center
+            if abs(spheres[unsafe_offset=i].radius - ignore_sphere_radius) < Float32(1e-4) and dot(dc, dc) < Float32(1e-4):
+                continue
+        if _shadow_is_null_material(materials, Int64(spheres[unsafe_offset=i].materialIndex)):
+            continue
+        if ray_sphere_hit(spheres[unsafe_offset=i].center, spheres[unsafe_offset=i].radius, ray, Float32(1e-4), tMax) > Float32(0.0):
+            return True
+    var rdir = Vec3f(Float32(1.0) / ray.direction.x, Float32(1.0) / ray.direction.y, Float32(1.0) / ray.direction.z)
+    var org = Vec3f(ray.origin.x, ray.origin.y, ray.origin.z)
+    var nearXIsMin = rdir.x >= Float32(0.0)
+    var nearYIsMin = rdir.y >= Float32(0.0)
+    var nearZIsMin = rdir.z >= Float32(0.0)
+    # Only slots below toVisit are ever read, so nothing needs zeroing.
+    var inst_leaf = PrimId(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
+    var stack = Array[Int32, 64](uninitialized=True)
+    var stack_ptr = stack.unsafe_ptr()
+    var toVisit = 0
+    var current = root
+    var nodes_f = bvh2Nodes.unsafe_bitcast[Float32]()
+    var cur_oc = _node_oc(_node_hi(nodes_f, root))
+    var ray_org = Vec3f(ray.origin.x, ray.origin.y, ray.origin.z)
+    var ray_dir = Vec3f(ray.direction.x, ray.direction.y, ray.direction.z)
+    var has_nodes = _bvh_has_nodes(cur_oc)
+    while has_nodes:
+        if cur_oc[1] > 0:
+            var offset = Int(cur_oc[0])
+            var count = Int(cur_oc[1])
+            for j in range(count):
+                var prim = primIds[unsafe_offset=offset + j]
+                var mesh_idx: Int
+                var base_vidx: Int
+                if prim.type == 0:
+                    mesh_idx = Int(prim.id1)
+                    base_vidx = Int(prim.id2)
+                elif prim.type == 1 or prim.type == 2 or prim.type == 3:
+                    if prim.id2 == -1:
+                        continue
+                    mesh_idx = Int(prim.id2 >> 32)
+                    base_vidx = Int(prim.id2 & 0xFFFFFFFF) * 3
+                elif prim.type == 5:
+                    # pbrt "interface" (null) material: no BSDF, medium boundary
+                    # only -- must not occlude. See _shadow_is_null_material.
+                    if _shadow_is_null_material(materials, prim.materialIndex):
+                        continue
+                    var curve = curve_at(curves, Int(prim.id1))
+                    if intersect_curve(ray_org, ray_dir, curve, Int(prim.id2) // 8, Int(prim.id2) % 8, tMax)[0]:
+                        return True
+                    continue
+                elif prim.type == 8:
+                    if _shadow_is_null_material(materials, prim.materialIndex):
+                        continue
+                    inst_leaf = prim      # walked after this loop, so a warp's threads walk the instances together
+                    continue
+                else:
+                    continue
+                var v0 = mesh_vi(meshes[unsafe_offset=mesh_idx], base_vidx)
+                var v1 = mesh_vi(meshes[unsafe_offset=mesh_idx], base_vidx + 1)
+                var v2 = mesh_vi(meshes[unsafe_offset=mesh_idx], base_vidx + 2)
+                var p0 = mesh_pos(meshes[unsafe_offset=mesh_idx], v0)
+                var p1 = mesh_pos(meshes[unsafe_offset=mesh_idx], v1)
+                var p2 = mesh_pos(meshes[unsafe_offset=mesh_idx], v2)
+                var hit_res = intersect_triangle(ray_org, ray_dir, p0, p1, p2, tMax)
+                if hit_res[0]:
+                    # Tested after the hit, not before: the null-material and
+                    # alpha lookups only matter for a primitive that is
+                    # actually crossed, and most are not.
+                    if _shadow_is_null_material(materials, prim.materialIndex):
+                        continue
+                    var mesh = meshes[unsafe_offset=mesh_idx]
+                    if not alpha_killed(mesh, v0, v1, v2, hit_res[2], hit_res[3],
+                                        ray_org, ray_dir, (mesh_idx << 32) | base_vidx):
+                        return True
+            if toVisit == 0:
+                break
+            toVisit -= 1
+            current = Int(stack_ptr[unsafe_offset=toVisit])
+            cur_oc = _node_oc(_node_hi(nodes_f, current))
+        else:
+            var leftIdx = current + 1
+            var rightIdx = Int(cur_oc[0])
+            var leftLo = _node_lo(nodes_f, leftIdx)
+            var leftHi = _node_hi(nodes_f, leftIdx)
+            var rightLo = _node_lo(nodes_f, rightIdx)
+            var rightHi = _node_hi(nodes_f, rightIdx)
+            var leftHit = _node_box_hit(leftLo, leftHi, rdir, org, nearXIsMin, nearYIsMin, nearZIsMin, tMax)
+            var rightHit = _node_box_hit(rightLo, rightHi, rdir, org, nearXIsMin, nearYIsMin, nearZIsMin, tMax)
+            var leftIsHit = leftHit[0]
+            var rightIsHit = rightHit[0]
+            if leftIsHit and rightIsHit:
+                if leftHit[1] <= rightHit[1]:
+                    current = leftIdx
+                    cur_oc = _node_oc(leftHi)
+                    stack_ptr[unsafe_offset=toVisit] = Int32(rightIdx)
+                else:
+                    current = rightIdx
+                    cur_oc = _node_oc(rightHi)
+                    stack_ptr[unsafe_offset=toVisit] = Int32(leftIdx)
+                toVisit += 1
+            elif leftIsHit:
+                current = leftIdx
+                cur_oc = _node_oc(leftHi)
+            elif rightIsHit:
+                current = rightIdx
+                cur_oc = _node_oc(rightHi)
+            else:
+                if toVisit == 0:
+                    break
+                toVisit -= 1
+                current = Int(stack_ptr[unsafe_offset=toVisit])
+                cur_oc = _node_oc(_node_hi(nodes_f, current))
+    if inst_leaf.type == Int8(8):
+        return _traverse_instances[wide_on](inst_leaf, meshes, blasNodesArr, blasPrimIdsArr, instances, ray_org, ray_dir, tMax, True, curves)[0]
+    return False
+
+
+# ── CPU entry point ─────────────────────────────────────────────────────────
+
+# ── BVH4 (CPU only) ───────────────────────────────────────────────────────────
+# The BVH2 is collapsed (build_bvh4) into 4-wide nodes (128 bytes) whose child
+# boxes are stored structure-of-arrays, so one SIMD slab test covers all four
+# children. Leaves are the BVH2's leaves unchanged (same primIds ranges) and the
+# boxes are the BVH2's own, so the culling matches the BVH2's. build_bvh4 also
+# copies each leaf triangle's p0/e1/e2 next to the leaf order, so a leaf test
+# touches no mesh arrays. GPU kernels keep the BVH2; traverse_dispatch /
+# any_hit_dispatch pick the BVH4 on the CPU only. Instance BLASes stay BVH2
+# (walked by _traverse_blas_triangles).
+# (8-bit quantised child boxes in a 64-byte node were measured too: half the cache
+# lines but ~10% more instructions overall, and no faster on a 592k-triangle scene.)
+
+comptime F4 = SIMD[DType.float32, 4]
+comptime I4 = SIMD[DType.int32, 4]
+comptime _BVH4_STACK = 96
+comptime _BVH4_TRI_STRIDE = 12        # floats per primIds slot: p0 + kind, e1 + null-material flag, e2 as three F4
+comptime _BVH4_CNT_SHIFT = 27         # child ref: interior = node index, leaf = count << 27 | primIds offset, empty = -1
+comptime _BVH4_OFF_MASK = (1 << 27) - 1
+
+struct BVH4Node(TrivialRegisterPassable):
+    var minX: F4
+    var minY: F4
+    var minZ: F4
+    var maxX: F4
+    var maxY: F4
+    var maxZ: F4
+    var child: I4
+    var pad: I4
+
+    def __init__(out self, minX: F4, minY: F4, minZ: F4, maxX: F4, maxY: F4, maxZ: F4, child: I4):
+        self.minX = minX
+        self.minY = minY
+        self.minZ = minZ
+        self.maxX = maxX
+        self.maxY = maxY
+        self.maxZ = maxZ
+        self.child = child
+        self.pad = I4(0)
+
+
+struct BVH4(TrivialRegisterPassable):
+    """CPU-only 4-wide BVH over the same primIds as the BVH2 it was collapsed
+    from, plus per-primIds-slot triangle data (build_bvh4)."""
+    var nodes: Pointer[BVH4Node, MutUntrackedOrigin]
+    var tris: Pointer[Float32, MutUntrackedOrigin]   # 12 floats per primIds slot: p0, kind | e1, null | e2, 0
+
+    def __init__(out self, nodes: Pointer[BVH4Node, MutUntrackedOrigin], tris: Pointer[Float32, MutUntrackedOrigin]):
+        self.nodes = nodes
+        self.tris = tris
+
+    @staticmethod
+    def none() -> Self:
+        return Self(Pointer[BVH4Node, MutUntrackedOrigin].unsafe_dangling(), Pointer[Float32, MutUntrackedOrigin].unsafe_dangling())
+
+    def is_real(self) -> Bool:
+        return _is_real_ptr(self.nodes)
+
+
+def _bvh2_area(n: BVH2Node) -> Float32:
+    var dx = n.max.x - n.min.x
+    var dy = n.max.y - n.min.y
+    var dz = n.max.z - n.min.z
+    return dx * dy + dy * dz + dz * dx
+
+
+def _bvh4_collapse(
+    n2: Pointer[BVH2Node, MutUntrackedOrigin],
+    root: Int,
+    dst: Pointer[BVH4Node, MutUntrackedOrigin],
+    counter: Pointer[Int32, MutUntrackedOrigin],
+    bad: Pointer[Int32, MutUntrackedOrigin],
+) -> Int32:
+    """Turn BVH2 node `root` into one BVH4 node (preorder index returned) by
+    repeatedly replacing its largest interior child with that child's two
+    children until it has four children or only leaves."""
+    var my = Int(counter[unsafe_offset=0])
+    counter[unsafe_offset=0] = Int32(my + 1)
+    var ids = Array[Int32, 4](uninitialized=True)
+    var ip = ids.unsafe_ptr()
+    var k: Int
+    var rn = n2[unsafe_offset=root]
+    if rn.count > 0:
+        ip[unsafe_offset=0] = Int32(root)
+        k = 1
+    else:
+        ip[unsafe_offset=0] = Int32(root + 1)
+        ip[unsafe_offset=1] = rn.offset
+        k = 2
+    while k < 4:
+        var best = -1
+        var best_a = Float32(-1.0)
+        for i in range(k):
+            var nd = n2[unsafe_offset=Int(ip[unsafe_offset=i])]
+            if nd.count == 0:
+                var a = _bvh2_area(nd)
+                if a > best_a:
+                    best_a = a
+                    best = i
+        if best < 0:
+            break
+        var bn = n2[unsafe_offset=Int(ip[unsafe_offset=best])]
+        ip[unsafe_offset=best] = ip[unsafe_offset=best] + 1
+        ip[unsafe_offset=k] = bn.offset
+        k += 1
+    var minX = F4(Float32(1e30))
+    var minY = F4(Float32(1e30))
+    var minZ = F4(Float32(1e30))
+    var maxX = F4(Float32(-1e30))
+    var maxY = F4(Float32(-1e30))
+    var maxZ = F4(Float32(-1e30))
+    var refs = I4(-1)
+    for i in range(k):
+        var idx = Int(ip[unsafe_offset=i])
+        var nd = n2[unsafe_offset=idx]
+        minX[i] = nd.min.x
+        minY[i] = nd.min.y
+        minZ[i] = nd.min.z
+        maxX[i] = nd.max.x
+        maxY[i] = nd.max.y
+        maxZ[i] = nd.max.z
+        if nd.count > 0:
+            if nd.count > 15 or Int(nd.offset) > _BVH4_OFF_MASK:
+                bad[unsafe_offset=0] = Int32(1)
+            refs[i] = (nd.count << Int32(_BVH4_CNT_SHIFT)) | nd.offset
+        else:
+            var c = _bvh4_collapse(n2, idx, dst, counter, bad)
+            if Int(c) > _BVH4_OFF_MASK:
+                bad[unsafe_offset=0] = Int32(1)
+            refs[i] = c
+    dst[unsafe_offset=my] = BVH4Node(minX, minY, minZ, maxX, maxY, maxZ, refs)
+    return Int32(my)
+
+
+def _bvh4_tris(
+    primIds: Pointer[PrimId, MutUntrackedOrigin],
+    count: Int,
+    meshes: Pointer[TriangleMesh, MutUntrackedOrigin],
+    materials: Pointer[Material, MutUntrackedOrigin],
+) -> Pointer[Float32, MutUntrackedOrigin]:
+    """p0 / e1 / e2 of every plain triangle slot. Lane 3 of the first vector is
+    the slot kind: 0 plain triangle, 1 triangle whose mesh has an alpha cut-out,
+    2 anything else (curve, instance, skipped shape), resolved through its PrimId.
+    Lane 3 of the second vector is 1 when the slot's material is the pbrt
+    "interface" (null) one, which shadow rays ignore."""
+    var tris = unsafe_alloc[Float32](max(count, 1) * _BVH4_TRI_STRIDE, alignment=16)
+    comptime CHUNK = 16384
+    var n_chunks = (count + CHUNK - 1) // CHUNK
+
+    def fill_chunk(ci: Int) {imm}:
+        for k in range(ci * CHUNK, min(count, (ci + 1) * CHUNK)):
+            var prim = primIds[unsafe_offset=k]
+            var t = tris.unsafe_offset(k * _BVH4_TRI_STRIDE)
+            for c in range(_BVH4_TRI_STRIDE):
+                t[unsafe_offset=c] = Float32(0.0)
+            var mesh_idx = -1
+            var base_vidx = 0
+            if prim.type == 0:
+                mesh_idx = Int(prim.id1)
+                base_vidx = Int(prim.id2)
+            elif (prim.type == 1 or prim.type == 2 or prim.type == 3) and prim.id2 != -1:
+                mesh_idx = Int(prim.id2 >> 32)
+                base_vidx = Int(prim.id2 & 0xFFFFFFFF) * 3
+            if mesh_idx < 0:
+                t[unsafe_offset=3] = Float32(2.0)
+                continue
+            var mesh = meshes[unsafe_offset=mesh_idx]
+            var p = Array[Float32, 9](fill=Float32(0.0))
+            for c in range(3):
+                var vi = Int(mesh_vi(mesh, base_vidx + c))
+                var pv = mesh_pos(mesh, vi)
+                p[c * 3] = pv.x; p[c * 3 + 1] = pv.y; p[c * 3 + 2] = pv.z
+            for a in range(3):
+                t[unsafe_offset=a] = p[a]
+                t[unsafe_offset=4 + a] = p[3 + a] - p[a]
+                t[unsafe_offset=8 + a] = p[6 + a] - p[a]
+            if mesh.alpha_w != Int32(0) or mesh.alpha_const < Float32(1.0):
+                t[unsafe_offset=3] = Float32(1.0)
+            if _shadow_is_null_material(materials, prim.materialIndex):
+                t[unsafe_offset=7] = Float32(1.0)
+
+    parallelize(fill_chunk, n_chunks)
+    return tris
+
+
+def build_bvh4(
+    n2: Pointer[BVH2Node, MutUntrackedOrigin],
+    node_capacity: Int,
+    primIds: Pointer[PrimId, MutUntrackedOrigin],
+    prim_count: Int,
+    meshes: Pointer[TriangleMesh, MutUntrackedOrigin],
+    materials: Pointer[Material, MutUntrackedOrigin],
+) -> Tuple[BVH4, Int]:
+    """Collapse the BVH2 rooted at n2[0] (node_capacity nodes) into a BVH4.
+    Caller owns both arrays (free_bvh4). Returns (BVH4.none(), 0) for an empty
+    tree or one the compact node format cannot hold."""
+    if node_capacity <= 0 or prim_count <= 0:
+        return (BVH4.none(), 0)
+    # Every BVH4 node swallows at least one interior BVH2 node, and there are fewer than half as many of those as BVH2 nodes.
+    var out = unsafe_alloc[BVH4Node](node_capacity // 2 + 2, alignment=128)
+    var counter = unsafe_alloc[Int32](2)
+    counter[unsafe_offset=0] = Int32(0)
+    counter[unsafe_offset=1] = Int32(0)
+    _ = _bvh4_collapse(n2, 0, out, counter, counter.unsafe_offset(1))
+    var n = Int(counter[unsafe_offset=0])
+    var bad = counter[unsafe_offset=1] != Int32(0) or prim_count > _BVH4_OFF_MASK
+    counter.unsafe_free()
+    if bad:
+        out.unsafe_free()
+        return (BVH4.none(), 0)
+    return (BVH4(out, _bvh4_tris(primIds, prim_count, meshes, materials)), n)
+
+
+def free_bvh4(b: BVH4):
+    if b.is_real():
+        b.nodes.unsafe_free()
+        b.tris.unsafe_free()
+
+
+@always_inline
+def _bvh4_boxes(
+    node: BVH4Node,
+    ox: F4, oy: F4, oz: F4,
+    rx: F4, ry: F4, rz: F4,
+    nearX: SIMD[DType.bool, 4], nearY: SIMD[DType.bool, 4], nearZ: SIMD[DType.bool, 4],
+    tMax: Float32,
+) -> Tuple[SIMD[DType.bool, 4], F4]:
+    """intersect_aabb for the four children: same (bound - org) * rdir
+    arithmetic and 1.0000003 far-plane gamma. Returns (hit mask, entry t).
+    nearX/Y/Z are the ray's direction signs (lower plane is the near one)."""
+    var nx = nearX.select(node.minX, node.maxX)
+    var fx = nearX.select(node.maxX, node.minX)
+    var ny = nearY.select(node.minY, node.maxY)
+    var fy = nearY.select(node.maxY, node.minY)
+    var nz = nearZ.select(node.minZ, node.maxZ)
+    var fz = nearZ.select(node.maxZ, node.minZ)
+    var tnx = (nx - ox) * rx
+    var tny = (ny - oy) * ry
+    var tnz = (nz - oz) * rz
+    var tfx = (fx - ox) * rx
+    var tfy = (fy - oy) * ry
+    var tfz = (fz - oz) * rz
+    var tNear = tnx.gt(tny).select(tnx, tny)
+    tNear = tnz.gt(tNear).select(tnz, tNear)
+    var zero = F4(Float32(0.0))
+    tNear = zero.gt(tNear).select(zero, tNear)
+    var tm = F4(tMax)
+    var tFar = tfx.lt(tfy).select(tfx, tfy)
+    tFar = tfz.lt(tFar).select(tfz, tFar)
+    tFar = tm.lt(tFar).select(tm, tFar)
+    tFar = tFar * F4(Float32(1.0000003))
+    return (tNear.le(tFar) & node.child.ge(I4(0)), tNear)
+
+
+@always_inline
+def _bvh4_order[O: Origin[mut=True]](
+    mask: SIMD[DType.bool, 4], tn: F4, sl: Pointer[Int32, O],
+) -> Int:
+    """Hit lanes sorted by entry distance into sl[0..n); returns n. Branch-free:
+    each lane's rank is the number of hit lanes before it (ties by lane)."""
+    var tt = mask.select(tn, F4(Float32(3.0e38)))
+    var r1 = tt.shuffle[1, 2, 3, 0]()
+    var r2 = tt.shuffle[2, 3, 0, 1]()
+    var r3 = tt.shuffle[3, 0, 1, 2]()
+    var one = I4(1)
+    var zero = I4(0)
+    var rank = r1.lt(tt).select(one, zero)
+    rank += r2.lt(tt).select(one, zero)
+    rank += r3.lt(tt).select(one, zero)
+    # Equal distances: the lower lane goes first. For rotation k the other lane
+    # is (i + k) % 4, which is the lower one exactly when i + k >= 4.
+    rank += SIMD[DType.bool, 4](False, False, False, True).select(r1.eq(tt).select(one, zero), zero)
+    rank += SIMD[DType.bool, 4](False, False, True, True).select(r2.eq(tt).select(one, zero), zero)
+    rank += SIMD[DType.bool, 4](False, True, True, True).select(r3.eq(tt).select(one, zero), zero)
+    sl[unsafe_offset=Int(rank[0])] = Int32(0)
+    sl[unsafe_offset=Int(rank[1])] = Int32(1)
+    sl[unsafe_offset=Int(rank[2])] = Int32(2)
+    sl[unsafe_offset=Int(rank[3])] = Int32(3)
+    return Int(mask.select(one, zero).reduce_add())
+
+
+@always_inline
+def _bvh4_tri_hit(bvh4: BVH4, slot: Int, ray_org: Vec3f, ray_dir: Vec3f, tMax: Float32) -> Tuple[Bool, Float32, Float32, Float32, Float32, Float32]:
+    """Test the triangle in `slot`; returns (hit, t, u, v, kind, null) with the
+    kind and the null-material flag of _bvh4_tris."""
+    var t = bvh4.tris.unsafe_offset(slot * _BVH4_TRI_STRIDE)
+    var a = t.unsafe_load[width=4, alignment=16](0)
+    var kind = a[3]
+    if kind >= Float32(2.0):
+        return (False, tMax, Float32(0), Float32(0), kind, Float32(0))
+    var b = t.unsafe_load[width=4, alignment=16](4)
+    var c = t.unsafe_load[width=4, alignment=16](8)
+    var r = intersect_triangle_edges(ray_org, ray_dir, Vec3f(a[0], a[1], a[2]), Vec3f(b[0], b[1], b[2]), Vec3f(c[0], c[1], c[2]), tMax)
+    return (r[0], r[1], r[2], r[3], kind, b[3])
+
+
+def traverse_bvh4_core[Or: Origin[mut=True]](
+    bvh4: BVH4,
+    primIds: Pointer[PrimId, MutUntrackedOrigin],
+    meshes: Pointer[TriangleMesh, MutUntrackedOrigin],
+    curves: Pointer[Curve, MutUntrackedOrigin],
+    ray: Ray,
+    tMax: Float32,
+    resultPtr: Pointer[Intersection, Or],
+    blasNodesArr: Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin] = Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
+    blasPrimIdsArr: Pointer[Pointer[PrimId, MutUntrackedOrigin], MutUntrackedOrigin] = Pointer[Pointer[PrimId, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
+    instances: Pointer[Instance, MutUntrackedOrigin] = Pointer[Instance, MutUntrackedOrigin].unsafe_dangling(),
+    spheres: Pointer[Sphere, MutUntrackedOrigin] = Pointer[Sphere, MutUntrackedOrigin].unsafe_dangling(),
+    n_spheres: Int = 0,
+):
+    """BVH4 twin of traverse_bvh2_core: same leaf handling, same results."""
+    var rdir = Vec3f(Float32(1.0) / ray.direction.x, Float32(1.0) / ray.direction.y, Float32(1.0) / ray.direction.z)
+    var ox = F4(ray.origin.x)
+    var oy = F4(ray.origin.y)
+    var oz = F4(ray.origin.z)
+    var rx = F4(rdir.x)
+    var ry = F4(rdir.y)
+    var rz = F4(rdir.z)
+    var nearX = SIMD[DType.bool, 4](fill=rdir.x >= Float32(0.0))
+    var nearY = SIMD[DType.bool, 4](fill=rdir.y >= Float32(0.0))
+    var nearZ = SIMD[DType.bool, 4](fill=rdir.z >= Float32(0.0))
+
+    var hitIndex: Int = -1
+    var localTHit = tMax
+    var bestU: Float32 = 0.0
+    var bestV: Float32 = 0.0
+    var instHit = False
+    var instHitPrim = PrimId(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
+
+    # Stack entry: entry distance's float bits (>= 0, so they order as integers) << 32 | child ref.
+    var sK = Array[UInt64, _BVH4_STACK](uninitialized=True)
+    var sKP = sK.unsafe_ptr()
+    var ordL = Array[Int32, 4](uninitialized=True)
+    var ordLP = ordL.unsafe_ptr()
+    var toVisit = 0
+    var cur = 0     # interior node index, or a leaf ref
+
+    var ray_org = Vec3f(ray.origin.x, ray.origin.y, ray.origin.z)
+    var ray_dir = Vec3f(ray.direction.x, ray.direction.y, ray.direction.z)
+
+    while True:
+        var cnt = cur >> _BVH4_CNT_SHIFT
+        var descended = False
+        if cnt > 0:
+            var offset = cur & _BVH4_OFF_MASK
+            for j in range(cnt):
+                var slot = offset + j
+                var th = _bvh4_tri_hit(bvh4, slot, ray_org, ray_dir, localTHit)
+                if th[4] < Float32(2.0):
+                    if th[0]:
+                        if th[4] == Float32(0.0):
+                            localTHit = th[1]
+                            bestU = th[2]
+                            bestV = th[3]
+                            hitIndex = slot
+                            instHit = False
+                        else:
+                            var tprim = primIds[unsafe_offset=slot]
+                            var t_mesh_idx = Int(tprim.id1)
+                            var t_base_vidx = Int(tprim.id2)
+                            if tprim.type != 0:
+                                t_mesh_idx = Int(tprim.id2 >> 32)
+                                t_base_vidx = Int(tprim.id2 & 0xFFFFFFFF) * 3
+                            var t_mesh = meshes[unsafe_offset=t_mesh_idx]
+                            var tv0 = Int(mesh_vi(t_mesh, t_base_vidx))
+                            var tv1 = Int(mesh_vi(t_mesh, t_base_vidx + 1))
+                            var tv2 = Int(mesh_vi(t_mesh, t_base_vidx + 2))
+                            if not alpha_killed(t_mesh, tv0, tv1, tv2, th[2], th[3],
+                                                ray_org, ray_dir, (t_mesh_idx << 32) | t_base_vidx):
+                                localTHit = th[1]
+                                bestU = th[2]
+                                bestV = th[3]
+                                hitIndex = slot
+                                instHit = False
+                    continue
+                var prim = primIds[unsafe_offset=slot]
+                if prim.type == 5:
+                    var curve = curve_at(curves, Int(prim.id1))
+                    var curve_hit = intersect_curve(ray_org, ray_dir, curve, Int(prim.id2) // 8, Int(prim.id2) % 8, localTHit)
+                    if curve_hit[0]:
+                        localTHit = curve_hit[1]
+                        bestU = curve_hit[2]
+                        bestV = curve_hit[3]
+                        hitIndex = slot
+                        instHit = False
+                elif prim.type == 8:
+                    var sub = _traverse_instances[True](prim, meshes, blasNodesArr, blasPrimIdsArr, instances, ray_org, ray_dir, localTHit, False, curves)
+                    if sub[0]:
+                        localTHit = sub[1]
+                        bestU = sub[2]
+                        bestV = sub[3]
+                        instHitPrim = sub[4]
+                        instHit = True
+        else:
+            var node = bvh4.nodes[unsafe_offset=cur]
+            var bx = _bvh4_boxes(node, ox, oy, oz, rx, ry, rz, nearX, nearY, nearZ, localTHit)
+            var m = Int(bx[0].select(I4(1, 2, 4, 8), I4(0)).reduce_add())
+            if m != 0:
+                var l0 = Int(count_trailing_zeros(m))
+                var rest = m & (m - 1)
+                if rest == 0:
+                    cur = Int(node.child[l0])
+                else:
+                    var l1 = Int(count_trailing_zeros(rest))
+                    var rest2 = rest & (rest - 1)
+                    if rest2 == 0:
+                        # Two children: the nearer one next, the other on the stack.
+                        var t0 = bx[1][l0]
+                        var t1 = bx[1][l1]
+                        var far = l1
+                        var tf = t1
+                        cur = Int(node.child[l0])
+                        if t1 < t0:
+                            far = l0
+                            tf = t0
+                            cur = Int(node.child[l1])
+                        if toVisit < _BVH4_STACK:
+                            sKP[unsafe_offset=toVisit] = (UInt64(bitcast[DType.uint32, 1](tf)) << 32) | UInt64(node.child[far])
+                            toVisit += 1
+                    else:
+                        var n = _bvh4_order(bx[0], bx[1], ordLP)
+                        # Far children first so the nearest is visited next.
+                        var k = n - 1
+                        while k >= 1:
+                            if toVisit < _BVH4_STACK:
+                                var lane = Int(ordLP[unsafe_offset=k])
+                                sKP[unsafe_offset=toVisit] = (UInt64(bitcast[DType.uint32, 1](bx[1][lane])) << 32) | UInt64(node.child[lane])
+                                toVisit += 1
+                            k -= 1
+                        cur = Int(node.child[Int(ordLP[unsafe_offset=0])])
+                descended = True
+        if not descended:
+            var found = False
+            while toVisit > 0:
+                toVisit -= 1
+                var key = sKP[unsafe_offset=toVisit]
+                if bitcast[DType.float32, 1](UInt32(key >> 32)) <= localTHit:
+                    cur = Int(key & UInt64(0xFFFFFFFF))
+                    found = True
+                    break
+            if not found:
+                break
+
+    var sphereHit = False
+    var sphereIdx = -1
+    for i in range(n_spheres):
+        var t = ray_sphere_hit(spheres[unsafe_offset=i].center, spheres[unsafe_offset=i].radius, ray, Float32(1e-4), localTHit)
+        if t > Float32(0.0):
+            localTHit = t
+            sphereHit = True
+            sphereIdx = i
+
+    if sphereHit:
+        var spId = PrimId(Int64(sphereIdx), Int64(-1), Int64(spheres[unsafe_offset=sphereIdx].materialIndex), Int32(-1), Int8(4), Int8(0), Int8(0), Int8(0))
+        resultPtr[unsafe_offset=0] = Intersection(spId, localTHit, Float32(0), Float32(0), Int8(1), 0, 0, 0)
+    elif instHit:
+        resultPtr[unsafe_offset=0] = Intersection(instHitPrim, localTHit, bestU, bestV, Int8(1), 0, 0, 0)
+    elif hitIndex != -1:
+        resultPtr[unsafe_offset=0] = Intersection(primIds[unsafe_offset=hitIndex], localTHit, bestU, bestV, Int8(1), 0, 0, 0)
+    else:
+        var dummyId = PrimId(-1, -1, 0, -1, 0, 0, 0, 0)
+        resultPtr[unsafe_offset=0] = Intersection(dummyId, tMax, 0.0, 0.0, Int8(0), 0, 0, 0)
+
+
+def any_hit_bvh4_core(
+    bvh4: BVH4,
+    primIds: Pointer[PrimId, MutUntrackedOrigin],
+    meshes: Pointer[TriangleMesh, MutUntrackedOrigin],
+    curves: Pointer[Curve, MutUntrackedOrigin],
+    ray: Ray,
+    tMax: Float32,
+    blasNodesArr: Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin] = Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
+    blasPrimIdsArr: Pointer[Pointer[PrimId, MutUntrackedOrigin], MutUntrackedOrigin] = Pointer[Pointer[PrimId, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
+    instances: Pointer[Instance, MutUntrackedOrigin] = Pointer[Instance, MutUntrackedOrigin].unsafe_dangling(),
+    spheres: Pointer[Sphere, MutUntrackedOrigin] = Pointer[Sphere, MutUntrackedOrigin].unsafe_dangling(),
+    n_spheres: Int = 0,
+    ignore_sphere_center: Vec3f = Vec3f(Float32(0.0), Float32(0.0), Float32(0.0)),
+    ignore_sphere_radius: Float32 = Float32(-1.0),
+    materials: Pointer[Material, MutUntrackedOrigin] = Pointer[Material, MutUntrackedOrigin].unsafe_dangling(),
+) -> Bool:
+    """BVH4 twin of any_hit_bvh2_core. Children are visited unordered."""
+    for i in range(n_spheres):
+        if ignore_sphere_radius >= Float32(0.0):
+            var sc = Vec3f(spheres[unsafe_offset=i].center.x, spheres[unsafe_offset=i].center.y, spheres[unsafe_offset=i].center.z)
+            var dc = sc - ignore_sphere_center
+            if abs(spheres[unsafe_offset=i].radius - ignore_sphere_radius) < Float32(1e-4) and dot(dc, dc) < Float32(1e-4):
+                continue
+        if _shadow_is_null_material(materials, Int64(spheres[unsafe_offset=i].materialIndex)):
+            continue
+        if ray_sphere_hit(spheres[unsafe_offset=i].center, spheres[unsafe_offset=i].radius, ray, Float32(1e-4), tMax) > Float32(0.0):
+            return True
+    var rdir = Vec3f(Float32(1.0) / ray.direction.x, Float32(1.0) / ray.direction.y, Float32(1.0) / ray.direction.z)
+    var ox = F4(ray.origin.x)
+    var oy = F4(ray.origin.y)
+    var oz = F4(ray.origin.z)
+    var rx = F4(rdir.x)
+    var ry = F4(rdir.y)
+    var rz = F4(rdir.z)
+    var nearX = SIMD[DType.bool, 4](fill=rdir.x >= Float32(0.0))
+    var nearY = SIMD[DType.bool, 4](fill=rdir.y >= Float32(0.0))
+    var nearZ = SIMD[DType.bool, 4](fill=rdir.z >= Float32(0.0))
+    var sRef = Array[Int32, _BVH4_STACK](uninitialized=True)
+    var sRefP = sRef.unsafe_ptr()
+    var toVisit = 0
+    var cur = 0
+    var ray_org = Vec3f(ray.origin.x, ray.origin.y, ray.origin.z)
+    var ray_dir = Vec3f(ray.direction.x, ray.direction.y, ray.direction.z)
+    while True:
+        var cnt = cur >> _BVH4_CNT_SHIFT
+        var descended = False
+        if cnt > 0:
+            var offset = cur & _BVH4_OFF_MASK
+            for j in range(cnt):
+                var slot = offset + j
+                var th = _bvh4_tri_hit(bvh4, slot, ray_org, ray_dir, tMax)
+                if th[4] < Float32(2.0):
+                    if th[0]:
+                        # A plain, non-interface triangle blocks: no PrimId load.
+                        if th[4] == Float32(0.0) and th[5] == Float32(0.0):
+                            return True
+                        var tprim = primIds[unsafe_offset=slot]
+                        # Tested after the hit, not before: the null-material
+                        # and alpha lookups only matter for a crossed primitive.
+                        if _shadow_is_null_material(materials, tprim.materialIndex):
+                            continue
+                        if th[4] == Float32(0.0):
+                            return True
+                        var t_mesh_idx = Int(tprim.id1)
+                        var t_base_vidx = Int(tprim.id2)
+                        if tprim.type != 0:
+                            t_mesh_idx = Int(tprim.id2 >> 32)
+                            t_base_vidx = Int(tprim.id2 & 0xFFFFFFFF) * 3
+                        var t_mesh = meshes[unsafe_offset=t_mesh_idx]
+                        var tv0 = Int(mesh_vi(t_mesh, t_base_vidx))
+                        var tv1 = Int(mesh_vi(t_mesh, t_base_vidx + 1))
+                        var tv2 = Int(mesh_vi(t_mesh, t_base_vidx + 2))
+                        if not alpha_killed(t_mesh, tv0, tv1, tv2, th[2], th[3],
+                                            ray_org, ray_dir, (t_mesh_idx << 32) | t_base_vidx):
+                            return True
+                    continue
+                var prim = primIds[unsafe_offset=slot]
+                if prim.type == 5:
+                    if _shadow_is_null_material(materials, prim.materialIndex):
+                        continue
+                    var curve = curve_at(curves, Int(prim.id1))
+                    if intersect_curve(ray_org, ray_dir, curve, Int(prim.id2) // 8, Int(prim.id2) % 8, tMax)[0]:
+                        return True
+                elif prim.type == 8:
+                    if _shadow_is_null_material(materials, prim.materialIndex):
+                        continue
+                    if _traverse_instances[True](prim, meshes, blasNodesArr, blasPrimIdsArr, instances, ray_org, ray_dir, tMax, True, curves)[0]:
+                        return True
+        else:
+            var node = bvh4.nodes[unsafe_offset=cur]
+            var bx = _bvh4_boxes(node, ox, oy, oz, rx, ry, rz, nearX, nearY, nearZ, tMax)
+            var m = Int(bx[0].select(I4(1, 2, 4, 8), I4(0)).reduce_add())
+            if m != 0:
+                cur = Int(node.child[Int(count_trailing_zeros(m))])
+                var rest = m & (m - 1)
+                while rest != 0:
+                    if toVisit < _BVH4_STACK:
+                        sRefP[unsafe_offset=toVisit] = node.child[Int(count_trailing_zeros(rest))]
+                        toVisit += 1
+                    rest = rest & (rest - 1)
+                descended = True
+        if not descended:
+            if toVisit == 0:
+                break
+            toVisit -= 1
+            cur = Int(sRefP[unsafe_offset=toVisit])
+    return False
+
+
+@always_inline
+def traverse_dispatch[Or: Origin[mut=True]](
+    bvh4: BVH4,
+    bvh2Nodes: Pointer[BVH2Node, MutUntrackedOrigin],
+    primIds: Pointer[PrimId, MutUntrackedOrigin],
+    meshes: Pointer[TriangleMesh, MutUntrackedOrigin],
+    curves: Pointer[Curve, MutUntrackedOrigin],
+    ray: Ray,
+    tMax: Float32,
+    resultPtr: Pointer[Intersection, Or],
+    blasNodesArr: Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin] = Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
+    blasPrimIdsArr: Pointer[Pointer[PrimId, MutUntrackedOrigin], MutUntrackedOrigin] = Pointer[Pointer[PrimId, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
+    instances: Pointer[Instance, MutUntrackedOrigin] = Pointer[Instance, MutUntrackedOrigin].unsafe_dangling(),
+    spheres: Pointer[Sphere, MutUntrackedOrigin] = Pointer[Sphere, MutUntrackedOrigin].unsafe_dangling(),
+    n_spheres: Int = 0,
+):
+    """BVH4 on the CPU when the scene has one, BVH2 otherwise and always on
+    the GPU (the BVH4 branch is not compiled into GPU code)."""
+    comptime if not is_gpu():
+        if bvh4.is_real():
+            traverse_bvh4_core(bvh4, primIds, meshes, curves, ray, tMax, resultPtr,
+                               blasNodesArr, blasPrimIdsArr, instances, spheres, n_spheres)
+            return
+    traverse_bvh2_core(bvh2Nodes, primIds, meshes, curves, ray, tMax, resultPtr,
+                       blasNodesArr, blasPrimIdsArr, instances, spheres, n_spheres)
+
+
+@always_inline
+def any_hit_dispatch(
+    bvh4: BVH4,
+    bvh2Nodes: Pointer[BVH2Node, MutUntrackedOrigin],
+    primIds: Pointer[PrimId, MutUntrackedOrigin],
+    meshes: Pointer[TriangleMesh, MutUntrackedOrigin],
+    curves: Pointer[Curve, MutUntrackedOrigin],
+    ray: Ray,
+    tMax: Float32,
+    blasNodesArr: Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin] = Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
+    blasPrimIdsArr: Pointer[Pointer[PrimId, MutUntrackedOrigin], MutUntrackedOrigin] = Pointer[Pointer[PrimId, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
+    instances: Pointer[Instance, MutUntrackedOrigin] = Pointer[Instance, MutUntrackedOrigin].unsafe_dangling(),
+    spheres: Pointer[Sphere, MutUntrackedOrigin] = Pointer[Sphere, MutUntrackedOrigin].unsafe_dangling(),
+    n_spheres: Int = 0,
+    ignore_sphere_center: Vec3f = Vec3f(Float32(0.0), Float32(0.0), Float32(0.0)),
+    ignore_sphere_radius: Float32 = Float32(-1.0),
+    materials: Pointer[Material, MutUntrackedOrigin] = Pointer[Material, MutUntrackedOrigin].unsafe_dangling(),
+) -> Bool:
+    comptime if not is_gpu():
+        if bvh4.is_real():
+            return any_hit_bvh4_core(bvh4, primIds, meshes, curves, ray, tMax,
+                                     blasNodesArr, blasPrimIdsArr, instances, spheres, n_spheres,
+                                     ignore_sphere_center, ignore_sphere_radius, materials)
+    return any_hit_bvh2_core(bvh2Nodes, primIds, meshes, curves, ray, tMax,
+                             blasNodesArr, blasPrimIdsArr, instances, spheres, n_spheres,
+                             ignore_sphere_center, ignore_sphere_radius, materials)
+
+
+
+# ── BVH2 Construction (SAH) ───────────────────────────────────────────
+
+@always_inline
+def _bvh_swap(
+    widx: Pointer[Int32, MutUntrackedOrigin],
+    wmin: Pointer[Float32, MutUntrackedOrigin],
+    wmax: Pointer[Float32, MutUntrackedOrigin],
+    i: Int, j: Int,
+):
+    var ti = widx[unsafe_offset=i]; widx[unsafe_offset=i] = widx[unsafe_offset=j]; widx[unsafe_offset=j] = ti
+    for a in range(3):
+        var mn = wmin[unsafe_offset=i*3+a]; wmin[unsafe_offset=i*3+a] = wmin[unsafe_offset=j*3+a]; wmin[unsafe_offset=j*3+a] = mn
+        var mx = wmax[unsafe_offset=i*3+a]; wmax[unsafe_offset=i*3+a] = wmax[unsafe_offset=j*3+a]; wmax[unsafe_offset=j*3+a] = mx
+
+@fieldwise_init
+struct _BVHSplit(TrivialRegisterPassable):
+    """How primitives [start, end) are split: their bounds, and `mid`, the
+    partition point in the reordered work arrays (-1: make them a leaf)."""
+    var bmin: Point3f
+    var bmax: Point3f
+    var mid: Int
+
+def _bvh_split(
+    widx: Pointer[Int32, MutUntrackedOrigin],
+    wmin: Pointer[Float32, MutUntrackedOrigin],
+    wmax: Pointer[Float32, MutUntrackedOrigin],
+    start: Int, end: Int,
+    prims_per_node: Int,
+    min_leaf: Int = 1,   # a range of at most this many primitives is not split, whatever the SAH says
+) -> _BVHSplit:
+    """Binned-SAH split of [start, end), partitioning the work arrays in place.
+    Touches only that range, so disjoint ranges can be split concurrently."""
+    var count = end - start
+
+    var INF = Float32(3.0e38)
+    var bminx = INF; var bminy = INF; var bminz = INF
+    var bmaxx = -INF; var bmaxy = -INF; var bmaxz = -INF
+    var cminx = INF; var cminy = INF; var cminz = INF
+    var cmaxx = -INF; var cmaxy = -INF; var cmaxz = -INF
+    for i in range(start, end):
+        var mnx = wmin[unsafe_offset=i*3+0]; var mny = wmin[unsafe_offset=i*3+1]; var mnz = wmin[unsafe_offset=i*3+2]
+        var mxx = wmax[unsafe_offset=i*3+0]; var mxy = wmax[unsafe_offset=i*3+1]; var mxz = wmax[unsafe_offset=i*3+2]
+        bminx = min(bminx, mnx); bminy = min(bminy, mny); bminz = min(bminz, mnz)
+        bmaxx = max(bmaxx, mxx); bmaxy = max(bmaxy, mxy); bmaxz = max(bmaxz, mxz)
+        var cx = Float32(0.5)*(mnx+mxx); var cy = Float32(0.5)*(mny+mxy)
+        var cz = Float32(0.5)*(mnz+mxz)
+        cminx = min(cminx, cx); cminy = min(cminy, cy); cminz = min(cminz, cz)
+        cmaxx = max(cmaxx, cx); cmaxy = max(cmaxy, cy); cmaxz = max(cmaxz, cz)
+
+    # Centroid bounds: pick maximum-extent axis.
+    var cex = cmaxx - cminx; var cey = cmaxy - cminy; var cez = cmaxz - cminz
+    var dim = 0
+    if cey > cex and cey >= cez:
+        dim = 1
+    elif cez > cex and cez > cey:
+        dim = 2
+    var cmin_d = cminx if dim == 0 else (cminy if dim == 1 else cminz)
+    var cmax_d = cmaxx if dim == 0 else (cmaxy if dim == 1 else cmaxz)
+
+    var dxb = bmaxx - bminx; var dyb = bmaxy - bminy; var dzb = bmaxz - bminz
+    if dxb < 0: dxb = 0
+    if dyb < 0: dyb = 0
+    if dzb < 0: dzb = 0
+    var sa = Float32(2.0) * (dxb*dyb + dyb*dzb + dzb*dxb)
+
+    # Leaf when geometry is degenerate or a single primitive.
+    if sa == Float32(0.0) or count == 1 or cmax_d == cmin_d:
+        return _BVHSplit(Point3f(bminx, bminy, bminz), Point3f(bmaxx, bmaxy, bmaxz), -1)
+
+    # Compute the split index `mid` (-1 => fall back to a leaf).
+    var mid = -1
+    if count <= 2:
+        # Order the (at most two) primitives along `dim`; split in the middle.
+        if count == 2:
+            var c0 = Float32(0.5)*(wmin[unsafe_offset=start*3+dim] + wmax[unsafe_offset=start*3+dim])
+            var c1 = Float32(0.5)*(wmin[unsafe_offset=(start+1)*3+dim] + wmax[unsafe_offset=(start+1)*3+dim])
+            if c1 < c0:
+                _bvh_swap(widx, wmin, wmax, start, start+1)
+        mid = start + count // 2
+    else:
+        comptime nBuckets = 12
+        var bk_cnt = Array[Int32, nBuckets](fill=Int32(0))
+        var bk_minx = Array[Float32, nBuckets](fill=INF)
+        var bk_miny = Array[Float32, nBuckets](fill=INF)
+        var bk_minz = Array[Float32, nBuckets](fill=INF)
+        var bk_maxx = Array[Float32, nBuckets](fill=-INF)
+        var bk_maxy = Array[Float32, nBuckets](fill=-INF)
+        var bk_maxz = Array[Float32, nBuckets](fill=-INF)
+        var inv_d = Float32(1.0) / (cmax_d - cmin_d)
+        for i in range(start, end):
+            var ci = Float32(0.5)*(wmin[unsafe_offset=i*3+dim] + wmax[unsafe_offset=i*3+dim])
+            var b = Int(Float32(nBuckets) * ((ci - cmin_d) * inv_d))
+            if b == nBuckets: b = nBuckets - 1
+            if b < 0: b = 0
+            bk_cnt[b] += 1
+            bk_minx[b] = min(bk_minx[b], wmin[unsafe_offset=i*3+0])
+            bk_miny[b] = min(bk_miny[b], wmin[unsafe_offset=i*3+1])
+            bk_minz[b] = min(bk_minz[b], wmin[unsafe_offset=i*3+2])
+            bk_maxx[b] = max(bk_maxx[b], wmax[unsafe_offset=i*3+0])
+            bk_maxy[b] = max(bk_maxy[b], wmax[unsafe_offset=i*3+1])
+            bk_maxz[b] = max(bk_maxz[b], wmax[unsafe_offset=i*3+2])
+
+        comptime nSplits = nBuckets - 1
+        var costs = Array[Float32, nSplits](fill=Float32(0.0))
+        # Prefix pass: cost of the "below" set for each split.
+        var cntBelow = 0
+        var pminx = INF; var pminy = INF; var pminz = INF
+        var pmaxx = -INF; var pmaxy = -INF; var pmaxz = -INF
+        for i in range(nSplits):
+            pminx = min(pminx, bk_minx[i]); pminy = min(pminy, bk_miny[i])
+            pminz = min(pminz, bk_minz[i])
+            pmaxx = max(pmaxx, bk_maxx[i]); pmaxy = max(pmaxy, bk_maxy[i])
+            pmaxz = max(pmaxz, bk_maxz[i])
+            cntBelow += Int(bk_cnt[i])
+            var ex = pmaxx - pminx; var ey = pmaxy - pminy; var ez = pmaxz - pminz
+            if ex < 0: ex = 0
+            if ey < 0: ey = 0
+            if ez < 0: ez = 0
+            costs[i] += Float32(cntBelow) * Float32(2.0) * (ex*ey + ey*ez + ez*ex)
+        # Suffix pass: cost of the "above" set.
+        var cntAbove = 0
+        var qminx = INF; var qminy = INF; var qminz = INF
+        var qmaxx = -INF; var qmaxy = -INF; var qmaxz = -INF
+        for i in range(nSplits, 0, -1):
+            qminx = min(qminx, bk_minx[i]); qminy = min(qminy, bk_miny[i])
+            qminz = min(qminz, bk_minz[i])
+            qmaxx = max(qmaxx, bk_maxx[i]); qmaxy = max(qmaxy, bk_maxy[i])
+            qmaxz = max(qmaxz, bk_maxz[i])
+            cntAbove += Int(bk_cnt[i])
+            var ex = qmaxx - qminx; var ey = qmaxy - qminy; var ez = qmaxz - qminz
+            if ex < 0: ex = 0
+            if ey < 0: ey = 0
+            if ez < 0: ez = 0
+            costs[i-1] += Float32(cntAbove) * Float32(2.0) * (ex*ey + ey*ez + ez*ex)
+
+        var minBucket = -1
+        var minCost = Float32(3.0e38)
+        for i in range(nSplits):
+            if costs[i] < minCost:
+                minCost = costs[i]
+                minBucket = i
+
+        var leafCost = Float32(count)
+        var splitCost = Float32(0.5) + minCost / sa
+        if count > prims_per_node or (count > min_leaf and splitCost < leafCost):
+            # Partition: "below" (bucket <= minBucket) first, "above" after.
+            var l = start
+            for r in range(start, end):
+                var ci = Float32(0.5)*(wmin[unsafe_offset=r*3+dim] + wmax[unsafe_offset=r*3+dim])
+                var b = Int(Float32(nBuckets) * ((ci - cmin_d) * inv_d))
+                if b == nBuckets: b = nBuckets - 1
+                if b < 0: b = 0
+                if b <= minBucket:           # predicate false => "below"
+                    if r != l:
+                        _bvh_swap(widx, wmin, wmax, l, r)
+                    l += 1
+            mid = l
+            if mid == start or mid == end:
+                mid = -1                     # degenerate split => leaf
+        # else: leave mid = -1 (leaf)
+
+    return _BVHSplit(Point3f(bminx, bminy, bminz), Point3f(bmaxx, bmaxy, bmaxz), mid)
+
+
+def build_bvh2_node(
+    widx: Pointer[Int32, MutUntrackedOrigin],
+    wmin: Pointer[Float32, MutUntrackedOrigin],
+    wmax: Pointer[Float32, MutUntrackedOrigin],
+    start: Int, end: Int,
+    out_nodes: Pointer[BVH2Node, MutUntrackedOrigin],
+    node_count: Pointer[Int32, MutUntrackedOrigin],
+    prims_per_node: Int,
+    min_leaf: Int = 1,
+) -> Int32:
+    """Build the subtree over [start, end) depth-first: this node, then the
+    left subtree at my+1, then the right one, whose index the node stores."""
+    var my = Int(node_count[unsafe_offset=0])
+    node_count[unsafe_offset=0] = node_count[unsafe_offset=0] + 1
+    var sp = _bvh_split(widx, wmin, wmax, start, end, prims_per_node, min_leaf)
+    if sp.mid < 0:
+        out_nodes[unsafe_offset=my] = BVH2Node(sp.bmin, sp.bmax, Int32(start), Int32(end - start))
+        return Int32(my)
+    _ = build_bvh2_node(widx, wmin, wmax, start, sp.mid,
+                        out_nodes, node_count, prims_per_node, min_leaf)
+    var right = build_bvh2_node(widx, wmin, wmax, sp.mid, end,
+                                out_nodes, node_count, prims_per_node, min_leaf)
+    out_nodes[unsafe_offset=my] = BVH2Node(sp.bmin, sp.bmax, right, Int32(0))
+    return Int32(my)
+
+
+# Near the root, ranges with more primitives than this are split before the
+# parallel phase; the ranges left over become the parallel subtree builds.
+# Inputs of at most four subtrees' worth build serially.
+comptime _BVH_SUBTREE_PRIMS = 16384
+comptime _BVH_MAX_TASKS = 8192
+
+@fieldwise_init
+struct _BVHTask(TrivialRegisterPassable):
+    """A node near the root. Interior (left >= 0): split before the parallel
+    phase, children at task indices left/right. Subtree (left == -1): primitives
+    [start, end), whose build_bvh2_node output ends up at `nodes`, root at 0."""
+    var start: Int
+    var end: Int
+    var left: Int
+    var right: Int
+    var bmin: Point3f
+    var bmax: Point3f
+    var nodes: Pointer[BVH2Node, MutUntrackedOrigin]
+    var n_nodes: Int
+
+def _bvh_subtree_task(start: Int, end: Int) -> _BVHTask:
+    return _BVHTask(start, end, -1, -1, Point3f(Float32(0), Float32(0), Float32(0)),
+                    Point3f(Float32(0), Float32(0), Float32(0)),
+                    Pointer[BVH2Node, MutUntrackedOrigin].unsafe_dangling(), 0)
+
+def _bvh_emit(
+    tasks: Pointer[_BVHTask, MutUntrackedOrigin], i: Int,
+    out_nodes: Pointer[BVH2Node, MutUntrackedOrigin],
+    node_count: Pointer[Int32, MutUntrackedOrigin],
+) -> Int32:
+    """Lay task `i` out depth-first exactly where build_bvh2_node would have put
+    it. A subtree is copied as one block, its right-child offsets rebased;
+    leaf offsets index the shared primitive order and stay as they are."""
+    var my = Int(node_count[unsafe_offset=0])
+    var t = tasks[unsafe_offset=i]
+    if t.left < 0:
+        for j in range(t.n_nodes):
+            var nd = t.nodes[unsafe_offset=j]
+            if nd.count == Int32(0):
+                nd.offset += Int32(my)
+            out_nodes[unsafe_offset=my + j] = nd
+        node_count[unsafe_offset=0] = Int32(my + t.n_nodes)
+        return Int32(my)
+    node_count[unsafe_offset=0] = Int32(my + 1)
+    _ = _bvh_emit(tasks, t.left, out_nodes, node_count)
+    var right = _bvh_emit(tasks, t.right, out_nodes, node_count)
+    out_nodes[unsafe_offset=my] = BVH2Node(t.bmin, t.bmax, right, Int32(0))
+    return Int32(my)
+
+def _build_bvh2_parallel(
+    widx: Pointer[Int32, MutUntrackedOrigin],
+    wmin: Pointer[Float32, MutUntrackedOrigin],
+    wmax: Pointer[Float32, MutUntrackedOrigin],
+    n: Int,
+    out_nodes: Pointer[BVH2Node, MutUntrackedOrigin],
+    node_count: Pointer[Int32, MutUntrackedOrigin],
+    subtree_prims: Int,
+    min_leaf: Int = 1,
+    max_leaf: Int = 4,
+):
+    """The tree build_bvh2_node would build over [0, n), node for node, on all
+    cores. Every split only reorders its own range of the work arrays, so the
+    same splits in any order give the same arrays and the same nodes."""
+    var tasks = unsafe_alloc[_BVHTask](_BVH_MAX_TASKS)
+    tasks[unsafe_offset=0] = _bvh_subtree_task(0, n)
+    var n_tasks = 1
+
+    # 1. Split the top of the tree level by level, each level's ranges in parallel.
+    var level = unsafe_alloc[Int](_BVH_MAX_TASKS)
+    var next_level = unsafe_alloc[Int](_BVH_MAX_TASKS)
+    var splits = unsafe_alloc[_BVHSplit](_BVH_MAX_TASKS)
+    level[unsafe_offset=0] = 0
+    var n_level = 1
+    while n_level > 0 and n_tasks + 2 * n_level <= _BVH_MAX_TASKS:
+        def split_one(k: Int) {imm}:
+            var t = tasks[unsafe_offset=level[unsafe_offset=k]]
+            if t.end - t.start > subtree_prims:
+                splits[unsafe_offset=k] = _bvh_split(widx, wmin, wmax, t.start, t.end, max_leaf)
+            else:
+                splits[unsafe_offset=k] = _BVHSplit(t.bmin, t.bmax, -1)   # small enough: a subtree build
+
+        parallelize(split_one, n_level)
+        var n_next = 0
+        for k in range(n_level):
+            var sp = splits[unsafe_offset=k]
+            if sp.mid < 0:
+                continue   # stays a subtree task (a leaf split is redone there, cheaply)
+            var i = level[unsafe_offset=k]
+            var t = tasks[unsafe_offset=i]
+            tasks[unsafe_offset=n_tasks] = _bvh_subtree_task(t.start, sp.mid)
+            tasks[unsafe_offset=n_tasks + 1] = _bvh_subtree_task(sp.mid, t.end)
+            tasks[unsafe_offset=i] = _BVHTask(t.start, t.end, n_tasks, n_tasks + 1, sp.bmin, sp.bmax, t.nodes, 0)
+            next_level[unsafe_offset=n_next] = n_tasks
+            next_level[unsafe_offset=n_next + 1] = n_tasks + 1
+            n_tasks += 2
+            n_next += 2
+        var tmp = level; level = next_level; next_level = tmp
+        n_level = n_next
+
+    # 2. Build the remaining subtrees concurrently, workers claiming the next one.
+    var subtrees = unsafe_alloc[Int](n_tasks)
+    var n_subtrees = 0
+    for i in range(n_tasks):
+        if tasks[unsafe_offset=i].left < 0:
+            subtrees[unsafe_offset=n_subtrees] = i
+            n_subtrees += 1
+    var next_subtree = unsafe_alloc[Int32](1)
+    next_subtree[unsafe_offset=0] = Int32(0)
+
+    def build_worker(_worker_idx: Int) {imm}:
+        while True:
+            var k = Int(Atomic.fetch_add(next_subtree, Int32(1)))
+            if k >= n_subtrees:
+                break
+            var i = subtrees[unsafe_offset=k]
+            var t = tasks[unsafe_offset=i]
+            var nodes = unsafe_alloc[BVH2Node](2 * (t.end - t.start))
+            var cnt = unsafe_alloc[Int32](1)
+            cnt[unsafe_offset=0] = Int32(0)
+            _ = build_bvh2_node(widx, wmin, wmax, t.start, t.end, nodes, cnt, max_leaf, min_leaf)
+            t.nodes = nodes.unsafe_origin_cast[MutUntrackedOrigin]()
+            t.n_nodes = Int(cnt[unsafe_offset=0])
+            tasks[unsafe_offset=i] = t
+            cnt.unsafe_free()
+
+    parallelize(build_worker, min(num_performance_cores(), n_subtrees))
+
+    # 3. Lay everything out depth-first.
+    node_count[unsafe_offset=0] = Int32(0)
+    _ = _bvh_emit(tasks, 0, out_nodes, node_count)
+
+    for k in range(n_subtrees):
+        tasks[unsafe_offset=subtrees[unsafe_offset=k]].nodes.unsafe_free()
+    tasks.unsafe_free(); level.unsafe_free(); next_level.unsafe_free(); splits.unsafe_free()
+    subtrees.unsafe_free(); next_subtree.unsafe_free()
+
+
+def build_bvh2(
+    primBounds: Pointer[Float32, MutUntrackedOrigin],   # 6 floats per prim
+    primCount: Int32,
+    outNodes: Pointer[BVH2Node, MutUntrackedOrigin],     # capacity >= 2*n
+    outOrder: Pointer[Int32, MutUntrackedOrigin],        # capacity >= n
+    parallel: Bool = True,   # False: the plain serial build, e.g. to check against
+    subtree_prims: Int = _BVH_SUBTREE_PRIMS,   # parallel subtree size; tests lower it
+    min_leaf: Int = 1,   # leaves hold at least this many primitives (up to max_leaf): fewer nodes, coarser culling
+    max_leaf: Int = 4,
+) -> Int32:
+    var n = Int(primCount)
+    if n <= 0:
+        return Int32(0)
+
+    var widx = unsafe_alloc[Int32](n)
+    var wmin = unsafe_alloc[Float32](n * 3)
+    var wmax = unsafe_alloc[Float32](n * 3)
+    for i in range(n):
+        widx[unsafe_offset=i] = Int32(i)
+        wmin[unsafe_offset=i*3+0] = primBounds[unsafe_offset=i*6+0]
+        wmin[unsafe_offset=i*3+1] = primBounds[unsafe_offset=i*6+1]
+        wmin[unsafe_offset=i*3+2] = primBounds[unsafe_offset=i*6+2]
+        wmax[unsafe_offset=i*3+0] = primBounds[unsafe_offset=i*6+3]
+        wmax[unsafe_offset=i*3+1] = primBounds[unsafe_offset=i*6+4]
+        wmax[unsafe_offset=i*3+2] = primBounds[unsafe_offset=i*6+5]
+
+    var node_count = unsafe_alloc[Int32](1)
+    node_count[unsafe_offset=0] = 0
+    if parallel and n > 4 * subtree_prims:
+        _build_bvh2_parallel(widx, wmin, wmax, n, outNodes, node_count, subtree_prims, min_leaf, max_leaf)
+    else:
+        _ = build_bvh2_node(widx, wmin, wmax, 0, n, outNodes, node_count, max_leaf, min_leaf)
+
+    for k in range(n):
+        outOrder[unsafe_offset=k] = widx[unsafe_offset=k]
+
+    var result = node_count[unsafe_offset=0]
+    widx.unsafe_free(); wmin.unsafe_free(); wmax.unsafe_free(); node_count.unsafe_free()
+    return result
+
+
+def build_bvh2_split(
+    primBounds: Pointer[Float32, MutUntrackedOrigin],
+    primCount: Int32,
+    n_first: Int32,                                       # primitives [0, n_first) and [n_first, n) get their own subtree
+    outNodes: Pointer[BVH2Node, MutUntrackedOrigin],      # capacity >= 2*n + 1
+    outOrder: Pointer[Int32, MutUntrackedOrigin],
+) -> Tuple[Int32, Int32]:
+    """build_bvh2 with the two ranges under one root: (node count, root of the second range's subtree, or -1 if empty).
+    The RT cores take the triangles; the curve subtree alone is what the software curve test then walks."""
+    var n = Int(primCount); var nf = Int(n_first)
+    if nf <= 0 or nf >= n:
+        return (build_bvh2(primBounds, primCount, outNodes, outOrder), Int32(0) if nf <= 0 and n > 0 else Int32(-1))
+    var nl = Int(build_bvh2(primBounds, n_first, outNodes.unsafe_offset(1), outOrder))
+    var nr = Int(build_bvh2(primBounds.unsafe_offset(nf * 6), Int32(n - nf), outNodes.unsafe_offset(1 + nl), outOrder.unsafe_offset(nf)))
+    for i in range(1, 1 + nl):
+        if outNodes[unsafe_offset=i].count == Int32(0):
+            outNodes[unsafe_offset=i].offset += Int32(1)
+    for i in range(1 + nl, 1 + nl + nr):
+        if outNodes[unsafe_offset=i].count == Int32(0):
+            outNodes[unsafe_offset=i].offset += Int32(1 + nl)
+        else:
+            outNodes[unsafe_offset=i].offset += Int32(nf)
+    for k in range(nf, n):
+        outOrder[unsafe_offset=k] += Int32(nf)
+    var l = outNodes[unsafe_offset=1]; var r = outNodes[unsafe_offset=1 + nl]
+    outNodes[unsafe_offset=0] = BVH2Node(Point3f(min(l.min.x, r.min.x), min(l.min.y, r.min.y), min(l.min.z, r.min.z)),
+                                         Point3f(max(l.max.x, r.max.x), max(l.max.y, r.max.y), max(l.max.z, r.max.z)),
+                                         Int32(1 + nl), Int32(0))
+    return (Int32(1 + nl + nr), Int32(1 + nl))
+
+# ── Unjittered normals/depth pass, for the denoiser's guide buffers ─────────
+# Lives here (not rendering.mojo, where it originated) so bdpt_*.mojo/sppm.mojo
+# can use it too without a circular import: rendering.mojo -> shading.mojo ->
+# sppm.mojo already exists, so sppm.mojo (or bdpt_*.mojo, which imports FROM
+# sppm.mojo) importing FROM rendering.mojo would cycle back to itself.
+# render_aux_buffers only ever needed BVH/geometry primitives, never
+# shading.mojo, so it belongs next to traverse_bvh2_core/test_spheres
+# regardless of the cycle -- rendering.mojo re-exposes it via its own import
+# so pipeline.mojo's existing `from .rendering import render_aux_buffers`
+# still resolves.
+def render_aux_buffers[Osc: Origin[mut=True], Onm: Origin[mut=True], Oc2w: Origin[mut=True], Odp: Origin[mut=True], Owp: Origin[mut=True] = MutUntrackedOrigin, Omi: Origin[mut=True] = MutUntrackedOrigin](
+    rasterToCamera: Pointer[Float32, MutUntrackedOrigin],
+    cameraToWorld:  Pointer[Float32, Oc2w],
+    min_x: Int32, min_y: Int32, max_x: Int32, max_y: Int32,
+    scene: Pointer[SceneView, Osc],
+    normals_out: Pointer[Float32, Onm],
+    depth_out:   Pointer[Float32, Odp],
+    # G-buffer extension (Phase 0.3, docs/A2_restir_migration_plan.md), CPU
+    # counterpart of gpu.mojo's gen_aux_buffers_gpu. Optional/unused by every
+    # current caller -- default to the .unsafe_dangling() sentinel and skip
+    # the write, guarded by _is_real_ptr, so existing call sites are unaffected.
+    world_pos_out: Pointer[Float32, Owp] = Pointer[Float32, Owp].unsafe_dangling(),
+    material_id_out: Pointer[Int32, Omi] = Pointer[Int32, Omi].unsafe_dangling(),
+):
+    var w  = Int(max_x - min_x)
+    var h  = Int(max_y - min_y)
+    var n_pixels = w * h
+    var sd = scene[unsafe_offset=0]
+    var org = Point3f(cameraToWorld[unsafe_offset=12], cameraToWorld[unsafe_offset=13], cameraToWorld[unsafe_offset=14])
+    var isects = unsafe_alloc[Intersection](n_pixels)
+
+    def trace_pixel(i: Int) {imm}:
+        var py = i // w
+        var px = i % w
+        var filmX = Float32(Int(min_x) + px) + Float32(0.5)
+        var filmY = Float32(Int(min_y) + py) + Float32(0.5)
+
+        # rasterToCamera (column-major 4×4), no filter offset
+        var cx = rasterToCamera[unsafe_offset=0]*filmX + rasterToCamera[unsafe_offset=4]*filmY + rasterToCamera[unsafe_offset=12]
+        var cy = rasterToCamera[unsafe_offset=1]*filmX + rasterToCamera[unsafe_offset=5]*filmY + rasterToCamera[unsafe_offset=13]
+        var cz = rasterToCamera[unsafe_offset=2]*filmX + rasterToCamera[unsafe_offset=6]*filmY + rasterToCamera[unsafe_offset=14]
+        var cw = rasterToCamera[unsafe_offset=3]*filmX + rasterToCamera[unsafe_offset=7]*filmY + rasterToCamera[unsafe_offset=15]
+        if cw != Float32(0.0) and cw != Float32(1.0):
+            cx /= cw; cy /= cw; cz /= cw
+        var cl = sqrt(cx*cx + cy*cy + cz*cz)
+        if cl > Float32(0): cx /= cl; cy /= cl; cz /= cl
+
+        # cameraToWorld rotation (upper-left 3×3)
+        var dir = Vec3f(
+            cameraToWorld[unsafe_offset=0]*cx + cameraToWorld[unsafe_offset=4]*cy + cameraToWorld[unsafe_offset=8]*cz,
+            cameraToWorld[unsafe_offset=1]*cx + cameraToWorld[unsafe_offset=5]*cy + cameraToWorld[unsafe_offset=9]*cz,
+            cameraToWorld[unsafe_offset=2]*cx + cameraToWorld[unsafe_offset=6]*cy + cameraToWorld[unsafe_offset=10]*cz,
+        )
+        var dl = dir.length()
+        if dl > Float32(0): dir = dir / dl
+
+        var ray = Ray(org, dir)
+        # A scene with literally zero mesh/curve/instance primitives (e.g.
+        # clouds.pbrt -- one analytic sphere plus a heterogeneous medium, no
+        # mesh Shape at all) still has *some* bvh2Nodes/primIds allocation,
+        # but traverse_bvh2_core was never exercised against a genuinely
+        # empty tree before this scene: skip it outright rather than trust
+        # an edge case this function has never had to handle.
+        if Int(sd.meshCount) > 0 or Int(sd.curveCount) > 0 or Int(sd.instanceCount) > 0:
+            traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, Float32(1e38), isects.unsafe_offset(i),
+                               sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances)
+        else:
+            isects[unsafe_offset=i] = Intersection(PrimId(-1, -1, 0, -1, 0, 0, 0, 0), Float32(1e38), 0.0, 0.0, Int8(0), 0, 0, 0)
+        if Int(sd.sphereCount) > 0:
+            test_spheres(sd.spheres, Int(sd.sphereCount), ray, isects.unsafe_offset(i))
+
+        var normal = Vec3f(Float32(0), Float32(0), Float32(1))   # background
+        var d  = Float32(1e38)
+
+        if isects[unsafe_offset=i].hit != Int8(0):
+            d = isects[unsafe_offset=i].tHit
+            var typ = Int(isects[unsafe_offset=i].primId.type)
+            if typ == 4:
+                # Sphere: normal = normalize(hit_point - center)
+                var si  = Int(isects[unsafe_offset=i].primId.id1)
+                if si >= 0 and si < Int(sd.sphereCount):
+                    normal = sphere_outward_normal(org + dir*d, sd.spheres[unsafe_offset=si].center)
+            elif typ == 5:
+                # Native curve: reconstruct the geometric normal the same way
+                # shade_hair does (shading.mojo) — h/v come straight from
+                # intersect_curve via Intersection.u/.v, no tessellated mesh.
+                var curve_idx = Int(isects[unsafe_offset=i].primId.id1)
+                if curve_idx >= 0 and curve_idx < Int(sd.curveCount):
+                    var curve = curve_at(sd.curves, curve_idx)
+                    var h = max(Float32(-0.99), min(Float32(0.99), isects[unsafe_offset=i].u))
+                    var piece = min(Int(curve.n_pieces) - 1, max(0, Int(isects[unsafe_offset=i].v * Float32(curve.n_pieces))))
+                    var (q0, q1, _, _) = curve_piece_endpoints(curve, piece)
+                    var seg_axis = q1 - q0
+                    var seg_len = sqrt(dot(seg_axis, seg_axis))
+                    var tangent: Vec3f
+                    if seg_len > Float32(1e-8):
+                        tangent = seg_axis * (Float32(1.0) / seg_len)
+                    else:
+                        tangent = Vec3f(Float32(1), Float32(0), Float32(0))
+                    var geo = curve_hit_normal(tangent, -dir, h)
+                    var gl = sqrt(dot(geo, geo))
+                    if gl > Float32(0):
+                        normal = Vec3f(geo[0] / gl, geo[1] / gl, geo[2] / gl)
+            elif typ == 0 or typ == 1 or typ == 2 or typ == 3:
+                # Triangle: geometric normal from edge cross product
+                var mesh_idx: Int
+                var base_vidx: Int
+                if typ == 0:
+                    mesh_idx  = Int(isects[unsafe_offset=i].primId.id1)
+                    base_vidx = Int(isects[unsafe_offset=i].primId.id2)
+                else:
+                    mesh_idx  = Int(isects[unsafe_offset=i].primId.id2 >> 32)
+                    base_vidx = Int(isects[unsafe_offset=i].primId.id2 & 0xFFFFFFFF) * 3
+                # Bounds-check before dereferencing sd.meshes -- defensive,
+                # same as the sphere/curve branches above: fail open (leave
+                # `normal` at its background default) rather than trust an
+                # index this function never validated before.
+                if mesh_idx >= 0 and mesh_idx < Int(sd.meshCount):
+                    var mesh = sd.meshes[unsafe_offset=mesh_idx]
+                    var vi0 = Int(mesh_vi(mesh, base_vidx))
+                    var vi1 = Int(mesh_vi(mesh, base_vidx + 1))
+                    var vi2 = Int(mesh_vi(mesh, base_vidx + 2))
+                    var p0 = mesh_point(mesh, vi0)
+                    var p1 = mesh_point(mesh, vi1)
+                    var p2 = mesh_point(mesh, vi2)
+                    var e1 = p1 - p0; var e2 = p2 - p0
+                    normal = Vec3f(e1.y*e2.z - e1.z*e2.y, e1.z*e2.x - e1.x*e2.z, e1.x*e2.y - e1.y*e2.x)
+                    var nl = normal.length()
+                    if nl > Float32(0): normal = normal / nl
+            # else: unrecognized hit type (shouldn't occur for a real
+            # Intersection — type==6 only ever exists as a transient BVH
+            # leaf marker, resolved into type 0-3 with instanceIdx set before
+            # traversal returns) — leave `normal` at its background default
+            # rather than guessing.
+            # Flip to face incoming ray
+            if normal.dot(-dir) < Float32(0):
+                normal = -normal
+
+        normals_out[unsafe_offset=i*3 + 0] = normal.x
+        normals_out[unsafe_offset=i*3 + 1] = normal.y
+        normals_out[unsafe_offset=i*3 + 2] = normal.z
+        depth_out[unsafe_offset=i] = d
+        if _is_real_ptr(world_pos_out):
+            store_vec3(world_pos_out, i, (org + dir*d).to_simd())
+        if _is_real_ptr(material_id_out):
+            material_id_out[unsafe_offset=i] = Int32(isects[unsafe_offset=i].primId.materialIndex) if isects[unsafe_offset=i].hit != Int8(0) else Int32(-1)
+
+    parallelize(trace_pixel, n_pixels)
+    isects.unsafe_free()
+
+
+# Collapses a BVH2 into wide nodes (see _wide_push_hits). Returns them as BVH2Node slots, three a node, and
+# the slot count; (dangling, 0) if a leaf does not fit a child ref.
+def collapse_bvh_wide(n2: Pointer[BVH2Node, MutUntrackedOrigin], n2_count: Int) -> Tuple[Pointer[BVH2Node, MutUntrackedOrigin], Int32]:
+    var cap = n2_count // 2 + 2
+    var out = unsafe_alloc[Int32](cap * _WIDE_WORDS)
+    var outf = out.unsafe_bitcast[Float32]()
+    var outb = out.unsafe_bitcast[UInt8]()
+    var todo_w = unsafe_alloc[Int32](cap)
+    var todo_s = unsafe_alloc[Int32](cap)
+    var kids = unsafe_alloc[Int32](8)
+    todo_w[unsafe_offset=0] = Int32(0); todo_s[unsafe_offset=0] = Int32(0)
+    var top = 1
+    var n_w = 1
+    var ok = True
+    while top > 0 and ok:
+        top -= 1
+        var w = Int(todo_w[unsafe_offset=top])
+        var r = Int(todo_s[unsafe_offset=top])
+        var nk = 1
+        kids[unsafe_offset=0] = Int32(r)
+        if n2[unsafe_offset=r].count == Int32(0):
+            kids[unsafe_offset=0] = Int32(r + 1); kids[unsafe_offset=1] = n2[unsafe_offset=r].offset
+            nk = 2
+            while nk < 8:
+                var best = -1
+                var best_a = Float32(-1.0)
+                for i in range(nk):
+                    var nd = n2[unsafe_offset=Int(kids[unsafe_offset=i])]
+                    if nd.count == Int32(0) and _bvh2_area(nd) > best_a:
+                        best = i; best_a = _bvh2_area(nd)
+                if best < 0:
+                    break
+                var bi = Int(kids[unsafe_offset=best])
+                kids[unsafe_offset=best] = Int32(bi + 1)
+                kids[unsafe_offset=nk] = n2[unsafe_offset=bi].offset
+                nk += 1
+        var lo = SIMD[DType.float32, 4](3.0e38)
+        var hi = SIMD[DType.float32, 4](-3.0e38)
+        for i in range(nk):
+            var nd = n2[unsafe_offset=Int(kids[unsafe_offset=i])]
+            lo = min(lo, SIMD[DType.float32, 4](nd.min.x, nd.min.y, nd.min.z, 0.0))
+            hi = max(hi, SIMD[DType.float32, 4](nd.max.x, nd.max.y, nd.max.z, 0.0))
+        var base = w * _WIDE_WORDS
+        var ebs = Int32(0)
+        var sc = SIMD[DType.float32, 4](0.0)
+        for a in range(3):
+            outf[unsafe_offset=base + a] = lo[a]
+            var eb = Int32(87)
+            while Float32(250.0) * _pow2(eb) < hi[a] - lo[a] and eb < Int32(254):
+                eb += Int32(1)
+            ebs = ebs | (eb << Int32(8 * a))
+            sc[a] = _pow2(eb)
+        out[unsafe_offset=base + 3] = ebs
+        for c in range(8):
+            out[unsafe_offset=base + 4 + c] = Int32(0)
+            for a in range(6): outb[unsafe_offset=base * 4 + 48 + c * 6 + a] = UInt8(0)   # all 48 box bytes over the eight passes
+        for c in range(nk):
+            var k = Int(kids[unsafe_offset=c])
+            var nd = n2[unsafe_offset=k]
+            var cl = SIMD[DType.float32, 4](nd.min.x, nd.min.y, nd.min.z, 0.0)
+            var ch = SIMD[DType.float32, 4](nd.max.x, nd.max.y, nd.max.z, 0.0)
+            for a in range(3):
+                # One step of slack beyond rounding: the kernel may fuse the multiply-add.
+                var ql = Int(floor((cl[a] - lo[a]) / sc[a])) - 1
+                while ql > 0 and lo[a] + Float32(ql) * sc[a] > cl[a]:
+                    ql -= 1
+                var qh = Int(floor((ch[a] - lo[a]) / sc[a])) + 2
+                while qh < 255 and lo[a] + Float32(qh) * sc[a] < ch[a]:
+                    qh += 1
+                outb[unsafe_offset=base * 4 + 48 + c * 4 + a] = UInt8(max(ql, 0))
+                outb[unsafe_offset=base * 4 + (48 + c * 4 + 3 if a == 0 else 80 + c * 2 + a - 1)] = UInt8(min(qh, 255))
+            if nd.count > Int32(0):
+                if nd.count > Int32(15) or nd.offset >= Int32(1 << 27):
+                    ok = False
+                out[unsafe_offset=base + 4 + c] = Int32(-2147483648) | (nd.count << Int32(27)) | nd.offset
+            else:
+                out[unsafe_offset=base + 4 + c] = Int32(n_w)
+                todo_w[unsafe_offset=top] = Int32(n_w); todo_s[unsafe_offset=top] = Int32(k)
+                top += 1
+                n_w += 1
+    todo_w.unsafe_free(); todo_s.unsafe_free(); kids.unsafe_free()
+    if not ok:
+        out.unsafe_free()
+        return (Pointer[BVH2Node, MutUntrackedOrigin].unsafe_dangling(), Int32(0))
+    var res = unsafe_alloc[BVH2Node](n_w * 3)
+    var resw = res.unsafe_bitcast[Int32]()
+    for i in range(n_w * _WIDE_WORDS): resw[unsafe_offset=i] = out[unsafe_offset=i]
+    out.unsafe_free()
+    return (res, Int32(n_w * 3))

@@ -1,7 +1,7 @@
 from std.math import abs, sqrt
 from std.testing import assert_true, assert_false, TestSuite
-from gonzales.geometry import RGB, Vec3f, reflect, INV_PI
-from gonzales.bxdf import (
+from gonzales.core.geometry import RGB, Vec3f, reflect, INV_PI
+from gonzales.transport.bxdf import (
     GeomContext, Material, BxDFFlags,
     bxdf_sample_conductor, bxdf_sample_dielectric, bxdf_sample_thin_dielectric,
     bxdf_sample_diffuse, bxdf_pdf_diffuse, bxdf_sample_diffuse_transmit,

@@ -13,7 +13,7 @@ already do this for one or two specular vertices (MNEE — Manifold
 Next-Event Estimation). `sms.mojo` generalizes it to an arbitrary-length
 chain, and adds what a fixed 1-/2-vertex solve never needed: curved
 casters and an unbiased correction for multiple solutions. All code
-snippets below are current source, verified against `src/gonzales/sms.mojo`
+snippets below are current source, verified against `src/gonzales/transport/sms.mojo`
 while writing this chapter — not transcribed from development notes.
 
 ## The manifold walk

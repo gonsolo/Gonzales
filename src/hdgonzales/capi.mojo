@@ -6,14 +6,14 @@ from std.os import getenv, setenv
 from std.time import perf_counter_ns
 from std.runtime import initialize_runtime
 from max.gpu.host import DeviceContext
-from gonzales.geometry import RGB, _is_real_ptr
-from gonzales.materials import MatKind
-from gonzales.parse_types import SceneParseState, NamedMaterial
-from gonzales.pbrt_parser import ParsedScene_Mojo, finalize_scene, mojo_apply_overrides
-from gonzales.pipeline import (_generate_sobol_matrices, RenderSession, SessionPtr, session_new, session_set_camera, session_set_samples, session_set_lens, session_set_filter_glossy, session_set_adaptive, session_set_clamp, session_set_bounces, session_set_integrator,
+from gonzales.core.geometry import RGB, _is_real_ptr
+from gonzales.scene.materials import MatKind
+from gonzales.scene.parse_types import SceneParseState, NamedMaterial
+from gonzales.scene.pbrt_parser import ParsedScene_Mojo, finalize_scene, mojo_apply_overrides
+from gonzales.app.pipeline import (_generate_sobol_matrices, RenderSession, SessionPtr, session_new, session_set_camera, session_set_samples, session_set_lens, session_set_filter_glossy, session_set_adaptive, session_set_clamp, session_set_bounces, session_set_integrator,
                                session_render, session_resolve, session_free)
-from gonzales.scene_builder import store_mesh
-from gonzales.spectrum import load_spectral_context, spectral_handle, SpectralContext
+from gonzales.scene.scene_builder import store_mesh
+from gonzales.core.spectrum import load_spectral_context, spectral_handle, SpectralContext
 
 comptime F32Ptr = Pointer[Float32, MutUntrackedOrigin]
 comptime I32Ptr = Pointer[Int32, MutUntrackedOrigin]

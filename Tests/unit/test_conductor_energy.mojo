@@ -27,14 +27,14 @@ albedo -- 1.6x too bright at alpha=1. A unit test belongs on the weight.
 """
 from std.math import abs, sqrt, cos, sin
 from std.testing import assert_true, TestSuite
-from gonzales.geometry import RGB, Vec3f, dot, PI
-from gonzales.rng import PCG32
-from gonzales.bxdf import (
+from gonzales.core.geometry import RGB, Vec3f, dot, PI
+from gonzales.core.rng import PCG32
+from gonzales.transport.bxdf import (
     GeomContext, Material,
     bxdf_sample_conductor, bxdf_eval_conductor_ggx, bxdf_pdf_conductor_ggx,
     ggx_albedo, ggx_albedo_avg, _eval_conductor_ggx_spectral,
 )
-from gonzales.spectrum import SampledWavelengths, null_spectral_handle
+from gonzales.core.spectrum import SampledWavelengths, null_spectral_handle
 
 # All-equal wavelengths + null_spectral_handle: the upsampler degrades to the
 # RGB passthrough (v0,v1,v2 = r,g,b), so a white f0 comes back as exactly 1

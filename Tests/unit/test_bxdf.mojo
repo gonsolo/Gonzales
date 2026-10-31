@@ -1,10 +1,10 @@
 from std.math import abs
 from std.testing import assert_true, assert_false, TestSuite
-from gonzales.bxdf import (
+from gonzales.transport.bxdf import (
     ggx_D, ggx_lambda, ggx_G1, ggx_G2, ggx_vndf_pdf,
     bxdf_is_delta, bxdf_eval_diffuse, bxdf_pdf_diffuse, BxDFFlags,
 )
-from gonzales.geometry import RGB, PI, INV_PI
+from gonzales.core.geometry import RGB, PI, INV_PI
 
 comptime EPS: Float32 = 1e-4
 

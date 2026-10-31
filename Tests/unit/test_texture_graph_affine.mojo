@@ -10,10 +10,10 @@ point) and fall back to flat albedo rather than rendering something wrong.
 from std.math import abs
 from std.memory.alloc import unsafe_alloc
 from std.testing import assert_true, TestSuite
-from gonzales.lexer import PbrtScanner, scanner_free
-from gonzales.parse_types import SceneParseState
-from gonzales.pbrt_parser import handle_texture
-from gonzales.material_builder import _psc_handle_make_named_material
+from gonzales.scene.lexer import PbrtScanner, scanner_free
+from gonzales.scene.parse_types import SceneParseState
+from gonzales.scene.pbrt_parser import handle_texture
+from gonzales.scene.material_builder import _psc_handle_make_named_material
 
 comptime _EPS = Float32(1e-5)
 

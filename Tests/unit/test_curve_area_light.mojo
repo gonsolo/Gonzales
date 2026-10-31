@@ -1,17 +1,17 @@
 from std.math import abs, sqrt
 from std.memory.alloc import unsafe_alloc
 from std.testing import assert_true, TestSuite
-from gonzales.geometry import Point3f, Vec3f, RGB, dot, cross
-from gonzales.materials import Material, MatKind
-from gonzales.render_state import PathState, MIN_RAY_PDF_NONE, SssWalk
-from gonzales.primitives import Intersection, PrimId, TriangleMesh, Sphere
-from gonzales.geometry import Ray
-from gonzales.lights import AreaLight, DistantLight, PointLight, InfiniteLight, LightSampler
-from gonzales.curves import Curve, curve_bspline_point, curve_light_tube_area, _curve_perp_axis
-from gonzales.spectrum import SpectralSample, SampledWavelengths
-from gonzales.bvh import BVH2Node
-from gonzales.shading import shade_core_cpu_nee
-from gonzales.guide import null_guide
+from gonzales.core.geometry import Point3f, Vec3f, RGB, dot, cross
+from gonzales.scene.materials import Material, MatKind
+from gonzales.transport.render_state import PathState, MIN_RAY_PDF_NONE, SssWalk
+from gonzales.scene.primitives import Intersection, PrimId, TriangleMesh, Sphere
+from gonzales.core.geometry import Ray
+from gonzales.scene.lights import AreaLight, DistantLight, PointLight, InfiniteLight, LightSampler
+from gonzales.scene.curves import Curve, curve_bspline_point, curve_light_tube_area, _curve_perp_axis
+from gonzales.core.spectrum import SpectralSample, SampledWavelengths
+from gonzales.scene.bvh import BVH2Node
+from gonzales.integrators.shading import shade_core_cpu_nee
+from gonzales.paths.guide import null_guide
 
 comptime EPS: Float32 = 1e-4
 

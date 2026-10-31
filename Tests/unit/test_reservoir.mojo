@@ -1,11 +1,11 @@
 from std.math import abs
 from std.testing import assert_true, assert_false, TestSuite
-from gonzales.reservoir import (
+from gonzales.core.reservoir import (
     ReservoirState, reservoir_state_init, reservoir_update, reservoir_combine,
     reservoir_finalize, reservoir_cap_confidence,
     ReprojectMode, reproject_pixel,
 )
-from gonzales.rng import PCG32
+from gonzales.core.rng import PCG32
 
 comptime EPS: Float32 = 1e-4
 

@@ -3,11 +3,11 @@ the measurement behind the out-of-core geometry work. Prints one `key value` pai
 
     build/scene_stats scene.pbrt
 """
-from gonzales.bvh import BVH2Node
-from gonzales.curves import Curve
-from gonzales.geometry import _is_real_ptr
-from gonzales.primitives import Instance, PrimId, TriangleMesh, mesh_points_floats
-from gonzales.scene_loader import mojo_parse_scene_any
+from gonzales.scene.bvh import BVH2Node
+from gonzales.scene.curves import Curve
+from gonzales.core.geometry import _is_real_ptr
+from gonzales.scene.primitives import Instance, PrimId, TriangleMesh, mesh_points_floats
+from gonzales.scene.scene_loader import mojo_parse_scene_any
 from std.memory.alloc import unsafe_alloc
 from std.sys import argv
 from std.sys.info import size_of

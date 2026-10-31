@@ -1,8 +1,8 @@
 from std.math import abs
 from std.testing import assert_true, assert_false, TestSuite
-from gonzales.geometry import Point3f, Bounds3f, Vec3f
-from gonzales.bvh import _equal_area_square_to_sphere
-from gonzales.guide import (
+from gonzales.core.geometry import Point3f, Bounds3f, Vec3f
+from gonzales.scene.bvh import _equal_area_square_to_sphere
+from gonzales.paths.guide import (
     GuideGrid,
     guide_create, guide_free, guide_clone_empty, guide_merge, guide_refine,
     guide_pos_to_cell, guide_record, guide_pdf, guide_cell_has_data, guide_sample,

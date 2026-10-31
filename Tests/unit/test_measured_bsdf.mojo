@@ -1,7 +1,7 @@
 from std.math import abs
 from std.testing import assert_true, assert_equal, TestSuite
 from std.memory.alloc import unsafe_alloc
-from gonzales.measured_bsdf import (
+from gonzales.scene.measured_bsdf import (
     load_measured_brdf_full, _pl2d_strides2, _pl2d_strides3,
     _pl2d_build_cdf, _pl2d_build_scaled_verbatim,
 )
