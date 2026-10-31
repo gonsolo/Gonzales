@@ -1,9 +1,10 @@
 """The path tracer's volume vertices: free flight, volume NEE and reservoirs."""
+from gonzales.transport.medium import MediumView
 from gonzales.scene.accel.bvh import LightSample, _sample_distant_light_nee, _sample_infinite_light_nee, _sample_point_light_nee, _sample_sphere_light_nee, any_hit_bvh2_core, test_spheres, traverse_bvh2_core, SceneView
 from gonzales.core.geometry import Point2f, Point3f, RGB, Vec3f, _is_real_ptr, cross, dot, point3f, vec3f
 from gonzales.scene.appearance.lights import area_light_pick_triangle, light_sampler_sample
 from gonzales.scene.appearance.materials import Material, MatKind
-from gonzales.scene.appearance.media import Grid, MEDIUM_TRACK_MAX_ITERS, Medium, NvdbGrid, grid_ray_range, grid_sample_density, hg_phase, hg_sample, medium_emission_spectral, medium_grid_for, medium_nvdb_for, medium_sigma_s_spectral, medium_sigma_t_spectral, medium_transmittance_ratio_spectral, nvdb_index_ray, nvdb_majorant_at_world, nvdb_node_exit_t, nvdb_ray_range, nvdb_sample_density, sample_free_flight
+from gonzales.scene.appearance.media import Grid, MEDIUM_TRACK_MAX_ITERS, Medium, NvdbGrid, grid_ray_range, grid_sample_density, hg_phase, hg_sample, medium_emission_spectral, medium_grid_for, medium_nvdb_for, nvdb_index_ray, nvdb_majorant_at_world, nvdb_node_exit_t, nvdb_ray_range, nvdb_sample_density
 from gonzales.scene.shapes.primitives import Intersection, PrimId, mesh_vi
 from gonzales.core.geometry import Ray
 from gonzales.scene.shapes.primitives import mesh_pos
@@ -643,7 +644,8 @@ def _sample_medium_core(
     var inter = intersections[unsafe_offset=i]
     if inter.hit == 0:
         return
-    var med = sd.mediums[unsafe_offset=med_idx]
+    var medv = MediumView.at(sd, Int32(med_idx))
+    var med = medv.med
     var sigma_t = med.sigma_a + med.sigma_s
     var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
     var t_surf = inter.tHit
@@ -670,10 +672,7 @@ def _sample_medium_core(
     var majorant_density = nvdb_grid.max_density if use_nvdb else grid.max_density
     var sigma_maj = majorant_density * sigma_t.r
 
-    var ff = sample_free_flight(
-        med, sd.grids, sd.nvdbGrids, ray_org, ray_dir, t_surf, pcg,
-        path_ptr[].wavelengths, sd.spectral.coeffs, sd.spectral.res,
-        sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65)
+    var ff = medv.free_flight_emitting(ray_org, ray_dir, t_surf, pcg, path_ptr[].wavelengths)
     # Volumetric emission (pbrt NanoVDBMedium's temperature grid) accumulated
     # over every majorant candidate along the tracked segment, already spectral
     # and already weighted by each candidate's absorption fraction. Zero for a
@@ -713,9 +712,7 @@ def _sample_medium_core(
         # LANE -- the same shared helper bdpt_*.mojo/sppm.mojo use, so CPU PT /
         # GPU PT / VCM / SPPM all treat a medium's colour identically.
         # See docs/02_spectra_and_color.md, "Chromatic extinction".
-        path_ptr[].throughput *= medium_transmittance_ratio_spectral(
-            med, t_seg, ff.pdf, path_ptr[].wavelengths,
-            sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65)
+        path_ptr[].throughput *= medv.transmittance_ratio(t_seg, ff.pdf, path_ptr[].wavelengths)
         if ff.collided:
             # Chromatic scattering ratio; 1 for a grey medium.
             #
@@ -752,12 +749,8 @@ def _sample_medium_core(
                 # it pairs with the free-flight MIS weight (also centred on 1)
                 # so neither factor drifts. Unbiased either way -- E[.] is
                 # alpha_i per scatter for both -- this is purely variance.
-                var sig_t_spec = medium_sigma_t_spectral(
-                    med, path_ptr[].wavelengths, sd.spectral.coeffs, sd.spectral.res,
-                    sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65)
-                var sig_s_spec = medium_sigma_s_spectral(
-                    med, path_ptr[].wavelengths, sd.spectral.coeffs, sd.spectral.res,
-                    sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65)
+                var sig_t_spec = medv.sigma_t(path_ptr[].wavelengths)
+                var sig_s_spec = medv.sigma_s(path_ptr[].wavelengths)
                 var a0 = sig_s_spec.v0 / max(sig_t_spec.v0, Float32(1e-30))
                 var a1 = sig_s_spec.v1 / max(sig_t_spec.v1, Float32(1e-30))
                 var a2 = sig_s_spec.v2 / max(sig_t_spec.v2, Float32(1e-30))
@@ -772,9 +765,7 @@ def _sample_medium_core(
             else:
                 # No spectral table: lanes carry RGB, so red IS the reference
                 # and this is the original expression unchanged.
-                var sig_s_spec = medium_sigma_s_spectral(
-                    med, path_ptr[].wavelengths, sd.spectral.coeffs, sd.spectral.res,
-                    sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65)
+                var sig_s_spec = medv.sigma_s(path_ptr[].wavelengths)
                 path_ptr[].throughput *= (sig_s_spec * (Float32(1.0) / ss_r)) * sigma_t.r
 
     if not ff.collided:

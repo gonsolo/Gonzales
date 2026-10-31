@@ -5,7 +5,8 @@ from gonzales.core.spectrum import SampledWavelengths, SpectralHandle, SpectralS
 from gonzales.scene.accel.bvh import SceneView
 from gonzales.scene.appearance.media import (
     FreeFlight, Grid, Medium, NvdbGrid, hg_phase, hg_sample, medium_inv_sigma_t_spectral, medium_kernel_radius,
-    medium_sigma_t_at_spectral, sample_free_flight, spectral_free_flight_weight,
+    medium_sigma_s_spectral, medium_sigma_t_at_spectral, medium_sigma_t_spectral, medium_transmittance_ratio_spectral,
+    sample_free_flight, spectral_free_flight_weight,
 )
 
 
@@ -36,6 +37,23 @@ struct MediumView(TrivialRegisterPassable):
     def weight(self, ff: FreeFlight, t_max: Float32, wl: SampledWavelengths) -> SpectralSample:
         var s = self.spectral
         return spectral_free_flight_weight(self.med, ff, t_max, wl, s.coeffs, s.res, s.cie_x, s.cie_y, s.cie_z, s.d65)
+
+    @always_inline
+    def transmittance_ratio(self, t: Float32, pdf: Float32, wl: SampledWavelengths) -> SpectralSample:
+        var s = self.spectral
+        return medium_transmittance_ratio_spectral(self.med, t, pdf, wl, s.coeffs, s.res, s.cie_x, s.cie_y, s.cie_z, s.d65)
+
+    @always_inline
+    def sigma_t(self, wl: SampledWavelengths) -> SpectralSample:
+        """Per unit density."""
+        var s = self.spectral
+        return medium_sigma_t_spectral(self.med, wl, s.coeffs, s.res, s.cie_x, s.cie_y, s.cie_z, s.d65)
+
+    @always_inline
+    def sigma_s(self, wl: SampledWavelengths) -> SpectralSample:
+        """Per unit density."""
+        var s = self.spectral
+        return medium_sigma_s_spectral(self.med, wl, s.coeffs, s.res, s.cie_x, s.cie_y, s.cie_z, s.d65)
 
     @always_inline
     def sigma_t_at(self, p: Vec3f, wl: SampledWavelengths) -> SpectralSample:
