@@ -9,9 +9,9 @@ from gonzales.core.geometry import Ray
 from gonzales.scene.accel.bvh import traverse_dispatch
 from gonzales.scene.accel.bvh import SceneView, test_spheres
 from gonzales.estimators.photon_grid import _HSIZE, _hash_cell, grid_reset_cell, grid_count, grid_keep, grid_coin_bits, grid_push
-from gonzales.paths.bdpt_vertex import _BDPT_MAX_VERTS, BDPTVertex
-from gonzales.paths.bdpt_eval import _bdpt_vertex_mis_scoped
-from gonzales.paths.vcm_strategy import _VCM_RADIUS_VOLUME_SCALE, _vcm_budget_active, _vcm_cap, _vcm_keep
+from gonzales.paths.vcm.vertex import _BDPT_MAX_VERTS, BDPTVertex
+from gonzales.paths.vcm.eval import _bdpt_vertex_mis_scoped
+from gonzales.paths.vcm.strategy import _VCM_RADIUS_VOLUME_SCALE, _vcm_budget_active, _vcm_cap, _vcm_keep
 
 
 comptime _VCM_FINE_LEVELS = 4

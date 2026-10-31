@@ -47,7 +47,7 @@ from gonzales.core.rng import PCG32
 from gonzales.core.sampling import film_filter_of
 from gonzales.core.spectrum import sample_wavelengths, null_spectral_handle
 from std.collections import Array
-from gonzales.paths.bdpt_vertex import BDPTVertex, _BDPT_MAX_DEPTH
+from gonzales.paths.vcm.vertex import BDPTVertex, _BDPT_MAX_DEPTH
 from gonzales.integrators.vcm.camera import _bdpt_trace_camera_and_connect, _bdpt_camera_path_init, _bdpt_camera_path_bounce
 
 comptime EPS: Float32 = 1e-3

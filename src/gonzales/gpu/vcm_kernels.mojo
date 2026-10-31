@@ -20,10 +20,10 @@ from gonzales.core.sampling import FilmFilter, ThinLens
 from gonzales.core.rng import PCG32
 from gonzales.estimators.photon_grid import _HSIZE, _PHOTON_BUCKET_CAP
 from gonzales.core.spectrum import SpectralSample, pass_wavelengths, spectral_sample_to_rgb
-from gonzales.paths.bdpt_vertex import _BDPT_MAX_VERTS, BDPTVertex
-from gonzales.paths.bdpt_nee import _visible_transmittance
-from gonzales.paths.vcm_grid import _bdpt_count_merge_vertex, _bdpt_insert_merge_vertex, _vcm_reset_cell
-from gonzales.paths.bdpt_connect import _bdpt_splat_filtered, _bdpt_connect_to_camera
+from gonzales.paths.vcm.vertex import _BDPT_MAX_VERTS, BDPTVertex
+from gonzales.paths.vcm.nee import _visible_transmittance
+from gonzales.paths.vcm.grid import _bdpt_count_merge_vertex, _bdpt_insert_merge_vertex, _vcm_reset_cell
+from gonzales.paths.vcm.connect import _bdpt_splat_filtered, _bdpt_connect_to_camera
 from gonzales.integrators.vcm.camera import (
     _bdpt_trace_camera_and_connect, VCMCameraPathState, _bdpt_camera_path_init, _bdpt_camera_path_bounce,
 )

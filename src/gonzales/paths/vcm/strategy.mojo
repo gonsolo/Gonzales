@@ -2,10 +2,10 @@
 from std.math import sqrt, floor, max, min
 from gonzales.core.geometry import Point3f, PI
 from gonzales.scene.appearance.materials import LobeKind
-from gonzales.paths.bdpt_eval import _bdpt_vertex_mis_scoped
+from gonzales.paths.vcm.eval import _bdpt_vertex_mis_scoped
 from gonzales.scene.accel.bvh import SceneView, _is_real_ptr, curve_radius
 from gonzales.estimators.photon_grid import _hash_cell, _PHOTON_BUCKET_CAP, grid_keep
-from gonzales.paths.bdpt_vertex import _BDPT_MAX_VERTS, BDPTVertex
+from gonzales.paths.vcm.vertex import _BDPT_MAX_VERTS, BDPTVertex
 from gonzales.transport.medium import MediumView
 
 

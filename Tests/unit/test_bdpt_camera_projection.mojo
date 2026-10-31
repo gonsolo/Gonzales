@@ -11,7 +11,7 @@ from std.math import sqrt, abs, max
 from std.memory.alloc import unsafe_alloc
 from std.testing import assert_true, TestSuite
 from gonzales.core.geometry import Vec3f
-from gonzales.paths.bdpt_connect import _bdpt_world_to_raster
+from gonzales.paths.vcm.connect import _bdpt_world_to_raster
 from gonzales.core.transform import matrix_invert
 from gonzales.core.sampling import ThinLens, camera_ray_from_film_xy
 

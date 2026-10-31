@@ -19,7 +19,7 @@ verbatim:
 Tolerance is 2e-6 relative: these run in Float32 while the harness is double.
 """
 from std.testing import assert_true, assert_equal, TestSuite
-from gonzales.paths.vcm_mis import vcm_env_escape_weight
+from gonzales.paths.vcm.mis import vcm_env_escape_weight
 from gonzales.transport.mis_policy import vcm_env_nee_weight
 
 # ── the harness's "1 surface vertex" configuration ─────────────────────────

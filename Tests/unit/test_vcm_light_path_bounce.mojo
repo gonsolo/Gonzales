@@ -33,7 +33,7 @@ from gonzales.scene.shapes.curves import Curve
 from gonzales.scene.accel.bvh import BVH4, SceneView, BVH2Node, build_bvh2, traverse_bvh2_core
 from gonzales.core.rng import PCG32
 from gonzales.core.spectrum import null_spectral_handle, sample_wavelengths
-from gonzales.paths.bdpt_vertex import BDPTVertex, _BDPT_MAX_VERTS, _BDPT_MAX_DEPTH
+from gonzales.paths.vcm.vertex import BDPTVertex, _BDPT_MAX_VERTS, _BDPT_MAX_DEPTH
 from gonzales.integrators.vcm.light import _bdpt_trace_light_path, _bdpt_light_path_init, _bdpt_light_path_bounce
 
 comptime EPS: Float32 = 1e-4

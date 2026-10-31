@@ -25,9 +25,9 @@ from gonzales.scene.appearance.media import Medium, MediumInterface, Grid, NvdbG
 from gonzales.scene.appearance.lights import LightSampler, AreaLight, DistantLight, PointLight, InfiniteLight
 from gonzales.scene.accel.bvh import BVH4, SceneView, BVH2Node
 from gonzales.transport.bxdf import ggx_D, ggx_G2, ggx_albedo_avg, ggx_ms_shape, ggx_ms_tint
-from gonzales.paths.bdpt_vertex import BDPTVertex
-from gonzales.paths.bdpt_connect import _pdf_solid_to_area, _bdpt_connect_to_cache
-from gonzales.paths.bdpt_eval import _eval_vertex_spectral
+from gonzales.paths.vcm.vertex import BDPTVertex
+from gonzales.paths.vcm.connect import _pdf_solid_to_area, _bdpt_connect_to_cache
+from gonzales.paths.vcm.eval import _eval_vertex_spectral
 from gonzales.transport.bxdf import _eval_conductor_ggx_spectral
 from gonzales.core.spectrum import SampledWavelengths, SpectralSample, null_spectral_handle
 from _scene_fixture import make_triangle_scene

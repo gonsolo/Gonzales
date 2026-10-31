@@ -11,11 +11,11 @@ from gonzales.scene.accel.bvh import SceneView
 from gonzales.core.sampling import power_heuristic, FilmFilter, filter_eval_2d, filter_integral_2d, sample_disk_concentric
 from gonzales.core.rng import PCG32
 from gonzales.core.spectrum import SpectralSample, spec_illum
-from gonzales.paths.bdpt_vertex import _BDPT_MAX_VERTS, BDPTVertex
+from gonzales.paths.vcm.vertex import _BDPT_MAX_VERTS, BDPTVertex
 from gonzales.scene.appearance.materials import LobeKind
-from gonzales.paths.bdpt_nee import _visible_transmittance
-from gonzales.paths.bdpt_eval import _vcm_free_flight, _vcm_cos_at, _eval_vertex_spectral, _bdpt_vertex_pdfs, _bdpt_vertex_mis_scoped, _bdpt_connect_pair_weighted
-from gonzales.paths.vcm_strategy import _vcm_too_long, _vcm_keep, _vcm_eta_scale, _vcm_eta_at, _vcm_on_fibre, _vcm_past_depth, _vcm_past_cache
+from gonzales.paths.vcm.nee import _visible_transmittance
+from gonzales.paths.vcm.eval import _vcm_free_flight, _vcm_cos_at, _eval_vertex_spectral, _bdpt_vertex_pdfs, _bdpt_vertex_mis_scoped, _bdpt_connect_pair_weighted
+from gonzales.paths.vcm.strategy import _vcm_too_long, _vcm_keep, _vcm_eta_scale, _vcm_eta_at, _vcm_on_fibre, _vcm_past_depth, _vcm_past_cache
 
 
 @always_inline

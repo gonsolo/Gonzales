@@ -9,7 +9,7 @@ from gonzales.core.geometry import Point3f, Point2f, Vec3f, vec3f, point3f, dot,
 from gonzales.scene.appearance.materials import MatKind, LobeKind, resolve_mix
 from gonzales.scene.shapes.primitives import Intersection
 from gonzales.core.geometry import Ray
-from gonzales.paths.vcm_mis import vcm_scatter_carries, vcm_phase_scatter
+from gonzales.paths.vcm.mis import vcm_scatter_carries, vcm_phase_scatter
 from gonzales.scene.accel.bvh import traverse_dispatch
 from gonzales.scene.accel.bvh import SceneView, test_spheres, _scene_bounding_sphere, _sample_disk_perpendicular, _sample_infinite_light_dir, sphere_light_cone_pdf, light_path_pick
 from gonzales.core.rng import PCG32
@@ -17,10 +17,10 @@ from gonzales.integrators.sppm.sppm import _cosine_hemisphere_sample, sample_are
 from gonzales.scene.appearance.lights import area_light_side_pdf
 from gonzales.core.spectrum import SampledWavelengths, SpectralSample, spec_refl, spec_illum
 from gonzales.scene.shapes.geom_normal import _geom_normal
-from gonzales.paths.bdpt_vertex import _VCM_SSS_CAMERA_ONLY, _vcm_walk_limit, _BDPT_MAX_VERTS, BDPTVertex, _null_vertex
-from gonzales.paths.bdpt_eval import _bdpt_vertex_mis_scoped, _vcm_mnee_light_dvcm
-from gonzales.paths.vcm_strategy import _vcm_depth, _VCM_MAX_STORED, _vcm_keep, _vcm_eta_scale, _vcm_eta_at, _vcm_fibre_scale
-from gonzales.paths.bdpt_connect import _bdpt_store_lvc_vertex
+from gonzales.paths.vcm.vertex import _VCM_SSS_CAMERA_ONLY, _vcm_walk_limit, _BDPT_MAX_VERTS, BDPTVertex, _null_vertex
+from gonzales.paths.vcm.eval import _bdpt_vertex_mis_scoped, _vcm_mnee_light_dvcm
+from gonzales.paths.vcm.strategy import _vcm_depth, _VCM_MAX_STORED, _vcm_keep, _vcm_eta_scale, _vcm_eta_at, _vcm_fibre_scale
+from gonzales.paths.vcm.connect import _bdpt_store_lvc_vertex
 from gonzales.integrators.vcm.camera import (
     _vcm_scatter, _vcm_lobe_vertex, _vcm_sss_walk, _vcm_sss_exit_vertex,
     _vcm_sss_exit_scatter, _vcm_dielectric_cross,

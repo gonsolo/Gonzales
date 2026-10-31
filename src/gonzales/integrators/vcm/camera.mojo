@@ -13,7 +13,7 @@ from gonzales.transport.render_state import PDF_DELTA_FULL, PDF_DROP_DIRECT
 from gonzales.scene.appearance.materials import Material, MatKind, LobeKind, resolve_mix
 from gonzales.scene.shapes.primitives import Intersection, mesh_pos
 from gonzales.core.geometry import Ray
-from gonzales.paths.vcm_mis import (
+from gonzales.paths.vcm.mis import (
     vcm_phase_scatter,
     vcm_arrival_carries, vcm_scatter_carries,
     vcm_env_escape_weight,
@@ -32,15 +32,15 @@ from gonzales.core.spectrum import (
     SampledWavelengths, SpectralSample, spec_refl, spec_refl_unbounded, spec_illum,
     rgb_bands_to_spectral_sample,
 )
-from gonzales.paths.bdpt_vertex import _VCM_SSS_CAMERA_ONLY, _VOL_PHASE_HIT, _vcm_walk_limit, _BDPT_MAX_VERTS, BDPTVertex, _null_vertex
-from gonzales.paths.bdpt_nee import _bdpt_simple_light_count, _bdpt_sample_simple_light, _bdpt_nee_contribute
-from gonzales.paths.bdpt_eval import (
+from gonzales.paths.vcm.vertex import _VCM_SSS_CAMERA_ONLY, _VOL_PHASE_HIT, _vcm_walk_limit, _BDPT_MAX_VERTS, BDPTVertex, _null_vertex
+from gonzales.paths.vcm.nee import _bdpt_simple_light_count, _bdpt_sample_simple_light, _bdpt_nee_contribute
+from gonzales.paths.vcm.eval import (
     _vcm_sphere_slot, _vcm_infinite_slot, _vcm_nee_surface, _vertex_ctx, _bdpt_vertex_mis_scoped, _vcm_mnee,
     _vcm_mnee_hit_term,
 )
-from gonzales.paths.vcm_strategy import vcm_camera_only, _vcm_depth, _VCM_MAX_STORED, _vcm_keep, _vcm_eta_scale, _vcm_eta_at, _vcm_fibre_scale
-from gonzales.paths.bdpt_connect import _bdpt_connect_to_cache, _bdpt_connect_to_cache_deferred
-from gonzales.paths.vcm_merge import _bdpt_merge_from_cache
+from gonzales.paths.vcm.strategy import vcm_camera_only, _vcm_depth, _VCM_MAX_STORED, _vcm_keep, _vcm_eta_scale, _vcm_eta_at, _vcm_fibre_scale
+from gonzales.paths.vcm.connect import _bdpt_connect_to_cache, _bdpt_connect_to_cache_deferred
+from gonzales.paths.vcm.merge import _bdpt_merge_from_cache
 from gonzales.transport.surface import surface_hit
 
 def _bdpt_trace_camera_and_connect[use_gpu: Bool](

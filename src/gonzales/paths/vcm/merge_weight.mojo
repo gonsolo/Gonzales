@@ -4,9 +4,9 @@
 from std.collections import Array
 from std.math import log
 from gonzales.scene.accel.bvh import SceneView
-from gonzales.paths.bdpt_vertex import _BDPT_MAX_VERTS, BDPTVertex
-from gonzales.paths.bdpt_eval import _bdpt_vertex_pdfs, _bdpt_vertex_mis_scoped
-from gonzales.paths.vcm_strategy import _vcm_keep, _vcm_eta_scale
+from gonzales.paths.vcm.vertex import _BDPT_MAX_VERTS, BDPTVertex
+from gonzales.paths.vcm.eval import _bdpt_vertex_pdfs, _bdpt_vertex_mis_scoped
+from gonzales.paths.vcm.strategy import _vcm_keep, _vcm_eta_scale
 
 @always_inline
 def _bdpt_merge_mis_weight(

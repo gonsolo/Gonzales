@@ -10,11 +10,11 @@ from gonzales.scene.accel.bvh import SceneView, _is_real_ptr, curve_radius
 from gonzales.estimators.photon_grid import _HSIZE, _hash_cell, _PHOTON_BUCKET_CAP, grid_keep, grid_weight, gather_disk_coverage, gather_disk_contains
 from gonzales.transport.medium import MediumView
 from gonzales.core.spectrum import SpectralSample
-from gonzales.paths.bdpt_vertex import _BDPT_MAX_VERTS, BDPTVertex
-from gonzales.paths.bdpt_eval import _lobe_eval, _bdpt_vertex_mis_scoped
-from gonzales.paths.vcm_grid import _VCM_FINE_LEVELS, _VCM_MN_STRIDE
-from gonzales.paths.vcm_strategy import vcm_can_merge, _vcm_too_long, _vcm_keep, _vcm_cap, _MERGE_COVERAGE, _VCM_VISIT_INSTRUMENT, _vcm_budget_active, _vcm_merge_radius_at, _VCM_RADIUS_VOLUME_SCALE, _vcm_inv_eta_at, _vcm_volume_radius_at, _vcm_mergeable, _vcm_on_fibre
-from gonzales.paths.vcm_merge_weight import _bdpt_merge_mis_weight
+from gonzales.paths.vcm.vertex import _BDPT_MAX_VERTS, BDPTVertex
+from gonzales.paths.vcm.eval import _lobe_eval, _bdpt_vertex_mis_scoped
+from gonzales.paths.vcm.grid import _VCM_FINE_LEVELS, _VCM_MN_STRIDE
+from gonzales.paths.vcm.strategy import vcm_can_merge, _vcm_too_long, _vcm_keep, _vcm_cap, _MERGE_COVERAGE, _VCM_VISIT_INSTRUMENT, _vcm_budget_active, _vcm_merge_radius_at, _VCM_RADIUS_VOLUME_SCALE, _vcm_inv_eta_at, _vcm_volume_radius_at, _vcm_mergeable, _vcm_on_fibre
+from gonzales.paths.vcm.merge_weight import _bdpt_merge_mis_weight
 
 @always_inline
 def _bdpt_merge_from_cache(

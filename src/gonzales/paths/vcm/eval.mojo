@@ -15,9 +15,9 @@ from gonzales.scene.accel.bvh import curve_tangent, fibre_cos, SceneView, _scene
 from gonzales.core.rng import PCG32
 from gonzales.transport.bxdf import BSDF, LobeEval, LobeTables
 from gonzales.core.spectrum import SampledWavelengths, SpectralSample, spec_illum
-from gonzales.paths.bdpt_vertex import BDPTVertex
+from gonzales.paths.vcm.vertex import BDPTVertex
 from gonzales.transport.medium import MediumView
-from gonzales.paths.bdpt_nee import _bdpt_simple_light_count, _bdpt_sample_simple_light, _bdpt_nee_contribute, _bdpt_nee_transmittance
+from gonzales.paths.vcm.nee import _bdpt_simple_light_count, _bdpt_sample_simple_light, _bdpt_nee_contribute, _bdpt_nee_transmittance
 
 @always_inline
 def _vcm_sphere_slot(ref sd: SceneView, si: Int) -> Int:

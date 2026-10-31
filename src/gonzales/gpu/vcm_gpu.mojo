@@ -19,13 +19,13 @@ from gonzales.estimators.photon_grid import _HSIZE
 from gonzales.gpu.gpu_scene import GpuSceneHandle
 from gonzales.core.progress import Progress
 from gonzales.integrators.outputs import finish_render, _sidecar_name, _write_channels
-from gonzales.paths.bdpt_vertex import _vcm_walk_limit, _BDPT_MAX_VERTS, BDPTVertex
+from gonzales.paths.vcm.vertex import _vcm_walk_limit, _BDPT_MAX_VERTS, BDPTVertex
 from gonzales.integrators.vcm.camera import VCMCameraPathState
 from gonzales.integrators.vcm.light import VCMLightPathState
 from gonzales.core.spectrum import SpectralSample
 from gonzales.gpu.vcm_rt import VcmRt
-from gonzales.paths.vcm_grid import _VCM_MN_STRIDE, _VCM_HEADS_SIZE, _vcm_grid_inv_cell, _camera_typical_distance, vcm_merge_radius
-from gonzales.paths.vcm_strategy import _VCM_VISIT_INSTRUMENT, _VCM_FOOTPRINT_PIXELS
+from gonzales.paths.vcm.grid import _VCM_MN_STRIDE, _VCM_HEADS_SIZE, _vcm_grid_inv_cell, _camera_typical_distance, vcm_merge_radius
+from gonzales.paths.vcm.strategy import _VCM_VISIT_INSTRUMENT, _VCM_FOOTPRINT_PIXELS
 from gonzales.integrators.film import _vcm_finalize_one_pixel
 from gonzales.gpu.vcm_kernels import (
     _bdpt_emit_light_paths_gpu, _bdpt_splat_light_paths_gpu, _bdpt_camera_connect_gpu,

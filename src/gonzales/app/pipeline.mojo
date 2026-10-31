@@ -8,7 +8,7 @@ from max.gpu.host import DeviceBuffer, DeviceContext, HostBuffer
 from gonzales.scene.appearance.footprint import camera_footprint
 from gonzales.scene.description.pbrt_parser import ParsedScene_Mojo, mojo_parsed_free, mojo_parsed_scene_descriptor, resize_film, mojo_apply_overrides
 from gonzales.scene.description.scene_loader import mojo_parse_scene_any
-from gonzales.cpu.rendering import render_all_tiles
+from gonzales.cpu.pt import render_all_tiles
 from gonzales.integrators.film import normalize_film, apply_film_sensor
 from gonzales.core.progress import Progress, fmt_time
 from gonzales.integrators.outputs import write_render_outputs
@@ -23,12 +23,12 @@ from gonzales.core.transform import Mat4, matrix_invert
 from gonzales.core.sampling import TileSamplerParams, ThinLens, camera_ray_from_film_xy
 from gonzales.core.rng import mix_bits_u64
 from gonzales.scene.accel.bvh import SceneView, render_aux_buffers, _scene_bounding_sphere
-from gonzales.cpu.sppm_cpu import sppm_render
+from gonzales.cpu.sppm import sppm_render
 from gonzales.gpu.sppm_gpu import sppm_render_gpu
-from gonzales.cpu.bdpt_render import vcm_render
+from gonzales.cpu.vcm import vcm_render
 from gonzales.gpu.vcm_gpu import vcm_render_gpu, VcmGpu
 from gonzales.gpu.vcm_rt import VcmRt
-from gonzales.paths.bdpt_vertex import _BDPT_MAX_VERTS
+from gonzales.paths.vcm.vertex import _BDPT_MAX_VERTS
 from gonzales.transport.guide import GuideGrid, GuidedRenderer, null_guide, train_guided
 from gonzales.gpu.gpu_guide import gpu_guide_begin, gpu_guide_end
 from gonzales.transport.restir_di import DIReservoir, di_reservoir_init, ReservoirIO, reservoir_io_null
