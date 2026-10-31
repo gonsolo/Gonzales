@@ -207,7 +207,6 @@ def _bdpt_connect_to_cache(
     path_len: Int,
     mis_vm_weight_factor: Float32,
     cam_count: Int,   # cv's non-delta interior-vertex count (see _vcm_depth)
-    n_light_paths_f: Float32 = Float32(0),
 ) -> SpectralSample:
     """VCM Stage 2b (2026-07-10): connect eye vertex `cv` to EVERY vertex of
     its deterministically PAIRED light path (`lp_idx` — standard Veach BDPT"""
@@ -227,7 +226,7 @@ def _bdpt_connect_to_cache(
                 continue
             took_unweighted = True
         sum += _connect(cv, lv, sd, has_med, scratch, mis_vm_weight_factor,
-            cam_count - 1, lvc, lp_idx * _BDPT_MAX_VERTS + local, n_light_paths_f, long_path=long_path)
+            long_path=long_path)
     return sum
 
 def _bdpt_connect_to_cache_deferred(
@@ -242,7 +241,6 @@ def _bdpt_connect_to_cache_deferred(
     shadow_valid: Pointer[Int8, MutUntrackedOrigin],
     shadow_seg_med: Pointer[Int32, MutUntrackedOrigin],
     cam_count: Int,
-    n_light_paths_f: Float32 = Float32(0),
 ):
     """Task #163 stage 5: Vulkan-RT-batched counterpart to
     _bdpt_connect_to_cache -- instead of resolving each connection's shadow"""
@@ -262,8 +260,7 @@ def _bdpt_connect_to_cache_deferred(
                 shadow_valid[unsafe_offset=base + local] = Int8(0)
                 continue
             took_unweighted = True
-        var (contrib, valid) = _connect_unweighted(cv, lv, sd, mis_vm_weight_factor,
-            cam_count - 1, lvc, base + local, n_light_paths_f)
+        var (contrib, valid) = _connect_unweighted(cv, lv, sd, mis_vm_weight_factor)
         if not valid:
             shadow_valid[unsafe_offset=base + local] = Int8(0)
             continue
@@ -290,10 +287,6 @@ def _connect(
     has_med: Bool,
     scratch: Pointer[Intersection, MutUntrackedOrigin],
     mis_vm_weight_factor: Float32,
-    num_cam_scat: Int = 0,
-    lvc: Pointer[BDPTVertex, MutUntrackedOrigin] = Pointer[BDPTVertex, MutUntrackedOrigin].unsafe_dangling(),
-    k: Int = 0,
-    n_light_paths_f: Float32 = Float32(0),
     long_path: Bool = False,
 ) -> SpectralSample:
     """Evaluate the contribution of connecting cv to lv via a shadow ray.
@@ -307,8 +300,7 @@ def _connect(
         Tr = _visible_transmittance(cv.pos, lv.pos, cv.med_idx, sd, scratch, cv.wavelengths)
         if Tr.is_black():
             return SpectralSample(Float32(0))
-    var (contrib, valid) = _connect_unweighted(cv, lv, sd, mis_vm_weight_factor,
-        num_cam_scat, lvc, k, n_light_paths_f, Tr, long_path)
+    var (contrib, valid) = _connect_unweighted(cv, lv, sd, mis_vm_weight_factor, Tr, long_path)
     if not valid or contrib.is_black():
         return SpectralSample(Float32(0))
     if not has_med:
@@ -322,10 +314,6 @@ def _connect_unweighted(
     lv: BDPTVertex,  # light-subpath vertex (including light point itself)
     ref sd: SceneView,
     mis_vm_weight_factor: Float32,
-    num_cam_scat: Int = 0,
-    lvc: Pointer[BDPTVertex, MutUntrackedOrigin] = Pointer[BDPTVertex, MutUntrackedOrigin].unsafe_dangling(),
-    k: Int = 0,
-    n_light_paths_f: Float32 = Float32(0),
     tr: SpectralSample = SpectralSample(Float32(1)),
     long_path: Bool = False,
 ) -> Tuple[SpectralSample, Bool]:
@@ -366,8 +354,7 @@ def _connect_unweighted(
     # GEOMETRY: 1/d^2 ONLY. Each endpoint's cosine is already inside its f_cos.
     #
     var contrib = cv.beta * lv.beta * f_combined * (Float32(1) / dist2)
-    contrib *= _bdpt_connect_mis_weight(cv, lv, sd, dir, dist2, mis_vm_weight_factor,
-        num_cam_scat, lvc, k, n_light_paths_f, tr, long_path)
+    contrib *= _bdpt_connect_mis_weight(cv, lv, sd, dir, dist2, mis_vm_weight_factor, tr, long_path)
     return (contrib, True)
 
 
@@ -379,10 +366,6 @@ def _bdpt_connect_mis_weight(
     dir: Vec3f,        # unit direction cv -> lv
     dist2: Float32,    # |lv - cv|^2
     mis_vm_weight_factor: Float32,
-    num_cam_scat: Int,
-    lvc: Pointer[BDPTVertex, MutUntrackedOrigin],
-    k: Int,
-    n_light_paths_f: Float32,
     tr: SpectralSample,
     long_path: Bool,
 ) -> Float32:

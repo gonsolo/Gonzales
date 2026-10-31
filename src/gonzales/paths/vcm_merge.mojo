@@ -28,7 +28,6 @@ def _bdpt_merge_from_cache(
     norm_pass: Float32,
     mis_vc_weight_factor: Float32,
     cam_count: Int,   # cv's non-delta interior-vertex count (see _vcm_depth)
-    n_light_paths_f: Float32 = Float32(0),
     # Benchmark instrumentation only (not part of the real
     # estimator, never read by anything that affects `result`): three
     *,
@@ -145,8 +144,7 @@ def _bdpt_merge_from_cache(
                                 f_cv = f_cv * (Float32(1.0) / cos_div)
                             else:
                                 f_cv = SpectralSample(Float32(0.0))
-                            var w = _bdpt_merge_mis_weight(cv, lv, sd, mis_vc_weight_factor, inv_eta_cv,
-                                cam_count - 1, lvc, k, n_light_paths_f)
+                            var w = _bdpt_merge_mis_weight(cv, lv, sd, inv_eta_cv)
                             # 1 / keep: the bucket's under the fixed cap; under
                             # the per-cell budget the vertex's own (_vcm_keep,
                             # the probability its insert survived).

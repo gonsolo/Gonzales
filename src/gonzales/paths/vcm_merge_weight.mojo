@@ -13,12 +13,7 @@ def _bdpt_merge_mis_weight(
     cv: BDPTVertex,
     lv: BDPTVertex,
     ref sd: SceneView,
-    mis_vc_weight_factor: Float32,
     inv_eta_x: Float32,   # 1/eta at cv (_vcm_inv_eta_at), which a volume vertex pays a density lookup for
-    num_cam_scat: Int,
-    lvc: Pointer[BDPTVertex, MutUntrackedOrigin],
-    k: Int,
-    n_light_paths_f: Float32,
 ) -> Float32:
     """Balance-heuristic merge weight (Georgiev et al. 2012 / SmallVCM's
     RangeQuery::Process), factored out of _bdpt_merge_from_cache's hot loop"""

@@ -94,7 +94,7 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
             sd, pcg, has_med, scratch[unsafe_offset=0], scratch, lvc, lp_idx, path_len,
             merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm,
             mis_vc_weight_factor, mis_vm_weight_factor,
-            st, visit_naive, visit_footprint, visit_thin, n_light_paths_f=n_light_paths_f):
+            st, visit_naive, visit_footprint, visit_thin):
             break
 
     return (st.total, st.total_merge, st.first_alb, visit_naive, visit_footprint, visit_thin)
@@ -421,7 +421,6 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
     shadow_pending: Pointer[SpectralSample, MutUntrackedOrigin] = Pointer[SpectralSample, MutUntrackedOrigin].unsafe_dangling(),
     shadow_valid: Pointer[Int8, MutUntrackedOrigin] = Pointer[Int8, MutUntrackedOrigin].unsafe_dangling(),
     shadow_seg_med: Pointer[Int32, MutUntrackedOrigin] = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
-    n_light_paths_f: Float32 = Float32(0),
 ) -> Bool:
     """One bounce of a camera subpath, shared by the per-path loop and the wavefront kernels; False ends the path."""
         if st.n_verts >= _BDPT_MAX_VERTS:
@@ -508,8 +507,8 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                     # BUG FIX (found investigating volumetric-caustic's
                     # colored-blob fireflies): merge is only safe to run
                     if _bdpt_vertex_mis_scoped(v):
-                        st.total_merge += _bdpt_merge_from_cache(v, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm, mis_vc_weight_factor, st.cam_count(), n_light_paths_f, visit_naive=visit_naive, visit_footprint=visit_footprint, visit_thin=visit_thin)
-                    st.total += _bdpt_connect_to_cache(v, sd, has_med, scratch, lvc, lp_idx, path_len, mis_vm_weight_factor, st.cam_count(), n_light_paths_f)
+                        st.total_merge += _bdpt_merge_from_cache(v, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm, mis_vc_weight_factor, st.cam_count(), visit_naive=visit_naive, visit_footprint=visit_footprint, visit_thin=visit_thin)
+                    st.total += _bdpt_connect_to_cache(v, sd, has_med, scratch, lvc, lp_idx, path_len, mis_vm_weight_factor, st.cam_count())
                 st.total += _vcm_nee_surface(sd, v, _vertex_ctx(v), sp, Vec3f(Float32(0)), st.beta, eta_v, v.dVCM, v.dVC,
                                              st.cur_med_idx, scratch, st.wl, pcg, Float32(0), False,
                                              vcm_camera_only(st.cam_count()))
@@ -653,14 +652,14 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 st.n_verts += 1
                 # Merging queries the GLOBAL photon grid and does not use this
                 # pixel's own paired light path, so unlike the connect below it
-                st.total_merge += _bdpt_merge_from_cache(v, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm, mis_vc_weight_factor, st.cam_count(), n_light_paths_f, visit_naive=visit_naive, visit_footprint=visit_footprint, visit_thin=visit_thin)
+                st.total_merge += _bdpt_merge_from_cache(v, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm, mis_vc_weight_factor, st.cam_count(), visit_naive=visit_naive, visit_footprint=visit_footprint, visit_thin=visit_thin)
                 if path_len > 0:
                     # Task #163 stage 5: the diffuse branch's connect shadow
                     # rays are the single highest-volume, cleanest shadow-ray
                     if defer_shadow_rays:
-                        _bdpt_connect_to_cache_deferred(v, sd, lvc, lp_idx, path_len, mis_vm_weight_factor, shadow_rays, shadow_pending, shadow_valid, shadow_seg_med, st.cam_count(), n_light_paths_f)
+                        _bdpt_connect_to_cache_deferred(v, sd, lvc, lp_idx, path_len, mis_vm_weight_factor, shadow_rays, shadow_pending, shadow_valid, shadow_seg_med, st.cam_count())
                     else:
-                        st.total += _bdpt_connect_to_cache(v, sd, has_med, scratch, lvc, lp_idx, path_len, mis_vm_weight_factor, st.cam_count(), n_light_paths_f)
+                        st.total += _bdpt_connect_to_cache(v, sd, has_med, scratch, lvc, lp_idx, path_len, mis_vm_weight_factor, st.cam_count())
 
                 # NEE to distant/point/sphere/infinite lights, via the shared
                 # Light interface (bvh.mojo's LightSample samplers) + BxDF
@@ -714,9 +713,9 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 # A walk's exit does not merge: light and camera exits are two walks, not one.
                 if path_len > 0:
                     if defer_shadow_rays:
-                        _bdpt_connect_to_cache_deferred(v, sd, lvc, lp_idx, path_len, mis_vm_weight_factor, shadow_rays, shadow_pending, shadow_valid, shadow_seg_med, st.cam_count(), n_light_paths_f)
+                        _bdpt_connect_to_cache_deferred(v, sd, lvc, lp_idx, path_len, mis_vm_weight_factor, shadow_rays, shadow_pending, shadow_valid, shadow_seg_med, st.cam_count())
                     else:
-                        st.total += _bdpt_connect_to_cache(v, sd, has_med, scratch, lvc, lp_idx, path_len, mis_vm_weight_factor, st.cam_count(), n_light_paths_f)
+                        st.total += _bdpt_connect_to_cache(v, sd, has_med, scratch, lvc, lp_idx, path_len, mis_vm_weight_factor, st.cam_count())
                 var ctx_x = BSDF(LobeKind.sss_exit, True, False, n_o, n_o, RGB(Float32(1)), Int32(-1), mat.albedo.r,
                                     Float32(0), Int32(-1), Float32(0), Float32(0), True, False)
                 st.total += _vcm_nee_surface(sd, v, ctx_x, x_o, n_o, st.beta, Float32(0),
