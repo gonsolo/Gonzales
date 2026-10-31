@@ -6,7 +6,7 @@ from std.testing import assert_true, TestSuite
 from gonzales.scene.description.lexer import PbrtScanner
 from gonzales.scene.description.parse_types import SceneParseState
 from gonzales.scene.description.pbrt_parser import parse_scene_file, finalize_scene, mojo_parsed_free, ParsedScene_Mojo
-from gonzales.gpu.gpu_scene import gpu_upload_scene
+from gonzales.gpu.scene import gpu_upload_scene
 from gonzales.scene.appearance.materials import Material
 from gonzales.scene.accel.bvh import BVH2Node
 

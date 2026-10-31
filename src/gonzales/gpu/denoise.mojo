@@ -6,7 +6,7 @@ from gonzales.integrators.postprocess import _atrous_spatial_weight, _atrous_tap
 from max.gpu import block_dim, block_idx, thread_idx
 from std.math import ceildiv
 from std.sys import has_accelerator
-from gonzales.gpu.gpu_scene import GpuSceneHandle
+from gonzales.gpu.scene import GpuSceneHandle
 
 
 @__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))

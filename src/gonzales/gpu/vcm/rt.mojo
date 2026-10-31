@@ -6,7 +6,7 @@ from max.gpu.host import DeviceContext, DeviceBuffer
 from std.math import ceildiv
 from gonzales.scene.accel.bvh import SceneView
 from gonzales.scene.shapes.primitives import Intersection
-from gonzales.gpu.gpu_wavefront import (
+from gonzales.gpu.pt.wavefront import (
     vulkaninterop_unpack_results_kernel, rtcore_trace_unpack_gpu, rtcore_spheres_from_rays_gpu,
     rtcore_alpha_passes, rt_no_ids, rt_no_paths, rt_no_meshes,
 )

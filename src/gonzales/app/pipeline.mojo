@@ -24,21 +24,21 @@ from gonzales.core.sampling import TileSamplerParams, ThinLens, camera_ray_from_
 from gonzales.core.rng import mix_bits_u64
 from gonzales.scene.accel.bvh import SceneView, render_aux_buffers, _scene_bounding_sphere
 from gonzales.cpu.sppm import sppm_render
-from gonzales.gpu.sppm_gpu import sppm_render_gpu
+from gonzales.gpu.sppm.driver import sppm_render_gpu
 from gonzales.cpu.vcm import vcm_render
-from gonzales.gpu.vcm_gpu import vcm_render_gpu, VcmGpu
-from gonzales.gpu.vcm_rt import VcmRt
+from gonzales.gpu.vcm.driver import vcm_render_gpu, VcmGpu
+from gonzales.gpu.vcm.rt import VcmRt
 from gonzales.paths.vcm.vertex import _BDPT_MAX_VERTS
 from gonzales.transport.guide import GuideGrid, GuidedRenderer, null_guide, train_guided
-from gonzales.gpu.gpu_guide import gpu_guide_begin, gpu_guide_end
+from gonzales.gpu.pt.guide import gpu_guide_begin, gpu_guide_end
 from gonzales.transport.restir_di import DIReservoir, di_reservoir_init, ReservoirIO, reservoir_io_null
 from gonzales.transport.restir_gi import GIReservoir, gi_reservoir_init, GIReservoirIO, gi_reservoir_io_null
 from gonzales.integrators.pt.restir_sms import SMSReservoir, sms_reservoir_init, SMSReservoirIO, sms_reservoir_io_null
 from gonzales.integrators.pt.restir_vol import VolReservoir, vol_reservoir_init, vol_reservoir_io_null
-from gonzales.gpu.gpu import gpu_render_sample, gpu_render_wavefront, gpu_adaptive_update, gpu_mnee_adapt, gpu_download_albedo, gpu_clear_film, gpu_clear_restir, gpu_clear_restir_vol
-from gonzales.gpu.gpu_scene import GpuSceneHandle, XertPieces, heat_fill, mesh_host_bytes, xert_heat, xert_mesh_blas, WAVEFRONT_BATCH, gpu_available, gpu_upload_scene, gpu_alloc_pixel_buffers, gpu_free_scene, gpu_ptex_begin, gpu_ptex_finish, gpu_ptex_withhold, gpu_ptex_withheld, gpu_ptex_redo_upload, gpu_ptex_stream_start, gpu_ptex_poll, gpu_ptex_stream_finish, gpu_ptex_make_room, gpu_set_curve_bvh_dev, typed_ptr
-from gonzales.gpu.gpu_denoise import gpu_atrous_denoise
-from gonzales.gpu.gpu_wavefront import gpu_gen_aux_buffers
+from gonzales.gpu.pt.driver import gpu_render_sample, gpu_render_wavefront, gpu_adaptive_update, gpu_mnee_adapt, gpu_download_albedo, gpu_clear_film, gpu_clear_restir, gpu_clear_restir_vol
+from gonzales.gpu.scene import GpuSceneHandle, XertPieces, heat_fill, mesh_host_bytes, xert_heat, xert_mesh_blas, WAVEFRONT_BATCH, gpu_available, gpu_upload_scene, gpu_alloc_pixel_buffers, gpu_free_scene, gpu_ptex_begin, gpu_ptex_finish, gpu_ptex_withhold, gpu_ptex_withheld, gpu_ptex_redo_upload, gpu_ptex_stream_start, gpu_ptex_poll, gpu_ptex_stream_finish, gpu_ptex_make_room, gpu_set_curve_bvh_dev, typed_ptr
+from gonzales.gpu.denoise import gpu_atrous_denoise
+from gonzales.gpu.pt.wavefront import gpu_gen_aux_buffers
 from gonzales.app.viewer import CameraState, viewer_create, viewer_update_framebuffer, viewer_should_close, viewer_poll_events, viewer_get_camera_state, viewer_set_camera_state, viewer_destroy, viewer_denoise_enabled, viewer_monitor_size, build_camera_to_world
 from gonzales.core.spectrum import SpectralHandle, null_spectral_handle
 from gonzales.scene.accel.vulkanrt import vulkanrt_build_scene, vulkanrt_destroy_scene

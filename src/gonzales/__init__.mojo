@@ -10,7 +10,7 @@ from gonzales.scene.description.pbrt_parser import ParsedScene_Mojo
 from gonzales.scene.shapes.ply_prefetch import PlyPrefetch, scan_plys
 from gonzales.core.os_thread import OsThread, ThreadArg
 from gonzales.scene.description.scene_loader import mojo_parse_scene_any
-from gonzales.gpu.gpu_scene import gpu_available
+from gonzales.gpu.scene import gpu_available
 from max.gpu.host import DeviceContext
 from gonzales.core.sensors import scan_film_sensor_params
 

@@ -11,7 +11,7 @@
 from std.memory import Pointer
 from std.sys.info import size_of
 from max.gpu.host import DeviceBuffer
-from gonzales.gpu.gpu_scene import GpuSceneHandle
+from gonzales.gpu.scene import GpuSceneHandle
 from gonzales.transport.guide import GuideGrid, guide_is_active, null_guide
 
 

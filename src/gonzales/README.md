@@ -5,9 +5,9 @@ A module imports only from its own layer and the ones below it. `Tests/check_lay
 
 ```
 app          pipeline, command line, viewer
-cpu, gpu     how a render is driven: threads and tiles, kernels and buffers; peers
+cpu, gpu     how a render is driven, per integrator; peers: threads and tiles, kernels and buffers
 integrators  one path step, shared by cpu and gpu: pt/, vcm/, sppm/
-paths        subpaths, vertices, connections, MIS, VCM's strategies and merge grid
+paths/vcm    subpaths, vertices, connections, MIS, strategies and the merge grid
 estimators   generic photon stores and density estimates
 transport    lobes, light sampling, walks, MNEE, SMS, texturing
 scene/description  parsers, scene building

@@ -16,10 +16,10 @@ from gonzales.scene.appearance.footprint import camera_footprint
 from gonzales.scene.description.pbrt_parser import ParsedScene_Mojo
 from gonzales.integrators.sppm.sppm import SPPMPixel, SPPMPhoton, _vp_samples_for, _VP_SAMPLES, _photon_depth_cap
 from gonzales.estimators.photon_grid import _HSIZE
-from gonzales.gpu.gpu_scene import GpuSceneHandle
+from gonzales.gpu.scene import GpuSceneHandle
 from gonzales.core.progress import Progress
 from gonzales.integrators.outputs import finish_render
-from gonzales.gpu.sppm_kernels import (
+from gonzales.gpu.sppm.kernels import (
     sppm_reset_i32_gpu, sppm_gen_vp_gpu, sppm_emit_photons_gpu, sppm_grid_reset_gpu, sppm_grid_count_gpu,
     sppm_grid_insert_gpu, sppm_gather_gpu, sppm_nee_gpu, sppm_finalize_gpu, sppm_flush_gpu, sppm_retrace_vp_gpu,
 )

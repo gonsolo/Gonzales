@@ -34,7 +34,7 @@ from max.gpu.host._nvidia_cuda import CUDA
 from std.atomic import Atomic
 from std.math import ceildiv, sqrt
 from std.sys import has_accelerator
-from gonzales.gpu.gpu_scene import GpuSceneHandle
+from gonzales.gpu.scene import GpuSceneHandle
 from gonzales.transport.sss_walk import _sss_walk_step
 
 @__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
