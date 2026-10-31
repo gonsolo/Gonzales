@@ -16,7 +16,7 @@ from gonzales.core.rng import PCG32
 from gonzales.transport.bxdf import BSDF, LobeEval, LobeTables
 from gonzales.core.spectrum import SampledWavelengths, SpectralSample, spec_illum
 from gonzales.paths.bdpt_vertex import BDPTVertex
-from gonzales.scene.appearance.media import medium_sigma_t_at_spectral
+from gonzales.transport.medium import MediumView
 from gonzales.paths.bdpt_nee import _bdpt_simple_light_count, _bdpt_sample_simple_light, _bdpt_nee_contribute, _bdpt_nee_transmittance
 
 @always_inline
@@ -52,9 +52,7 @@ def _vcm_free_flight(ref sd: SceneView, v: BDPTVertex, tr: SpectralSample) -> Fl
     (Scenes/vcm_volume_mis_derivation.py, free_flight)."""
     if v.is_surface != Int32(0) or Int(v.med_idx) < 0:
         return tr.average()
-    ref s = sd.spectral
-    return (tr * medium_sigma_t_at_spectral(sd.mediums[unsafe_offset=Int(v.med_idx)], sd.grids, sd.nvdbGrids, v.pos.to_simd(),
-                                            v.wavelengths, s.coeffs, s.res, s.cie_x, s.cie_y, s.cie_z, s.d65)).average()
+    return (tr * MediumView.at(sd, v.med_idx).sigma_t_at(v.pos.to_simd(), v.wavelengths)).average()
 
 
 @always_inline

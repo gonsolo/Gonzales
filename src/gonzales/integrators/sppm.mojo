@@ -10,6 +10,7 @@ from std.math import sqrt, cos, sin, floor, max, min
 from std.memory.alloc import unsafe_alloc
 from std.atomic import Atomic
 from std.memory import bitcast
+from gonzales.transport.medium import MediumView
 from gonzales.core.geometry import face_toward
 from gonzales.transport.sss_walk import sss_entry_lobe, sss_walk_to_exit
 from gonzales.transport.medium_interface import default_emit_medium, medium_after
@@ -20,8 +21,8 @@ from gonzales.scene.shapes.primitives import (
 )
 from gonzales.core.geometry import Ray
 from gonzales.scene.shapes.primitives import mesh_pos
-from gonzales.scene.appearance.media import medium_inv_sigma_t_spectral, medium_kernel_radius, hg_phase, hg_sample
-from gonzales.scene.appearance.media import Medium, Grid, NvdbGrid, sample_free_flight, medium_is_heterogeneous, medium_sigma_t_spectral, medium_grid_for, medium_nvdb_for, grid_sample_density, nvdb_sample_density, SSS_WALK_ROUNDS, spectral_free_flight_weight
+from gonzales.scene.appearance.media import medium_inv_sigma_t_spectral
+from gonzales.scene.appearance.media import Medium, Grid, NvdbGrid, SSS_WALK_ROUNDS
 from gonzales.scene.appearance.lights import area_light_pick_triangle, area_light_side_pdf, AreaLight
 from gonzales.scene.shapes.curves import Curve, curve_at, curve_piece_endpoints, _curve_perp_axis
 from gonzales.scene.accel.bvh import traverse_dispatch, any_hit_dispatch
@@ -678,17 +679,13 @@ def _sppm_trace_visible_point[use_gpu: Bool](
 
         # ── Volume free-flight ────────────────────────────────────────────
         if has_media and Int(cur_med_idx) >= 0:
-            var med = sd.mediums[unsafe_offset=Int(cur_med_idx)]
             # ONE shared sampler for both medium kinds (geometry.mojo):
             # homogeneous closed form, or delta tracking against the real
             # density field. This call site used to be the homogeneous one
             # unconditionally, which rendered every "uniformgrid"/"nanovdb"/
             # "cloud" medium as uniform density-1 fog -- bunny-cloud came out a
             # featureless sphere with no bunny in it. See sample_free_flight.
-            var ff = sample_free_flight(
-                med, sd.grids, sd.nvdbGrids, Vec3f(ro.x, ro.y, ro.z), rd, t_hit, pcg,
-                vp.wavelengths, sd.spectral.coeffs, sd.spectral.res,
-                sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65)
+            var ff = MediumView.at(sd, cur_med_idx).free_flight_emitting(Vec3f(ro.x, ro.y, ro.z), rd, t_hit, pcg, vp.wavelengths)
             var (em_r, em_g, em_b) = spectral_sample_to_rgb(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y,
                                                             sd.spectral.cie_z, sd.spectral.d65, ff.emission, vp.wavelengths)
             vp.env += vp.beta * RGB(em_r, em_g, em_b)
@@ -1200,15 +1197,14 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
 
         # ── Volume free-flight ────────────────────────────────────────────
         if has_media and Int(cur_med_idx) >= 0:
-            var med = sd.mediums[unsafe_offset=Int(cur_med_idx)]
+            var medv = MediumView.at(sd, cur_med_idx)
             # ONE shared sampler for both medium kinds (geometry.mojo):
             # homogeneous closed form, or delta tracking against the real
             # density field. This call site used to be the homogeneous one
             # unconditionally, which rendered every "uniformgrid"/"nanovdb"/
             # "cloud" medium as uniform density-1 fog -- bunny-cloud came out a
             # featureless sphere with no bunny in it. See sample_free_flight.
-            var ff = sample_free_flight(
-                med, sd.grids, sd.nvdbGrids, Vec3f(ro.x, ro.y, ro.z), rd, t_hit, pcg)
+            var ff = medv.free_flight(Vec3f(ro.x, ro.y, ro.z), rd, t_hit, pcg)
             if ff.collided:
                 # A scattering event INSIDE a subsurface interior is a step of
                 # the subsurface random walk, not a path bounce, so it is not
@@ -1216,7 +1212,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
                 # buys the path tracer. Skin1 at the scale sssdragon/head use
                 # needs tens to hundreds of these before a photon escapes or is
                 # absorbed; charging them ends the walk almost immediately.
-                if med.is_sss != Int32(0):
+                if medv.med.is_sss != Int32(0):
                     bounce -= 1
                 # Volume scatter — store photon and sample new direction
                 var sp = ro + rd * ff.t_free
@@ -1243,7 +1239,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
                 # exactly the channel value in every lane.
                 flux *= rgb_bands_to_spectral_sample((ff.albedo).r, (ff.albedo).g, (ff.albedo).b, ph_wavelengths)
                 # Sample new isotropic direction (uniform sphere)
-                var hs = hg_sample((-rd).to_simd(), med.g, pcg.next_float(), pcg.next_float())
+                var hs = medv.sample_phase((-rd).to_simd(), pcg.next_float(), pcg.next_float())
                 rd = vec3f(Vec3f(hs[0], hs[1], hs[2]))
                 ro = sp + rd * Float32(0.0001)
                 continue
@@ -1253,8 +1249,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
                 # PER LANE -- see spectral_free_flight_weight's docstring for
                 # why this differs from (and replaces) band-picking the
                 # already-exponentiated RGB ratio.
-                flux *= spectral_free_flight_weight(med, ff, t_hit, ph_wavelengths,
-                    spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65)
+                flux *= medv.weight(ff, t_hit, ph_wavelengths)
 
         var mat_idx = Int(inter.primId.materialIndex)
         var mat = sd.materials[unsafe_offset=mat_idx]
@@ -1412,7 +1407,7 @@ def _sppm_photon_on_vp_surface(vp_is_volume: Int32, vp_mat_kind: Int32, vp_norma
 @always_inline
 def _vp_phase(ref sd: SceneView, vp: SPPMPixel, wi: Vec3f) -> Float32:
     """A volume visible point's phase function toward wi."""
-    return hg_phase(dot(vp.wo.to_simd(), wi), sd.mediums[unsafe_offset=Int(vp.med_idx)].g)
+    return MediumView.at(sd, vp.med_idx).phase(vp.wo.to_simd(), wi)
 
 
 def _sppm_gather_one(
@@ -1467,7 +1462,7 @@ def _sppm_gather_one(
     var vp = vps[unsafe_offset=i]
     var r2 = vp.r2
     if vp.is_volume == PhotonKind.volume and Int(vp.med_idx) >= 0:
-        var cap = medium_kernel_radius(sd.mediums[unsafe_offset=Int(vp.med_idx)], sd.grids, sd.nvdbGrids, vp.pos.to_simd())
+        var cap = MediumView.at(sd, vp.med_idx).kernel_radius(vp.pos.to_simd())
         if r2 > cap * cap:   # same history rescale as the update below
             var q = cap * cap / r2
             vp.tau = vp.tau * (q * sqrt(q))

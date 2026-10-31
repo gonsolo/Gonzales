@@ -3,6 +3,7 @@
 
 from std.collections import Array
 from std.math import sqrt, cos, sin, log, exp, max, abs
+from gonzales.transport.medium import MediumView
 from gonzales.core.geometry import face_toward
 from gonzales.transport.sss_walk import SssExit, sss_entry_lobe, sss_walk_to_exit
 from gonzales.transport.medium_interface import medium_after
@@ -12,7 +13,6 @@ from gonzales.transport.render_state import PDF_DELTA_FULL, PDF_DROP_DIRECT
 from gonzales.scene.appearance.materials import Material, MatKind, LobeKind, resolve_mix
 from gonzales.scene.shapes.primitives import Intersection, mesh_pos
 from gonzales.core.geometry import Ray
-from gonzales.scene.appearance.media import sample_free_flight, spectral_free_flight_weight
 from gonzales.paths.vcm_mis import (
     vcm_phase_scatter,
     vcm_arrival_carries, vcm_scatter_carries,
@@ -498,18 +498,15 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 # enters dVCM) is outside CAMIS's Class: S0's harness models
                 # vacuum edges only. Legacy weights stay exact for it.
                 camis.in_class = False
-            var med = sd.mediums[unsafe_offset=Int(st.cur_med_idx)]
+            var med = MediumView.at(sd, st.cur_med_idx)
             # ONE shared sampler for both medium kinds (geometry.mojo):
             # homogeneous closed form, or delta tracking against the real
-            var ff = sample_free_flight(
-                med, sd.grids, sd.nvdbGrids, Vec3f(st.ro.x, st.ro.y, st.ro.z), st.rd, t_hit, pcg,
-                st.wl, sd.spectral.coeffs, sd.spectral.res,
-                sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65)
+            var ff = med.free_flight_emitting(Vec3f(st.ro.x, st.ro.y, st.ro.z), st.rd, t_hit, pcg, st.wl)
             st.total += st.beta * ff.emission   # no light path samples a glowing medium, so no MIS
             if ff.collided:
                 # Chromatic collision weight -- the ratio to the sampled (red)
                 # channel. Without it a chromatic medium is biased at every
-                st.beta *= spectral_free_flight_weight(med, ff, t_hit, st.wl, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65)
+                st.beta *= med.weight(ff, t_hit, st.wl)
                 # Volume scatter vertex
                 var sp = st.ro + st.rd*ff.t_free
                 # dVCM's Jacobian above was applied with t_hit (distance to
@@ -524,7 +521,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 v.beta = st.beta
                 v.alb = ff.albedo
                 v.is_surface = Int32(0); v.is_delta = Int32(0)
-                v.wo = vec3f(-ray_dir); v.pdf_bwd = med.g
+                v.wo = vec3f(-ray_dir); v.pdf_bwd = med.med.g
                 v.pdf_fwd = ff.pdf   # the density actually sampled from; under hero-wavelength MIS this is a lane MIXTURE, not sig_t's lone exponential
                 v.med_idx = st.cur_med_idx
                 v.wavelengths = st.wl
@@ -538,7 +535,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 # CACHE's per-path slot count, and the camera subpath stores
                 var eta_v = _vcm_eta_at(sd, v, mis_vm_weight_factor)
                 var (dvcm_v, dvc_v, dvm_v, wi_v) = vcm_phase_scatter[dvc0=_VCM_CAMIS](
-                    -ray_dir, med.g, pcg.next_float(), pcg.next_float(),
+                    -ray_dir, med.med.g, pcg.next_float(), pcg.next_float(),
                     st.dvcm, st.dvc, st.dvm, mis_vc_weight_factor, eta_v)
                 st.dvcm = dvcm_v; st.dvc = dvc_v; st.dvm = dvm_v
                 st.prev_sig_t = ff.sig_t
@@ -562,7 +559,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             else:
                 # Pass-through weight (a per-channel RATIO -- see
                 # sample_homogeneous_free_flight; the sampled channel's
-                st.beta *= spectral_free_flight_weight(med, ff, t_hit, st.wl, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65)
+                st.beta *= med.weight(ff, t_hit, st.wl)
                 # MIS: dVCM must equal 1/P(prev -> this vertex), and reaching a
                 # SURFACE through a medium carries a survival factor
                 var ff_exp = -log(max(ff.pdf, Float32(1e-30)))   # optical depth of the density actually sampled from (see FreeFlight.pdf)

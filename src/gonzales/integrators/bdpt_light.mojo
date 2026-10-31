@@ -2,12 +2,12 @@
 # Part of the BDPT/VCM machinery that used to be one file (bdpt_*.mojo).
 
 from std.math import sqrt, cos, sin, log, exp, max
+from gonzales.transport.medium import MediumView
 from gonzales.transport.medium_interface import medium_after
 from gonzales.core.geometry import Point3f, Point2f, Vec3f, vec3f, point3f, dot, PI, INV_FOUR_PI
 from gonzales.scene.appearance.materials import MatKind, LobeKind, resolve_mix
 from gonzales.scene.shapes.primitives import Intersection
 from gonzales.core.geometry import Ray
-from gonzales.scene.appearance.media import sample_free_flight, spectral_free_flight_weight
 from gonzales.paths.vcm_mis import vcm_scatter_carries, vcm_phase_scatter
 from gonzales.paths.vcm_camis import (
     CamisLightRecord, CamisLightCarry, camis_light_carry_off, camis_light_origin, camis_light_arrive,
@@ -334,14 +334,13 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
         if has_med and Int(st.cur_med_idx) >= 0:
             comptime if _VCM_CAMIS:
                 camis_l.in_class = False   # a medium segment: see the camera side
-            var med = sd.mediums[unsafe_offset=Int(st.cur_med_idx)]
+            var med = MediumView.at(sd, st.cur_med_idx)
             # ONE shared sampler for both medium kinds (geometry.mojo):
             # homogeneous closed form, or delta tracking against the real
-            var ff = sample_free_flight(
-                med, sd.grids, sd.nvdbGrids, Vec3f(st.ro.x, st.ro.y, st.ro.z), st.rd, t_hit, pcg)
+            var ff = med.free_flight(Vec3f(st.ro.x, st.ro.y, st.ro.z), st.rd, t_hit, pcg)
             if ff.collided:
                 # Chromatic collision weight; see the camera-side comment.
-                st.flux *= spectral_free_flight_weight(med, ff, t_hit, st.wl, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65)
+                st.flux *= med.weight(ff, t_hit, st.wl)
                 var sp = st.ro + st.rd*ff.t_free
                 # dVCM's Jacobian above was applied with t_hit (the distance
                 # to the SURFACE the ray was cast toward), computed before we
@@ -363,7 +362,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
                 v.beta = st.flux
                 v.alb = ff.albedo
                 v.is_surface = Int32(0); v.is_delta = Int32(0)
-                v.wo = vec3f(-ray_dir); v.pdf_bwd = med.g
+                v.wo = vec3f(-ray_dir); v.pdf_bwd = med.med.g
                 v.pdf_fwd = ff.pdf   # the density actually sampled from; under hero-wavelength MIS this is a lane MIXTURE, not sig_t's lone exponential
                 v.med_idx = st.cur_med_idx
                 v.wavelengths = st.wl
@@ -381,7 +380,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
                 # 0 for them -- this function's own docstring: they have no
                 var eta_v = _vcm_eta_at(sd, v, mis_vm_weight_factor)
                 var (dvcm_v, dvc_v, dvm_v, wi_v) = vcm_phase_scatter[dvc0=_VCM_CAMIS](
-                    -ray_dir, med.g, pcg.next_float(), pcg.next_float(),
+                    -ray_dir, med.med.g, pcg.next_float(), pcg.next_float(),
                     st.dvcm, st.dvc, st.dvm, mis_vc_weight_factor, eta_v)
                 st.dvcm = dvcm_v; st.dvc = dvc_v; st.dvm = dvm_v
                 st.prev_sig_t = ff.sig_t
@@ -393,7 +392,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
                 st.mis_null_dist = Float32(0)
                 return True   # volume free-flight scatter: no vertex stored this bounce, path continues
             else:
-                st.flux *= spectral_free_flight_weight(med, ff, t_hit, st.wl, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65)
+                st.flux *= med.weight(ff, t_hit, st.wl)
                 # Same missing free-flight factor on dVCM as the camera path --
                 # see _bdpt_camera_path_bounce's matching comment for the
                 # derivation and the measured error growth with optical depth.

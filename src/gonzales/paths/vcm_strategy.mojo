@@ -5,7 +5,7 @@ from gonzales.scene.appearance.materials import LobeKind
 from gonzales.scene.accel.bvh import SceneView, _is_real_ptr, curve_radius
 from gonzales.estimators.photon_grid import _hash_cell, _PHOTON_BUCKET_CAP, grid_keep
 from gonzales.paths.bdpt_vertex import _BDPT_MAX_VERTS, BDPTVertex
-from gonzales.scene.appearance.media import medium_kernel_radius
+from gonzales.transport.medium import MediumView
 
 
 @always_inline
@@ -139,7 +139,7 @@ def _vcm_volume_radius_at(ref sd: SceneView, v: BDPTVertex) -> Float32:
     var r = _vcm_merge_radius_at(sd, v.pos, is_volume=True)
     if Int(v.med_idx) < 0:
         return r
-    return min(r, medium_kernel_radius(sd.mediums[unsafe_offset=Int(v.med_idx)], sd.grids, sd.nvdbGrids, v.pos.to_simd()))
+    return min(r, MediumView.at(sd, v.med_idx).kernel_radius(v.pos.to_simd()))
 
 
 @always_inline

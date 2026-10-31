@@ -9,7 +9,7 @@ from gonzales.scene.appearance.materials import LobeKind
 from gonzales.paths.vcm_camis import CamisCamRecord, CamisCamCarry, CamisLightRecord
 from gonzales.scene.accel.bvh import SceneView, _is_real_ptr, curve_radius
 from gonzales.estimators.photon_grid import _HSIZE, _hash_cell, _PHOTON_BUCKET_CAP, grid_keep, grid_weight, gather_disk_coverage, gather_disk_contains
-from gonzales.scene.appearance.media import medium_inv_sigma_t_spectral
+from gonzales.transport.medium import MediumView
 from gonzales.core.spectrum import SpectralSample
 from gonzales.paths.bdpt_vertex import _BDPT_MAX_VERTS, BDPTVertex
 from gonzales.paths.bdpt_eval import _lobe_eval, _bdpt_vertex_mis_scoped
@@ -164,9 +164,7 @@ def _bdpt_merge_from_cache(
                     k = Int(merge_next[unsafe_offset=k * _VCM_MN_STRIDE + lvl])
     var result = total * cv.beta * norm
     if cv.is_surface == Int32(0) and Int(cv.med_idx) >= 0:
-        ref s = sd.spectral
-        result *= medium_inv_sigma_t_spectral(sd.mediums[unsafe_offset=Int(cv.med_idx)], sd.grids, sd.nvdbGrids, cv.pos.to_simd(),
-                                              cv.wavelengths, s.coeffs, s.res, s.cie_x, s.cie_y, s.cie_z, s.d65)
+        result *= MediumView.at(sd, cv.med_idx).inv_sigma_t_at(cv.pos.to_simd(), cv.wavelengths)
     # Truncation: the photons came only from the part of the disk that is
     # surface (gather_disk_coverage). Queries that found nothing have nothing
     # to correct, and a disk the probes find empty keeps the plain estimate.
