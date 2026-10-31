@@ -15,7 +15,7 @@ from gonzales.paths.vcm.vertex import _BDPT_MAX_VERTS, BDPTVertex
 from gonzales.scene.appearance.materials import LobeKind
 from gonzales.paths.vcm.nee import _visible_transmittance
 from gonzales.paths.vcm.eval import _vcm_free_flight, _vcm_cos_at, _eval_vertex_spectral, _bdpt_vertex_pdfs, _bdpt_vertex_mis_scoped, _bdpt_connect_pair_weighted
-from gonzales.paths.vcm.strategy import _vcm_too_long, _vcm_keep, _vcm_eta_scale, _vcm_eta_at, _vcm_on_fibre, _vcm_past_depth, _vcm_past_cache
+from gonzales.paths.vcm.strategy import VcmStrategies, _vcm_keep, _vcm_eta_scale, _vcm_on_fibre
 
 
 @always_inline
@@ -189,7 +189,7 @@ def _bdpt_connect_to_camera(
     #   wLight = (cameraPdfA / lightSubPathCount)
     var (_dp, rev_pdf_w) = _bdpt_vertex_pdfs(lv, Vec3f(dir_to_cam[0], dir_to_cam[1], dir_to_cam[2]), sd)
     var camera_pdf_a = image_to_surface * _vcm_free_flight(sd, lv, Tr)
-    var eta_lv_splat = _vcm_eta_at(sd, lv, mis_vm_weight_factor)
+    var eta_lv_splat = VcmStrategies.merge_density(sd, lv, mis_vm_weight_factor)
     var mis_weight: Float32
     var w_light = (camera_pdf_a * inv_n) * (eta_lv_splat + lv.dVCM + lv.dVC * rev_pdf_w)
     mis_weight = Float32(1) / (w_light + Float32(1))
@@ -206,7 +206,7 @@ def _bdpt_connect_to_cache(
     lp_idx: Int,
     path_len: Int,
     mis_vm_weight_factor: Float32,
-    cam_count: Int,   # cv's non-delta interior-vertex count (see _vcm_depth)
+    cam_count: Int,   # cv's non-delta interior-vertex count (see VcmStrategies.depth)
 ) -> SpectralSample:
     """VCM Stage 2b (2026-07-10): connect eye vertex `cv` to EVERY vertex of
     its deterministically PAIRED light path (`lp_idx` — standard Veach BDPT"""
@@ -215,10 +215,10 @@ def _bdpt_connect_to_cache(
     # Volume vertices have no dVCM/dVC (no surface pdf), so any (s,t) split
     var took_unweighted = False
     for local in range(path_len):
-        if _vcm_past_depth(sd, lvc, lp_idx, local, cam_count):
-            break   # see _vcm_depth: a path longer than d has no strategy at all
+        if VcmStrategies.past_depth(sd, lvc, lp_idx, local, cam_count):
+            break   # see VcmStrategies.depth: a path longer than d has no strategy at all
         var lv = lvc[unsafe_offset=lp_idx * _BDPT_MAX_VERTS + local]
-        var long_path = _vcm_past_cache(lvc, lp_idx, local, cam_count)
+        var long_path = VcmStrategies.past_cache(lvc, lp_idx, local, cam_count)
         if long_path and lv.is_light != Int32(1):
             break
         if not _bdpt_connect_pair_weighted(cv, lv):
@@ -249,8 +249,8 @@ def _bdpt_connect_to_cache_deferred(
     # _bdpt_connect_to_cache -- see its comment for the derivation and the
     var took_unweighted = False
     for local in range(_BDPT_MAX_VERTS):
-        if local < path_len and _vcm_too_long(sd, lvc, lp_idx, local, cam_count):
-            break   # see _vcm_depth
+        if local < path_len and VcmStrategies.too_long(sd, lvc, lp_idx, local, cam_count):
+            break   # see VcmStrategies.depth
         if local >= path_len:
             shadow_valid[unsafe_offset=base + local] = Int8(0)
             continue
@@ -392,14 +392,14 @@ def _bdpt_connect_mis_weight(
             light_bsdf_rev_pdf_w = lrp
         var camera_bsdf_dir_pdf_a = camera_bsdf_dir_pdf_w * cos_lv / dist2 * _vcm_free_flight(sd, lv, tr)
         var light_bsdf_dir_pdf_a = light_bsdf_dir_pdf_w * cos_cv / dist2 * _vcm_free_flight(sd, cv, tr)
-        var eta_cv = _vcm_eta_at(sd, cv, mis_vm_weight_factor)
+        var eta_cv = VcmStrategies.merge_density(sd, cv, mis_vm_weight_factor)
         var w_light: Float32
         if lv.is_light == Int32(1):
             # s=1: this connection IS VCM's direct-light strategy for an area
             # light (there is no separate area-light NEE), so its light-side
             w_light = camera_bsdf_dir_pdf_a / max(lv.pdf_fwd, Float32(1e-30))
         else:
-            var eta_lv = _vcm_eta_at(sd, lv, mis_vm_weight_factor)
+            var eta_lv = VcmStrategies.merge_density(sd, lv, mis_vm_weight_factor)
             w_light = camera_bsdf_dir_pdf_a * (eta_lv + lv.dVCM + lv.dVC * light_bsdf_rev_pdf_w)
         var w_camera = Float32(0) if long_path else light_bsdf_dir_pdf_a * (eta_cv + cv.dVCM + cv.dVC * camera_bsdf_rev_pdf_w)
         return Float32(1) / (w_light + Float32(1) + w_camera)

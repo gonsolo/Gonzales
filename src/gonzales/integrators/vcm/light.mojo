@@ -19,7 +19,7 @@ from gonzales.core.spectrum import SampledWavelengths, SpectralSample, spec_refl
 from gonzales.scene.shapes.geom_normal import _geom_normal
 from gonzales.paths.vcm.vertex import _VCM_SSS_CAMERA_ONLY, _vcm_walk_limit, _BDPT_MAX_VERTS, BDPTVertex, _null_vertex
 from gonzales.paths.vcm.eval import _bdpt_vertex_mis_scoped, _vcm_mnee_light_dvcm
-from gonzales.paths.vcm.strategy import _vcm_depth, _VCM_MAX_STORED, _vcm_keep, _vcm_eta_scale, _vcm_eta_at, _vcm_fibre_scale
+from gonzales.paths.vcm.strategy import VcmStrategies, _vcm_keep, _vcm_eta_scale, _vcm_fibre_scale
 from gonzales.paths.vcm.connect import _bdpt_store_lvc_vertex
 from gonzales.integrators.vcm.camera import (
     _vcm_scatter, _vcm_lobe_vertex, _vcm_sss_walk, _vcm_sss_exit_vertex,
@@ -283,11 +283,11 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
             return False   # mirrors the original loop's top-of-iteration guard
         # The next vertex stored would be interior vertex n_verts (after an area
         # light's origin slot) or n_verts + 1 (no origin slot): past d it starts
-        # no strategy (see _vcm_depth).
+        # no strategy (see VcmStrategies.depth).
         var next_count = st.n_verts
         if st.n_verts == 0 or lvc[unsafe_offset=lp_idx * _BDPT_MAX_VERTS].is_light != Int32(1):
             next_count = st.n_verts + 1
-        if next_count + st.n_delta > _vcm_depth(sd) or next_count > _VCM_MAX_STORED:
+        if next_count + st.n_delta > VcmStrategies.depth(sd) or VcmStrategies.beyond_cache(next_count):
             return False
         if inter.hit == Int8(0):
             return False   # nothing hit -- path escapes the scene
@@ -352,7 +352,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
                 _bdpt_store_lvc_vertex(v, lvc, lp_idx, st.n_verts - 1)
                 # Distant/infinite/point lights store NO lv0 (n_verts starts at
                 # 0 for them -- this function's own docstring: they have no
-                var eta_v = _vcm_eta_at(sd, v, mis_vm_weight_factor)
+                var eta_v = VcmStrategies.merge_density(sd, v, mis_vm_weight_factor)
                 var (dvcm_v, dvc_v, dvm_v, wi_v) = vcm_phase_scatter(
                     -ray_dir, med.med.g, pcg.next_float(), pcg.next_float(),
                     st.dvcm, st.dvc, st.dvm, mis_vc_weight_factor, eta_v)

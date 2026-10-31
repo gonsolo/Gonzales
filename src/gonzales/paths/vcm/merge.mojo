@@ -13,7 +13,7 @@ from gonzales.core.spectrum import SpectralSample
 from gonzales.paths.vcm.vertex import _BDPT_MAX_VERTS, BDPTVertex
 from gonzales.paths.vcm.eval import _lobe_eval, _bdpt_vertex_mis_scoped
 from gonzales.paths.vcm.grid import _VCM_FINE_LEVELS, _VCM_MN_STRIDE
-from gonzales.paths.vcm.strategy import vcm_can_merge, _vcm_too_long, _vcm_keep, _vcm_cap, _MERGE_COVERAGE, _VCM_VISIT_INSTRUMENT, _vcm_budget_active, _vcm_merge_radius_at, _VCM_RADIUS_VOLUME_SCALE, _vcm_inv_eta_at, _vcm_volume_radius_at, _vcm_mergeable, _vcm_on_fibre
+from gonzales.paths.vcm.strategy import VcmStrategies, _vcm_keep, _vcm_cap, _MERGE_COVERAGE, _VCM_VISIT_INSTRUMENT, _vcm_budget_active, _vcm_merge_radius_at, _VCM_RADIUS_VOLUME_SCALE, _vcm_volume_radius_at, _vcm_on_fibre
 from gonzales.paths.vcm.merge_weight import _bdpt_merge_mis_weight
 
 @always_inline
@@ -27,7 +27,7 @@ def _bdpt_merge_from_cache(
     r2_pass: Float32,
     norm_pass: Float32,
     mis_vc_weight_factor: Float32,
-    cam_count: Int,   # cv's non-delta interior-vertex count (see _vcm_depth)
+    cam_count: Int,   # cv's non-delta interior-vertex count (see VcmStrategies.depth)
     # Benchmark instrumentation only (not part of the real
     # estimator, never read by anything that affects `result`): three
     *,
@@ -45,7 +45,7 @@ def _bdpt_merge_from_cache(
         return SpectralSample(Float32(0))
     # A vertex kind with no real pdf has no real MIS weight either -- the
     # weight below falls back to 1, and an unweighted merge summed with an
-    if not _bdpt_vertex_mis_scoped(cv) or not _vcm_mergeable(sd, cv):
+    if not _bdpt_vertex_mis_scoped(cv) or not VcmStrategies.can_merge_at(sd, cv):
         return SpectralSample(Float32(0))
     var total = SpectralSample(Float32(0))
     # This query's own radius (see _vcm_merge_radius_at); r2/norm arrive as the
@@ -68,7 +68,7 @@ def _bdpt_merge_from_cache(
         var rq = _vcm_merge_radius_at(sd, cv.pos)
         r2 = rq * rq
         norm = norm_pass * (r2_pass / max(r2, Float32(1e-20)))
-    var inv_eta_cv = _vcm_inv_eta_at(sd, cv, mis_vc_weight_factor)
+    var inv_eta_cv = VcmStrategies.inv_merge_density(sd, cv, mis_vc_weight_factor)
     var on_fibre = _vcm_on_fibre(cv)
     if on_fibre:
         # The fibre kernel: N * 2r * w, the strand within r as a ribbon of its own width, instead of N * pi r^2.
@@ -98,14 +98,14 @@ def _bdpt_merge_from_cache(
                 var k = Int(lheads[unsafe_offset=hl])
                 while k != -1:
                     # The merged path shares cv and the photon, so its interior
-                    # length is light count + camera count - 1 (see _vcm_depth).
-                    if _vcm_too_long(sd, lvc, k // _BDPT_MAX_VERTS, k % _BDPT_MAX_VERTS, cam_count - 1):
+                    # length is light count + camera count - 1 (see VcmStrategies.depth).
+                    if VcmStrategies.too_long(sd, lvc, k // _BDPT_MAX_VERTS, k % _BDPT_MAX_VERTS, cam_count - 1):
                         k = Int(merge_next[unsafe_offset=k * _VCM_MN_STRIDE + lvl])
                         continue
                     var lv = lvc[unsafe_offset=k]
                     # is_light==1 vertices are the light SOURCE's own point
                     # (the s=1 connection strategy): their beta is 1/pdf_area
-                    if vcm_can_merge(cv, lv):
+                    if VcmStrategies.can_merge(cv, lv):
                         var e = lv.pos - cv.pos
                         var dist2 = e.length_sq()
                         var accept: Bool

@@ -63,7 +63,7 @@ def _vcm_nee_one(
 ) -> SpectralSample:
     """One light sample's contribution. In a medium the weight needs the edge's transmittance, so it is traced first."""
     if long_path:
-        pol.emission_pdf_w = Float32(0)   # no light strategy reaches this far (_vcm_past_cache)
+        pol.emission_pdf_w = Float32(0)   # no light strategy reaches this far (VcmStrategies.past_cache)
     if Int(sd.mediumCount) == 0:
         return _bdpt_nee_contribute(beta, ctx.nee_weight_mis(ls, tab, wavelengths, pol), ls, pos, gn_geo, cur_med_idx, sd, scratch, wavelengths, spawn_eps, two_sided)
     var tr = _bdpt_nee_transmittance(ls, pos, gn_geo, cur_med_idx, sd, scratch, wavelengths, spawn_eps, two_sided)

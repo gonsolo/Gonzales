@@ -266,7 +266,7 @@ struct SceneView(TrivialRegisterPassable, DevicePassable):
     var vcmKeepInvCell: Float32
     var vcmKeepScale:   Float32
     # VCM's full-path length limit: every strategy produces only paths with at
-    # most this many non-delta interior vertices (vcm_grid.mojo's _vcm_depth).
+    # most this many non-delta interior vertices (VcmStrategies.depth).
     var vcmMaxDepth:    Int32
     # VCM's per-vertex merge radius (vcm_grid.mojo's _vcm_merge_radius_at): the
     # camera position, the world size of `_VCM_FOOTPRINT_PIXELS` pixels at unit

@@ -9,45 +9,102 @@ from gonzales.paths.vcm.vertex import _BDPT_MAX_VERTS, BDPTVertex
 from gonzales.transport.medium import MediumView
 
 
-@always_inline
-def _vcm_depth(ref sd: SceneView) -> Int:
-    """VCM's full-path length limit: the scene's maxdepth, glass bounces included."""
-    var d = Int(sd.vcmMaxDepth)
-    return d if d > 0 else _VCM_MAX_STORED
-
-
 comptime _VCM_MAX_STORED = _BDPT_MAX_VERTS - 1   # non-delta vertices of a full path, or a strategy would not fit the cache
 
 
-@always_inline
-def _vcm_past_depth(ref sd: SceneView, lvc: Pointer[BDPTVertex, MutUntrackedOrigin], lp_idx: Int, local: Int, cam_count: Int) -> Bool:
-    return _vcm_light_count(lvc, lp_idx, local) + cam_count > _vcm_depth(sd)
+struct VcmStrategies:
+    """What exists at a vertex. Weights read their shares from here, so a share without a running strategy cannot happen."""
 
+    @staticmethod
+    @always_inline
+    def depth(ref sd: SceneView) -> Int:
+        """VCM's full-path length limit: the scene's maxdepth, glass bounces included."""
+        var d = Int(sd.vcmMaxDepth)
+        return d if d > 0 else _VCM_MAX_STORED
 
-@always_inline
-def _vcm_past_cache(lvc: Pointer[BDPTVertex, MutUntrackedOrigin], lp_idx: Int, local: Int, cam_count: Int) -> Bool:
-    """A path the light cache cannot hold whole: only the camera strategies (hit, NEE) exist for it, and only they share its weight."""
-    return _vcm_light_count(lvc, lp_idx, local) - Int(lvc[unsafe_offset=lp_idx * _BDPT_MAX_VERTS + local].n_delta) + cam_count > _VCM_MAX_STORED
+    @staticmethod
+    @always_inline
+    def past_depth(ref sd: SceneView, lvc: Pointer[BDPTVertex, MutUntrackedOrigin], lp_idx: Int, local: Int, cam_count: Int) -> Bool:
+        return _vcm_light_count(lvc, lp_idx, local) + cam_count > VcmStrategies.depth(sd)
 
+    @staticmethod
+    @always_inline
+    def past_cache(lvc: Pointer[BDPTVertex, MutUntrackedOrigin], lp_idx: Int, local: Int, cam_count: Int) -> Bool:
+        """A path the light cache cannot hold whole: only the camera strategies (hit, NEE) exist for it, and only they share its weight."""
+        return _vcm_light_count(lvc, lp_idx, local) - Int(lvc[unsafe_offset=lp_idx * _BDPT_MAX_VERTS + local].n_delta) + cam_count > _VCM_MAX_STORED
 
-@always_inline
-def vcm_camera_only(cam_count: Int) -> Bool:
-    """Past the light cache from the camera side: only the camera strategies (hit, NEE) exist, see _vcm_past_cache."""
-    return cam_count > _VCM_MAX_STORED
+    @staticmethod
+    @always_inline
+    def beyond_cache(cam_count: Int) -> Bool:
+        """Past the light cache from the camera side: only the camera strategies (hit, NEE) exist, see _vcm_past_cache."""
+        return cam_count > _VCM_MAX_STORED
 
+    @staticmethod
+    @always_inline
+    def can_merge(cv: BDPTVertex, lv: BDPTVertex) -> Bool:
+        """May camera vertex cv merge with stored light vertex lv? Same kind of vertex, neither delta, the light source no
+        photon, and a walk's exit is two walks rather than one: it stores nothing to merge."""
+        return (lv.is_delta == Int32(0) and lv.is_surface == cv.is_surface and lv.is_light == Int32(0)
+                and lv.mat_kind != LobeKind.sss_exit and _bdpt_vertex_mis_scoped(lv) and _vcm_on_fibre(lv) == _vcm_on_fibre(cv))
 
-@always_inline
-def vcm_can_merge(cv: BDPTVertex, lv: BDPTVertex) -> Bool:
-    """May camera vertex cv merge with stored light vertex lv? Same kind of vertex, neither delta, the light source no
-    photon, and a walk's exit is two walks rather than one: it stores nothing to merge."""
-    return (lv.is_delta == Int32(0) and lv.is_surface == cv.is_surface and lv.is_light == Int32(0)
-            and lv.mat_kind != LobeKind.sss_exit and _bdpt_vertex_mis_scoped(lv) and _vcm_on_fibre(lv) == _vcm_on_fibre(cv))
+    @staticmethod
+    @always_inline
+    def too_long(ref sd: SceneView, lvc: Pointer[BDPTVertex, MutUntrackedOrigin], lp_idx: Int, local: Int, cam_count: Int) -> Bool:
+        """Light slot `local` plus `cam_count` camera vertices is no light strategy."""
+        return VcmStrategies.past_depth(sd, lvc, lp_idx, local, cam_count) or VcmStrategies.past_cache(lvc, lp_idx, local, cam_count)
 
+    @staticmethod
+    @always_inline
+    def can_merge_at(ref sd: SceneView, v: BDPTVertex) -> Bool:
+        """Whether merging may estimate a density here: a fibre only with its kernel's pass radius."""
+        return not _vcm_on_fibre(v) or sd.vcmMergeR > Float32(0)
 
-@always_inline
-def _vcm_too_long(ref sd: SceneView, lvc: Pointer[BDPTVertex, MutUntrackedOrigin], lp_idx: Int, local: Int, cam_count: Int) -> Bool:
-    """Light slot `local` plus `cam_count` camera vertices is no light strategy."""
-    return _vcm_past_depth(sd, lvc, lp_idx, local, cam_count) or _vcm_past_cache(lvc, lp_idx, local, cam_count)
+    @staticmethod
+    @always_inline
+    def merge_density(ref sd: SceneView, v: BDPTVertex, mis_vm_weight_factor: Float32) -> Float32:
+        """This vertex's own eta(x) = N * (kernel measure at x), fully scaled --
+        a DISK area on a surface, a BALL volume in a medium; 0 where it cannot merge. `mis_vm_weight_factor`"""
+        if v.mat_kind == LobeKind.sss_exit:
+            return Float32(0)
+        if _vcm_on_fibre(v):
+            return mis_vm_weight_factor * _vcm_fibre_scale(sd, v.pos, Int(v.hair_curve_idx), v.hair_v)
+        if v.is_surface == Int32(0):
+            var s3 = _VCM_RADIUS_VOLUME_SCALE * _VCM_RADIUS_VOLUME_SCALE * _VCM_RADIUS_VOLUME_SCALE
+            return mis_vm_weight_factor * (Float32(4.0 / 3.0) * sd.vcmMergeR * s3) * _vcm_eta_scale_vol(sd, v)
+        return mis_vm_weight_factor * _vcm_eta_scale(sd, v.pos)
+
+    @staticmethod
+    @always_inline
+    def inv_merge_density(ref sd: SceneView, v: BDPTVertex, mis_vc_weight_factor: Float32) -> Float32:
+        """1/eta(x) at this vertex, in the mis_vc_weight_factor=1/eta_pass
+        convention _bdpt_merge_mis_weight uses (the merge weight's dVM = dVC/eta
+        rule divides by eta rather than multiplying, see vcm_mis.mojo's
+        vcm_scatter_carries docstring)."""
+        if _vcm_on_fibre(v):
+            var fs = _vcm_fibre_scale(sd, v.pos, Int(v.hair_curve_idx), v.hair_v)
+            return mis_vc_weight_factor / fs if fs > Float32(0) else Float32(0)
+        if v.is_surface == Int32(0):
+            var s3 = _VCM_RADIUS_VOLUME_SCALE * _VCM_RADIUS_VOLUME_SCALE * _VCM_RADIUS_VOLUME_SCALE
+            return mis_vc_weight_factor / ((Float32(4.0 / 3.0) * sd.vcmMergeR * s3) * _vcm_eta_scale_vol(sd, v))
+        return mis_vc_weight_factor / _vcm_eta_scale(sd, v.pos)
+
+    @staticmethod
+    @always_inline
+    def ends_at_delta(ref sd: SceneView, count: Int) -> Bool:
+        """A delta vertex at the depth limit starts no strategy."""
+        return count >= VcmStrategies.depth(sd)
+
+    @staticmethod
+    @always_inline
+    def ends_at_vertex(ref sd: SceneView, count: Int, stored: Int) -> Bool:
+        """Nor does a stored vertex there, or one that would not fit the cache."""
+        return count >= VcmStrategies.depth(sd) or stored >= _VCM_MAX_STORED
+
+    @staticmethod
+    @always_inline
+    def has_manifold(v: BDPTVertex) -> Bool:
+        """May this vertex run MNEE toward a light behind glass?"""
+        return LobeKind.is_diffuse(v.mat_kind)
 
 
 @always_inline
@@ -177,41 +234,6 @@ def _vcm_fibre_scale(ref sd: SceneView, p: Point3f, curve_idx: Int, v_global: Fl
     var r = _vcm_merge_radius_at(sd, p) if sd.vcmFootprint > Float32(0) else sd.vcmMergeR
     var w = Float32(2) * curve_radius(sd.curves, curve_idx, v_global)
     return _vcm_keep(sd, p) * Float32(2) * r * w / (PI * sd.vcmMergeR * sd.vcmMergeR)
-
-
-@always_inline
-def _vcm_mergeable(ref sd: SceneView, v: BDPTVertex) -> Bool:
-    """Whether merging may estimate a density here: a fibre only with its kernel's pass radius."""
-    return not _vcm_on_fibre(v) or sd.vcmMergeR > Float32(0)
-
-
-@always_inline
-def _vcm_eta_at(ref sd: SceneView, v: BDPTVertex, mis_vm_weight_factor: Float32) -> Float32:
-    """This vertex's own eta(x) = N * (kernel measure at x), fully scaled --
-    a DISK area on a surface, a BALL volume in a medium; 0 where it cannot merge. `mis_vm_weight_factor`"""
-    if v.mat_kind == LobeKind.sss_exit:
-        return Float32(0)
-    if _vcm_on_fibre(v):
-        return mis_vm_weight_factor * _vcm_fibre_scale(sd, v.pos, Int(v.hair_curve_idx), v.hair_v)
-    if v.is_surface == Int32(0):
-        var s3 = _VCM_RADIUS_VOLUME_SCALE * _VCM_RADIUS_VOLUME_SCALE * _VCM_RADIUS_VOLUME_SCALE
-        return mis_vm_weight_factor * (Float32(4.0 / 3.0) * sd.vcmMergeR * s3) * _vcm_eta_scale_vol(sd, v)
-    return mis_vm_weight_factor * _vcm_eta_scale(sd, v.pos)
-
-
-@always_inline
-def _vcm_inv_eta_at(ref sd: SceneView, v: BDPTVertex, mis_vc_weight_factor: Float32) -> Float32:
-    """1/eta(x) at this vertex, in the mis_vc_weight_factor=1/eta_pass
-    convention _bdpt_merge_mis_weight uses (the merge weight's dVM = dVC/eta
-    rule divides by eta rather than multiplying, see vcm_mis.mojo's
-    vcm_scatter_carries docstring)."""
-    if _vcm_on_fibre(v):
-        var fs = _vcm_fibre_scale(sd, v.pos, Int(v.hair_curve_idx), v.hair_v)
-        return mis_vc_weight_factor / fs if fs > Float32(0) else Float32(0)
-    if v.is_surface == Int32(0):
-        var s3 = _VCM_RADIUS_VOLUME_SCALE * _VCM_RADIUS_VOLUME_SCALE * _VCM_RADIUS_VOLUME_SCALE
-        return mis_vc_weight_factor / ((Float32(4.0 / 3.0) * sd.vcmMergeR * s3) * _vcm_eta_scale_vol(sd, v))
-    return mis_vc_weight_factor / _vcm_eta_scale(sd, v.pos)
 
 
 # Volume merges get their own, much larger, fraction: a medium's own extent

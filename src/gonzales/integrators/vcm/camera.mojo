@@ -38,7 +38,7 @@ from gonzales.paths.vcm.eval import (
     _vcm_sphere_slot, _vcm_infinite_slot, _vcm_nee_surface, _vertex_ctx, _bdpt_vertex_mis_scoped, _vcm_mnee,
     _vcm_mnee_hit_term,
 )
-from gonzales.paths.vcm.strategy import vcm_camera_only, _vcm_depth, _VCM_MAX_STORED, _vcm_keep, _vcm_eta_scale, _vcm_eta_at, _vcm_fibre_scale
+from gonzales.paths.vcm.strategy import VcmStrategies, _vcm_keep, _vcm_eta_scale, _vcm_fibre_scale
 from gonzales.paths.vcm.connect import _bdpt_connect_to_cache, _bdpt_connect_to_cache_deferred
 from gonzales.paths.vcm.merge import _bdpt_merge_from_cache
 from gonzales.transport.surface import surface_hit
@@ -151,7 +151,7 @@ struct VCMCameraPathState(TrivialRegisterPassable):
 
     @always_inline
     def cam_count(self) -> Int:
-        """Vertices so far, delta bounces included (see _vcm_depth)."""
+        """Vertices so far, delta bounces included (see VcmStrategies.depth)."""
         return self.n_verts + self.n_vol + self.n_delta
 
 def _bdpt_camera_path_init[use_gpu: Bool](
@@ -427,8 +427,8 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             return False   # mirrors the original loop's top-of-iteration guard
         # Zero carries do not mean no competitor: a walk's exit behind glass has none, and MNEE still samples this path.
         var mnee_rival = st.last_bsdf_pdf == PDF_DELTA_FULL and st.mnee.pdf0 > Float32(0)
-        # Past the cache only camera strategies exist: see _vcm_past_cache.
-        var long_hit = vcm_camera_only(st.cam_count())
+        # Past the cache only camera strategies exist: see VcmStrategies.past_cache.
+        var long_hit = VcmStrategies.beyond_cache(st.cam_count())
         if inter.hit == Int8(0):
             for inf_i in range(Int(sd.infiniteLightCount)):
                 var ilight = sd.infiniteLights[unsafe_offset=inf_i]
@@ -496,7 +496,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 st.n_vol += 1
                 # NOT `n_verts += 1`. _BDPT_MAX_VERTS is the light-vertex
                 # CACHE's per-path slot count, and the camera subpath stores
-                var eta_v = _vcm_eta_at(sd, v, mis_vm_weight_factor)
+                var eta_v = VcmStrategies.merge_density(sd, v, mis_vm_weight_factor)
                 var (dvcm_v, dvc_v, dvm_v, wi_v) = vcm_phase_scatter(
                     -ray_dir, med.med.g, pcg.next_float(), pcg.next_float(),
                     st.dvcm, st.dvc, st.dvm, mis_vc_weight_factor, eta_v)
@@ -511,7 +511,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                     st.total += _bdpt_connect_to_cache(v, sd, has_med, scratch, lvc, lp_idx, path_len, mis_vm_weight_factor, st.cam_count())
                 st.total += _vcm_nee_surface(sd, v, _vertex_ctx(v), sp, Vec3f(Float32(0)), st.beta, eta_v, v.dVCM, v.dVC,
                                              st.cur_med_idx, scratch, st.wl, pcg, Float32(0), False,
-                                             vcm_camera_only(st.cam_count()))
+                                             VcmStrategies.beyond_cache(st.cam_count()))
                 # Continuation beta = prev × alb_s (same as stored vertex beta)
                 st.beta *= spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (ff.albedo).r, (ff.albedo).g, (ff.albedo).b, st.wl)
                 st.rd = vec3f(wi_v)
@@ -642,13 +642,13 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             var spawn_eps = lh.spawn_eps; var on_curve = lh.on_curve; var eff_alb = lh.eff_alb
             v.dVCM = st.dvcm; v.dVC = st.dvc; v.dVM = st.dvm
             if v.is_delta != Int32(0):
-                if st.cam_count() >= _vcm_depth(sd):
+                if VcmStrategies.ends_at_delta(sd, st.cam_count()):
                     return False   # a delta vertex past d starts no strategy either
                 st.n_delta += 1
             if v.is_delta == Int32(0):
                 if st.n_verts == 0: st.first_alb = eff_alb
-                if st.cam_count() >= _vcm_depth(sd) or st.n_verts >= _VCM_MAX_STORED:
-                    return False   # a vertex past d starts no strategy (see _vcm_depth)
+                if VcmStrategies.ends_at_vertex(sd, st.cam_count(), st.n_verts):
+                    return False   # a vertex past d starts no strategy (see VcmStrategies.depth)
                 st.n_verts += 1
                 # Merging queries the GLOBAL photon grid and does not use this
                 # pixel's own paired light path, so unlike the connect below it
@@ -666,9 +666,9 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 st.total += _vcm_nee_surface(sd, v, _vertex_ctx(v), hit, gn_geo, st.beta, eta_x, st.dvcm, st.dvc,
                                           st.cur_med_idx, scratch, st.wl, pcg, spawn_eps,
                                           v.mat_kind == LobeKind.diffuse_transmit or v.mat_kind == LobeKind.hair or v.mat_kind == LobeKind.rough_dielectric,
-                                          vcm_camera_only(st.cam_count()))
+                                          VcmStrategies.beyond_cache(st.cam_count()))
                 # MNEE toward a light behind glass, one more strategy in the balance (_vcm_mnee).
-                if LobeKind.is_diffuse(v.mat_kind):
+                if VcmStrategies.has_manifold(v):
                     st.total += _vcm_mnee(sd, v, hit.to_simd(), gn, st.beta, pcg, st.wl, eta_x, st.dvcm, st.dvc)
 
             # Scatter through THE lobe sampler -- the same BSDF connect,
@@ -690,7 +690,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 st.mnee.pdf0 = Float32(0)
 
         elif mat.type == MatKind.dielectric or mat.type == MatKind.thin_dielectric:
-            if st.cam_count() >= _vcm_depth(sd):
+            if VcmStrategies.ends_at_delta(sd, st.cam_count()):
                 return False   # a delta vertex past d starts no strategy either
             var dvcm_in = st.dvcm; var dvc_in = st.dvc; var dvm_in = st.dvm; var med_in = st.cur_med_idx
             var ior_cur = st.current_dielectric_ior; var ior_prev = st.previous_dielectric_ior
@@ -707,8 +707,8 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 var n_o = ex.n_o
                 var v = _vcm_sss_exit_vertex(ex, mat.albedo.r, st.beta, st.cur_med_idx, st.wl, st.dvcm, st.dvc, st.dvm)
                 if st.n_verts == 0: st.first_alb = mat.sss_mean_refl
-                if st.cam_count() >= _vcm_depth(sd) or st.n_verts >= _VCM_MAX_STORED:
-                    return False   # a vertex past d starts no strategy (see _vcm_depth)
+                if VcmStrategies.ends_at_vertex(sd, st.cam_count(), st.n_verts):
+                    return False   # a vertex past d starts no strategy (see VcmStrategies.depth)
                 st.n_verts += 1
                 # A walk's exit does not merge: light and camera exits are two walks, not one.
                 if path_len > 0:

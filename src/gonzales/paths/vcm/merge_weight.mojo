@@ -6,14 +6,14 @@ from std.math import log
 from gonzales.scene.accel.bvh import SceneView
 from gonzales.paths.vcm.vertex import _BDPT_MAX_VERTS, BDPTVertex
 from gonzales.paths.vcm.eval import _bdpt_vertex_pdfs, _bdpt_vertex_mis_scoped
-from gonzales.paths.vcm.strategy import _vcm_keep, _vcm_eta_scale
+from gonzales.paths.vcm.strategy import VcmStrategies, _vcm_keep, _vcm_eta_scale
 
 @always_inline
 def _bdpt_merge_mis_weight(
     cv: BDPTVertex,
     lv: BDPTVertex,
     ref sd: SceneView,
-    inv_eta_x: Float32,   # 1/eta at cv (_vcm_inv_eta_at), which a volume vertex pays a density lookup for
+    inv_eta_x: Float32,   # 1/eta at cv (VcmStrategies.inv_merge_density), which a volume vertex pays a density lookup for
 ) -> Float32:
     """Balance-heuristic merge weight (Georgiev et al. 2012 / SmallVCM's
     RangeQuery::Process), factored out of _bdpt_merge_from_cache's hot loop"""
