@@ -708,7 +708,7 @@ def _sample_medium_core(
         # colour conversion. Upsample sigma_t to the 4 hero lanes FIRST via
         # spec_refl_unbounded (the coefficient-safe smooth upsampler; grey
         # media pass through it exactly -- verified in
-        # Tests/unit/test_coefficient_upsampling.mojo), THEN exponentiate PER
+        # Tests/unit/core/test_coefficient_upsampling.mojo), THEN exponentiate PER
         # LANE -- the same shared helper bdpt_*.mojo/sppm.mojo use, so CPU PT /
         # GPU PT / VCM / SPPM all treat a medium's colour identically.
         # See docs/02_spectra_and_color.md, "Chromatic extinction".

@@ -32,7 +32,7 @@
 # its quad HEAD-ON, so mu_o ~ 1, and at mu_o = 1 all of defect 4 is silent.
 # It cost 30 percent of a grazing rough conductor's energy corpus-wide, in a
 # SHARED sampler the coat walk calls too, and no scene in this directory
-# could see it. Tests/unit/test_conductor_energy.mojo sweeps mu_o for that
+# could see it. Tests/unit/transport/test_conductor_energy.mojo sweeps mu_o for that
 # reason; when this file disagrees with that one, believe that one first.
 #
 # Kulla-Conty (SIGGRAPH 2017) + Turquin (2019) colour then adds the real

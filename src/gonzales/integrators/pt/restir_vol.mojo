@@ -31,7 +31,7 @@
 #
 # Scope actually implemented here: the payload, the target function, and the
 # temporal+spatial combine (vol_temporal_spatial_combine) -- fully unit-tested
-# (Tests/unit/test_restir_vol.mojo) but NOT YET WIRED into the render loop (no
+# (Tests/unit/integrators/pt/test_restir_vol.mojo) but NOT YET WIRED into the render loop (no
 # persistent per-pixel buffers, no G-buffer plumbing, no call site). Candidate
 # generation and the shadow-ray resolve ARE wired, in gpu.mojo's
 # _sample_medium_core, next to the medium sampler that owns the ray -- exactly

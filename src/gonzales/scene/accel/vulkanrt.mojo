@@ -78,7 +78,7 @@ def vulkanrt_destroy_scene(scene: VulkanRtSceneHandle):
 # out_t/out_u/out_v/out_mesh/out_triangle only meaningful when out_hit[i]
 # is 1. out_u/out_v use the same barycentric convention as gonzales's own
 # Moller-Trumbore intersect_triangle (verified in
-# Tests/unit/test_vulkanrt_batch.mojo).
+# Tests/unit/scene/accel/test_vulkanrt_batch.mojo).
 #
 # Returns 1 if the dispatch executed, 0 on failure (null scene, allocation
 # failure) -- per-ray hit/miss is conveyed via out_hit, not this return

@@ -19,7 +19,7 @@ from gonzales.scene.accel.vulkaninterop import (
 # ctx.synchronize() until the very end, to inspect results for this test's
 # assertions), and the results are read back and checked against known
 # geometry -- same 2-mesh scene and expected hits as
-# Tests/unit/test_vulkanrt_scene.mojo, cross-validating that the interop
+# Tests/unit/scene/accel/test_vulkanrt_scene.mojo, cross-validating that the interop
 # path produces identical results to vulkanrt.mojo's non-interop path.
 
 def test_vulkaninterop_rt_trace_matches_known_geometry() raises:

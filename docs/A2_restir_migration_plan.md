@@ -9,7 +9,7 @@ neighbour reservoirs, so no win yet); Phase 7 machinery complete (light RIS
 at volume scatter vertices, distance resampling **on by default**, temporal
 reuse opt-in via `--vol-restir-reuse`, spatial reuse measured and shipped
 disabled); Phase 8.1's MIS-weight recovery derived and machine-checked
-(`restir_bdpt.mojo`, `Tests/unit/test_restir_bdpt_mis.mojo`) with the rest
+(`restir_bdpt.mojo`, `Tests/unit/integrators/vcm/test_restir_bdpt_mis.mojo`) with the rest
 of Phase 8 not started; Phases 9-10 open research.**
 
 **Neither SPPM nor VCM has been retired, and completing Phases 7 and 8 does
@@ -426,7 +426,7 @@ off-normal they cost **~30% of a grazing rough conductor's energy**, in a
 sampler the coat walk shares.
 
 The fix pattern exists and should be generalised before any gate leans on
-the analytic suite: `Tests/unit/test_conductor_energy.mojo` puts the white
+the analytic suite: `Tests/unit/transport/test_conductor_energy.mojo` puts the white
 furnace on the **BxDF itself** and sweeps `mu_o`, checking (a) the
 quadrature of `f`, (b) `E[weight]` over the sampler, and (c)
 `weight == f*cos/pdf`, separately — when (a) and (c) pass and (b) fails, the
@@ -689,7 +689,7 @@ deliberately as the cheapest available correctness check.
 **Not yet wired:** `vol_temporal_spatial_combine` -- temporal reuse via
 identity reprojection plus spatial reuse over `VOL_SPATIAL_NEIGHBORS = 4`
 neighbours, with Bitterli et al. 2020 Algorithm 6 Z-normalization -- is
-fully implemented and unit-tested (`Tests/unit/test_restir_vol.mojo`), but
+fully implemented and unit-tested (`Tests/unit/integrators/pt/test_restir_vol.mojo`), but
 has no caller in `gpu.mojo`/`pipeline.mojo`: no persistent per-pixel
 `VolReservoirIO` buffers are allocated, and no depth/world-position
 G-buffer data is threaded to it. Wiring this in (persistent reservoir
@@ -970,7 +970,7 @@ Derived 2026-09-09 from gonzales's own `dVCM`/`dVC` recursion rather than
 from van Antwerpen 2011 (still not sourced; it turned out not to be
 needed). Implemented as executable, dependency-free reference math in
 `src/gonzales/integrators/vcm/restir.mojo`, checked against a brute-force sum over
-every strategy in `Tests/unit/test_restir_bdpt_mis.mojo`.
+every strategy in `Tests/unit/integrators/vcm/test_restir_bdpt_mis.mojo`.
 
 Index a full path's vertices `x_0` (light) … `x_k` (camera). Strategy `s`
 means the light subpath supplied `x_0..x_{s-1}`, so the connection crosses

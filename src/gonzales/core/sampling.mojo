@@ -130,7 +130,7 @@ def sample_ggx_vndf(
     # delivered 0.348 where the GGX directional albedo is 0.499 at alpha=1,
     # mu_o=0.4, i.e. 30% of a grazing rough conductor's energy simply gone,
     # and sample_ggx_vndf is shared, so the coat walk lost it too.
-    # Tests/unit/test_conductor_energy.mojo sweeps mu_o for this reason.
+    # Tests/unit/transport/test_conductor_energy.mojo sweeps mu_o for this reason.
     var s_corr = Float32(0.5) * (Float32(1.0) + vh.z)
     var tx2    = Float32(1.0) - tx * tx
     var ty     = (Float32(1.0) - s_corr) * sqrt(tx2 if tx2 > Float32(0.0) else Float32(0.0)) + s_corr * ty_raw

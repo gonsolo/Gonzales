@@ -129,7 +129,7 @@ crossover (blue below 490 nm, green to 580 nm, red above).
 **Correction (2026-09-10).** This passage previously justified band-picking
 by asserting that `RGB(1,1,1)` "does not upsample to exactly 1 in every
 wavelength lane (the table has no reason to be flat there)". **That is
-false, and it was measured.** `Tests/unit/test_coefficient_upsampling.mojo`
+false, and it was measured.** `Tests/unit/core/test_coefficient_upsampling.mojo`
 checks the actual table across four hero-wavelength sets: `spec_refl(1,1,1)`
 returns exactly 1.0 in all four lanes, and `spec_refl_unbounded(2,2,2)`
 exactly 2.0. The grey invariant is preserved by the smooth Jakob-Hanika
@@ -214,7 +214,7 @@ individual channel ratios within noise of one another). That is decisive:
 it rules out ordering as the dominant cause of the pbrt gap. Fixing the
 ordering bug was still correct and worth keeping (it *is* a real
 mathematical inconsistency, and grey media are provably unaffected — see
-`Tests/unit/test_coefficient_upsampling.mojo`), but the ~1.8–2.8× spread
+`Tests/unit/core/test_coefficient_upsampling.mojo`), but the ~1.8–2.8× spread
 against pbrt lives somewhere else: most likely a difference between
 gonzales's Jakob-Hanika reconstruction table/basis and pbrt's own
 `RGBUnboundedSpectrum` fit for the *same* RGB triple, or something specific

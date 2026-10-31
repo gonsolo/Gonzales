@@ -136,7 +136,7 @@ CASES["furnace-coateddiffuse-rough"] = dict(
 #     GRAZING rough conductor's energy, this suite structurally COULD NOT
 #     see: every furnace scene in this directory views its quad head-on, and
 #     the bug vanishes at normal incidence. It took a unit test sweeping mu_o
-#     (Tests/unit/test_conductor_energy.mojo) to find it. Treat that as a
+#     (Tests/unit/transport/test_conductor_energy.mojo) to find it. Treat that as a
 #     standing limitation of these scenes, not a one-off -- an analytic scene
 #     only proves the renderer correct on the configuration it renders, and
 #     every scene here renders one flat quad seen head-on.

@@ -38,7 +38,7 @@ def vulkaninterop_round_trip(interop: VulkanInteropHandle, cuda_stream: CUstream
 def vulkaninterop_destroy(interop: VulkanInteropHandle):
     external_call["vulkaninterop_destroy", NoneType, VulkanInteropHandle](interop)
 
-# Minimal GPU kernel used only by Tests/unit/test_vulkaninterop.mojo to
+# Minimal GPU kernel used only by Tests/unit/scene/accel/test_vulkaninterop.mojo to
 # exercise the interop buffer from a real Mojo enqueue_function kernel
 # (proving the whole chain works from gonzales's own GPU code, not just a
 # standalone C/CUDA test) -- lives in the package rather than the test file
@@ -175,7 +175,7 @@ def vulkaninterop_rt_chunk_info(scene: VulkanInteropRtSceneHandle, chunk_of_mesh
 def vulkaninterop_rt_destroy_scene(scene: VulkanInteropRtSceneHandle):
     external_call["vulkaninterop_rt_destroy_scene", NoneType, VulkanInteropRtSceneHandle](scene)
 
-# Minimal GPU kernel used only by Tests/unit/test_vulkaninterop_rt.mojo to
+# Minimal GPU kernel used only by Tests/unit/scene/accel/test_vulkaninterop_rt.mojo to
 # write 3 known test rays directly into the interop rays buffer (same
 # reasoning as vulkaninterop_fill_kernel_test for living in the package
 # rather than the test file).

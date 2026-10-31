@@ -356,7 +356,7 @@ test_release: release
 # Unit tests (std.testing.TestSuite) for pure functions — separate from the
 # scene-render smoke tests above. Each file under Tests/unit/ is its own
 # `mojo run` invocation (TestSuite.discover_tests[__functions_in_module()]).
-UNIT_TEST_SRCS := $(filter-out Tests/unit/_%,$(wildcard Tests/unit/*.mojo))
+UNIT_TEST_SRCS := $(shell find Tests/unit -name "test_*.mojo" | sort)
 
 # These instantiate GPU kernels at COMPILE time (DeviceContext /
 # vulkaninterop entry points), so on a machine without the CUDA toolkit they
@@ -367,12 +367,12 @@ UNIT_TEST_SRCS := $(filter-out Tests/unit/_%,$(wildcard Tests/unit/*.mojo))
 # them from the suite when there is no toolkit to build them against. Every
 # other GPU-touching test (test_vulkanrt_*, test_gpu_scene_upload) compiles
 # fine and skips at runtime, so they stay in.
-GPU_ONLY_TEST_SRCS := Tests/unit/test_gpu.mojo \
-                      Tests/unit/test_gpu_bvh.mojo \
-                      Tests/unit/test_vulkaninterop.mojo \
-                      Tests/unit/test_vulkaninterop_rt.mojo \
-                      Tests/unit/test_rtcore.mojo \
-                      Tests/unit/test_xert.mojo
+GPU_ONLY_TEST_SRCS := Tests/unit/gpu/test_gpu.mojo \
+                      Tests/unit/scene/accel/test_gpu_bvh.mojo \
+                      Tests/unit/scene/accel/test_vulkaninterop.mojo \
+                      Tests/unit/scene/accel/test_vulkaninterop_rt.mojo \
+                      Tests/unit/scene/accel/test_rtcore.mojo \
+                      Tests/unit/scene/accel/test_xert.mojo
 # Intel Arc (xe driver, no NVIDIA driver): the released Mojo has no Intel target, so tests build with
 # the source-built HAL Mojo, from a copy of src/ that imports _nvidia_cuda from its new place.
 HAL_ROOT ?= /mnt/storage/gonzales_cache/mojo-src-hal
@@ -384,8 +384,8 @@ INTEL := 1
 endif
 endif
 ifdef INTEL
-UNIT_TEST_SRCS := $(filter-out Tests/unit/test_vulkaninterop.mojo Tests/unit/test_vulkaninterop_rt.mojo \
-                               Tests/unit/test_rtcore.mojo,$(UNIT_TEST_SRCS))
+UNIT_TEST_SRCS := $(filter-out Tests/unit/scene/accel/test_vulkaninterop.mojo Tests/unit/scene/accel/test_vulkaninterop_rt.mojo \
+                               Tests/unit/scene/accel/test_rtcore.mojo,$(UNIT_TEST_SRCS))
 UNIT_TEST_DEPS := unittest-intel-src
 UNIT_TEST_RUN = . $(HAL_ROOT)/env.sh && \
     MODULAR_DRIVER_PLUGINS="level_zero@$(HAL_ROOT)/lib/plugins/LevelZeroPlugin.so;cpu@$(HAL_ROOT)/lib/plugins/CPUPlugin.so" \
@@ -393,7 +393,7 @@ UNIT_TEST_RUN = . $(HAL_ROOT)/env.sh && \
     uv run mojo run --target-accelerator intel:bmg -I $(BUILD_DIR)/intel-src
 else ifeq ($(HAVE_CUDA),)
 ifdef AMD
-UNIT_TEST_SRCS := $(filter-out $(filter-out Tests/unit/test_gpu.mojo,$(GPU_ONLY_TEST_SRCS)),$(UNIT_TEST_SRCS))
+UNIT_TEST_SRCS := $(filter-out $(filter-out Tests/unit/gpu/test_gpu.mojo,$(GPU_ONLY_TEST_SRCS)),$(UNIT_TEST_SRCS))
 else
 UNIT_TEST_SRCS := $(filter-out $(GPU_ONLY_TEST_SRCS),$(UNIT_TEST_SRCS))
 endif
@@ -541,7 +541,7 @@ unittest: $(OIIO_BRIDGE_LIB) $(VIEWER_LIB) $(VULKANRT_LIB) $(VULKANINTEROP_LIB) 
 	for f in $(UNIT_TEST_SRCS); do \
 		i=$$((i+1)); \
 		echo "$$f" >> build/unittest-logs/order.txt; \
-		( $(UNIT_TEST_RUN) $(subst -Xlinker -lm,,$(MOJO_LINK_FLAGS)) "$$f" > build/unittest-logs/$$i.log 2>&1; \
+		( $(UNIT_TEST_RUN) -I Tests/unit $(subst -Xlinker -lm,,$(MOJO_LINK_FLAGS)) "$$f" > build/unittest-logs/$$i.log 2>&1; \
 		  echo $$? > build/unittest-logs/$$i.exit ) & \
 		while [ $$(jobs -pr | wc -l) -ge $$(nproc) ]; do sleep 0.2; done; \
 	done; \

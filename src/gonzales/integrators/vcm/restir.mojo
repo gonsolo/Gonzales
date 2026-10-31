@@ -2,7 +2,7 @@
 # connection time, and the property that makes it survive a ReSTIR shift.
 #
 # Nothing in the renderer calls this yet. It exists so the Phase 8.1
-# derivation is *executable* -- `Tests/unit/test_restir_bdpt_mis.mojo`
+# derivation is *executable* -- `Tests/unit/integrators/vcm/test_restir_bdpt_mis.mojo`
 # checks the recursion against a brute-force sum over every strategy, and
 # then checks the shift-stability claim Phase 8 actually depends on. See
 # docs/A2_restir_migration_plan.md's Phase 8 section for the writeup.

@@ -95,7 +95,7 @@ void vulkanrt_destroy_scene(void* scene);
 // is 1. out_u/out_v are the hardware's committed-intersection barycentric
 // coordinates -- same (u, v) = (weight of vertex 1, weight of vertex 2)
 // convention as gonzales's own Moller-Trumbore intersect_triangle, verified
-// against it in Tests/unit/test_vulkanrt_batch.mojo.
+// against it in Tests/unit/scene/accel/test_vulkanrt_batch.mojo.
 //
 // Returns 1 if the dispatch executed, 0 on failure (null scene, allocation
 // failure) -- per-ray hit/miss is conveyed via out_hit, not this return

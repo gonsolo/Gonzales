@@ -127,7 +127,7 @@ def ggx_albedo(mu: Float32, alpha: Float32) -> Float32:
     ggx_albedo_avg), the compensation lobe's normalisation is exact, so the
     white furnace reads 1 + (E_true(mu_o) - E_fit(mu_o)) -- the pointwise fit
     error, nothing else. Measured worst case 0.4%.
-    Pinned by Tests/unit/test_conductor_energy.mojo."""
+    Pinned by Tests/unit/transport/test_conductor_energy.mojo."""
     var m = min(max(mu, Float32(0.0)), Float32(1.0))
     var a = min(max(alpha, Float32(0.0)), Float32(1.0))
     var x = Float32(2.0) * m - Float32(1.0)
