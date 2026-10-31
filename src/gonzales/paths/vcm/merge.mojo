@@ -4,7 +4,7 @@
 from std.collections import Array
 from std.math import sqrt, floor, max, abs
 from std.atomic import Atomic
-from gonzales.core.geometry import dot, PI
+from gonzales.core.geometry import dot, PI, Vec3f
 from gonzales.scene.appearance.materials import LobeKind
 from gonzales.scene.accel.bvh import SceneView, _is_real_ptr, curve_radius
 from gonzales.estimators.photon_grid import _HSIZE, _hash_cell, _PHOTON_BUCKET_CAP, grid_keep, grid_weight, gather_disk_coverage, gather_disk_contains
@@ -15,6 +15,49 @@ from gonzales.paths.vcm.eval import _lobe_eval, _bdpt_vertex_mis_scoped
 from gonzales.paths.vcm.grid import _VCM_FINE_LEVELS, _VCM_MN_STRIDE
 from gonzales.paths.vcm.strategy import VcmStrategies, _vcm_keep, _vcm_cap, _MERGE_COVERAGE, _VCM_VISIT_INSTRUMENT, _vcm_budget_active, _vcm_merge_radius_at, _VCM_RADIUS_VOLUME_SCALE, _vcm_volume_radius_at, _vcm_on_fibre
 from gonzales.paths.vcm.merge_weight import _bdpt_merge_mis_weight
+
+
+@fieldwise_init
+struct MergeKernel(TrivialRegisterPassable):
+    """The density estimate at one camera vertex: a disk on a surface, a ball in a medium, a ribbon on a fibre."""
+    var r2: Float32
+    var norm: Float32   # 1 / (N * kernel measure)
+
+    @staticmethod
+    @always_inline
+    def at(ref sd: SceneView, cv: BDPTVertex, r2_pass: Float32, norm_pass: Float32) -> MergeKernel:
+        """`norm_pass` is always the disk constant 1/(N*pi*r_pass^2); the grid cells are sized to that radius."""
+        var r2 = r2_pass
+        var norm = norm_pass
+        if cv.is_surface == Int32(0):
+            var r_pass_len = sqrt(max(r2_pass, Float32(1e-20)))
+            var s3 = _VCM_RADIUS_VOLUME_SCALE * _VCM_RADIUS_VOLUME_SCALE * _VCM_RADIUS_VOLUME_SCALE
+            var r_pass_vol = r_pass_len * _VCM_RADIUS_VOLUME_SCALE
+            norm = norm_pass / (Float32(4.0 / 3.0) * r_pass_len * s3)
+            r2 = r_pass_vol * r_pass_vol
+            if sd.vcmMergeR > Float32(0):
+                var rq = _vcm_volume_radius_at(sd, cv)
+                r2 = rq * rq
+                norm = norm * (r_pass_vol * r_pass_vol * r_pass_vol) / max(rq * rq * rq, Float32(1e-20))
+        elif sd.vcmFootprint > Float32(0) and sd.vcmMergeR > Float32(0):
+            var rq = _vcm_merge_radius_at(sd, cv.pos)
+            r2 = rq * rq
+            norm = norm_pass * (r2_pass / max(r2, Float32(1e-20)))
+        if _vcm_on_fibre(cv):
+            # N * 2r * w, the strand within r as a ribbon of its own width.
+            var w = Float32(2) * curve_radius(sd.curves, Int(cv.hair_curve_idx), cv.hair_v)
+            norm = norm_pass * PI * r2_pass / max(Float32(2) * sqrt(r2) * w, Float32(1e-20))
+        return MergeKernel(r2, norm)
+
+    @always_inline
+    def accepts(self, cv: BDPTVertex, lv: BDPTVertex, e: Vec3f, dist2: Float32) -> Bool:
+        if _vcm_on_fibre(cv):   # photons on the same strand only
+            return lv.hair_curve_idx == cv.hair_curve_idx and dist2 <= self.r2
+        if cv.is_surface == Int32(0):
+            return dist2 <= self.r2
+        # A photon on another surface within reach must not count against this disk's area.
+        return dot(cv.normal.to_simd(), lv.normal.to_simd()) > Float32(0.7) and gather_disk_contains(e.to_simd(), dist2, self.r2, cv.normal.to_simd())
+
 
 @always_inline
 def _bdpt_merge_from_cache(
@@ -48,32 +91,9 @@ def _bdpt_merge_from_cache(
     if not _bdpt_vertex_mis_scoped(cv) or not VcmStrategies.can_merge_at(sd, cv):
         return SpectralSample(Float32(0))
     var total = SpectralSample(Float32(0))
-    # This query's own radius (see _vcm_merge_radius_at); r2/norm arrive as the
-    # pass's global values and the grid cells are sized to that radius.
-    var r2 = r2_pass
-    var norm = norm_pass
-    if cv.is_surface == Int32(0):
-        # Ball kernel measure at a volume merge vertex: norm_pass is always
-        # the DISK constant 1/(N*pi*r_pass^2) (computed once, unconditionally,
-        var r_pass_len = sqrt(max(r2_pass, Float32(1e-20)))
-        var s3 = _VCM_RADIUS_VOLUME_SCALE * _VCM_RADIUS_VOLUME_SCALE * _VCM_RADIUS_VOLUME_SCALE
-        var r_pass_vol = r_pass_len * _VCM_RADIUS_VOLUME_SCALE
-        norm = norm_pass / (Float32(4.0 / 3.0) * r_pass_len * s3)
-        r2 = r_pass_vol * r_pass_vol
-        if sd.vcmMergeR > Float32(0):
-            var rq = _vcm_volume_radius_at(sd, cv)
-            r2 = rq * rq
-            norm = norm * (r_pass_vol * r_pass_vol * r_pass_vol) / max(rq * rq * rq, Float32(1e-20))
-    elif sd.vcmFootprint > Float32(0) and sd.vcmMergeR > Float32(0):
-        var rq = _vcm_merge_radius_at(sd, cv.pos)
-        r2 = rq * rq
-        norm = norm_pass * (r2_pass / max(r2, Float32(1e-20)))
+    var kernel = MergeKernel.at(sd, cv, r2_pass, norm_pass)
+    var r2 = kernel.r2
     var inv_eta_cv = VcmStrategies.inv_merge_density(sd, cv, mis_vc_weight_factor)
-    var on_fibre = _vcm_on_fibre(cv)
-    if on_fibre:
-        # The fibre kernel: N * 2r * w, the strand within r as a ribbon of its own width, instead of N * pi r^2.
-        var w = Float32(2) * curve_radius(sd.curves, Int(cv.hair_curve_idx), cv.hair_v)
-        norm = norm_pass * PI * r2_pass / max(Float32(2) * sqrt(r2) * w, Float32(1e-20))
     var cix = Int(floor(cv.pos.x * inv_cell))
     var ciy = Int(floor(cv.pos.y * inv_cell))
     var ciz = Int(floor(cv.pos.z * inv_cell))
@@ -108,31 +128,15 @@ def _bdpt_merge_from_cache(
                     if VcmStrategies.can_merge(cv, lv):
                         var e = lv.pos - cv.pos
                         var dist2 = e.length_sq()
-                        var accept: Bool
-                        if on_fibre:   # photons on the same strand only
-                            accept = lv.hair_curve_idx == cv.hair_curve_idx and dist2 <= r2
-                        elif cv.is_surface == Int32(1):
-                            # Surface-compatibility guard: a distance-only gather
-                            # counts a photon lying on a DIFFERENT surface (the
-                            var _ncmp = dot(cv.normal.to_simd(), lv.normal.to_simd())
-                            # Gather in the tangent DISK, not the ball. The normal
-                            # test above rejects a photon on a differently-oriented
-                            comptime if _VCM_VISIT_INSTRUMENT:
-                                if _ncmp > Float32(0.7):
-                                    if gather_disk_contains(e.to_simd(), dist2, r2_pass, cv.normal.to_simd()):
-                                        visit_naive += Int32(1)
-                                    if gather_disk_contains(e.to_simd(), dist2, r2, cv.normal.to_simd()):
-                                        visit_footprint += Int32(1)
-                                        if grid_keep(heads, _hash_cell(Int(floor(lv.pos.x * inv_cell)), Int(floor(lv.pos.y * inv_cell)), Int(floor(lv.pos.z * inv_cell))), k, lv.pos, _PHOTON_BUCKET_CAP):
-                                            visit_thin += Int32(1)
-                            # Disk-not-ball: the SHARED test, sppm.mojo's
-                            # gather_disk_contains -- SPPM's gather now uses it too.
-                            accept = _ncmp > Float32(0.7) and gather_disk_contains(e.to_simd(), dist2, r2, cv.normal.to_simd())
-                        else:
-                            # Volume-volume merge: a genuine BALL acceptance
-                            # test. Neither endpoint has a surface normal, so
-                            accept = dist2 <= r2
-                        if accept:
+                        comptime if _VCM_VISIT_INSTRUMENT:
+                            if cv.is_surface == Int32(1) and dot(cv.normal.to_simd(), lv.normal.to_simd()) > Float32(0.7):
+                                if gather_disk_contains(e.to_simd(), dist2, r2_pass, cv.normal.to_simd()):
+                                    visit_naive += Int32(1)
+                                if gather_disk_contains(e.to_simd(), dist2, r2, cv.normal.to_simd()):
+                                    visit_footprint += Int32(1)
+                                    if grid_keep(heads, _hash_cell(Int(floor(lv.pos.x * inv_cell)), Int(floor(lv.pos.y * inv_cell)), Int(floor(lv.pos.z * inv_cell))), k, lv.pos, _PHOTON_BUCKET_CAP):
+                                        visit_thin += Int32(1)
+                        if kernel.accepts(cv, lv, e, dist2):
                             var le_cv = _lobe_eval[want_pdfs=False](cv, lv.wo.to_simd(), sd, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, cv.wavelengths)
                             var f_cv = le_cv.f_cos
                             # MERGING TAKES THE BARE BSDF, NOT f*cos.
@@ -153,7 +157,7 @@ def _bdpt_merge_from_cache(
                                 keep_w = Float32(1) / _vcm_keep(sd, lv.pos)
                             total += f_cv * lv.beta * (w * keep_w)
                     k = Int(merge_next[unsafe_offset=k * _VCM_MN_STRIDE + lvl])
-    var result = total * cv.beta * norm
+    var result = total * cv.beta * kernel.norm
     if cv.is_surface == Int32(0) and Int(cv.med_idx) >= 0:
         result *= MediumView.at(sd, cv.med_idx).inv_sigma_t_at(cv.pos.to_simd(), cv.wavelengths)
     # Truncation: the photons came only from the part of the disk that is
