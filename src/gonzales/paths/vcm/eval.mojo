@@ -8,7 +8,7 @@ from gonzales.scene.appearance.materials import LobeKind
 from gonzales.scene.shapes.primitives import Intersection, mesh_vi, mesh_pos
 from gonzales.scene.appearance.lights import area_light_pick_triangle
 from gonzales.scene.appearance.lights import area_light_side_pdf
-from gonzales.transport.manifold import _mnee_first_probe, _mnee_chain, _mnee_chain_t_eta, _mnee_reproduce, _emitter_face_normal
+from gonzales.transport.manifold import _mnee_first_probe, _mnee_chain, _mnee_chain_t_eta, _mnee_bsdf_over_light, _mnee_reproduce, _emitter_face_normal
 from gonzales.transport.shade_context import _shade_context
 from gonzales.transport.mis_policy import MisPolicy
 from gonzales.scene.accel.bvh import curve_tangent, fibre_cos, SceneView, _scene_bounding_sphere, LightSample, _sample_infinite_light_nee, light_path_pick, light_path_pick_pdf
@@ -312,7 +312,7 @@ def _vcm_mnee(
         sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wl)
     var (t_ch, eta_ch) = _mnee_chain_t_eta(hit_v, verts, n)
     var g = c[5]
-    var w_light = le.pdf_fwd * t_ch * g / p_a
+    var w_light = _mnee_bsdf_over_light(le.pdf_fwd, t_ch, g, p_a)
     var w_camera = side / PI / (eta_ch * eta_ch) * c[6] * g * t_ch * (eta_x + dvcm + dvc * le.pdf_rev)
     var w = Float32(1) / (w_light + Float32(1) + w_camera)
     return (beta * le.f_cos
@@ -329,18 +329,11 @@ def _vcm_mnee_hit_term(
     vertices: p_A / (p_bsdf (1 - F) g) when MNEE's solve reproduces the path, else 0."""
     if sd.hasGlass == Int32(0) or n_glass <= 0 or pdf_x0 <= Float32(0):
         return Float32(0)
-    var seg = light_hit - x0
-    var seg_len = sqrt(dot(seg, seg))
-    if seg_len < Float32(1e-4):
-        return Float32(0)
     var ctx = _shade_context(sd, Pointer[UInt32, MutUntrackedOrigin].unsafe_dangling())
-    var (glass, probe) = _mnee_first_probe(ctx, x0, seg * (Float32(1) / seg_len), seg_len)
-    if not glass:
-        return Float32(0)
-    var rp = _mnee_reproduce(ctx, x0, n_glass, last_glass, light_hit, l_du, l_dv, probe, pcg)
+    var rp = _mnee_reproduce(ctx, x0, n_glass, last_glass, light_hit, l_du, l_dv, pcg)
     if rp[0] != 1 or rp[3] <= Float32(0):
         return Float32(0)
-    return p_a / (pdf_x0 * _mnee_chain_t_eta(x0, rp[2], rp[1])[0] * rp[3])
+    return Float32(1) / _mnee_bsdf_over_light(pdf_x0, _mnee_chain_t_eta(x0, rp[2], rp[1])[0], rp[3], p_a)
 
 
 @no_inline
@@ -353,17 +346,10 @@ def _vcm_mnee_light_dvcm(
     J_light = (n_x0 / n_y)^2 cos_x0 g / cos_y by etendue, and p_emit's cos_y / pi cancels its cos_y."""
     if sd.hasGlass == Int32(0) or n_glass <= 0 or side <= Float32(0):
         return Float32(0)
-    var seg = y - x0
-    var seg_len = sqrt(dot(seg, seg))
-    if seg_len < Float32(1e-4):
-        return Float32(0)
     var ctx = _shade_context(sd, Pointer[UInt32, MutUntrackedOrigin].unsafe_dangling())
-    var (glass, probe) = _mnee_first_probe(ctx, x0, seg * (Float32(1) / seg_len), seg_len)
-    if not glass:
-        return Float32(0)
     var a = Vec3f(Float32(1), Float32(0), Float32(0)) if abs(ny[0]) < Float32(0.9) else Vec3f(Float32(0), Float32(1), Float32(0))
     var tu = cross(ny, a)
-    var rp = _mnee_reproduce(ctx, x0, n_glass, first_glass, y, tu, cross(ny, tu), probe, pcg)
+    var rp = _mnee_reproduce(ctx, x0, n_glass, first_glass, y, tu, cross(ny, tu), pcg)
     if rp[0] != 1 or rp[3] <= Float32(0):
         return Float32(0)
     var (t_ch, eta_ch) = _mnee_chain_t_eta(x0, rp[2], rp[1])

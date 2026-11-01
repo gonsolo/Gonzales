@@ -21,7 +21,7 @@ from gonzales.transport.sms import MAX_SMS_VERTICES, SMSVertex, sms_vertex_init
 from gonzales.integrators.pt.restir_sms import SMSReservoir, sms_reservoir_init, sms_target_pdf, SMSReservoirIO, sms_reservoir_io_null, sms_spatial_combine
 from gonzales.transport.texturing import _get_tri_verts
 from gonzales.transport.shade_context import ShadeContext
-from gonzales.transport.manifold import _emitter_face_normal, _mnee_chain, _mnee_chain_t_eta, _mnee_first_probe, _mnee_reproduce, _sms_solve_from_probe
+from gonzales.transport.manifold import _emitter_face_normal, _mnee_chain, _mnee_bsdf_over_light, _mnee_chain_t_eta, _mnee_first_probe, _mnee_reproduce, _sms_solve_from_probe
 from gonzales.integrators.pt.common import _clamped, _to_spec_diffuse_lit, _emitter_invisible, _shadow_inline, _shadow_blocked, _shadow_contribute
 
 
@@ -365,28 +365,30 @@ def _mnee_mis_weight(
         return Float32(1.0)
     var d = verts[0].pos - x0
     var p_bsdf = bxdf_pdf_diffuse(dot(normal, d) / sqrt(max(dot(d, d), Float32(1e-30))))
-    return power_heuristic(pdf_area / g, p_bsdf * _mnee_chain_t_eta(x0, verts, n)[0])
+    var q = _mnee_bsdf_over_light(p_bsdf, _mnee_chain_t_eta(x0, verts, n)[0], g, pdf_area)
+    return Float32(1.0) / (Float32(1.0) + q * q)
 
 
 @no_inline
 def _mnee_bsdf_weight(
-    ctx: ShadeContext, path_ptr: Pointer[PathState, MutUntrackedOrigin], inter: Intersection, probe_inter: Intersection,
-    light_hit: Vec3f,
+    ctx: ShadeContext, path_ptr: Pointer[PathState, MutUntrackedOrigin], inter: Intersection, light_hit: Vec3f,
 ) -> Float32:
     """The weight of this BSDF path to the emitter against MNEE, which may sample the very same path.
 
-    The straight-line probe seeds the same manifold solve that last_ns_p's NEE ran for this light point. If it ends at
-    the vertex this ray left from, through as many specular vertices, MNEE samples this path too and the two share it
-    by MIS (_mnee_mis_weight); any other path (another topology, another root, no root) is the BSDF's alone."""
+    _mnee_reproduce repeats the manifold solve that last_ns_p's NEE ran for this light point. If it ends at the vertex
+    this ray left from, through as many specular vertices, MNEE samples this path too and the two share it by MIS
+    (_mnee_mis_weight); any other path (another topology, another root, no root) is the BSDF's alone."""
     var (lmesh, lv0, lv1, lv2, _) = _get_tri_verts(inter, ctx.meshes)
     var lp0 = mesh_pos(lmesh, lv0)
     var x0 = path_ptr[].last_ns_p
     var o = path_ptr[].ray.origin
     var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
     var rp = _mnee_reproduce(ctx, x0, Int(path_ptr[].ns_spec), Vec3f(o.x, o.y, o.z), light_hit,
-                             mesh_pos(lmesh, lv1) - lp0, mesh_pos(lmesh, lv2) - lp0, probe_inter, pcg)
+                             mesh_pos(lmesh, lv1) - lp0, mesh_pos(lmesh, lv2) - lp0, pcg)
+    if rp[0] == -1:
+        return Float32(0.0)
     if rp[0] != 1:
-        return Float32(0.0) if rp[0] < 0 else Float32(1.0)
+        return Float32(1.0)
     var al_idx = Int(inter.primId.id1)
     var al = ctx.lights.area_lights[unsafe_offset=al_idx]
     var pdf_area = light_sampler_pdf_at(ctx.lights.light_sampler, Int32(al_idx), x0) / max(al.total_area, Float32(1e-30))

@@ -29,6 +29,7 @@ from gonzales.transport.shade_context import GIPendingX1, LightContext, ShadeCon
 from gonzales.transport.manifold import _emitter_face_normal
 from gonzales.integrators.pt.common import area_light_hit_cos, curve_light_hit, _geom_normal_and_ray, _hit_emission, _clamped, _to_spec_illum
 from gonzales.integrators.pt.nee import _mnee_bsdf_weight, _mnee_live
+from gonzales.transport.manifold import _mnee_first_probe
 from gonzales.integrators.pt.materials import shade_diffuse_transmission, _shade_sss_exit, shade_coated_diffuse, shade_dielectric, shade_thin_dielectric, shade_conductor, shade_measured, shade_hair, shade_diffuse, shade_interface
 
 
@@ -410,40 +411,27 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
                 var seg_dir = seg * (Float32(1.0) / seg_len)
                 if dot(ns_n, seg_dir) > Float32(0.0) \
                    and area_light_hit_cos(inter, ctx.meshes, ctx.instances, seg_dir) > Float32(0.0):
-                    var pr_org = path_ptr[].last_ns_p + seg_dir * Float32(0.0002)
-                    var pr_ray = Ray(Point3f(pr_org[0], pr_org[1], pr_org[2]),
-                                       Vec3f(seg_dir[0], seg_dir[1], seg_dir[2]))
-                    var pr_prim = PrimId(Int64(-1), Int64(-1), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
-                    var pr_store = Array[Intersection, 1](fill=Intersection(
-                        pr_prim, Float32(0), Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0)))
-                    traverse_dispatch(ctx.bvh4, ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves, pr_ray,
-                                       seg_len * Float32(0.9995), pr_store.unsafe_ptr(),
-                                       ctx.blasNodesArr, ctx.blasPrimIdsArr, ctx.instances,
-                                       ctx.lights.spheres, ctx.lights.sphere_count)
-                    var pr = pr_store[0]
-                    if pr.hit != Int8(0) and pr.primId.type == Int8(0):
-                        var pr_mat = ctx.materials[unsafe_offset=Int(pr.primId.materialIndex)]
-                        if pr_mat.is_specular_glass():
-                            comptime if use_gpu:
-                                # The solve is far too big for this kernel: park the hit for resolve_suppress_gpu.
-                                if _is_real_ptr(ctx.suppress_tasks):
-                                    var edir_d = Vec3f(path_ptr[].ray.direction.x, path_ptr[].ray.direction.y, path_ptr[].ray.direction.z)
-                                    var park = SpectralSample(Float32(0.0))
-                                    if area_light_hit_cos(inter, ctx.meshes, ctx.instances, edir_d) > Float32(0.0):
-                                        park = path_ptr[].throughput * _to_spec_illum(ctx, emission, path_ptr[].wavelengths)
-                                    ctx.suppress_tasks[unsafe_offset=ctx.path_idx] = SuppressTask(park, Int32(1), Int32(0), Int32(0), Int32(0))
-                                    if mat.type == MatKind.lamp:   # the ray goes on (Cycles' shade_light.h)
-                                        shade_interface(path_ptr, inter)
-                                        return
-                                    path_ptr[].active = 0
-                                    return
+                    if _mnee_first_probe(ctx, path_ptr[].last_ns_p, seg_dir, seg_len)[0]:
+                        comptime if use_gpu:
+                            # The solve is far too big for this kernel: park the hit for resolve_suppress_gpu.
+                            if _is_real_ptr(ctx.suppress_tasks):
+                                var edir_d = Vec3f(path_ptr[].ray.direction.x, path_ptr[].ray.direction.y, path_ptr[].ray.direction.z)
+                                var park = SpectralSample(Float32(0.0))
+                                if area_light_hit_cos(inter, ctx.meshes, ctx.instances, edir_d) > Float32(0.0):
+                                    park = path_ptr[].throughput * _to_spec_illum(ctx, emission, path_ptr[].wavelengths)
+                                ctx.suppress_tasks[unsafe_offset=ctx.path_idx] = SuppressTask(park, Int32(1), Int32(0), Int32(0), Int32(0))
                                 if mat.type == MatKind.lamp:   # the ray goes on (Cycles' shade_light.h)
                                     shade_interface(path_ptr, inter)
                                     return
                                 path_ptr[].active = 0
                                 return
-                            else:
-                                mnee_w_b = _mnee_bsdf_weight(ctx, path_ptr, inter, pr, hp)
+                            if mat.type == MatKind.lamp:   # the ray goes on (Cycles' shade_light.h)
+                                shade_interface(path_ptr, inter)
+                                return
+                            path_ptr[].active = 0
+                            return
+                        else:
+                            mnee_w_b = _mnee_bsdf_weight(ctx, path_ptr, inter, hp)
         # A pbrt area light emits from its FRONT face only
         # (DiffuseAreaLight::L: `if (!twoSided && Dot(n, w) < 0) return 0`).
         # The MIS branch below has always enforced that via its own

@@ -3,7 +3,6 @@ from std.utils import StaticTuple
 from gonzales.core.gpu_tuning import MINCTA_NEE, MINCTA_DIFFUSE, MINCTA_COATED, MINCTA_CONDUCTOR, MINCTA_MEASURED, MINCTA_DIELECTRIC
 from gonzales.scene.accel.bvh import SceneView
 from gonzales.core.geometry import _is_real_ptr, Vec3f, dot
-from std.math import sqrt
 from gonzales.scene.appearance.materials import MatKind, resolve_mix
 from gonzales.scene.shapes.primitives import Intersection
 from gonzales.transport.render_state import PathState, ShadowTask, SuppressTask
@@ -12,7 +11,6 @@ from gonzales.core.rng import PCG32
 from gonzales.integrators.pt.materials import _shade_sss_exit, shade_coated_diffuse, shade_conductor, shade_dielectric, shade_diffuse, shade_diffuse_transmission, shade_hair, shade_interface, shade_measured, shade_thin_dielectric
 from gonzales.integrators.pt.shading import shade_nee_core
 from gonzales.integrators.pt.nee import _mnee_bsdf_weight
-from gonzales.transport.manifold import _mnee_first_probe
 from gonzales.transport.shade_context import ShadeContext, _shade_context
 from max.gpu import block_dim, block_idx, thread_idx
 
@@ -81,17 +79,9 @@ def resolve_suppress_gpu(
     var path_ptr = paths.unsafe_offset(tid)
     var inter = intersections[unsafe_offset=tid]
     var ctx = _shade_context(sd, sobol_matrices, tid)
-    var x0 = path_ptr[].last_ns_p
     var hp = Vec3f(path_ptr[].ray.origin.x, path_ptr[].ray.origin.y, path_ptr[].ray.origin.z) \
              + Vec3f(path_ptr[].ray.direction.x, path_ptr[].ray.direction.y, path_ptr[].ray.direction.z) * inter.tHit
-    var seg = hp - x0
-    var seg_len = sqrt(dot(seg, seg))
-    var w = Float32(1.0)
-    if seg_len > Float32(0.0001):
-        var seg_dir = seg * (Float32(1.0) / seg_len)
-        var (glass, pr) = _mnee_first_probe(ctx, x0, seg_dir, seg_len)
-        if glass:
-            w = _mnee_bsdf_weight(ctx, path_ptr, inter, pr, hp)
+    var w = _mnee_bsdf_weight(ctx, path_ptr, inter, hp)
     if w > Float32(0.0):
         path_ptr[].estimate += tasks[unsafe_offset=tid].contrib * w
 

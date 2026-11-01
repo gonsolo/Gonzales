@@ -756,20 +756,33 @@ def _mnee_chain_t_eta(x0: Vec3f, verts: Array[SMSVertex, MAX_SMS_VERTICES], n: I
     return (t, eta)
 
 
+@always_inline
+def _mnee_bsdf_over_light(p_x0: Float32, t_chain: Float32, g: Float32, p_light: Float32) -> Float32:
+    """BSDF sampling's density of a solved chain over MNEE's, both per solid angle at x0: the deterministic solve's is
+    the light's area density over g, BSDF sampling's the lobe at x0 times refracting at every vertex."""
+    return p_x0 * t_chain * g / p_light
+
+
 def _mnee_reproduce(
     ctx: ShadeContext, x0: Vec3f, n_spec: Int, last_spec: Vec3f, light_hit: Vec3f, l_du: Vec3f, l_dv: Vec3f,
-    probe_inter: Intersection, mut pcg: PCG32,
+    mut pcg: PCG32,
 ) -> Tuple[Int, Int, Array[SMSVertex, MAX_SMS_VERTICES], Float32]:
     """Whether MNEE's deterministic solve from x0 to light_hit is the path that got there through n_spec glass
-    vertices, the last at last_spec: (1 it is, 0 it is not, -1 the solve found no glass), with the chain and its g.
-    The probe is the caller's: the straight segment's first hit, which must be glass."""
+    vertices, the last at last_spec: (1 it is, 0 it is not, -1 the solve found no glass, -2 MNEE does not try: no glass
+    first on the straight segment), with the chain and its g."""
+    var verts = Array[SMSVertex, MAX_SMS_VERTICES](uninitialized=True)
     var seg = light_hit - x0
     var seg_len = sqrt(dot(seg, seg))
+    if seg_len <= Float32(1e-4):
+        return (-2, 0, verts^, Float32(0.0))
+    var seg_dir = seg * (Float32(1.0) / seg_len)
+    var (glass, probe_inter) = _mnee_first_probe(ctx, x0, seg_dir, seg_len)
+    if not glass:
+        return (-2, 0, verts^, Float32(0.0))
     var (o_du, o_dv) = mnee_orthonormal_basis(l_du, l_dv)
-    var res = _sms_solve_from_probe(ctx, x0, seg * (Float32(1.0) / max(seg_len, Float32(1e-12))), seg_len, light_hit,
-                                    o_du, o_dv, pcg, probe_inter)
+    var res = _sms_solve_from_probe(ctx, x0, seg_dir, seg_len, light_hit, o_du, o_dv, pcg, probe_inter)
     var n = res[2]
-    var verts = res[3].copy()
+    verts = res[3].copy()
     if not res[0]:
         return (-1, n, verts^, Float32(0.0))
     if n_spec != n or not res[1]:
