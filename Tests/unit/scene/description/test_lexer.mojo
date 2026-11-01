@@ -98,6 +98,18 @@ def test_scan_float_huge_exponent_is_fast_and_saturates() raises:
     scanner_free(handle)
 
 
+def test_failed_string_parse_leaves_an_empty_string() raises:
+    var src = _buf(String("not quoted"))
+    var cur = unsafe_alloc[Int32](1)
+    cur[unsafe_offset=0] = Int32(0)
+    var dst = unsafe_alloc[UInt8](8)
+    for i in range(8):
+        dst[unsafe_offset=i] = UInt8(65)
+    assert_equal(parse_quoted_string(src, Int32(10), cur, dst, Int32(8)), Int32(-1))
+    assert_equal(dst[unsafe_offset=0], UInt8(0))
+    cur.unsafe_free(); dst.unsafe_free(); src.unsafe_free()
+
+
 def test_scan_int_positive() raises:
     var buf = _buf("42")
     var cur = unsafe_alloc[Int32](1); cur[unsafe_offset=0] = Int32(0)

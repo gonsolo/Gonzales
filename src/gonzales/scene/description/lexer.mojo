@@ -290,6 +290,8 @@ def parse_quoted_string(
     buf: Pointer[UInt8, MutUntrackedOrigin],
     max_buf: Int32,
 ) -> Int32:
+    if max_buf > 0:
+        buf[unsafe_offset=0] = UInt8(0)   # callers read it as a string even when no string was there
     var cur = Int(cursor[unsafe_offset=0])
     var len = Int(length)
     cur = skip_whitespace_and_comments(bytes, len, cur)
