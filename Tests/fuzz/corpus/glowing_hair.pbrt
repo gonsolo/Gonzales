@@ -1,0 +1,46 @@
+Integrator "path" "integer maxdepth" [ 4 ]
+Sampler "sobol" "integer pixelsamples" [ 16 ]
+#Sampler "sobol" "integer pixelsamples" [ 1 ]
+PixelFilter "gaussian" "float xradius" [ 1.5 ] "float yradius" [ 1.5 ] "float sigma" [2.5]
+Accelerator "bvh"
+Film "rgb"
+    "string filename" [ "glowing_hair.exr" ]
+     "integer xresolution" [ 1024 ] "integer yresolution" [ 1024 ]
+    #"integer xresolution" [ 256 ] "integer yresolution" [ 256 ]
+ 
+LookAt 0 2 6  0 1 0  0 1 0
+Camera "perspective" "float fov" [ 45 ]
+
+WorldBegin
+
+MakeNamedMaterial "Floor"
+    "string type" [ "diffuse" ]
+    "rgb reflectance" [ 0.2 0.2 0.2 ]
+
+NamedMaterial "Floor"
+Shape "trianglemesh"
+    "point3 P" [ -5 0 -5  -5 0 5  5 0 5  5 0 -5 ]
+    "integer indices" [ 0 1 2 0 2 3 ]
+
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 200 80 20 ]
+    Shape "curve"
+        "point3 P" [ -1 0 0   -1.5 1 0   0 2 0   1 0 0 ]
+        "float width" [ 0.2 ]
+AttributeEnd
+
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 20 80 200 ]
+    Shape "curve"
+        "point3 P" [ 1 0 1   1.5 2 1   -1 3 1   -2 0 1 ]
+        "float width0" [ 0.2 ] "float width1" [ 0.05 ]
+AttributeEnd
+
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 200 20 200 ]
+    Shape "curve"
+        "point3 P" [ 0 0 -1   0.5 1.5 -1   -0.5 1.5 -1   0 0 -1 ]
+        "float width" [ 0.15 ]
+AttributeEnd
+
+WorldEnd
