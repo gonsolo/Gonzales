@@ -1080,7 +1080,9 @@ def _lobe_eval[want_pdfs: Bool = True, want_rev: Bool = True](
             rev_ly = pd[1]
         return LobeEval(f_ly * cos_ly, cos_ly, fwd_ly, rev_ly, True)
     if c.kind == LobeKind.sss_exit:
-        var cos_x = abs(dot(dir_to_other, vn))
+        var cos_x = dot(dir_to_other, vn)
+        if cos_x <= Float32(0):   # one-sided: a chord through the object is no path, and a shadow ray sees nothing along it
+            return LobeEval(SpectralSample(Float32(0)), Float32(0), Float32(0), Float32(0), _lobe_scoped(c))
         return LobeEval(SpectralSample(sss_boundary_lobe(cos_x, c.param) * INV_PI * cos_x),
                         cos_x, cos_x * INV_PI, Float32(1) - fr_dielectric(cos_x, c.param), _lobe_scoped(c))
 
