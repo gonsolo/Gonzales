@@ -541,10 +541,14 @@ def shade_dielectric[use_gpu: Bool, enqueue_shadow: Bool](
             geom_normal = _apply_normal_map_sphere[use_gpu](mat, center, hit_point_raw, geom_normal, ctx.tex_filenames, ctx.textures, ctx.n_textures)
 
     var ior = mat.albedo.r
-    if mat.is_rough_dielectric() and mat.sss_boundary == Int8(0):
-        # A real BSDF, not a delta: pbrt's rough DielectricBxDF, with NEE.
-        _shade_rough_dielectric[enqueue_shadow](path_ptr, ctx, mat, Int(inter.primId.materialIndex), geom_normal, ray_dir,
-                                                ray_org, inter.tHit, ior)
+    var walks = mat.sss_walk_interior() and inter.primId.type == Int8(0)
+    if mat.is_rough_dielectric() and (mat.sss_boundary == Int8(0) or walks):
+        # A real BSDF, not a delta: pbrt's rough DielectricBxDF, with NEE. Below skin, what it transmits starts the walk.
+        var tint = SpectralSample(Float32(1))
+        if walks and mat.tex_idx >= Int32(0):
+            tint = sss_texel_tint(_tex_lookup[use_gpu](mat, inter, v0, v1, v2, mesh, ctx.tex_filenames, ctx.textures, ctx.n_textures),
+                                  mat.sss_mean_refl, path_ptr[].wavelengths)
+        _shade_rough_dielectric[enqueue_shadow](path_ptr, ctx, mat, inter, geom_normal, ray_dir, ray_org, ior, walks, tint)
         return
     # Entering vs exiting is the mesh's own orientation, as in pbrt (ReverseOrientation negates the
     # normals at parse time); a pane whose normal faces away from the camera totally reflects.
@@ -624,14 +628,16 @@ def _shade_rough_dielectric[enqueue_shadow: Bool](
     path_ptr: Pointer[PathState, MutUntrackedOrigin],
     ctx: ShadeContext,
     mat: Material,
-    mat_idx: Int,
+    inter: Intersection,
     n: Vec3f,          # the OUTWARD normal (not face-forwarded): inside/outside is wo's side of it
     ray_dir: Vec3f,
     ray_org: Vec3f,
-    t_hit: Float32,
     ior: Float32,
+    walks: Bool,
+    tint: SpectralSample,
 ):
-    var hit_raw = ray_org + ray_dir * t_hit
+    var mat_idx = Int(inter.primId.materialIndex)
+    var hit_raw = ray_org + ray_dir * inter.tHit
     var wo = -ray_dir
     var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
     # param is `mat`'s alpha: Filter Glossy may have widened it. Shadow and scatter rays leave to their side of n.
@@ -647,6 +653,11 @@ def _shade_rough_dielectric[enqueue_shadow: Bool](
         # touching-dielectric IOR stack pushes on the way in, pops on the way out.
         var entering = dot(wo, n) > Float32(0.0)
         var etap = ior if entering else Float32(1.0) / ior
+        if walks and entering:   # a walk leaves into the medium it came from, so no compression
+            path_ptr[].throughput *= s.weight * SpectralSample(etap * etap) * tint
+            _sss_walk_enter_interior(path_ptr, mat, inter, hit_raw, n, sss_entry_lobe(face_toward(n, s.wi), mat.albedo.r, pcg))
+            path_ptr[].pcgState = pcg.state
+            return
         path_ptr[].eta_scale *= etap * etap
         if entering:
             path_ptr[].previous_dielectric_ior = path_ptr[].current_dielectric_ior
