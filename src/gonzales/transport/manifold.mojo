@@ -1,7 +1,7 @@
 """Solving a specular chain to a light: the probe, the manifold walks, and their geometry term."""
 from std.collections import Array
 from std.math import sqrt, abs
-from gonzales.core.geometry import Point3f, Vec3f, dot, cross, _is_real_ptr
+from gonzales.core.geometry import Point3f, Vec3f, dot, cross, offset_eps, _is_real_ptr
 from gonzales.scene.appearance.materials import fr_dielectric
 from gonzales.scene.appearance.materials import normal_slope_map_none
 from gonzales.scene.shapes.primitives import Intersection, PrimId, TriangleMesh, Instance, mesh_normal
@@ -776,7 +776,10 @@ def _mnee_reproduce(
         return (0, n, verts^, Float32(0.0))
     var d = verts[n-1].pos - last_spec
     var r = last_spec - x0
-    if dot(d, d) > Float32(1e-7) * dot(r, r):   # 0.03% of the distance: another root of the same chain is further away
+    # 0.03% of the distance: another root of the same chain is further away. Never below the ray's spawn offset from
+    # the vertex, or a receiver close to the glass finds its own path foreign and it counts twice.
+    var off = Float32(4) * offset_eps(last_spec.x, last_spec.y, last_spec.z)
+    if dot(d, d) > max(Float32(1e-7) * dot(r, r), off * off):
         return (0, n, verts^, Float32(0.0))
     var g = _mnee_chain_g(x0, verts, res[5])
     return (1, n, verts^, g)
