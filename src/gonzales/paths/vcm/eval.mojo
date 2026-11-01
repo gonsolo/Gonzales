@@ -331,7 +331,7 @@ def _vcm_mnee_hit_term(
         return Float32(0)
     var ctx = _shade_context(sd, Pointer[UInt32, MutUntrackedOrigin].unsafe_dangling())
     var rp = _mnee_reproduce(ctx, x0, n_glass, last_glass, light_hit, l_du, l_dv, pcg)
-    if rp[0] != 1 or rp[3] <= Float32(0):
+    if not rp[0] or rp[3] <= Float32(0):
         return Float32(0)
     return Float32(1) / _mnee_bsdf_over_light(pdf_x0, _mnee_chain_t_eta(x0, rp[2], rp[1])[0], rp[3], p_a)
 
@@ -350,7 +350,7 @@ def _vcm_mnee_light_dvcm(
     var a = Vec3f(Float32(1), Float32(0), Float32(0)) if abs(ny[0]) < Float32(0.9) else Vec3f(Float32(0), Float32(1), Float32(0))
     var tu = cross(ny, a)
     var rp = _mnee_reproduce(ctx, x0, n_glass, first_glass, y, tu, cross(ny, tu), pcg)
-    if rp[0] != 1 or rp[3] <= Float32(0):
+    if not rp[0] or rp[3] <= Float32(0):
         return Float32(0)
     var (t_ch, eta_ch) = _mnee_chain_t_eta(x0, rp[2], rp[1])
     var w0 = rp[2][0].pos - x0

@@ -385,9 +385,7 @@ def _mnee_bsdf_weight(
     var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
     var rp = _mnee_reproduce(ctx, x0, Int(path_ptr[].ns_spec), Vec3f(o.x, o.y, o.z), light_hit,
                              mesh_pos(lmesh, lv1) - lp0, mesh_pos(lmesh, lv2) - lp0, pcg)
-    if rp[0] == -1:
-        return Float32(0.0)
-    if rp[0] != 1:
+    if not rp[0]:
         return Float32(1.0)
     var al_idx = Int(inter.primId.id1)
     var al = ctx.lights.area_lights[unsafe_offset=al_idx]

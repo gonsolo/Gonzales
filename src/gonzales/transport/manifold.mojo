@@ -766,36 +766,33 @@ def _mnee_bsdf_over_light(p_x0: Float32, t_chain: Float32, g: Float32, p_light: 
 def _mnee_reproduce(
     ctx: ShadeContext, x0: Vec3f, n_spec: Int, last_spec: Vec3f, light_hit: Vec3f, l_du: Vec3f, l_dv: Vec3f,
     mut pcg: PCG32,
-) -> Tuple[Int, Int, Array[SMSVertex, MAX_SMS_VERTICES], Float32]:
+) -> Tuple[Bool, Int, Array[SMSVertex, MAX_SMS_VERTICES], Float32]:
     """Whether MNEE's deterministic solve from x0 to light_hit is the path that got there through n_spec glass
-    vertices, the last at last_spec: (1 it is, 0 it is not, -1 the solve found no glass, -2 MNEE does not try: no glass
-    first on the straight segment), with the chain and its g."""
+    vertices, the last at last_spec, with the chain and its g. No glass first on the straight segment: MNEE never tries."""
     var verts = Array[SMSVertex, MAX_SMS_VERTICES](uninitialized=True)
     var seg = light_hit - x0
     var seg_len = sqrt(dot(seg, seg))
     if seg_len <= Float32(1e-4):
-        return (-2, 0, verts^, Float32(0.0))
+        return (False, 0, verts^, Float32(0.0))
     var seg_dir = seg * (Float32(1.0) / seg_len)
     var (glass, probe_inter) = _mnee_first_probe(ctx, x0, seg_dir, seg_len)
     if not glass:
-        return (-2, 0, verts^, Float32(0.0))
+        return (False, 0, verts^, Float32(0.0))
     var (o_du, o_dv) = mnee_orthonormal_basis(l_du, l_dv)
     var res = _sms_solve_from_probe(ctx, x0, seg_dir, seg_len, light_hit, o_du, o_dv, pcg, probe_inter)
     var n = res[2]
     verts = res[3].copy()
-    if not res[0]:
-        return (-1, n, verts^, Float32(0.0))
     if n_spec != n or not res[1]:
-        return (0, n, verts^, Float32(0.0))
+        return (False, n, verts^, Float32(0.0))
     var d = verts[n-1].pos - last_spec
     var r = last_spec - x0
     # 0.03% of the distance: another root of the same chain is further away. Never below the ray's spawn offset from
     # the vertex, or a receiver close to the glass finds its own path foreign and it counts twice.
     var off = Float32(4) * offset_eps(last_spec.x, last_spec.y, last_spec.z)
     if dot(d, d) > max(Float32(1e-7) * dot(r, r), off * off):
-        return (0, n, verts^, Float32(0.0))
+        return (False, n, verts^, Float32(0.0))
     var g = _mnee_chain_g(x0, verts, res[5])
-    return (1, n, verts^, g)
+    return (True, n, verts^, g)
 
 
 def _mnee_chain(
