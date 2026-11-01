@@ -19,6 +19,7 @@ from gonzales.core.reservoir import reservoir_update
 from gonzales.transport.restir_di import ReservoirIO, reservoir_io_null
 from gonzales.transport.restir_gi import gi_target_pdf, gi_temporal_spatial_combine
 from gonzales.integrators.pt.restir_sms import SMSReservoirIO, sms_reservoir_io_null
+from gonzales.transport.surface import sss_texel_tint
 from gonzales.transport.texturing import _apply_surface_maps, _tex_lookup, sample_texture
 from gonzales.transport.shade_context import GIPendingX1, ShadeContext
 from gonzales.transport.manifold import _interp_vertex_normal
@@ -573,23 +574,7 @@ def shade_dielectric[use_gpu: Bool, enqueue_shadow: Bool](
         if entering:
             var a_pt = _tex_lookup[use_gpu](mat, inter, v0, v1, v2, mesh,
                                             ctx.tex_filenames, ctx.textures, ctx.n_textures)
-            var mr = mat.sss_mean_refl
-            # Guard a degenerate mean, and cap the correction: a texel far
-            # above the mean must brighten its patch, never manufacture an
-            # unbounded throughput spike the way an unclamped ratio would.
-            var kr = min(a_pt.r / mr.r, Float32(4.0)) if mr.r > Float32(1e-4) else Float32(1.0)
-            var kg = min(a_pt.g / mr.g, Float32(4.0)) if mr.g > Float32(1e-4) else Float32(1.0)
-            var kb = min(a_pt.b / mr.b, Float32(4.0)) if mr.b > Float32(1e-4) else Float32(1.0)
-            # Band-picked rather than smoothly upsampled: the spectral table
-            # is not threaded into the dielectric kernel, and unlike the
-            # sigma_s ratio that had to be made consistent with sigma_t (see
-            # medium_sigma_s_spectral), this tint is applied ONCE per BSSRDF
-            # event -- only on the way in, since TIR events are reflections --
-            # so its error is bounded instead of compounding over hundreds of
-            # scatters.
-            path_ptr[].throughput *= rgb_bands_to_spectral_sample(
-                max(kr, Float32(0.0)), max(kg, Float32(0.0)), max(kb, Float32(0.0)),
-                path_ptr[].wavelengths)
+            path_ptr[].throughput *= sss_texel_tint(a_pt, mat.sss_mean_refl, path_ptr[].wavelengths)
     if mat.sss_walk_interior() and not is_reflect and inter.primId.type == Int8(0) and \
        (force_entering or dot(ray_dir, geom_normal) < Float32(0.0)):
         var wi_lobe = sss_entry_lobe(face_toward(geom_normal, bs.wi), mat.albedo.r, pcg)

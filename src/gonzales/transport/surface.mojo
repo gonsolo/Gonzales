@@ -1,6 +1,6 @@
 # A ray's hit on a scattering surface as every integrator sees it, and the BSDF there (pbrt's SurfaceInteraction).
 
-from std.math import abs, min
+from std.math import abs, max, min
 from gonzales.core.geometry import offset_eps, face_toward, RGB, Point3f, Vec3f, vec3f, dot
 from gonzales.scene.appearance.materials import Material, MatKind
 from gonzales.scene.shapes.primitives import Intersection
@@ -41,18 +41,27 @@ struct SurfaceHit(TrivialRegisterPassable):
 
 
 @always_inline
+def _sss_tint_band(texel: Float32, mean: Float32) -> Float32:
+    return max(min(texel / mean, Float32(4)), Float32(0)) if mean > Float32(1e-4) else Float32(1)
+
+
+@always_inline
+def sss_texel_tint(texel: RGB, mean: RGB, wl: SampledWavelengths) -> SpectralSample:
+    """A texel against the mean a subsurface walk was built from, capped so a bright texel stays no spike."""
+    return rgb_bands_to_spectral_sample(_sss_tint_band(texel.r, mean.r), _sss_tint_band(texel.g, mean.g),
+                                        _sss_tint_band(texel.b, mean.b), wl)
+
+
+@always_inline
 def sss_entry_tint[use_gpu: Bool](ref sd: SceneView, mat: Material, inter: Intersection, wl: SampledWavelengths) -> SpectralSample:
-    """A textured subsurface walk's colour against the mean it was built from, capped so a bright texel stays no spike."""
+    """The surface tint of a textured subsurface walk."""
     if mat.tex_idx < Int32(0):
         return SpectralSample(Float32(1))
     var (mesh, v0, v1, v2, ok) = _get_tri_verts(inter, sd.meshes)
     if not ok:
         return SpectralSample(Float32(1))
     var a = _tex_lookup[use_gpu](mat, inter, v0, v1, v2, mesh, sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
-    var m = mat.sss_mean_refl
-    return rgb_bands_to_spectral_sample(min(a.r / m.r, Float32(4)) if m.r > Float32(1e-4) else Float32(1),
-                                        min(a.g / m.g, Float32(4)) if m.g > Float32(1e-4) else Float32(1),
-                                        min(a.b / m.b, Float32(4)) if m.b > Float32(1e-4) else Float32(1), wl)
+    return sss_texel_tint(a, mat.sss_mean_refl, wl)
 
 
 @always_inline
