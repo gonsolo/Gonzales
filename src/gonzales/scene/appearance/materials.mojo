@@ -139,10 +139,10 @@ struct Material(TrivialRegisterPassable):
 
     @always_inline
     def uses_lobe(self) -> Bool:
-        """Scatters through its BSDF (lobe): everything but smooth glass, subsurface boundaries, mixes, emitters
+        """Scatters through its BSDF (lobe): everything but smooth glass, smooth subsurface boundaries, mixes, emitters
         and pass-through boundaries."""
         if self.type == MatKind.dielectric:
-            return self.is_rough_dielectric() and self.sss_boundary == Int8(0)
+            return self.is_rough_dielectric() and (self.sss_boundary == Int8(0) or self.sss_walk_interior())
         return self.type == MatKind.diffuse or self.type == MatKind.diffuse_transmit or self.type == MatKind.coated_diffuse \
             or self.type == MatKind.conductor or self.type == MatKind.measured or self.type == MatKind.hair \
             or self.type == MatKind.coated_conductor

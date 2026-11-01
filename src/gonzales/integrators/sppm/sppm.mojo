@@ -12,7 +12,7 @@ from std.atomic import Atomic
 from std.memory import bitcast
 from gonzales.transport.medium import MediumView
 from gonzales.core.geometry import face_toward
-from gonzales.transport.sss_walk import sss_entered, sss_hop, sss_leave, sss_walks_below
+from gonzales.transport.sss_walk import SssExit, sss_entered, sss_hop, sss_leave, sss_walks_below
 from gonzales.transport.medium_interface import default_emit_medium, medium_after
 from gonzales.core.geometry import offset_eps, TERMINAL_SEGMENT_GRACE_ROUNDS, RGB, Point3f, Point2f, Vec3f, vec3f, point3f, dot, cross, PI, INV_FOUR_PI, Frame, _is_real_ptr
 from gonzales.scene.appearance.materials import Material, MatKind, LobeKind, PhotonKind, fr_dielectric, resolve_mix
@@ -523,6 +523,36 @@ def _spectral_gain_rgb(ref sd: SceneView, w: SpectralSample, wl: SampledWaveleng
 
 
 @always_inline
+def _photon_walk[tex_gpu: Bool](ref sd: SceneView, mat: Material, inter: Intersection, hit: Point3f, refracted: Vec3f,
+                                wl: SampledWavelengths, mut pcg: PCG32, mut flux: SpectralSample) -> Tuple[Vec3f, Point3f, Bool]:
+    """A photon through the walk and out of its exit: the next ray, and whether it lives."""
+    var g_w = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
+    var ex = sss_hop[tex_gpu](sd, mat, inter, hit.to_simd(), g_w, refracted, wl, pcg)
+    if not ex.ok:
+        return (vec3f(refracted), hit, False)
+    var out = sss_leave(ex.n_o, mat.albedo.r, pcg.next_float(), pcg.next_float())
+    flux *= ex.weight * SpectralSample(out.weight)
+    var wi = vec3f(out.wi)
+    return (wi, ex.x_o + wi * Float32(0.0002), True)
+
+
+@always_inline
+def _vp_at_walk_exit(mut vp: SPPMPixel, ex: SssExit, mat: Material, mat_idx: Int, ref sd: SceneView):
+    """The path tracer's walk ended: a visible point at its exit, with the Fresnel exit lobe."""
+    vp.beta = vp.beta * _spectral_gain_rgb(sd, ex.weight, vp.wavelengths)
+    vp.pos = ex.x_o
+    vp.normal = vec3f(ex.n_o)
+    vp.geo_normal = vec3f(ex.n_o)
+    vp.wo = vec3f(ex.n_o)
+    vp.alb = RGB(Float32(1))
+    vp.mat_kind = LobeKind.sss_exit
+    vp.alpha = mat.albedo.r
+    vp.mat_idx = Int32(mat_idx)
+    vp.is_volume = PhotonKind.surface
+    vp.valid = Int32(1)
+
+
+@always_inline
 def _film_rgb(c: RGB, wl: SampledWavelengths, ref sd: SceneView) -> RGB:
     """Seen radiance through the film's spectral response (a named sensor's curves), as the path tracer sees it."""
     var sp = rgb_illuminant_to_spectral_sample(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, c.r, c.g, c.b, wl)
@@ -785,18 +815,19 @@ def _sppm_trace_visible_point[use_gpu: Bool](
             var gn = sh.gn
             var gn_geo = sh.gn_geo   # before any bump/normal map -- see SPPMPixel.geo_normal
             var eff_alb = sh.alb
-            if mat.type == MatKind.hair and bounce < max_charged:
-                # pbrt's SPPM: hair is glossy, so no visible point on it before the last bounce. Light it here,
-                # radiance into env, and scatter on with the sampler's own RGB f/pdf.
+            var rough_skin = mat.is_rough_dielectric() and sss_walks_below(mat, inter, cur_med_idx)
+            if (mat.type == MatKind.hair or rough_skin) and bounce < max_charged:
+                # pbrt's SPPM: hair and rough skin are glossy, so no visible point on them before the last bounce. Light
+                # it here, radiance into env, and scatter on with the sampler's own f/pdf.
                 var hv = vp
                 hv.pos = hit
                 hv.normal = vec3f(gn)
                 hv.geo_normal = vec3f(gn_geo)
                 hv.alb = eff_alb
-                hv.mat_kind = LobeKind.hair
+                hv.mat_kind = mat.lobe()
                 hv.mat_idx = Int32(mat_idx)
                 hv.wo = vec3f((-rd).to_simd())
-                hv.alpha = Float32(0)
+                hv.alpha = mat.lobe_param() if rough_skin else Float32(0)
                 hv.hair_curve_idx = sh.curve_idx
                 hv.hair_h = sh.curve_h
                 hv.hair_v = sh.curve_v
@@ -806,6 +837,23 @@ def _sppm_trace_visible_point[use_gpu: Bool](
                 var (lr, lg, lb) = spectral_sample_to_rgb(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x,
                     sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, _sppm_nee_at(hv, sd, pcg), vp.wavelengths)
                 vp.env += vp.beta * RGB(lr, lg, lb)
+                if rough_skin:
+                    var s_v = sh.bsdf(mat, mat_idx).sample(pcg.next_float(), pcg.next_float(), pcg.next_float(), pcg.next_float(),
+                        LobeTables(sd.materials, sd.curves, sd.measuredBrdfs, sd.spectral), vp.wavelengths)
+                    if not s_v.valid:
+                        break
+                    if s_v.transmit:   # a walk leaves into the medium it came from, so no compression
+                        var ex_r = sss_hop[use_gpu](sd, mat, inter, hit.to_simd(), _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd()),
+                                                    s_v.wi, vp.wavelengths, pcg)
+                        if ex_r.ok:
+                            vp.beta = vp.beta * _spectral_gain_rgb(sd, s_v.weight * SpectralSample(mat.albedo.r * mat.albedo.r), vp.wavelengths)
+                            _vp_at_walk_exit(vp, ex_r, mat, mat_idx, sd)
+                        break
+                    vp.beta = vp.beta * _spectral_gain_rgb(sd, s_v.weight, vp.wavelengths)
+                    rd = vec3f(s_v.wi)
+                    ro = sh.spawn(s_v.wi)
+                    after_glossy = True
+                    continue
                 var hc = _hair_precompute(mat, sd.curves, Int(sh.curve_idx), sh.curve_v, sh.curve_h, (-rd).to_simd())
                 var hs = _hair_sample_dir_u(hc, pcg.next_float(), pcg.next_float(), pcg.next_float(), pcg.next_float())
                 if hs[2] <= Float32(0):
@@ -913,21 +961,10 @@ def _sppm_trace_visible_point[use_gpu: Bool](
                 not sss_walks_below(mat, inter, cur_med_idx), True, _vp_strat_u(vdc, pidx, bounce))
             if sss_entered(mat, inter, ray_dir, new_dir, cur_med_idx, sd, hit.to_simd()):
                 var g_w = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
-                # The path tracer's walk; its exit is a visible point with the Fresnel exit lobe.
                 var ex = sss_hop[use_gpu](sd, mat, inter, hit.to_simd(), g_w, new_dir, vp.wavelengths, pcg)
-                if not ex.ok:
-                    break
-                vp.beta = vp.beta * radiance_scale * _spectral_gain_rgb(sd, ex.weight, vp.wavelengths)
-                vp.pos = ex.x_o
-                vp.normal = vec3f(ex.n_o)
-                vp.geo_normal = vec3f(ex.n_o)
-                vp.wo = vec3f(ex.n_o)
-                vp.alb = RGB(Float32(1))
-                vp.mat_kind = LobeKind.sss_exit
-                vp.alpha = mat.albedo.r
-                vp.mat_idx = Int32(mat_idx)
-                vp.is_volume = PhotonKind.surface
-                vp.valid = Int32(1)
+                if ex.ok:
+                    vp.beta = vp.beta * radiance_scale
+                    _vp_at_walk_exit(vp, ex, mat, mat_idx, sd)
                 break
             current_dielectric_ior = new_cur_ior
             previous_dielectric_ior = new_prev_ior
@@ -1285,6 +1322,13 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
             if rr_l <= Float32(0.0) or pcg.next_float() >= rr_l:
                 break
             flux *= s_l.weight * (Float32(1.0) / rr_l)
+            if s_l.transmit and sss_walks_below(mat, inter, cur_med_idx):
+                bounce -= 1
+                var (wr, or_w, ok_w) = _photon_walk[tex_gpu](sd, mat, inter, hit, s_l.wi, ph_wavelengths, pcg, flux)
+                if not ok_w:
+                    break
+                rd = wr; ro = or_w
+                continue
             rd = vec3f(s_l.wi)
             ro = sh.spawn(s_l.wi)
             continue
@@ -1318,14 +1362,10 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
             var (new_dir, new_org, _, new_cur_ior, new_prev_ior) = _dielectric_bounce(
                 ray_dir, hit.to_simd(), gn, ior, False, pcg, current_dielectric_ior, previous_dielectric_ior, mat.type == MatKind.thin_dielectric, radiance_mode=False)
             if sss_entered(mat, inter, ray_dir, new_dir, cur_med_idx, sd, hit.to_simd()):
-                var g_w = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
-                var ex = sss_hop[tex_gpu](sd, mat, inter, hit.to_simd(), g_w, new_dir, ph_wavelengths, pcg)
-                if not ex.ok:
+                var (wr, or_w, ok_w) = _photon_walk[tex_gpu](sd, mat, inter, hit, new_dir, ph_wavelengths, pcg, flux)
+                if not ok_w:
                     break
-                var out = sss_leave(ex.n_o, mat.albedo.r, pcg.next_float(), pcg.next_float())
-                flux *= ex.weight * SpectralSample(out.weight)
-                rd = vec3f(out.wi)
-                ro = ex.x_o + rd * Float32(0.0002)
+                rd = wr; ro = or_w
                 continue
             current_dielectric_ior = new_cur_ior
             previous_dielectric_ior = new_prev_ior

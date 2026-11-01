@@ -5,7 +5,7 @@ from std.collections import Array
 from std.math import sqrt, cos, sin, log, exp, max, abs
 from gonzales.transport.medium import MediumView
 from gonzales.core.geometry import face_toward
-from gonzales.transport.sss_walk import SssExit, sss_entered, sss_hop, sss_leave
+from gonzales.transport.sss_walk import SssExit, sss_entered, sss_walks_below, sss_hop, sss_leave
 from gonzales.transport.medium_interface import medium_after
 from gonzales.scene.appearance.materials import fr_dielectric, sss_boundary_lobe
 from gonzales.core.geometry import offset_eps, RGB, Point3f, Point2f, Vec3f, vec3f, point3f, dot, cross, PI, INV_FOUR_PI, INV_PI
@@ -632,6 +632,8 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
         if mat.type != MatKind.interface:
             st.mis_null_dist = Float32(0)
 
+        var walks = False
+        var dvcm_in = st.dvcm; var dvc_in = st.dvc; var dvm_in = st.dvm; var med_in = st.cur_med_idx
         if mat.uses_lobe():
             if not mat.has_lobe():
                 return False   # e.g. a measured table that failed to load
@@ -682,6 +684,9 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             else:
                 st.ro = hit + st.rd*Float32(0.0002)
             st.beta *= sc.weight
+            walks = sc.transmit and sss_walks_below(mat, inter, med_in)
+            if walks:   # a walk leaves into the medium it came from, so no compression
+                st.beta *= SpectralSample(mat.albedo.r * mat.albedo.r)
             st.last_bsdf_pdf = Float32(-1) if sc.is_delta else sc.pdf_fwd
             if v.is_delta == Int32(0):
                 var receiver = LobeKind.is_diffuse(v.mat_kind)
@@ -692,40 +697,13 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
         elif mat.type == MatKind.dielectric or mat.type == MatKind.thin_dielectric:
             if VcmStrategies.ends_at_delta(sd, st.cam_count()):
                 return False   # a delta vertex past d starts no strategy either
-            var dvcm_in = st.dvcm; var dvc_in = st.dvc; var dvm_in = st.dvm; var med_in = st.cur_med_idx
             var ior_cur = st.current_dielectric_ior; var ior_prev = st.previous_dielectric_ior
             var cross_scale = _vcm_dielectric_cross[use_gpu, True](sd, inter, mat, hit, ray_dir, vcm_cone_w, has_med, pcg,
                 st.ro, st.rd, st.current_dielectric_ior, st.previous_dielectric_ior, st.cur_med_idx, st.dvcm, st.dvc, st.dvm)
             if sss_entered(mat, inter, ray_dir, st.rd, med_in, sd, hit.to_simd()):
                 st.cur_med_idx = med_in
                 st.current_dielectric_ior = ior_cur; st.previous_dielectric_ior = ior_prev
-                var ex = _vcm_sss_walk[use_gpu](sd, inter, mat, hit, ray_dir, st.rd, st.wl, mis_vc_weight_factor, pcg, st.beta,
-                                                st.dvcm, st.dvc, st.dvm, dvcm_in, dvc_in, dvm_in)
-                if not ex.ok:
-                    return False
-                var x_o = ex.x_o
-                var n_o = ex.n_o
-                var v = _vcm_sss_exit_vertex(ex, mat.albedo.r, st.beta, st.cur_med_idx, st.wl, st.dvcm, st.dvc, st.dvm)
-                if st.n_verts == 0: st.first_alb = mat.sss_mean_refl
-                if VcmStrategies.ends_at_vertex(sd, st.cam_count(), st.n_verts):
-                    return False   # a vertex past d starts no strategy (see VcmStrategies.depth)
-                st.n_verts += 1
-                # A walk's exit does not merge: light and camera exits are two walks, not one.
-                if path_len > 0:
-                    if defer_shadow_rays:
-                        _bdpt_connect_to_cache_deferred(v, sd, lvc, lp_idx, path_len, mis_vm_weight_factor, shadow_rays, shadow_pending, shadow_valid, shadow_seg_med, st.cam_count())
-                    else:
-                        st.total += _bdpt_connect_to_cache(v, sd, has_med, scratch, lvc, lp_idx, path_len, mis_vm_weight_factor, st.cam_count())
-                var ctx_x = BSDF(LobeKind.sss_exit, True, False, n_o, n_o, RGB(Float32(1)), Int32(-1), mat.albedo.r,
-                                    Float32(0), Int32(-1), Float32(0), Float32(0), True, False)
-                st.total += _vcm_nee_surface(sd, v, ctx_x, x_o, n_o, st.beta, Float32(0),
-                                          v.dVCM, v.dVC, st.cur_med_idx, scratch, st.wl, pcg,
-                                          offset_eps(x_o.x, x_o.y, x_o.z), False)
-                st.total += _vcm_mnee(sd, v, x_o.to_simd(), n_o, st.beta, pcg, st.wl, Float32(0), v.dVCM, v.dVC)
-                var cos_out_x = _vcm_sss_exit_scatter(sd, ex, mat.albedo.r, mis_vc_weight_factor, mis_vm_weight_factor, pcg,
-                                                      st.ro, st.rd, st.beta, st.dvcm, st.dvc, st.dvm)
-                st.last_bsdf_pdf = cos_out_x * INV_PI
-                st.mnee = VCMMneeTrack(x_o.to_simd(), cos_out_x * INV_PI, Int32(0))
+                walks = True
             else:
                 st.n_delta += 1
                 st.mnee.n_glass += 1
@@ -744,5 +722,33 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
         else:
             return False   # unhandled material type
 
+        if walks:
+            var ex = _vcm_sss_walk[use_gpu](sd, inter, mat, hit, ray_dir, st.rd, st.wl, mis_vc_weight_factor, pcg, st.beta,
+                                            st.dvcm, st.dvc, st.dvm, dvcm_in, dvc_in, dvm_in)
+            if not ex.ok:
+                return False
+            var x_o = ex.x_o
+            var n_o = ex.n_o
+            var v = _vcm_sss_exit_vertex(ex, mat.albedo.r, st.beta, st.cur_med_idx, st.wl, st.dvcm, st.dvc, st.dvm)
+            if st.n_verts == 0: st.first_alb = mat.sss_mean_refl
+            if VcmStrategies.ends_at_vertex(sd, st.cam_count(), st.n_verts):
+                return False   # a vertex past d starts no strategy (see VcmStrategies.depth)
+            st.n_verts += 1
+            # A walk's exit does not merge: light and camera exits are two walks, not one.
+            if path_len > 0:
+                if defer_shadow_rays:
+                    _bdpt_connect_to_cache_deferred(v, sd, lvc, lp_idx, path_len, mis_vm_weight_factor, shadow_rays, shadow_pending, shadow_valid, shadow_seg_med, st.cam_count())
+                else:
+                    st.total += _bdpt_connect_to_cache(v, sd, has_med, scratch, lvc, lp_idx, path_len, mis_vm_weight_factor, st.cam_count())
+            var ctx_x = BSDF(LobeKind.sss_exit, True, False, n_o, n_o, RGB(Float32(1)), Int32(-1), mat.albedo.r,
+                                Float32(0), Int32(-1), Float32(0), Float32(0), True, False)
+            st.total += _vcm_nee_surface(sd, v, ctx_x, x_o, n_o, st.beta, Float32(0),
+                                      v.dVCM, v.dVC, st.cur_med_idx, scratch, st.wl, pcg,
+                                      offset_eps(x_o.x, x_o.y, x_o.z), False)
+            st.total += _vcm_mnee(sd, v, x_o.to_simd(), n_o, st.beta, pcg, st.wl, Float32(0), v.dVCM, v.dVC)
+            var cos_out_x = _vcm_sss_exit_scatter(sd, ex, mat.albedo.r, mis_vc_weight_factor, mis_vm_weight_factor, pcg,
+                                                  st.ro, st.rd, st.beta, st.dvcm, st.dvc, st.dvm)
+            st.last_bsdf_pdf = cos_out_x * INV_PI
+            st.mnee = VCMMneeTrack(x_o.to_simd(), cos_out_x * INV_PI, Int32(0))
 
         return True   # bounce processed normally, path continues

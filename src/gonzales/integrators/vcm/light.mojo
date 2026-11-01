@@ -3,7 +3,7 @@
 
 from std.math import sqrt, cos, sin, log, exp, max
 from gonzales.transport.medium import MediumView
-from gonzales.transport.sss_walk import sss_entered
+from gonzales.transport.sss_walk import sss_entered, sss_walks_below
 from gonzales.transport.medium_interface import medium_after
 from gonzales.core.geometry import Point3f, Point2f, Vec3f, vec3f, point3f, dot, PI, INV_FOUR_PI
 from gonzales.scene.appearance.materials import MatKind, LobeKind, resolve_mix
@@ -389,6 +389,8 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
         if mat.type != MatKind.interface:
             st.mis_null_dist = Float32(0)
 
+        var walks = False
+        var dvcm_in = st.dvcm; var dvc_in = st.dvc; var dvm_in = st.dvm; var med_in = st.cur_med_idx
         if mat.uses_lobe():
             if not mat.has_lobe():
                 return False   # e.g. a measured table that failed to load
@@ -411,9 +413,11 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
                 v.n_delta = Int32(st.n_delta)
                 _bdpt_store_lvc_vertex(v, lvc, lp_idx, st.n_verts - 1)
             var sc = _vcm_scatter(v, True, pcg, sd, st.wl, st.dvcm, st.dvc, st.dvm, mis_vc_weight_factor, eta_x)
-            st.mnee.side = Float32(0)
             if not sc.valid:
                 return False
+            walks = sc.transmit and sss_walks_below(mat, inter, med_in)
+            if not walks:
+                st.mnee.side = Float32(0)
             st.rd = vec3f(sc.wi)
             if on_curve:
                 st.ro = hit + vec3f(gn_geo) * (spawn_eps if dot(sc.wi, gn_geo) >= Float32(0) else -spawn_eps)
@@ -422,33 +426,13 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
             st.flux *= sc.weight
 
         elif mat.type == MatKind.dielectric or mat.type == MatKind.thin_dielectric:
-            var dvcm_in = st.dvcm; var dvc_in = st.dvc; var dvm_in = st.dvm; var med_in = st.cur_med_idx
             var ior_cur = st.current_dielectric_ior; var ior_prev = st.previous_dielectric_ior
             _ = _vcm_dielectric_cross[use_gpu, False](sd, inter, mat, hit, ray_dir, Float32(-1.0), has_med, pcg,
                     st.ro, st.rd, st.current_dielectric_ior, st.previous_dielectric_ior, st.cur_med_idx, st.dvcm, st.dvc, st.dvm)
             if sss_entered(mat, inter, ray_dir, st.rd, med_in, sd, hit.to_simd()):
-                comptime if _VCM_SSS_CAMERA_ONLY:
-                    return False
                 st.cur_med_idx = med_in
                 st.current_dielectric_ior = ior_cur; st.previous_dielectric_ior = ior_prev
-                if st.mnee.side > Float32(0) and st.mnee.n_glass > Int32(0):
-                    # Reached through glass only: the camera exit's MNEE samples this entry too.
-                    var gn_e = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
-                    var d_m = _vcm_mnee_light_dvcm(sd, hit.to_simd(), gn_e, st.mnee.y, st.mnee.ny, st.mnee.side,
-                                                   Int(st.mnee.n_glass), st.mnee.first_glass, pcg)
-                    if d_m > Float32(0):
-                        dvcm_in = d_m * abs(dot(ray_dir, gn_e))   # the walk applies the arrival cosine
-                var ex = _vcm_sss_walk[use_gpu](sd, inter, mat, hit, ray_dir, st.rd, st.wl, mis_vc_weight_factor, pcg, st.flux,
-                                                st.dvcm, st.dvc, st.dvm, dvcm_in, dvc_in, dvm_in)
-                if not ex.ok:
-                    return False
-                var v = _vcm_sss_exit_vertex(ex, mat.albedo.r, st.flux, st.cur_med_idx, st.wl, st.dvcm, st.dvc, st.dvm)
-                st.n_verts += 1
-                v.n_delta = Int32(st.n_delta)
-                _bdpt_store_lvc_vertex(v, lvc, lp_idx, st.n_verts - 1)
-                _ = _vcm_sss_exit_scatter(sd, ex, mat.albedo.r, mis_vc_weight_factor, mis_vm_weight_factor, pcg,
-                                          st.ro, st.rd, st.flux, st.dvcm, st.dvc, st.dvm)
-                st.mnee.side = Float32(0)
+                walks = True
             else:
                 st.n_delta += 1
                 if st.mnee.n_glass == Int32(0):
@@ -468,6 +452,27 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
         else:
             return False   # unhandled material type
 
+        if walks:
+            comptime if _VCM_SSS_CAMERA_ONLY:
+                return False
+            if st.mnee.side > Float32(0) and st.mnee.n_glass > Int32(0):
+                # Reached through glass only: the camera exit's MNEE samples this entry too.
+                var gn_e = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
+                var d_m = _vcm_mnee_light_dvcm(sd, hit.to_simd(), gn_e, st.mnee.y, st.mnee.ny, st.mnee.side,
+                                               Int(st.mnee.n_glass), st.mnee.first_glass, pcg)
+                if d_m > Float32(0):
+                    dvcm_in = d_m * abs(dot(ray_dir, gn_e))   # the walk applies the arrival cosine
+            var ex = _vcm_sss_walk[use_gpu](sd, inter, mat, hit, ray_dir, st.rd, st.wl, mis_vc_weight_factor, pcg, st.flux,
+                                            st.dvcm, st.dvc, st.dvm, dvcm_in, dvc_in, dvm_in)
+            if not ex.ok:
+                return False
+            var v = _vcm_sss_exit_vertex(ex, mat.albedo.r, st.flux, st.cur_med_idx, st.wl, st.dvcm, st.dvc, st.dvm)
+            st.n_verts += 1
+            v.n_delta = Int32(st.n_delta)
+            _bdpt_store_lvc_vertex(v, lvc, lp_idx, st.n_verts - 1)
+            _ = _vcm_sss_exit_scatter(sd, ex, mat.albedo.r, mis_vc_weight_factor, mis_vm_weight_factor, pcg,
+                                      st.ro, st.rd, st.flux, st.dvcm, st.dvc, st.dvm)
+            st.mnee.side = Float32(0)
 
         return True   # bounce processed normally, path continues
 
