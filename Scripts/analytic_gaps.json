@@ -44,6 +44,9 @@
   "furnace-mix.pt": 1.0024,
   "furnace-mix.sppm": 1.0014,
   "furnace-mix.vcm": 1.0002,
+  "furnace-mnee-near-glass.pt": 0.9981,
+  "furnace-mnee-near-glass.sppm": 1.008,
+  "furnace-mnee-near-glass.vcm": 0.9971,
   "furnace-thindielectric.pt": 1.0026,
   "furnace-thindielectric.sppm": 1.0,
   "furnace-thindielectric.vcm": 1.0
