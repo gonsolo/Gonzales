@@ -11,20 +11,22 @@ from gonzales.scene.shapes.primitives import mesh_pos
 from gonzales.transport.render_state import PathState, SssWalk
 from gonzales.core.rng import PCG32
 from gonzales.transport.surface import sss_entry_tint
-from gonzales.core.spectrum import SampledWavelengths, SpectralSample, rgb_bands_to_spectral_sample
+from gonzales.core.spectrum import SampledWavelengths, SpectralHandle, SpectralSample, spec_refl, spec_refl_unbounded
 from std.collections import Array
 from std.math import abs, cos, exp, log, pow, sin, sqrt
 
 
 @always_inline
-def sss_walk_start(mat: Material, inter: Intersection, hit: Vec3f, geo_normal: Vec3f, wi: Vec3f, wl: SampledWavelengths) -> Tuple[Ray, SssWalk]:
-    """The ray and state of a walk entering a pbrt subsurface boundary at `hit` along the refracted direction wi."""
+def sss_walk_start(mat: Material, inter: Intersection, hit: Vec3f, geo_normal: Vec3f, wi: Vec3f, wl: SampledWavelengths, h: SpectralHandle) -> Tuple[Ray, SssWalk]:
+    """The ray and state of a walk entering a pbrt subsurface boundary at `hit` along the refracted direction wi.
+    Its coefficients are upsampled as any medium's (medium_sigma_s_spectral: unbounded sigma_t, bounded albedo)."""
     var st = mat.checker_tex1
     var al = mat.checker_tex2
     var out_n = face_toward(geo_normal, -wi)
     var org = offset_point(hit, -out_n)
     return (Ray(Point3f(org[0], org[1], org[2]), Vec3f(wi[0], wi[1], wi[2])),
-            SssWalk(rgb_bands_to_spectral_sample(st.r, st.g, st.b, wl), rgb_bands_to_spectral_sample(al.r, al.g, al.b, wl),
+            SssWalk(spec_refl_unbounded(h.coeffs, h.res, h.cie_x, h.cie_y, h.cie_z, h.d65, st.r, st.g, st.b, wl),
+                    spec_refl(h.coeffs, h.res, h.cie_x, h.cie_y, h.cie_z, h.d65, al.r, al.g, al.b, wl),
                     mat.checker_uscale, Int32(inter.primId.id1), inter.primId.instanceIdx, Int32(0), Int32(0),
                     hit, out_n, Float32(-1), Float32(1), Float32(1), Float32(1), Float32(0), Float32(0), Float32(0)))
 
@@ -68,7 +70,7 @@ struct SssExit(TrivialRegisterPassable):
 def sss_walk_to_exit(ref sd: SceneView, mat: Material, inter: Intersection, hit: Vec3f, geo_normal: Vec3f, wi: Vec3f,
                      wl: SampledWavelengths, mut pcg: PCG32) -> SssExit:
     """The path tracer's walk, run to its end in one go for the integrators without a walking wavefront."""
-    var (ray, walk) = sss_walk_start(mat, inter, hit, geo_normal, wi, wl)
+    var (ray, walk) = sss_walk_start(mat, inter, hit, geo_normal, wi, wl, sd.spectral)
     var state = Array[PathState, 1](uninitialized=True)
     var store = Array[Intersection, 1](fill=inter)
     var ps = state.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()

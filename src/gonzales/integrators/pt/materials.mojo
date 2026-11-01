@@ -14,7 +14,7 @@ from gonzales.scene.accel.bvh import curve_hit_frame, curve_offset_eps, LightSam
 from gonzales.core.sampling import power_heuristic, sample_cosine_hemisphere_world, sample_ggx_vndf
 from gonzales.core.transform import transform_normal, Mat4
 from gonzales.transport.guide import GuideGrid, guide_pos_to_cell, guide_pdf, guide_sample, guide_cell_has_data, null_guide, guide_is_active
-from gonzales.core.spectrum import SpectralSample, spectral_sample_to_rgb, rgb_bands_to_spectral_sample
+from gonzales.core.spectrum import SpectralHandle, SpectralSample, spectral_sample_to_rgb, rgb_bands_to_spectral_sample
 from gonzales.core.reservoir import reservoir_update
 from gonzales.transport.restir_di import ReservoirIO, reservoir_io_null
 from gonzales.transport.restir_gi import gi_target_pdf, gi_temporal_spatial_combine
@@ -311,11 +311,12 @@ def _sss_walk_enter(
 def _sss_walk_enter_interior(
     path_ptr: Pointer[PathState, MutUntrackedOrigin], mat: Material, inter: Intersection, hit: Vec3f, geo_normal: Vec3f,
     wi: Vec3f,
+    spectral: SpectralHandle,
 ):
     """Start the walk below a pbrt subsurface boundary along the refracted direction wi, with the interior's own
     extinction and albedo (Material.sss_walk_interior). It leaves through the walk's Lambertian exit, which carries all
     the energy out as pbrt's normalized Fresnel exit lobe does."""
-    var (ray, walk) = sss_walk_start(mat, inter, hit, geo_normal, wi, path_ptr[].wavelengths)
+    var (ray, walk) = sss_walk_start(mat, inter, hit, geo_normal, wi, path_ptr[].wavelengths, spectral)
     path_ptr[].ray = ray
     path_ptr[].sss = walk
     if path_ptr[].bounce == 0 or path_ptr[].specularBounce == Int8(1):
@@ -582,7 +583,7 @@ def shade_dielectric[use_gpu: Bool, enqueue_shadow: Bool](
     if mat.sss_walk_interior() and not is_reflect and inter.primId.type == Int8(0) and \
        (force_entering or dot(ray_dir, geom_normal) < Float32(0.0)):
         var wi_lobe = sss_entry_lobe(face_toward(geom_normal, bs.wi), mat.albedo.r, pcg)
-        _sss_walk_enter_interior(path_ptr, mat, inter, ray_org + ray_dir * inter.tHit, geom_normal, wi_lobe)
+        _sss_walk_enter_interior(path_ptr, mat, inter, ray_org + ray_dir * inter.tHit, geom_normal, wi_lobe, ctx.spectral)
         path_ptr[].pcgState = pcg.state
         return
     if not is_reflect:
@@ -655,7 +656,7 @@ def _shade_rough_dielectric[enqueue_shadow: Bool](
         var etap = ior if entering else Float32(1.0) / ior
         if walks and entering:   # a walk leaves into the medium it came from, so no compression
             path_ptr[].throughput *= s.weight * SpectralSample(etap * etap) * tint
-            _sss_walk_enter_interior(path_ptr, mat, inter, hit_raw, n, sss_entry_lobe(face_toward(n, s.wi), mat.albedo.r, pcg))
+            _sss_walk_enter_interior(path_ptr, mat, inter, hit_raw, n, sss_entry_lobe(face_toward(n, s.wi), mat.albedo.r, pcg), ctx.spectral)
             path_ptr[].pcgState = pcg.state
             return
         path_ptr[].eta_scale *= etap * etap
