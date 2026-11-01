@@ -1309,16 +1309,16 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
             gn = apply_surface_maps_at_hit[tex_gpu](mat, inter, sd.meshes, sd.instances,
                 gn, gn, hit.to_simd(), ray_dir, Float32(-1.0), sd.camFp,
                 sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
+            # A visible point at a camera walk's exit gathers what lands here. Its lobe holds the Fresnel, so store before the choice.
+            if sss_walks_below(mat, inter, cur_med_idx) and n_events - n_null > 1:
+                _sppm_store_photon[use_gpu](
+                    SPPMPhoton(pos=hit, flux=flux, nxt=Int32(-1), is_volume=PhotonKind.surface, dir_in=rd,
+                               wavelengths=ph_wavelengths, curve=Int32(-1)),
+                    photons, max_photons, counter)
             var (new_dir, new_org, _, new_cur_ior, new_prev_ior) = _dielectric_bounce(
                 ray_dir, hit.to_simd(), gn, ior, False, pcg, current_dielectric_ior, previous_dielectric_ior, mat.type == MatKind.thin_dielectric, radiance_mode=False)
             if sss_entered(mat, inter, ray_dir, new_dir, cur_med_idx, sd, hit.to_simd()):
                 var g_w = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
-                # A visible point at a camera walk's exit gathers what lands here, then the photon walks on.
-                if n_events - n_null > 1:
-                    _sppm_store_photon[use_gpu](
-                        SPPMPhoton(pos=hit, flux=flux, nxt=Int32(-1), is_volume=PhotonKind.surface, dir_in=rd,
-                                   wavelengths=ph_wavelengths, curve=Int32(-1)),
-                        photons, max_photons, counter)
                 var ex = sss_hop[tex_gpu](sd, mat, inter, hit.to_simd(), g_w, new_dir, ph_wavelengths, pcg)
                 if not ex.ok:
                     break
