@@ -38,7 +38,7 @@ Done: layer check; `Ray`, hash, `GpuTexture` and `MisPolicy` moves; `estimators.
 1. Tests mirrored to the package layout.
 2. `Medium` and `Hop`: `MediumView` and `sss_hop` serve VCM and SPPM. PT still has its own step-by-step walk.
 3. `StrategySet`: `VcmStrategies` gathers the rules in one place. It becomes a trait with its second user, UPBP, as a trait with one implementation only decorates.
-4. `PhotonEstimator`, VCM and SPPM on it.
+4. `PhotonEstimator`: VCM and SPPM share the grid, disk test and kernel measures. The query loops stay apart: SPPM accumulates per pixel across passes, VCM weights each photon with MIS. The trait comes with photon planes or UPBP, which show what it must hold.
 5. New integrators, one module each.
 
 ## Open questions
