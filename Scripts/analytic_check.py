@@ -73,7 +73,9 @@ for _m in ("diffuse", "dielectric", "thindielectric",
 # A receiver just under the glass, where MNEE and BSDF sampling must agree on which paths they share.
 CASES["furnace-mnee-near-glass"] = dict(
     scene="Scenes/furnace/mnee-near-glass.pbrt", expect=1.0, res="64x64",
-    crop=(16, 48), strict=True,
+    # Light trapped under the plane needs many bounces: SPPM's cap of 10 reads 0.980 at any passes, radius or photons,
+    # PT's MNEE edge charges no bounce, so PT at 11 is its equal.
+    crop=(16, 48), strict=True, capped={"sppm": 11},
     why="white floor under a slab in an emitting cavity reads the emission")
 CASES["furnace-dielectric-inert"] = dict(
     scene="Scenes/furnace/dielectric-inert.pbrt", expect=1.0, res="64x64",
