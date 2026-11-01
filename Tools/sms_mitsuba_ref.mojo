@@ -183,7 +183,7 @@ struct Mat4(ImplicitlyCopyable, Movable):
 
     def mul(self, o: Mat4) -> Mat4:
         # Both operands are affine (implicit last row [0,0,0,1]).
-        var out = InlineArray[SIMD[DType.float32, 4], 3](fill=SIMD[DType.float32, 4](0.0))
+        var out = Array[SIMD[DType.float32, 4], 3](fill=SIMD[DType.float32, 4](0.0))
         for i in range(3):
             var ri = self.row(i)
             var acc = SIMD[DType.float32, 4](0.0)
@@ -1214,8 +1214,8 @@ def main() raises:
             var ep = lr0.o
             var ntry = 4000
             var nok = 0
-            var dirs = InlineArray[Vec3f, 64](fill=v3(0.0, 0.0, 0.0))
-            var counts = InlineArray[Int, 64](fill=0)
+            var dirs = Array[Vec3f, 64](fill=v3(0.0, 0.0, 0.0))
+            var counts = Array[Int, 64](fill=0)
             var nbasin = 0
             for _ in range(ntry):
                 var r = sample_path(scene, pt, ep, rngd)
@@ -1257,8 +1257,7 @@ def main() raises:
     var solved_total = unsafe_alloc[Int](1); solved_total[unsafe_offset=0] = 0
     var trials_total = unsafe_alloc[Int](1); trials_total[unsafe_offset=0] = 0
 
-    @parameter
-    def render_row(row: Int):
+    def render_row(row: Int) {imm}:
         var solved = 0
         var trials = 0
         for col in range(width):
@@ -1337,7 +1336,7 @@ def main() raises:
         solved_total[unsafe_offset=0] += solved
         trials_total[unsafe_offset=0] += trials
 
-    parallelize[render_row](height)
+    parallelize(render_row, height)
 
     print("solved paths:", solved_total[unsafe_offset=0], " bernoulli iterations:", trials_total[unsafe_offset=0])
     if solved_total[unsafe_offset=0] > 0:

@@ -19,11 +19,20 @@ too, and it is the one case a stub gets free.
 """
 from std.sys import argv
 from std.memory.alloc import unsafe_alloc
+from std.ffi import external_call
 from gonzales.scene.appearance.nanovdb import (
-    nvdb_load, nvdb_data, nvdb_size, nvdb_free,
-    nvdb_get_value_ref, nvdb_active_count, nvdb_active_coord, nvdb_majorant_at, nvdb_leaf_base, nvdb_leaf_value,
-    nvdb_sample_index,
+    nvdb_load, nvdb_data, nvdb_size, nvdb_free, nvdb_active_count, nvdb_active_coord, nvdb_majorant_at, nvdb_leaf_base, nvdb_leaf_value, nvdb_sample_index,
 )
+
+
+# NanoVDB's own accessor, what this harness diffs against; nothing else uses it.
+def nvdb_get_value_ref(handle: Pointer[UInt8, MutUntrackedOrigin], i: Int32, j: Int32, k: Int32) -> Float32:
+    """NanoVDB's own C++ accessor. Exists ONLY so `nvdb_sample_index` can be
+    diffed against it -- offset/bitmask errors in a tree traversal are
+    silent (wrong densities, not crashes). Never call this from rendering
+    code: it cannot run on the GPU."""
+    return external_call["nvdb_get_value", Float32](handle, i, j, k)
+
 
 def main() raises:
     var av = argv()
