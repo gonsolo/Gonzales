@@ -1,0 +1,23 @@
+# White floor just under a dielectric plane, closed in by walls that emit 1: equilibrium, so the floor reads 1 through
+# the plane. Lights reach it through the plane, so MNEE and BSDF sampling share each path. With the path check too
+# strict near the glass, both kept the same path and this read high.
+Film "rgb" "string filename" "mnee-near-glass.exr" "integer xresolution" [ 64 ] "integer yresolution" [ 64 ]
+LookAt 0 1.2 0.2  0 0 0  0 0 1
+Camera "perspective" "float fov" [ 30 ]
+Integrator "volpath" "integer maxdepth" [ 24 ]
+Sampler "independent" "integer pixelsamples" [ 256 ]
+WorldBegin
+AttributeBegin
+  AreaLightSource "diffuse" "rgb L" [ 1 1 1 ] "bool twosided" [ true ]
+  Shape "trianglemesh" "point3 P" [ -1 0.005 -1  1 0.005 -1  1 0.005 1  -1 0.005 1  -1 2 -1  1 2 -1  1 2 1  -1 2 1 ]
+    "integer indices" [ 4 5 6 4 6 7  0 1 5 0 5 4  1 2 6 1 6 5  2 3 7 2 7 6  3 0 4 3 4 7 ]
+AttributeEnd
+AttributeBegin
+  Material "diffuse" "rgb reflectance" [ 1 1 1 ]
+  Shape "trianglemesh" "point3 P" [ -1 0 -1  1 0 -1  1 0 1  -1 0 1  -1 0.005 -1  1 0.005 -1  1 0.005 1  -1 0.005 1 ]
+    "integer indices" [ 0 2 1 0 3 2  0 1 5 0 5 4  1 2 6 1 6 5  2 3 7 2 7 6  3 0 4 3 4 7 ]
+AttributeEnd
+AttributeBegin
+  Material "dielectric" "float eta" [ 1.33 ]
+  Shape "trianglemesh" "point3 P" [ -1 0.005 -1  1 0.005 -1  1 0.005 1  -1 0.005 1 ] "integer indices" [ 0 2 1 0 3 2 ]
+AttributeEnd

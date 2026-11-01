@@ -70,6 +70,11 @@ for _m in ("diffuse", "dielectric", "thindielectric",
 # (1.1708 at the default light-path count, converging to 1.9665 as that count
 # rises). `Material "none"` in the same geometry is correct, so it is the delta
 # carry handling and not the extra surface. Full account in the scene header.
+# A receiver just under the glass, where MNEE and BSDF sampling must agree on which paths they share.
+CASES["furnace-mnee-near-glass"] = dict(
+    scene="Scenes/furnace/mnee-near-glass.pbrt", expect=1.0, res="64x64",
+    crop=(16, 48), strict=True,
+    why="white floor under a slab in an emitting cavity reads the emission")
 CASES["furnace-dielectric-inert"] = dict(
     scene="Scenes/furnace/dielectric-inert.pbrt", expect=1.0, res="64x64",
     crop=(16, 48), strict=True,
