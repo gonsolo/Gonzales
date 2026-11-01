@@ -566,6 +566,22 @@ def scanner_scan_token(
     return ret
 
 
+def _scan_bare_token(handle: Pointer[PbrtScanner, MutUntrackedOrigin], buf: Pointer[UInt8, MutUntrackedOrigin], max_buf: Int32) -> Int32:
+    """A bool's value: true, [ true ] or "true". Ends at whitespace or the array's bracket, without its quotes."""
+    var delims = unsafe_alloc[UInt8](5)
+    delims[unsafe_offset=0] = UInt8(32); delims[unsafe_offset=1] = UInt8(9); delims[unsafe_offset=2] = UInt8(10)
+    delims[unsafe_offset=3] = UInt8(13); delims[unsafe_offset=4] = UInt8(93)
+    var n = scanner_scan_token(handle, delims, 5, buf, max_buf)
+    delims.unsafe_free()
+    if n >= 2 and buf[unsafe_offset=0] == UInt8(34):
+        var i = 0
+        while buf[unsafe_offset=i + 1] != UInt8(0) and buf[unsafe_offset=i + 1] != UInt8(34):
+            buf[unsafe_offset=i] = buf[unsafe_offset=i + 1]
+            i += 1
+        buf[unsafe_offset=i] = UInt8(0)
+    return n
+
+
 # ── String / type utilities (shared by material_builder and light_builder) ────
 
 def _psc_streq(a: Pointer[UInt8, MutUntrackedOrigin], b: StringLiteral) -> Bool:
@@ -668,10 +684,7 @@ def _psc_skip_value(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
             while scanner_parse_quoted_string(handle, tmp_s, 1024) >= 0:
                 pass
     else:
-        var nl_buf = unsafe_alloc[UInt8](1)
-        nl_buf[unsafe_offset=0] = UInt8(10)
-        _ = scanner_scan_token(handle, nl_buf, 1, tmp_s, 1024)
-        nl_buf.unsafe_free()
+        _ = _scan_bare_token(handle, tmp_s, 1024)
     tmp_s.unsafe_free()
 
 struct ParamScanner(Movable):
@@ -1071,10 +1084,7 @@ def _psc_collect_params(handle: Pointer[PbrtScanner, MutUntrackedOrigin]) -> Par
             # get_bool can compare it; mirrors _psc_skip_value's own
             # else-branch scanning, just retained instead of discarded.
             var tmp_s = unsafe_alloc[UInt8](32)
-            var nl_buf = unsafe_alloc[UInt8](1)
-            nl_buf[unsafe_offset=0] = UInt8(10)
-            _ = scanner_scan_token(handle, nl_buf, 1, tmp_s, 32)
-            nl_buf.unsafe_free()
+            _ = _scan_bare_token(handle, tmp_s, 32)
             pv.strs.append(String(unsafe_from_utf8_ptr=tmp_s.as_imm()))
             tmp_s.unsafe_free()
             if ps.is_array:

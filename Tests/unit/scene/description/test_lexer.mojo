@@ -1,13 +1,13 @@
 from std.math import abs
 from std.memory.alloc import unsafe_alloc
-from std.testing import assert_true, assert_false, TestSuite
+from std.testing import assert_true, assert_false, assert_equal, TestSuite
 from gonzales.scene.description.lexer import (
     scan_int, scan_float, scan_floats, scan_ints, count_floats, count_ints,
     scan_char, scan_token, parse_quoted_string,
     _psc_streq, _psc_strncmp, _psc_strncpy,
     _psc_type_is_float, _psc_type_is_int, _psc_type_is_str, _psc_type_is_blackbody,
     _psc_blackbody_to_rgb,
-    PbrtScanner, scanner_free, ParamScanner,
+    PbrtScanner, scanner_free, ParamScanner, _psc_collect_params,
 )
 
 comptime EPS: Float32 = 1e-5
@@ -55,6 +55,21 @@ def _scanner_from_string(s: String) -> Pointer[PbrtScanner, MutUntrackedOrigin]:
     return handle
 
 # ── scan_int ─────────────────────────────────────────────────────────────
+
+def test_bool_forms_keep_their_value_and_the_next_param() raises:
+    var handle = _scanner_from_string(String('"bool a" [ true ] "float x" [ 2.5 ] "bool b" true "float y" 3.5 "bool c" "true" "bool d" [ false ] "bool e" ["false"] "float z" [ 4.5 ]'))
+    var d = _psc_collect_params(handle)
+    assert_true(d.get_bool("a", False))
+    assert_true(d.get_bool("b", False))
+    assert_true(d.get_bool("c", False))
+    assert_false(d.get_bool("d", True))
+    assert_false(d.get_bool("e", True))
+    assert_equal(len(d.params), 8)
+    assert_equal(d.get_floats("x")[0], Float32(2.5))
+    assert_equal(d.get_floats("y")[0], Float32(3.5))
+    assert_equal(d.get_floats("z")[0], Float32(4.5))
+    scanner_free(handle)
+
 
 def test_scan_int_positive() raises:
     var buf = _buf("42")
