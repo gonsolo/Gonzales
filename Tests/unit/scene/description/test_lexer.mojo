@@ -7,7 +7,7 @@ from gonzales.scene.description.lexer import (
     _psc_streq, _psc_strncmp, _psc_strncpy,
     _psc_type_is_float, _psc_type_is_int, _psc_type_is_str, _psc_type_is_blackbody,
     _psc_blackbody_to_rgb,
-    PbrtScanner, scanner_free, ParamScanner, _psc_collect_params,
+    PbrtScanner, scanner_free, ParamScanner, _psc_collect_params, scanner_scan_float,
 )
 
 comptime EPS: Float32 = 1e-5
@@ -68,6 +68,33 @@ def test_bool_forms_keep_their_value_and_the_next_param() raises:
     assert_equal(d.get_floats("x")[0], Float32(2.5))
     assert_equal(d.get_floats("y")[0], Float32(3.5))
     assert_equal(d.get_floats("z")[0], Float32(4.5))
+    scanner_free(handle)
+
+
+def test_scan_float_every_exponent_form() raises:
+    var n = 0
+    for text in ["1e+05", "1E+05", "1e5", "1E5", "+1e5", "1.0e+05", "100000", "+100000.0"]:
+        var handle = _scanner_from_string(String(text))
+        var r = unsafe_alloc[Float32](1)
+        assert_equal(scanner_scan_float(handle, r), Int32(1))
+        assert_true(_close(r[unsafe_offset=0], Float32(100000.0)))
+        assert_equal(handle[unsafe_offset=0].cursor, Int32(String(text).byte_length()))
+        r.unsafe_free()
+        scanner_free(handle)
+        n += 1
+    assert_equal(n, 8)
+
+
+def test_scan_float_huge_exponent_is_fast_and_saturates() raises:
+    var handle = _scanner_from_string(String("1e-99999999999999 1e99999999999999 0e99999"))
+    var r = unsafe_alloc[Float32](1)
+    _ = scanner_scan_float(handle, r)
+    assert_true(r[unsafe_offset=0] == Float32(0))
+    _ = scanner_scan_float(handle, r)
+    assert_true(r[unsafe_offset=0] > Float32(1e30))
+    _ = scanner_scan_float(handle, r)
+    assert_true(r[unsafe_offset=0] == Float32(0))
+    r.unsafe_free()
     scanner_free(handle)
 
 

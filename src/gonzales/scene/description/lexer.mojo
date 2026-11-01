@@ -56,76 +56,69 @@ def scan_int(
     result[unsafe_offset=0] = value
     return Int32(1)
 
+comptime _MAX_FLOAT_EXP = 400   # past Float64's range: 10^400 is inf, its reciprocal 0
+
+
+@always_inline
+def _parse_float(bytes: Pointer[UInt8, MutUntrackedOrigin], len: Int, start: Int) -> Tuple[Bool, Int, Float32]:
+    """A number at `start`: found, where it ends, its value."""
+    var cur = start
+    var negative = bytes[unsafe_offset=cur] == UInt8(45)
+    if negative or bytes[unsafe_offset=cur] == UInt8(43):
+        cur += 1
+    var dval = Float64(0.0)
+    var int_seen = False
+    while cur < len and is_digit(bytes[unsafe_offset=cur]):
+        dval = dval * Float64(10.0) + Float64(Int32(bytes[unsafe_offset=cur]) - Int32(48))
+        cur += 1
+        int_seen = True
+
+    if cur < len and bytes[unsafe_offset=cur] == UInt8(46):   # '.'
+        cur += 1
+        var tenth = Float64(0.1)
+        while cur < len and is_digit(bytes[unsafe_offset=cur]):
+            dval += tenth * Float64(Int32(bytes[unsafe_offset=cur]) - Int32(48))
+            tenth *= Float64(0.1)
+            cur += 1
+    elif not int_seen:
+        return (False, start, Float32(0))
+
+    if cur < len and (bytes[unsafe_offset=cur] == UInt8(101) or bytes[unsafe_offset=cur] == UInt8(69)):   # 'e', 'E'
+        cur += 1
+        var exp_negative = cur < len and bytes[unsafe_offset=cur] == UInt8(45)
+        if cur < len and (exp_negative or bytes[unsafe_offset=cur] == UInt8(43)):
+            cur += 1
+        var exp_val = 0
+        while cur < len and is_digit(bytes[unsafe_offset=cur]):
+            exp_val = min(exp_val * 10 + Int(bytes[unsafe_offset=cur]) - 48, _MAX_FLOAT_EXP)
+            cur += 1
+        var factor = Float64(1.0)
+        for _ in range(exp_val):
+            factor *= Float64(10.0)
+        if dval != Float64(0.0):   # 0 * inf is NaN
+            dval = dval / factor if exp_negative else dval * factor
+
+    var f = Float32(dval)
+    if negative:
+        f = -f
+
+    return (True, cur, f)
+
+
 def scan_float(
     bytes: Pointer[UInt8, MutUntrackedOrigin],
     length: Int32,
     cursor: Pointer[Int32, MutUntrackedOrigin],
     result: Pointer[Float32, MutUntrackedOrigin],
 ) -> Int32:
-    var cur = Int(cursor[unsafe_offset=0])
     var len = Int(length)
-    cur = skip_whitespace_and_comments(bytes, len, cur)
+    var cur = skip_whitespace_and_comments(bytes, len, Int(cursor[unsafe_offset=0]))
     if cur >= len:
         return Int32(0)
-
-    var leading_negative = bytes[unsafe_offset=cur] == UInt8(45)
-
-    var int_negative = False
-    if cur < len and bytes[unsafe_offset=cur] == UInt8(45):
-        int_negative = True
-        cur += 1
-    var int_part = Int32(0)
-    var int_seen = False
-    while cur < len and is_digit(bytes[unsafe_offset=cur]):
-        int_part = int_part * Int32(10) + Int32(bytes[unsafe_offset=cur]) - Int32(48)
-        cur += 1
-        int_seen = True
-    if int_negative:
-        int_part = -int_part
-
-    var dval = Float64(int_part)
-
-    if cur < len and bytes[unsafe_offset=cur] == UInt8(46):   # '.'
-        cur += 1
-        var tenth = Float64(0.1)
-        while cur < len and is_digit(bytes[unsafe_offset=cur]):
-            var d = Float64(Int32(bytes[unsafe_offset=cur]) - Int32(48))
-            if dval < Float64(0.0):
-                dval -= tenth * d
-            else:
-                dval += tenth * d
-            tenth *= Float64(0.1)
-            cur += 1
-    elif not int_seen:
+    var (found, end, f) = _parse_float(bytes, len, cur)
+    if not found:
         return Int32(0)
-
-    if cur < len and bytes[unsafe_offset=cur] == UInt8(101):  # 'e'
-        cur += 1
-        cur = skip_whitespace_and_comments(bytes, len, cur)
-        var exp_negative = False
-        if cur < len and bytes[unsafe_offset=cur] == UInt8(45):
-            exp_negative = True
-            cur += 1
-        var exp_val = Int32(0)
-        while cur < len and is_digit(bytes[unsafe_offset=cur]):
-            exp_val = exp_val * Int32(10) + Int32(bytes[unsafe_offset=cur]) - Int32(48)
-            cur += 1
-        if exp_negative:
-            exp_val = -exp_val
-        var factor = Float64(1.0)
-        var abs_exp = exp_val if exp_val >= 0 else -exp_val
-        for _ in range(Int(abs_exp)):
-            factor *= Float64(10.0)
-        if exp_val < 0:
-            dval /= factor
-        else:
-            dval *= factor
-
-    var f = Float32(dval)
-    if leading_negative and int_part == Int32(0):
-        f = -f
-
-    cursor[unsafe_offset=0] = Int32(cur)
+    cursor[unsafe_offset=0] = Int32(end)
     result[unsafe_offset=0] = f
     return Int32(1)
 
@@ -141,7 +134,7 @@ def count_floats(
         cur = skip_whitespace_and_comments(bytes, len, cur)
         if cur >= len:
             break
-        if cur < len and bytes[unsafe_offset=cur] == UInt8(45):   # optional '-'
+        if cur < len and (bytes[unsafe_offset=cur] == UInt8(45) or bytes[unsafe_offset=cur] == UInt8(43)):   # sign
             cur += 1
         var int_seen = False
         while cur < len and is_digit(bytes[unsafe_offset=cur]):
@@ -153,9 +146,9 @@ def count_floats(
                 cur += 1
         elif not int_seen:
             break
-        if cur < len and bytes[unsafe_offset=cur] == UInt8(101):  # 'e'
+        if cur < len and (bytes[unsafe_offset=cur] == UInt8(101) or bytes[unsafe_offset=cur] == UInt8(69)):   # 'e', 'E'
             cur += 1
-            if cur < len and bytes[unsafe_offset=cur] == UInt8(45):
+            if cur < len and (bytes[unsafe_offset=cur] == UInt8(45) or bytes[unsafe_offset=cur] == UInt8(43)):
                 cur += 1
             while cur < len and is_digit(bytes[unsafe_offset=cur]):
                 cur += 1
@@ -176,57 +169,10 @@ def scan_floats[Or: Origin[mut=True]](
         cur = skip_whitespace_and_comments(bytes, len, cur)
         if cur >= len:
             break
-        var leading_negative = bytes[unsafe_offset=cur] == UInt8(45)
-        var int_negative = False
-        if cur < len and bytes[unsafe_offset=cur] == UInt8(45):
-            int_negative = True
-            cur += 1
-        var int_part = Int32(0)
-        var int_seen = False
-        while cur < len and is_digit(bytes[unsafe_offset=cur]):
-            int_part = int_part * Int32(10) + Int32(bytes[unsafe_offset=cur]) - Int32(48)
-            cur += 1
-            int_seen = True
-        if int_negative:
-            int_part = -int_part
-        var dval = Float64(int_part)
-        if cur < len and bytes[unsafe_offset=cur] == UInt8(46):
-            cur += 1
-            var tenth = Float64(0.1)
-            while cur < len and is_digit(bytes[unsafe_offset=cur]):
-                var d = Float64(Int32(bytes[unsafe_offset=cur]) - Int32(48))
-                if dval < Float64(0.0):
-                    dval -= tenth * d
-                else:
-                    dval += tenth * d
-                tenth *= Float64(0.1)
-                cur += 1
-        elif not int_seen:
+        var (found, end, f) = _parse_float(bytes, len, cur)
+        if not found:
             break
-        if cur < len and bytes[unsafe_offset=cur] == UInt8(101):
-            cur += 1
-            cur = skip_whitespace_and_comments(bytes, len, cur)
-            var exp_negative = False
-            if cur < len and bytes[unsafe_offset=cur] == UInt8(45):
-                exp_negative = True
-                cur += 1
-            var exp_val = Int32(0)
-            while cur < len and is_digit(bytes[unsafe_offset=cur]):
-                exp_val = exp_val * Int32(10) + Int32(bytes[unsafe_offset=cur]) - Int32(48)
-                cur += 1
-            if exp_negative:
-                exp_val = -exp_val
-            var factor = Float64(1.0)
-            var abs_exp = exp_val if exp_val >= 0 else -exp_val
-            for _ in range(Int(abs_exp)):
-                factor *= Float64(10.0)
-            if exp_val < 0:
-                dval /= factor
-            else:
-                dval *= factor
-        var f = Float32(dval)
-        if leading_negative and int_part == Int32(0):
-            f = -f
+        cur = end
         result[unsafe_offset=Int(count)] = f
         count += Int32(1)
     cursor[unsafe_offset=0] = Int32(cur)
