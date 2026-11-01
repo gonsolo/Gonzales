@@ -293,9 +293,15 @@ def _sss_walk_step[steps: Int = 256](
 
 
 @always_inline
+def sss_walks_below(mat: Material, inter: Intersection, med_before: Int32) -> Bool:
+    """Would a refraction at this hit start a walk? It then carries no eta^2: the walk leaves into the medium it came from."""
+    return mat.sss_walk_interior() and inter.primId.type == Int8(0) and Int(med_before) < 0
+
+
+@always_inline
 def sss_entered(mat: Material, inter: Intersection, ray_dir: Vec3f, new_dir: Vec3f, med_before: Int32, ref sd: SceneView, hit: Vec3f) -> Bool:
     """Did this dielectric crossing refract into a subsurface interior?"""
-    if not mat.sss_walk_interior() or inter.primId.type != Int8(0) or Int(med_before) >= 0:
+    if not sss_walks_below(mat, inter, med_before):
         return False
     var gn = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit)
     return dot(gn, ray_dir) * dot(gn, new_dir) > Float32(0)

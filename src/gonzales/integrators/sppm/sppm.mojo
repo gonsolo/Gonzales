@@ -12,7 +12,7 @@ from std.atomic import Atomic
 from std.memory import bitcast
 from gonzales.transport.medium import MediumView
 from gonzales.core.geometry import face_toward
-from gonzales.transport.sss_walk import sss_entered, sss_hop, sss_leave
+from gonzales.transport.sss_walk import sss_entered, sss_hop, sss_leave, sss_walks_below
 from gonzales.transport.medium_interface import default_emit_medium, medium_after
 from gonzales.core.geometry import offset_eps, TERMINAL_SEGMENT_GRACE_ROUNDS, RGB, Point3f, Point2f, Vec3f, vec3f, point3f, dot, cross, PI, INV_FOUR_PI, Frame, _is_real_ptr
 from gonzales.scene.appearance.materials import Material, MatKind, LobeKind, PhotonKind, fr_dielectric, resolve_mix
@@ -910,14 +910,14 @@ def _sppm_trace_visible_point[use_gpu: Bool](
                 sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
             var (new_dir, new_org, radiance_scale, new_cur_ior, new_prev_ior) = _dielectric_bounce(
                 ray_dir, hit.to_simd(), gn, ior, False, pcg, current_dielectric_ior, previous_dielectric_ior, mat.type == MatKind.thin_dielectric,
-                True, True, _vp_strat_u(vdc, pidx, bounce))
+                not sss_walks_below(mat, inter, cur_med_idx), True, _vp_strat_u(vdc, pidx, bounce))
             if sss_entered(mat, inter, ray_dir, new_dir, cur_med_idx, sd, hit.to_simd()):
                 var g_w = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
                 # The path tracer's walk; its exit is a visible point with the Fresnel exit lobe.
                 var ex = sss_hop[use_gpu](sd, mat, inter, hit.to_simd(), g_w, new_dir, vp.wavelengths, pcg)
                 if not ex.ok:
                     break
-                vp.beta = vp.beta * _spectral_gain_rgb(sd, ex.weight, vp.wavelengths)
+                vp.beta = vp.beta * radiance_scale * _spectral_gain_rgb(sd, ex.weight, vp.wavelengths)
                 vp.pos = ex.x_o
                 vp.normal = vec3f(ex.n_o)
                 vp.geo_normal = vec3f(ex.n_o)
