@@ -83,7 +83,7 @@ PFM = $(IMAGE:.exr=.pfm)
 
 OPTIONS = $(SINGLERAY) $(SYNC) $(VERBOSE) $(QUICK) $(PARSE) $(WRITE_GONZALES) $(USE_GONZALES)
 
-.PHONY: unittest-intel-src all c ca clean clean_all e edit es editScene em editMakefile lldb p perf tags t test smoke smoketest \
+.PHONY: fuzz unittest-intel-src all c ca clean clean_all e edit es editScene em editMakefile lldb p perf tags t test smoke smoketest \
 	test_debug test_release v view wc book book-html book-watch ut unittest \
 	caustics causticstest sms_mitsuba_ref release-amd unittest-amd intel-hello hydra gzreplay
 
@@ -352,6 +352,16 @@ test_debug: debug
 tr: test_release
 test_release: release
 	@$(RUN_RELEASE)
+
+# libFuzzer on the pbrt parser: Mojo emits bitcode, clang instruments it. FUZZ=fuzz_forms for exact values, FUZZ_SECS to run longer.
+FUZZ ?= fuzz_params
+FUZZ_SECS ?= 60
+FUZZ_RT ?= $(shell find .venv $(UV_PROJECT_ENVIRONMENT) $(MODULAR_DERIVED_PATH) -name libKGENCompilerRTShared.so -printf "%h\n" -quit 2>/dev/null)
+fuzz:
+	@mkdir -p $(BUILD_DIR)/fuzz/$(FUZZ)
+	uv run mojo build --emit llvm-bitcode Tests/fuzz/$(FUZZ).mojo -I src -o $(BUILD_DIR)/fuzz/$(FUZZ).bc
+	clang -w -fsanitize=fuzzer,address -O1 -g -x ir $(BUILD_DIR)/fuzz/$(FUZZ).bc -x none -L$(FUZZ_RT) -lKGENCompilerRTShared -Wl,-rpath,$(FUZZ_RT) -lm -o $(BUILD_DIR)/fuzz/$(FUZZ).bin
+	cd $(BUILD_DIR)/fuzz && ASAN_OPTIONS=detect_leaks=0 ./$(FUZZ).bin $(FUZZ) $(CURDIR)/Tests/fuzz/corpus -dict=$(CURDIR)/Tests/fuzz/pbrt.dict -max_len=4096 -max_total_time=$(FUZZ_SECS) -jobs=$(shell nproc) -workers=$(shell nproc) -artifact_prefix=./ -timeout=5 -rss_limit_mb=3000
 
 # Unit tests (std.testing.TestSuite) for pure functions — separate from the
 # scene-render smoke tests above. Each file under Tests/unit/ is its own
