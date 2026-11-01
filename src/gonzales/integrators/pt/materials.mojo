@@ -3,7 +3,7 @@ from std.math import sqrt, atan, exp, pow
 from gonzales.core.geometry import offset_point, offset_eps, RGB, Point3f, Point2f, Vec3f, dot, face_toward, cross, Frame, PI, INV_PI, _is_real_ptr
 from gonzales.core.geometry import point3f
 from gonzales.scene.appearance.materials import Material, MatKind, LobeKind, sss_boundary_lobe
-from gonzales.transport.sss_walk import sss_entry_lobe, sss_walk_start
+from gonzales.transport.sss_walk import sss_leave, sss_entry_lobe, sss_walk_start
 from gonzales.transport.render_state import PathState, SssWalk
 from gonzales.scene.shapes.primitives import Intersection, TriangleMesh, Sphere, mesh_uv, mesh_has_uvs
 from gonzales.core.geometry import Ray
@@ -369,17 +369,17 @@ def _shade_sss_exit[enqueue_shadow: Bool](
     _lobe_nee[enqueue_shadow](path_ptr, ctx, white, hit_point, pcg)
     if interior:
         _mnee_at_walk_exit(path_ptr, ctx, n, hit_point, exit_mat.albedo.r, pcg)
-    var (wi, pdf) = sample_cosine_hemisphere_world(pcg.next_float(), pcg.next_float(), n)
+    var out = sss_leave(n, exit_mat.albedo.r, pcg.next_float(), pcg.next_float())
     path_ptr[].pcgState = pcg.state
-    if pdf <= Float32(0) or dot(wi, gn) <= Float32(0):
+    if out.pdf <= Float32(0) or dot(out.wi, gn) <= Float32(0):
         path_ptr[].active = 0
         return
     if interior:
-        path_ptr[].throughput *= SpectralSample(sss_boundary_lobe(dot(wi, n), exit_mat.albedo.r))
-    var org = spawn_origin(hit_point, gn, wi)
-    path_ptr[].ray = Ray(Point3f(org[0], org[1], org[2]), Vec3f(wi[0], wi[1], wi[2]))
+        path_ptr[].throughput *= SpectralSample(out.weight)
+    var org = spawn_origin(hit_point, gn, out.wi)
+    path_ptr[].ray = Ray(Point3f(org[0], org[1], org[2]), Vec3f(out.wi[0], out.wi[1], out.wi[2]))
     path_ptr[].specularBounce = Int8(0)
-    path_ptr[].lastBsdfPdf = pdf
+    path_ptr[].lastBsdfPdf = out.pdf
     path_ptr[].bounce += 1
 
 

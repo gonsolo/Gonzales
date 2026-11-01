@@ -5,7 +5,7 @@ from std.collections import Array
 from std.math import sqrt, cos, sin, log, exp, max, abs
 from gonzales.transport.medium import MediumView
 from gonzales.core.geometry import face_toward
-from gonzales.transport.sss_walk import SssExit, sss_entered, sss_hop
+from gonzales.transport.sss_walk import SssExit, sss_entered, sss_hop, sss_leave
 from gonzales.transport.medium_interface import medium_after
 from gonzales.scene.appearance.materials import fr_dielectric, sss_boundary_lobe
 from gonzales.core.geometry import offset_eps, RGB, Point3f, Point2f, Vec3f, vec3f, point3f, dot, cross, PI, INV_FOUR_PI, INV_PI
@@ -304,11 +304,11 @@ def _vcm_sss_exit_scatter(
     mut ro: Point3f, mut rd: Vec3f, mut beta: SpectralSample, mut dvcm: Float32, mut dvc: Float32, mut dvm: Float32,
 ) -> Float32:
     """Leaves a walk's exit along its cosine-sampled lobe; returns cos_out. The reverse density is the entry choice 1 - F."""
-    var ux1 = pcg.next_float(); var ux2 = pcg.next_float()
-    rd = vec3f(_cosine_hemisphere_sample(ex.n_o, ux1, ux2))
+    var out = sss_leave(ex.n_o, eta, pcg.next_float(), pcg.next_float())
+    rd = vec3f(out.wi)
     ro = ex.x_o + rd * Float32(0.0002)
-    var cos_out = abs(dot(rd.to_simd(), ex.n_o))
-    beta *= SpectralSample(sss_boundary_lobe(cos_out, eta))
+    var cos_out = out.cos_out
+    beta *= SpectralSample(out.weight)
     (dvcm, dvc, dvm) = vcm_scatter_carries(dvcm, dvc, dvm, PI, cos_out / PI, Float32(1) - fr_dielectric(cos_out, eta),
                                                         mis_vc, Float32(0))   # an exit does not merge
     return cos_out

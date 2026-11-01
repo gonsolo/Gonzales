@@ -2,7 +2,8 @@
 from gonzales.scene.accel.bvh import traverse_bvh2_core_defer_curves, SceneView
 from gonzales.core.geometry import Frame, Point3f, Vec3f, _is_real_ptr, cross, dot, face_toward, offset_point
 from gonzales.scene.shapes.geom_normal import _geom_normal
-from gonzales.scene.appearance.materials import Material, fr_dielectric
+from gonzales.scene.appearance.materials import Material, fr_dielectric, sss_boundary_lobe
+from gonzales.core.sampling import sample_cosine_hemisphere_world
 from gonzales.scene.appearance.media import hg_phase, hg_sample
 from gonzales.scene.shapes.primitives import Intersection, mesh_vi
 from gonzales.core.geometry import Ray
@@ -31,23 +32,28 @@ def sss_walk_start(mat: Material, inter: Intersection, hit: Vec3f, geo_normal: V
 @always_inline
 def sss_entry_lobe(in_n: Vec3f, eta: Float32, mut pcg: PCG32) -> Vec3f:
     """A walk's first direction: a cosine lobe weighted by interior transmission, the mirror of its exit."""
-    var wi = _cosine_hemisphere_dir(in_n, pcg.next_float(), pcg.next_float())
+    var wi = sample_cosine_hemisphere_world(pcg.next_float(), pcg.next_float(), in_n)[0]
     for _ in range(8):
         if pcg.next_float() >= fr_dielectric(abs(dot(wi, in_n)), Float32(1) / max(eta, Float32(1.0001))):
             break
-        wi = _cosine_hemisphere_dir(in_n, pcg.next_float(), pcg.next_float())
+        wi = sample_cosine_hemisphere_world(pcg.next_float(), pcg.next_float(), in_n)[0]
     return wi
 
 
+@fieldwise_init
+struct SssLeave(TrivialRegisterPassable):
+    var wi: Vec3f
+    var cos_out: Float32
+    var pdf: Float32
+    var weight: Float32             # the boundary lobe over its cosine sampling; mean 1
+
+
 @always_inline
-def _cosine_hemisphere_dir(n: Vec3f, u1: Float32, u2: Float32) -> Vec3f:
-    var f = Frame.from_z(n)
-    var r = sqrt(u1)
-    var phi = Float32(6.283185307) * u2
-    var x = r * cos(phi)
-    var y = r * sin(phi)
-    var z = sqrt(max(Float32(1) - u1, Float32(0)))
-    return Vec3f(f.x.x * x + f.y.x * y + n.x * z, f.x.y * x + f.y.y * y + n.y * z, f.x.z * x + f.y.z * y + n.z * z)
+def sss_leave(n_o: Vec3f, eta: Float32, u1: Float32, u2: Float32) -> SssLeave:
+    """Leaves a walk's exit along its boundary lobe, for every integrator."""
+    var (wi, pdf) = sample_cosine_hemisphere_world(u1, u2, n_o)
+    var cos_out = abs(dot(wi, n_o))
+    return SssLeave(wi, cos_out, pdf, sss_boundary_lobe(cos_out, eta))
 
 
 @fieldwise_init
