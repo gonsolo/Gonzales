@@ -151,10 +151,7 @@ def _gather_update(
     pass_idx: Int = 0,
 ):
     def gather_one(i: Int) {imm}:
-        _sppm_gather_one(vps, i, photons, heads, inv_cell, sd, sd.mediums, Int(sd.mediumCount),
-                         sd.grids, sd.nvdbGrids,
-                         sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y,
-                         sd.spectral.cie_z, sd.spectral.d65, pass_wl, pass_idx)
+        _sppm_gather_one(vps, i, photons, heads, inv_cell, sd, pass_wl, pass_idx)
 
     parallelize(gather_one, n_pix)
 

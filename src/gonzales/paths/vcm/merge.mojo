@@ -7,7 +7,7 @@ from std.atomic import Atomic
 from gonzales.core.geometry import dot, PI, Vec3f
 from gonzales.scene.appearance.materials import LobeKind
 from gonzales.scene.accel.bvh import SceneView, _is_real_ptr, curve_radius
-from gonzales.estimators.photon_grid import _HSIZE, _hash_cell, _PHOTON_BUCKET_CAP, grid_keep, grid_weight, gather_disk_coverage, gather_disk_contains
+from gonzales.estimators.photon_grid import disk_measure, ribbon_measure, _HSIZE, _hash_cell, _PHOTON_BUCKET_CAP, grid_keep, grid_weight, gather_disk_coverage, gather_disk_contains
 from gonzales.transport.medium import MediumView
 from gonzales.core.spectrum import SpectralSample
 from gonzales.paths.vcm.vertex import _BDPT_MAX_VERTS, BDPTVertex
@@ -46,7 +46,7 @@ struct MergeKernel(TrivialRegisterPassable):
         if _vcm_on_fibre(cv):
             # N * 2r * w, the strand within r as a ribbon of its own width.
             var w = Float32(2) * curve_radius(sd.curves, Int(cv.hair_curve_idx), cv.hair_v)
-            norm = norm_pass * PI * r2_pass / max(Float32(2) * sqrt(r2) * w, Float32(1e-20))
+            norm = norm_pass * disk_measure(r2_pass) / max(ribbon_measure(r2, w), Float32(1e-20))
         return MergeKernel(r2, norm)
 
     @always_inline

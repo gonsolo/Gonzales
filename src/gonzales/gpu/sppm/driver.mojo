@@ -114,10 +114,6 @@ def sppm_render_gpu(
             var r2c_ptr = r2c_buf.unsafe_ptr().unsafe_bitcast[Float32]().unsafe_origin_cast[MutUntrackedOrigin]()
             var c2w_ptr = c2w_buf.unsafe_ptr().unsafe_bitcast[Float32]().unsafe_origin_cast[MutUntrackedOrigin]()
 
-            var mediums = handle[].media.mediums_buf.unsafe_ptr().unsafe_bitcast[Medium]()
-            var grids_dev = handle[].media.grids_buf.unsafe_ptr().unsafe_bitcast[Grid]()
-            var nvdb_grids_dev = handle[].media.nvdb_grids_buf.unsafe_ptr().unsafe_bitcast[NvdbGrid]()
-            var n_mediums = Int64(handle[].media.n_mediums)
             var (spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65) = handle[].spectral.unsafe_ptrs()
             handle[].cam_fp = camera_footprint(psc[unsafe_offset=0].raster_to_camera,
                 psc[unsafe_offset=0].camera_to_world,
@@ -211,10 +207,6 @@ def sppm_render_gpu(
                         inv_cell,
                         gsd,
                         Int64(pass_idx),
-                        mediums,
-                        n_mediums,
-                        grids_dev,
-                        nvdb_grids_dev,
                         grid_dim=grid_vps,
                         block_dim=block_size,
                     )

@@ -145,27 +145,13 @@ def sppm_gather_gpu(
     inv_cell: Float32,
     sd: SceneView,
     pass_idx_dp: Int64 = Int64(0),
-    med_arr_dp: Pointer[Medium, MutUntrackedOrigin] = Pointer[Medium, MutUntrackedOrigin].unsafe_dangling(),
-    med_count_dp: Int64 = Int64(0),
-    grids_dp: Pointer[Grid, MutUntrackedOrigin] = Pointer[Grid, MutUntrackedOrigin].unsafe_dangling(),
-    nvdb_grids_dp: Pointer[NvdbGrid, MutUntrackedOrigin] = Pointer[NvdbGrid, MutUntrackedOrigin].unsafe_dangling(),
 ):
     """One thread per visible point."""
-    var spectral_coeffs = sd.spectral.coeffs
-    var spectral_cie_x = sd.spectral.cie_x
-    var spectral_cie_y = sd.spectral.cie_y
-    var spectral_cie_z = sd.spectral.cie_z
-    var spectral_d65 = sd.spectral.d65
-    var spectral_res_dp = Int64(sd.spectral.res)
-    var spectral_res = Int(spectral_res_dp)
     var n_pix = Int(n_pix_dp)
     var i = Int(block_idx.x * block_dim.x + thread_idx.x)
     if i >= n_pix:
         return
-    _sppm_gather_one(vps, i, photons, heads, inv_cell, sd, med_arr_dp, Int(med_count_dp),
-                     grids_dp, nvdb_grids_dp,
-                     spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y,
-                     spectral_cie_z, spectral_d65, pass_wavelengths(Int(pass_idx_dp)), Int(pass_idx_dp))
+    _sppm_gather_one(vps, i, photons, heads, inv_cell, sd, pass_wavelengths(Int(pass_idx_dp)), Int(pass_idx_dp))
 
 
 @__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))

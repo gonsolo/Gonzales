@@ -35,7 +35,7 @@ from gonzales.transport.texturing import apply_surface_maps_at_hit
 from gonzales.scene.shapes.geom_normal import _geom_normal, _shading_normal_at
 from gonzales.estimators.photon_grid import (
     _HSIZE, _hash_cell, _PHOTON_BUCKET_CAP, grid_reset_cell, grid_count, grid_keep, grid_coin_bits, grid_push, grid_weight,
-    gather_disk_contains, gather_disk_coverage,
+    gather_disk_contains, gather_disk_coverage, disk_measure, ball_measure, ribbon_measure,
 )
 from gonzales.transport.shadow_media import shadow_transmittance
 from gonzales.core.sampling import sample_ggx_vndf, camera_ray_from_film_xy, FilmFilter, film_filter_of, film_filter_offset
@@ -1419,32 +1419,6 @@ def _sppm_gather_one(
     # passed BY VALUE and its struct members do not read back reliably inside
     # the GPU kernel. Reading sd.mediumCount here returned 0 while the driver
     # held the real count.
-    med_arr:   Pointer[Medium, MutUntrackedOrigin],
-    med_count: Int,
-    # Density fields, decomposed for the same reason: the gather kernel's own
-    # `sd` carries dangling grid pointers, so a heterogeneous medium's density
-    # lookup must not go through it.
-    grids_arr: Pointer[Grid, MutUntrackedOrigin],
-    nvdb_arr:  Pointer[NvdbGrid, MutUntrackedOrigin],
-    # Decomposed spectral tables rather than reading sd.spectral. `sd` is a
-    # SceneView passed BY VALUE, and it contains a SpectralHandle --
-    # the 6-field TrivialRegisterPassable struct suspected (modular/modular#6759,
-    # later retracted by its own author as unreproducible) of corrupting
-    # under by-value passing across a real call boundary. Whatever the cause,
-    # decomposing fixed a real observed symptom here: measured here, the GPU
-    # kernel held sd.spectral.res == 64 immediately before the call and this
-    # function read 0 from the same field, silently taking every conversion's
-    # table-less path while the photons it was gathering had been built WITH
-    # the table. CPU and GPU SPPM then disagreed by 10%, chromatically. This
-    # only surfaced when the gather started reading sd.spectral on its common
-    # path; before that only the measured-BxDF branch did, which no test
-    # scene hit.
-    spectral_coeffs: Pointer[Float32, MutUntrackedOrigin],
-    spectral_res: Int,
-    spectral_cie_x: Pointer[Float32, MutUntrackedOrigin],
-    spectral_cie_y: Pointer[Float32, MutUntrackedOrigin],
-    spectral_cie_z: Pointer[Float32, MutUntrackedOrigin],
-    spectral_d65: Pointer[Float32, MutUntrackedOrigin],
     pass_wl:  SampledWavelengths,
     pass_idx: Int = 0,
 ):
@@ -1458,6 +1432,12 @@ def _sppm_gather_one(
     if vps[unsafe_offset=i].valid == Int32(0):
         return
     var vp = vps[unsafe_offset=i]
+    var spectral_coeffs = sd.spectral.coeffs
+    var spectral_res = sd.spectral.res
+    var spectral_cie_x = sd.spectral.cie_x
+    var spectral_cie_y = sd.spectral.cie_y
+    var spectral_cie_z = sd.spectral.cie_z
+    var spectral_d65 = sd.spectral.d65
     var r2 = vp.r2
     if vp.is_volume == PhotonKind.volume and Int(vp.med_idx) >= 0:
         var cap = MediumView.at(sd, vp.med_idx).kernel_radius(vp.pos.to_simd())
@@ -1505,65 +1485,9 @@ def _sppm_gather_one(
                         # cosine-weighted density (same convention the
                         # Lambertian/phase branches already rely on).
                         if vp.is_volume == PhotonKind.volume:
-                            # VOLUME radiance estimate, which is NOT the surface
-                            # one with a different kernel volume.
-                            #
-                            # Photons stored in a medium sit at SCATTERING
-                            # EVENTS, and the density of those events is itself
-                            # proportional to sigma_s: flux deposited in dV from
-                            # direction w' is sigma_s * L(x,w') dV dw'. Recovering
-                            # radiance therefore needs a 1/sigma_s that a surface
-                            # gather has no analogue of (Jensen's volumetric
-                            # radiance estimate). It was missing, so the estimate
-                            # was too bright by exactly sigma_s -- invisible in
-                            # thin fog and ruinous in anything dense. Measured on
-                            # a plain homogeneous scatterer of albedo 0.9 against
-                            # the path tracer, with no subsurface material
-                            # anywhere: 1.67x at sigma_s = 1, 10.5x at 10, 55.9x
-                            # at 100. That is the whole of the "SPPM subsurface is
-                            # 33-142x hot" symptom -- skin is simply a very dense
-                            # medium.
-                            #
-                            # `vp.alb` (= sigma_s/sigma_t) is applied here rather
-                            # than folded into vp.beta, mirroring how a surface VP
-                            # defers its BRDF, so alb/sigma_s collapses to
-                            # 1/sigma_t. Using that form directly is both cheaper
-                            # and safer: sigma_t is never zero inside a medium,
-                            # and it avoids dividing two INDEPENDENTLY upsampled
-                            # spectra, which is exactly what made the subsurface
-                            # albedo exceed 1 in 6de092a1.
-                            # Guard the index: a VP whose medium is unknown
-                            # (or a descriptor with no medium table) must not
-                            # index the array -- dereferencing it crashed every
-                            # --sppm run here. NOTE: no `continue` in this
-                            # guard. The enclosing loop is a `while k != -1`
-                            # walk down a photon linked list whose `k` advance
-                            # sits at the BOTTOM, so a `continue` never
-                            # advances it and the render hangs forever (it did,
-                            # for 30 minutes, before this was written as a
-                            # plain conditional).
-                            var mi_v = Int(vp.med_idx)
-                            # med_arr/med_count, NOT sd.mediums/sd.mediumCount:
-                            # the GPU gather kernel builds its sd with a
-                            # DANGLING medium table and count 0, so reading it
-                            # here made ok_med always false and every volume
-                            # visible point gathered exactly zero -- SPPM in
-                            # any participating medium was its direct-lighting
-                            # term alone (measured: 0.29-0.52x of the path
-                            # tracer, and completely insensitive to
-                            # --sppm-photons, which is what gave it away).
-                            var ok_med = (mi_v >= 0 and mi_v < med_count
-                                          and _is_real_ptr[Medium](med_arr))
-                            var medv = med_arr[unsafe_offset=mi_v] if ok_med else Medium(
-                                sigma_a=RGB(Float32(0)), sigma_s=RGB(Float32(1)),
-                                g=Float32(0), grid_idx=Int32(-1), nvdb_idx=Int32(-1),
-                                nvdb_temp_idx=Int32(-1), le_scale=Float32(0),
-                                temp_offset=Float32(0), temp_scale=Float32(1),
-                                is_sss=Int32(0))
-                            var inv_sig = medium_inv_sigma_t_spectral(
-                                medv, grids_arr, nvdb_arr, vp.pos.to_simd(), ph.wavelengths, spectral_coeffs, spectral_res,
-                                spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65)
-                            if ok_med:
+                            if Int(vp.med_idx) >= 0:   # no `continue`: k advances at the bottom of this loop
+                                # 1/sigma_t, not albedo/sigma_s: two independently upsampled spectra would exceed 1 (6de092a1).
+                                var inv_sig = MediumView.at(sd, vp.med_idx).inv_sigma_t_at(vp.pos.to_simd(), ph.wavelengths)
                                 # Keep `alb`, and divide by sigma_t (NOT
                                 # sigma_s): this implementation stores a photon
                                 # at every COLLISION, before the scatter/absorb
@@ -1610,8 +1534,8 @@ def _sppm_gather_one(
                 phi_rgb = phi_rgb * (Float32(1) / cov)
         if vp.mat_kind == LobeKind.hair:
             # The fibre kernel measures 2 r w, not pi r^2: rescale this pass into the disk convention tau carries.
-            phi_rgb = phi_rgb * (PI * sqrt(r2) / max(Float32(4) * curve_radius(sd.curves, Int(vp.hair_curve_idx), vp.hair_v),
-                                                    Float32(1e-20)))
+            var w = Float32(2) * curve_radius(sd.curves, Int(vp.hair_curve_idx), vp.hair_v)
+            phi_rgb = phi_rgb * (disk_measure(r2) / max(ribbon_measure(r2, w), Float32(1e-20)))
         var N = vp.N_acc
         var ratio = (N + _ALPHA * M) / (N + M)
         vps[unsafe_offset=i].r2  = r2 * ratio
@@ -1997,9 +1921,9 @@ def _sppm_finalize_one_pixel(
             # scene's r=0.05 is ~15x too dark. That went unnoticed because
             # volume VPs had no working direct-lighting term to compare
             # against until the same session fixed that.
-            var denom = PI * vp.r2 * Float32(n_passes)
+            var denom = disk_measure(vp.r2) * Float32(n_passes)
             if vp.is_volume == PhotonKind.volume:
-                denom = (Float32(4.0) / Float32(3.0)) * PI * vp.r2 * sqrt(vp.r2) * Float32(n_passes)
+                denom = ball_measure(vp.r2) * Float32(n_passes)
             acc_c += vp.tau / denom
     acc_g = acc_g / Float32(vp_samples)
     acc_c = acc_c / Float32(vp_samples)

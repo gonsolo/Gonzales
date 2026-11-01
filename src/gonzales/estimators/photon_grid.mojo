@@ -2,7 +2,7 @@
 from std.math import sqrt, cos, sin, abs
 from std.atomic import Atomic
 from std.memory import bitcast
-from gonzales.core.geometry import Point3f, Vec3f, Ray, dot
+from gonzales.core.geometry import Point3f, Vec3f, Ray, dot, PI
 from gonzales.scene.shapes.primitives import Intersection, PrimId
 from gonzales.scene.shapes.geom_normal import _geom_normal
 from gonzales.scene.accel.bvh import SceneView, traverse_dispatch
@@ -102,6 +102,22 @@ def grid_weight(heads: Pointer[Int32, MutUntrackedOrigin], h: Int,
     if n <= cap:
         return Float32(1)
     return Float32(n) / Float32(cap)
+
+
+@always_inline
+def disk_measure(r2: Float32) -> Float32:
+    return PI * r2
+
+
+@always_inline
+def ball_measure(r2: Float32) -> Float32:
+    return (Float32(4.0) / Float32(3.0)) * PI * r2 * sqrt(r2)
+
+
+@always_inline
+def ribbon_measure(r2: Float32, width: Float32) -> Float32:
+    """A fibre within r, a ribbon of its own width facing every direction."""
+    return Float32(2) * sqrt(r2) * width
 
 
 @always_inline
