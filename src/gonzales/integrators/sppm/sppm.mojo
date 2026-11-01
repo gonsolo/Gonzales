@@ -27,7 +27,8 @@ from gonzales.scene.appearance.lights import area_light_pick_triangle, area_ligh
 from gonzales.scene.shapes.curves import Curve, curve_at, curve_piece_endpoints, _curve_perp_axis
 from gonzales.scene.accel.bvh import traverse_dispatch, any_hit_dispatch
 from gonzales.scene.accel.bvh import SceneView, curve_radius, _hair_sample_dir_u, _scene_bounding_sphere, _sample_disk_perpendicular, _sample_infinite_light_dir, _eval_infinite_light_and_pdf, _hair_precompute, LightSample, _sample_distant_light_nee, _sample_point_light_nee, _sample_sphere_light_nee, _sample_infinite_light_nee, light_path_pick
-from gonzales.transport.mis_policy import mis_policy_sole
+from gonzales.transport.mis_policy import mis_policy_power, mis_policy_sole
+from gonzales.core.sampling import power_heuristic
 from gonzales.transport.bxdf import ggx_lambda, dielectric_interface, bxdf_sample_dielectric, bxdf_sample_thin_dielectric, BxDFFlags, GeomContext, bxdf_sample_conductor, BSDF, LobeTables
 from gonzales.transport.surface import surface_hit
 from gonzales.integrators.pt.common import area_light_hit_cos
@@ -523,6 +524,14 @@ def _spectral_gain_rgb(ref sd: SceneView, w: SpectralSample, wl: SampledWaveleng
 
 
 @always_inline
+def _after_glossy_weight(glossy_pdf: Float32, light_pdf: Float32) -> Float32:
+    """The share of emission a camera path found right after a glossy vertex, whose NEE sampled it at light_pdf."""
+    if glossy_pdf < Float32(0):
+        return Float32(1)
+    return power_heuristic(glossy_pdf, light_pdf) if glossy_pdf > Float32(0) else Float32(0)
+
+
+@always_inline
 def _photon_walk[tex_gpu: Bool](ref sd: SceneView, mat: Material, inter: Intersection, hit: Point3f, refracted: Vec3f,
                                 wl: SampledWavelengths, mut pcg: PCG32, mut flux: SpectralSample) -> Tuple[Vec3f, Point3f, Bool]:
     """A photon through the walk and out of its exit: the next ray, and whether it lives."""
@@ -675,7 +684,9 @@ def _sppm_trace_visible_point[use_gpu: Bool](
     var max_charged = min(maxdepth, _MAX_B)
     var bounce = 0
     var n_events = 0   # interactions so far, charged or not
-    var after_glossy = False   # a glossy vertex lit itself (pbrt's SPPM): emission found after it is NEE's, not ours
+    # After a glossy vertex that lit itself: > 0 its density, emission found next shares with its NEE; 0 emission is NEE's
+    # alone (pbrt's SPPM); < 0 no such vertex, or a delta vertex since, which NEE could not see through.
+    var glossy_pdf = Float32(-1)
     while bounce < max_charged + TERMINAL_SEGMENT_GRACE_ROUNDS and n_events < max_charged + SSS_WALK_ROUNDS + TERMINAL_SEGMENT_GRACE_ROUNDS:
         n_events += 1
         # Charged up front, and the two subsurface-exempt branches below undo
@@ -697,9 +708,8 @@ def _sppm_trace_visible_point[use_gpu: Bool](
         if scratch[unsafe_offset=0].hit == Int8(0):
             for inf_i in range(Int(sd.infiniteLightCount)):
                 var ilight = sd.infiniteLights[unsafe_offset=inf_i]
-                var (Le, _pdf_unused) = _eval_infinite_light_and_pdf(ilight, rd, ro.to_simd())
-                if not after_glossy:
-                    vp.env += vp.beta * _film_rgb(Le, vp.wavelengths, sd)
+                var (Le, le_pdf) = _eval_infinite_light_and_pdf(ilight, rd, ro.to_simd())
+                vp.env += vp.beta * _film_rgb(Le, vp.wavelengths, sd) * _after_glossy_weight(glossy_pdf, le_pdf)
             break
 
         var inter = scratch[unsafe_offset=0]
@@ -765,7 +775,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
         if inter.primId.type == Int8(4):
             var sph_hit = sd.spheres[unsafe_offset=Int(inter.primId.id1)]
             if sph_hit.isAreaLight != Int8(0):
-                if not after_glossy:
+                if glossy_pdf < Float32(0):
                     vp.env += vp.beta * _film_rgb(sph_hit.emission, vp.wavelengths, sd)
                 break
 
@@ -789,12 +799,16 @@ def _sppm_trace_visible_point[use_gpu: Bool](
             # median there was 0. For a curve, id1 is the curve index, not an
             # AreaLight index, and the curve's emission lives in its own
             # material slot; a closed tube is always hit on its outside.
-            if after_glossy:
-                pass
-            elif inter.primId.type == Int8(5):
-                vp.env += vp.beta * _film_rgb(mat.emission, vp.wavelengths, sd)
-            elif area_light_hit_cos(inter, sd.meshes, sd.instances, ray_dir) > Float32(0):
-                vp.env += vp.beta * _film_rgb(sd.areaLights[unsafe_offset=Int(inter.primId.id1)].emission, vp.wavelengths, sd)
+            if inter.primId.type == Int8(5):
+                if glossy_pdf < Float32(0):
+                    vp.env += vp.beta * _film_rgb(mat.emission, vp.wavelengths, sd)
+            else:
+                var cos_l = area_light_hit_cos(inter, sd.meshes, sd.instances, ray_dir)
+                if cos_l > Float32(0):
+                    var al_h = sd.areaLights[unsafe_offset=Int(inter.primId.id1)]
+                    # as _sppm_nee_at's: uniform over the lights, then over the light's area
+                    var pdf_l = t_hit * t_hit / (cos_l * Float32(sd.areaLightCount) * al_h.total_area)
+                    vp.env += vp.beta * _film_rgb(al_h.emission, vp.wavelengths, sd) * _after_glossy_weight(glossy_pdf, pdf_l)
             break
 
         # See geometry.mojo's TERMINAL_SEGMENT_GRACE_ROUNDS: the loop bound
@@ -835,7 +849,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
                 hv.med_idx = cur_med_idx
                 hv.valid = Int32(1)
                 var (lr, lg, lb) = spectral_sample_to_rgb(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x,
-                    sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, _sppm_nee_at(hv, sd, pcg), vp.wavelengths)
+                    sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, _sppm_nee_at(hv, sd, pcg, rough_skin), vp.wavelengths)
                 vp.env += vp.beta * RGB(lr, lg, lb)
                 if rough_skin:
                     var s_v = sh.bsdf(mat, mat_idx).sample(pcg.next_float(), pcg.next_float(), pcg.next_float(), pcg.next_float(),
@@ -852,7 +866,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
                     vp.beta = vp.beta * _spectral_gain_rgb(sd, s_v.weight, vp.wavelengths)
                     rd = vec3f(s_v.wi)
                     ro = sh.spawn(s_v.wi)
-                    after_glossy = True
+                    glossy_pdf = Float32(-1) if s_v.is_delta else s_v.pdf_fwd
                     continue
                 var hc = _hair_precompute(mat, sd.curves, Int(sh.curve_idx), sh.curve_v, sh.curve_h, (-rd).to_simd())
                 var hs = _hair_sample_dir_u(hc, pcg.next_float(), pcg.next_float(), pcg.next_float(), pcg.next_float())
@@ -861,7 +875,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
                 vp.beta *= hs[1] * (Float32(1) / hs[2])
                 rd = vec3f(hs[0])
                 ro = sh.spawn(hs[0])
-                after_glossy = True
+                glossy_pdf = Float32(0)
                 continue
             # A smooth conductor is the one kind here that is genuinely
             # delta: it scatters but stores no visible point, exactly like
@@ -896,6 +910,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
                         rd = vec3f(m_s * (Float32(2.0) * dot(m_s, wo_s)) - wo_s)
                         ro = hit + rd * Float32(0.0002)
                         vp.beta *= g_refl
+                        glossy_pdf = Float32(-1)
                         continue
                     vp.beta *= Float32(1.0) / (Float32(1.0) - f_coat)
                     vp.coat_keep = Float32(1.0) - f_coat
@@ -933,6 +948,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
             if bs_c.is_valid == Int8(0):
                 break
             vp.beta *= bs_c.f
+            glossy_pdf = Float32(-1)
             rd = vec3f(bs_c.wi)
             ro = hit + rd * Float32(0.0002)
 
@@ -968,6 +984,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
                 break
             current_dielectric_ior = new_cur_ior
             previous_dielectric_ior = new_prev_ior
+            glossy_pdf = Float32(-1)
             vp.beta *= radiance_scale  # camera-path (Radiance mode): apply non-symmetric-scattering correction
             rd = vec3f(new_dir)
             ro = point3f(new_org)
@@ -1612,6 +1629,7 @@ def _sppm_nee_weight(
     wo: Vec3f,
     ls: LightSample,
     alpha: Float32,
+    shares: Bool = False,
 ) -> SpectralSample:
     """One distant, point, sphere or infinite light sample's NEE weight at a visible point, through its BSDF."""
     if vp.is_volume == PhotonKind.volume:
@@ -1647,7 +1665,7 @@ def _sppm_nee_weight(
     # deficit), and this is the same fix applied uniformly rather than at
     # one material's call site.
     return (BSDF(vp.mat_kind, True, False, vn, wo, vp.alb, vp.mat_idx, alpha,
-                Float32(0), vp.hair_curve_idx, vp.hair_h, vp.hair_v, True, False)).nee_weight_mis(ls, LobeTables(sd.materials, sd.curves, sd.measuredBrdfs, sd.spectral), vp.wavelengths, mis_policy_sole())
+                Float32(0), vp.hair_curve_idx, vp.hair_h, vp.hair_v, True, False)).nee_weight_mis(ls, LobeTables(sd.materials, sd.curves, sd.measuredBrdfs, sd.spectral), vp.wavelengths, mis_policy_power() if shares else mis_policy_sole())
 
 
 @always_inline
@@ -1719,6 +1737,7 @@ def _sppm_nee_at(
     vp:      SPPMPixel,
     ref sd:      SceneView,
     mut pcg: PCG32,
+    shares: Bool = False,   # a glossy vertex: BSDF hits on area and infinite lights share them by MIS (_after_glossy_weight)
 ) -> SpectralSample:
     """Direct (NEE) lighting update for visible point `i`. Shared verbatim
     between the CPU driver (_sppm_nee_update, one call per VP in a loop) and
@@ -1807,9 +1826,13 @@ def _sppm_nee_at(
                                       * geom * tr_a)
                     else:
                         # The lobe's own f*cos: its cosine is hair's fibre cosine, not the curve normal's.
-                        var le_vp = (BSDF(vp.mat_kind, True, False, vn, wo, vp.alb,
+                        var bsdf_vp = BSDF(vp.mat_kind, True, False, vn, wo, vp.alb,
                                     vp.mat_idx, _vp_base_alpha(vp.alpha), Float32(0), vp.hair_curve_idx,
-                                    vp.hair_h, vp.hair_v, True, False)).f[want_pdfs=False](wi, LobeTables(sd.materials, sd.curves, sd.measuredBrdfs, sd.spectral), vp.wavelengths)
+                                    vp.hair_h, vp.hair_v, True, False)
+                        var tab_vp = LobeTables(sd.materials, sd.curves, sd.measuredBrdfs, sd.spectral)
+                        var le_vp = bsdf_vp.f[want_pdfs=False](wi, tab_vp, vp.wavelengths)
+                        if shares and al.kind == Int8(0):   # a curve light's hit takes no share: NEE keeps it whole
+                            geom *= power_heuristic(dist2 / (cos_light * inv_pdf_area), bsdf_vp.f[want_pdfs=True](wi, tab_vp, vp.wavelengths).pdf_fwd)
                         var light_spec = rgb_illuminant_to_spectral_sample(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, al.emission.r, al.emission.g, al.emission.b, vp.wavelengths)
                         ld += le_vp.f_cos * light_spec * geom * tr_a
 
@@ -1836,7 +1859,7 @@ def _sppm_nee_at(
 
     for inf_i in range(Int(sd.infiniteLightCount)):
         var ls_e = _sample_infinite_light_nee(sd.infiniteLights[unsafe_offset=inf_i], Point2f(pcg.next_float(), pcg.next_float()), vp.pos)
-        var w_e = _sppm_nee_weight(vp, sd, vn, wo, ls_e, _vp_base_alpha(vp.alpha))
+        var w_e = _sppm_nee_weight(vp, sd, vn, wo, ls_e, _vp_base_alpha(vp.alpha), shares)
         if not w_e.is_black():
             var s_org_e = shadow_org_back if (two_sided_vp and dot(vp.geo_normal.to_simd(), ls_e.wi) < Float32(0)) else shadow_org
             var tr_e = _sppm_shadow(vp, sd, s_org_e, ls_e.wi, ls_e.dist, pcg)
