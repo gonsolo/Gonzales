@@ -913,7 +913,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
                 True, True, _vp_strat_u(vdc, pidx, bounce))
             if sss_entered(mat, inter, ray_dir, new_dir, cur_med_idx, sd, hit.to_simd()):
                 var g_w = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
-                # The path tracer's walk; its exit is an ordinary Lambertian visible point.
+                # The path tracer's walk; its exit is a visible point with the Fresnel exit lobe.
                 var ex = sss_hop[use_gpu](sd, mat, inter, hit.to_simd(), g_w, new_dir, vp.wavelengths, pcg)
                 if not ex.ok:
                     break
@@ -923,7 +923,8 @@ def _sppm_trace_visible_point[use_gpu: Bool](
                 vp.geo_normal = vec3f(ex.n_o)
                 vp.wo = vec3f(ex.n_o)
                 vp.alb = RGB(Float32(1))
-                vp.mat_kind = LobeKind.lambertian
+                vp.mat_kind = LobeKind.sss_exit
+                vp.alpha = mat.albedo.r
                 vp.mat_idx = Int32(mat_idx)
                 vp.is_volume = PhotonKind.surface
                 vp.valid = Int32(1)
@@ -1398,7 +1399,7 @@ def _sppm_photon_on_vp_surface(vp_is_volume: Int32, vp_mat_kind: Int32, vp_norma
         return True
     if not gather_disk_contains(e, dist2, r2, vp_normal):
         return False
-    if vp_mat_kind == LobeKind.lambertian:
+    if vp_mat_kind == LobeKind.lambertian or vp_mat_kind == LobeKind.sss_exit:
         return dot(dir_in, vp_normal) < Float32(0.0)
     return True
 
