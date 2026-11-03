@@ -487,7 +487,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
                 entry_eta = VcmStrategies.walk_merge_density(sd, hit, mis_vm_weight_factor)
             var ex = _vcm_sss_walk[use_gpu](sd, inter, mat, hit, ray_dir, st.rd, st.wl, mis_vc_weight_factor, pcg, st.flux,
                                             st.dvcm, st.dvc, st.dvm, dvcm_in, dvc_in, dvm_in, entry_eta)
-            if not ex.ok:
+            if not ex.ok or st.n_verts >= _BDPT_MAX_VERTS:   # rough skin's lobe vertex may have taken the last slot
                 return False
             var v = _vcm_sss_exit_vertex(ex, mat.albedo.r, st.flux, st.cur_med_idx, st.wl, st.dvcm, st.dvc, st.dvm)
             st.n_verts += 1
