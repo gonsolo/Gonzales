@@ -942,7 +942,7 @@ def _lobe_scoped(c: BSDF) -> Bool:
     return (c.kind == LobeKind.lambertian or c.kind == LobeKind.ggx
             or c.kind == LobeKind.hair or c.kind == LobeKind.measured
             or c.kind == LobeKind.diffuse_transmit
-            or c.kind == LobeKind.rough_dielectric or c.kind == LobeKind.sss_exit)
+            or c.kind == LobeKind.rough_dielectric or c.kind == LobeKind.sss_exit or c.kind == LobeKind.sss_entry)
 
 
 @always_inline

@@ -5,11 +5,11 @@ from std.math import sqrt, cos, sin, log, exp, max
 from gonzales.transport.medium import MediumView
 from gonzales.transport.sss_walk import sss_entered, sss_walks_below
 from gonzales.transport.medium_interface import medium_after
-from gonzales.core.geometry import Point3f, Point2f, Vec3f, vec3f, point3f, dot, PI, INV_FOUR_PI
+from gonzales.core.geometry import Point3f, Point2f, Vec3f, vec3f, point3f, dot, face_toward, PI, INV_FOUR_PI, RGB
 from gonzales.scene.appearance.materials import MatKind, LobeKind, resolve_mix
 from gonzales.scene.shapes.primitives import Intersection
 from gonzales.core.geometry import Ray
-from gonzales.paths.vcm.mis import vcm_scatter_carries, vcm_phase_scatter
+from gonzales.paths.vcm.mis import vcm_scatter_carries, vcm_phase_scatter, vcm_arrival_carries
 from gonzales.scene.accel.bvh import traverse_dispatch
 from gonzales.scene.accel.bvh import SceneView, test_spheres, _scene_bounding_sphere, _sample_disk_perpendicular, _sample_infinite_light_dir, sphere_light_cone_pdf, light_path_pick
 from gonzales.core.rng import PCG32
@@ -462,15 +462,38 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
                                                Int(st.mnee.n_glass), st.mnee.first_glass, pcg)
                 if d_m > Float32(0):
                     dvcm_in = d_m * abs(dot(ray_dir, gn_e))   # the walk applies the arrival cosine
+            # On smooth skin the photon is stored where it arrives, before walking, for camera walk exits to merge
+            # (Scenes/vcm_sss_exit_merge_derivation.py); one slot stays free for the exit.
+            var entry_eta = Float32(0)
+            if not mat.is_rough_dielectric() and st.n_verts + 1 < _BDPT_MAX_VERTS:
+                var gn_a = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
+                var (a_vcm, a_vc, a_vm) = vcm_arrival_carries(dvcm_in, dvc_in, dvm_in, abs(dot(ray_dir, gn_a)))
+                var a = _null_vertex()
+                a.pos = hit
+                a.normal = vec3f(face_toward(gn_a, -ray_dir))
+                a.shading_normal = a.normal
+                a.beta = st.flux
+                a.alb = RGB(Float32(1))
+                a.is_surface = Int32(1)
+                a.mat_kind = LobeKind.sss_entry
+                a.pdf_bwd = mat.albedo.r
+                a.wo = vec3f(-ray_dir)
+                a.med_idx = st.cur_med_idx
+                a.wavelengths = st.wl
+                a.dVCM = a_vcm; a.dVC = a_vc; a.dVM = a_vm
+                st.n_verts += 1
+                a.n_delta = Int32(st.n_delta)
+                _bdpt_store_lvc_vertex(a, lvc, lp_idx, st.n_verts - 1)
+                entry_eta = VcmStrategies.walk_merge_density(sd, hit, mis_vm_weight_factor)
             var ex = _vcm_sss_walk[use_gpu](sd, inter, mat, hit, ray_dir, st.rd, st.wl, mis_vc_weight_factor, pcg, st.flux,
-                                            st.dvcm, st.dvc, st.dvm, dvcm_in, dvc_in, dvm_in)
+                                            st.dvcm, st.dvc, st.dvm, dvcm_in, dvc_in, dvm_in, entry_eta)
             if not ex.ok:
                 return False
             var v = _vcm_sss_exit_vertex(ex, mat.albedo.r, st.flux, st.cur_med_idx, st.wl, st.dvcm, st.dvc, st.dvm)
             st.n_verts += 1
             v.n_delta = Int32(st.n_delta)
             _bdpt_store_lvc_vertex(v, lvc, lp_idx, st.n_verts - 1)
-            _ = _vcm_sss_exit_scatter(sd, ex, mat.albedo.r, mis_vc_weight_factor, mis_vm_weight_factor, pcg,
+            _ = _vcm_sss_exit_scatter(sd, ex, mat.albedo.r, mis_vc_weight_factor, Float32(0), pcg,   # a light exit does not merge
                                       st.ro, st.rd, st.flux, st.dvcm, st.dvc, st.dvm)
             st.mnee.side = Float32(0)
 

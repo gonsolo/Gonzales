@@ -43,9 +43,12 @@ struct VcmStrategies:
     @always_inline
     def can_merge(cv: BDPTVertex, lv: BDPTVertex) -> Bool:
         """May camera vertex cv merge with stored light vertex lv? Same kind of vertex, neither delta, the light source no
-        photon, and a walk's exit is two walks rather than one: it stores nothing to merge."""
+        photon, and a walk's exit is two walks rather than one: it stores nothing to merge. A camera walk exit merges
+        only photons that arrived at the skin before walking (Scenes/vcm_sss_exit_merge_derivation.py), and nothing else
+        merges those."""
         return (lv.is_delta == Int32(0) and lv.is_surface == cv.is_surface and lv.is_light == Int32(0)
-                and lv.mat_kind != LobeKind.sss_exit and _bdpt_vertex_mis_scoped(lv) and _vcm_on_fibre(lv) == _vcm_on_fibre(cv))
+                and lv.mat_kind != LobeKind.sss_exit and _bdpt_vertex_mis_scoped(lv) and _vcm_on_fibre(lv) == _vcm_on_fibre(cv)
+                and (cv.mat_kind == LobeKind.sss_exit) == (lv.mat_kind == LobeKind.sss_entry))
 
     @staticmethod
     @always_inline
@@ -64,14 +67,21 @@ struct VcmStrategies:
     def merge_density(ref sd: SceneView, v: BDPTVertex, mis_vm_weight_factor: Float32) -> Float32:
         """This vertex's own eta(x) = N * (kernel measure at x), fully scaled --
         a DISK area on a surface, a BALL volume in a medium; 0 where it cannot merge. `mis_vm_weight_factor`"""
-        if v.mat_kind == LobeKind.sss_exit:
-            return Float32(0)
+        if v.mat_kind == LobeKind.sss_exit:   # a light exit never merges, a camera exit only on smooth skin (mat_idx set)
+            return VcmStrategies.walk_merge_density(sd, v.pos, mis_vm_weight_factor) if v.mat_idx >= Int32(0) else Float32(0)
         if _vcm_on_fibre(v):
             return mis_vm_weight_factor * _vcm_fibre_scale(sd, v.pos, Int(v.hair_curve_idx), v.hair_v)
         if v.is_surface == Int32(0):
             var s3 = _VCM_RADIUS_VOLUME_SCALE * _VCM_RADIUS_VOLUME_SCALE * _VCM_RADIUS_VOLUME_SCALE
             return mis_vm_weight_factor * (Float32(4.0 / 3.0) * sd.vcmMergeR * s3) * _vcm_eta_scale_vol(sd, v)
         return mis_vm_weight_factor * _vcm_eta_scale(sd, v.pos)
+
+    @staticmethod
+    @always_inline
+    def walk_merge_density(ref sd: SceneView, pos: Point3f, mis_vm_weight_factor: Float32) -> Float32:
+        """eta(x) where a camera walk exit merges with a photon arriving at the skin: the surface kernel at x, which both
+        subpaths evaluate at the same point."""
+        return mis_vm_weight_factor * _vcm_eta_scale(sd, pos)
 
     @staticmethod
     @always_inline

@@ -255,11 +255,12 @@ def _area_light_hit(ref sd: SceneView, inter: Intersection, mat: Material,
 def _vcm_sss_walk[use_gpu: Bool](
     ref sd: SceneView, inter: Intersection, mat: Material, hit: Point3f, ray_dir: Vec3f, rd: Vec3f, wl: SampledWavelengths,
     mis_vc: Float32, mut pcg: PCG32, mut beta: SpectralSample, mut dvcm: Float32, mut dvc: Float32, mut dvm: Float32,
-    dvcm_in: Float32, dvc_in: Float32, dvm_in: Float32,
+    dvcm_in: Float32, dvc_in: Float32, dvm_in: Float32, entry_eta: Float32 = Float32(0),
 ) -> SssExit:
     """The path tracer's walk below a subsurface boundary the dielectric cross just refracted into, and its MIS carries:
     Scenes/vcm_sss_hop_mis_derivation.py. The interior is one symmetric hop, so its density cancels between the
-    subpaths, and nothing connects across it."""
+    subpaths, and nothing connects across it. `entry_eta`: the merge share of the entry, a light path's arrival on smooth
+    skin, which a camera walk exit merges (Scenes/vcm_sss_exit_merge_derivation.py); 0 on the camera side."""
     var gn = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
     var ex = sss_hop[use_gpu](sd, mat, inter, hit.to_simd(), gn, rd, wl, pcg)
     if ex.ok:
@@ -273,15 +274,16 @@ def _vcm_sss_walk[use_gpu: Bool](
             dvc = Float32(0)
             dvm = Float32(0)
             return ex
-        dvc = inv_t * (a_vc * pdf_rev + a_vcm)
+        dvc = inv_t * (a_vc * pdf_rev + a_vcm + entry_eta)
         dvm = inv_t * (a_vm * pdf_rev + a_vcm * mis_vc)
     return ex
 
 
 @always_inline
 def _vcm_sss_exit_vertex(ex: SssExit, eta: Float32, beta: SpectralSample, med_idx: Int32, wl: SampledWavelengths,
-                         dvcm: Float32, dvc: Float32, dvm: Float32) -> BDPTVertex:
-    """The subpath vertex at a walk's exit: Lambertian, the walk's internal Fresnel already spent."""
+                         dvcm: Float32, dvc: Float32, dvm: Float32, merge_mat: Int32 = Int32(-1)) -> BDPTVertex:
+    """The subpath vertex at a walk's exit: Lambertian, the walk's internal Fresnel already spent. `merge_mat`, the skin's
+    material, marks a camera exit that merges with photons arriving there (VcmStrategies.merge_density); -1 elsewhere."""
     var v = _null_vertex()
     v.pos = ex.x_o
     v.normal = vec3f(ex.n_o)
@@ -295,6 +297,7 @@ def _vcm_sss_exit_vertex(ex: SssExit, eta: Float32, beta: SpectralSample, med_id
     v.med_idx = med_idx
     v.wavelengths = wl
     v.dVCM = dvcm; v.dVC = dvc; v.dVM = dvm
+    v.mat_idx = merge_mat
     return v
 
 
@@ -310,7 +313,7 @@ def _vcm_sss_exit_scatter(
     var cos_out = out.cos_out
     beta *= SpectralSample(out.weight)
     (dvcm, dvc, dvm) = vcm_scatter_carries(dvcm, dvc, dvm, PI, cos_out / PI, Float32(1) - fr_dielectric(cos_out, eta),
-                                                        mis_vc, Float32(0))   # an exit does not merge
+                                                        mis_vc, mis_vm)   # mis_vm: 0 where the exit does not merge
     return cos_out
 
 
@@ -729,12 +732,19 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 return False
             var x_o = ex.x_o
             var n_o = ex.n_o
-            var v = _vcm_sss_exit_vertex(ex, mat.albedo.r, st.beta, st.cur_med_idx, st.wl, st.dvcm, st.dvc, st.dvm)
+            # On smooth skin the exit merges with photons that arrived there before walking: one walk, not two.
+            var merges = not mat.is_rough_dielectric()
+            var v = _vcm_sss_exit_vertex(ex, mat.albedo.r, st.beta, st.cur_med_idx, st.wl, st.dvcm, st.dvc, st.dvm,
+                                         Int32(inter.primId.materialIndex) if merges else Int32(-1))
+            var exit_eta = VcmStrategies.merge_density(sd, v, mis_vm_weight_factor)
             if st.n_verts == 0: st.first_alb = mat.sss_mean_refl
             if VcmStrategies.ends_at_vertex(sd, st.cam_count(), st.n_verts):
                 return False   # a vertex past d starts no strategy (see VcmStrategies.depth)
             st.n_verts += 1
-            # A walk's exit does not merge: light and camera exits are two walks, not one.
+            if merges:
+                st.total_merge += _bdpt_merge_from_cache(v, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2,
+                    merge_norm, mis_vc_weight_factor, st.cam_count(), visit_naive=visit_naive,
+                    visit_footprint=visit_footprint, visit_thin=visit_thin)
             if path_len > 0:
                 if defer_shadow_rays:
                     _bdpt_connect_to_cache_deferred(v, sd, lvc, lp_idx, path_len, mis_vm_weight_factor, shadow_rays, shadow_pending, shadow_valid, shadow_seg_med, st.cam_count())
@@ -742,11 +752,11 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                     st.total += _bdpt_connect_to_cache(v, sd, has_med, scratch, lvc, lp_idx, path_len, mis_vm_weight_factor, st.cam_count())
             var ctx_x = BSDF(LobeKind.sss_exit, True, False, n_o, n_o, RGB(Float32(1)), Int32(-1), mat.albedo.r,
                                 Float32(0), Int32(-1), Float32(0), Float32(0), True, False)
-            st.total += _vcm_nee_surface(sd, v, ctx_x, x_o, n_o, st.beta, Float32(0),
+            st.total += _vcm_nee_surface(sd, v, ctx_x, x_o, n_o, st.beta, exit_eta,
                                       v.dVCM, v.dVC, st.cur_med_idx, scratch, st.wl, pcg,
                                       offset_eps(x_o.x, x_o.y, x_o.z), False)
-            st.total += _vcm_mnee(sd, v, x_o.to_simd(), n_o, st.beta, pcg, st.wl, Float32(0), v.dVCM, v.dVC)
-            var cos_out_x = _vcm_sss_exit_scatter(sd, ex, mat.albedo.r, mis_vc_weight_factor, mis_vm_weight_factor, pcg,
+            st.total += _vcm_mnee(sd, v, x_o.to_simd(), n_o, st.beta, pcg, st.wl, exit_eta, v.dVCM, v.dVC)
+            var cos_out_x = _vcm_sss_exit_scatter(sd, ex, mat.albedo.r, mis_vc_weight_factor, exit_eta, pcg,
                                                   st.ro, st.rd, st.beta, st.dvcm, st.dvc, st.dvm)
             st.last_bsdf_pdf = cos_out_x * INV_PI
             st.mnee = VCMMneeTrack(x_o.to_simd(), cos_out_x * INV_PI, Int32(0))

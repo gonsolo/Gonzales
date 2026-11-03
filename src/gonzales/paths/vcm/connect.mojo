@@ -128,7 +128,7 @@ def _bdpt_connect_to_camera(
 ) -> Tuple[Bool, Float32, Float32, SpectralSample]:
     """The t=1 strategy: connect a LIGHT-subpath vertex directly to the
     camera and return the continuous raster position it lands on plus its"""
-    if lv.is_delta != Int32(0):
+    if lv.is_delta != Int32(0) or lv.mat_kind == LobeKind.sss_entry:   # skin arrivals only merge
         return (False, Float32(-1), Float32(-1), SpectralSample(Float32(0)))
     # The light-source vertex itself is NEVER splatted. Connecting the
     # emission point straight to the camera builds the length-1 path
@@ -221,6 +221,8 @@ def _bdpt_connect_to_cache(
         var long_path = VcmStrategies.past_cache(lvc, lp_idx, local, cam_count)
         if long_path and lv.is_light != Int32(1):
             break
+        if lv.mat_kind == LobeKind.sss_entry:
+            continue   # a skin arrival only merges with a camera walk exit
         if not _bdpt_connect_pair_weighted(cv, lv):
             if took_unweighted:
                 continue
@@ -255,6 +257,9 @@ def _bdpt_connect_to_cache_deferred(
             shadow_valid[unsafe_offset=base + local] = Int8(0)
             continue
         var lv = lvc[unsafe_offset=base + local]
+        if lv.mat_kind == LobeKind.sss_entry:
+            shadow_valid[unsafe_offset=base + local] = Int8(0)
+            continue   # a skin arrival only merges with a camera walk exit
         if not _bdpt_connect_pair_weighted(cv, lv):
             if took_unweighted:
                 shadow_valid[unsafe_offset=base + local] = Int8(0)
@@ -319,7 +324,7 @@ def _connect_unweighted(
 ) -> Tuple[SpectralSample, Bool]:
     """Task #163 stage 5: byte-for-byte copy of _connect's math (see that
     function's own docstring for the MIS derivation, not repeated here),"""
-    if cv.is_delta != Int32(0) or lv.is_delta != Int32(0):
+    if cv.is_delta != Int32(0) or lv.is_delta != Int32(0) or lv.mat_kind == LobeKind.sss_entry:
         return (SpectralSample(Float32(0)), False)
 
     var d3 = lv.pos - cv.pos
