@@ -732,19 +732,17 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 return False
             var x_o = ex.x_o
             var n_o = ex.n_o
-            # On smooth skin the exit merges with photons that arrived there before walking: one walk, not two.
-            var merges = not mat.is_rough_dielectric()
+            # The exit merges with photons that arrived there before walking: one walk, not two.
             var v = _vcm_sss_exit_vertex(ex, mat.albedo.r, st.beta, st.cur_med_idx, st.wl, st.dvcm, st.dvc, st.dvm,
-                                         Int32(inter.primId.materialIndex) if merges else Int32(-1))
+                                         Int32(inter.primId.materialIndex))
             var exit_eta = VcmStrategies.merge_density(sd, v, mis_vm_weight_factor)
             if st.n_verts == 0: st.first_alb = mat.sss_mean_refl
             if VcmStrategies.ends_at_vertex(sd, st.cam_count(), st.n_verts):
                 return False   # a vertex past d starts no strategy (see VcmStrategies.depth)
             st.n_verts += 1
-            if merges:
-                st.total_merge += _bdpt_merge_from_cache(v, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2,
-                    merge_norm, mis_vc_weight_factor, st.cam_count(), visit_naive=visit_naive,
-                    visit_footprint=visit_footprint, visit_thin=visit_thin)
+            st.total_merge += _bdpt_merge_from_cache(v, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2,
+                merge_norm, mis_vc_weight_factor, st.cam_count(), visit_naive=visit_naive,
+                visit_footprint=visit_footprint, visit_thin=visit_thin)
             if path_len > 0:
                 if defer_shadow_rays:
                     _bdpt_connect_to_cache_deferred(v, sd, lvc, lp_idx, path_len, mis_vm_weight_factor, shadow_rays, shadow_pending, shadow_valid, shadow_seg_med, st.cam_count())

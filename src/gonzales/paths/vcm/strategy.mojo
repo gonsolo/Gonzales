@@ -67,7 +67,7 @@ struct VcmStrategies:
     def merge_density(ref sd: SceneView, v: BDPTVertex, mis_vm_weight_factor: Float32) -> Float32:
         """This vertex's own eta(x) = N * (kernel measure at x), fully scaled --
         a DISK area on a surface, a BALL volume in a medium; 0 where it cannot merge. `mis_vm_weight_factor`"""
-        if v.mat_kind == LobeKind.sss_exit:   # a light exit never merges, a camera exit only on smooth skin (mat_idx set)
+        if v.mat_kind == LobeKind.sss_exit:   # a light exit never merges, a camera exit does (mat_idx set)
             return VcmStrategies.walk_merge_density(sd, v.pos, mis_vm_weight_factor) if v.mat_idx >= Int32(0) else Float32(0)
         if _vcm_on_fibre(v):
             return mis_vm_weight_factor * _vcm_fibre_scale(sd, v.pos, Int(v.hair_curve_idx), v.hair_v)

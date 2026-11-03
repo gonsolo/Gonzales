@@ -6,7 +6,7 @@ from gonzales.transport.medium import MediumView
 from gonzales.transport.sss_walk import sss_entered, sss_walks_below
 from gonzales.transport.medium_interface import medium_after
 from gonzales.core.geometry import Point3f, Point2f, Vec3f, vec3f, point3f, dot, face_toward, PI, INV_FOUR_PI, RGB
-from gonzales.scene.appearance.materials import MatKind, LobeKind, resolve_mix
+from gonzales.scene.appearance.materials import MatKind, LobeKind, Material, resolve_mix
 from gonzales.scene.shapes.primitives import Intersection
 from gonzales.core.geometry import Ray
 from gonzales.paths.vcm.mis import vcm_scatter_carries, vcm_phase_scatter, vcm_arrival_carries
@@ -267,6 +267,46 @@ def _bdpt_light_path_init[use_gpu: Bool](
         n_delta=0, mis_null_dist=Float32(0), prev_sig_t=Float32(1), mnee=mnee_l,
     )
 
+
+def _vcm_skin_arrival(
+    ref sd: SceneView, inter: Intersection, mat: Material, hit: Point3f, ray_dir: Vec3f, mis_vm: Float32,
+    mut pcg: PCG32, lvc: Pointer[BDPTVertex, MutUntrackedOrigin], lp_idx: Int, mut st: VCMLightPathState,
+    mut dvcm_in: Float32, dvc_in: Float32, dvm_in: Float32,
+) -> Float32:
+    """A photon arriving at skin, stored before the boundary chooses for camera walk exits to merge
+    (Scenes/vcm_sss_exit_merge_derivation.py); returns the walk's entry merge share, 0 when no slot is left."""
+    var gn = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
+    var cos_a = abs(dot(ray_dir, gn))
+    if st.mnee.side > Float32(0) and st.mnee.n_glass > Int32(0):
+        # Reached through glass only: the camera exit's MNEE samples this entry too.
+        var d_m = _vcm_mnee_light_dvcm(sd, hit.to_simd(), gn, st.mnee.y, st.mnee.ny, st.mnee.side,
+                                       Int(st.mnee.n_glass), st.mnee.first_glass, pcg)
+        if d_m > Float32(0):
+            dvcm_in = d_m * cos_a   # the walk applies the arrival cosine
+    # Slots for this arrival, rough skin's lobe vertex and the walk's exit.
+    if st.n_verts + (3 if mat.uses_lobe() else 2) > _BDPT_MAX_VERTS:
+        return Float32(0)
+    var (a_vcm, a_vc, a_vm) = vcm_arrival_carries(dvcm_in, dvc_in, dvm_in, cos_a)
+    var a = _null_vertex()
+    a.pos = hit
+    a.normal = vec3f(face_toward(gn, -ray_dir))
+    a.shading_normal = a.normal
+    a.beta = st.flux
+    a.alb = RGB(Float32(1))
+    a.is_surface = Int32(1)
+    a.mat_kind = LobeKind.sss_entry
+    a.pdf_bwd = mat.albedo.r
+    a.wo = vec3f(-ray_dir)
+    a.med_idx = st.cur_med_idx
+    a.wavelengths = st.wl
+    a.dVCM = a_vcm; a.dVC = a_vc; a.dVM = a_vm
+    a.n_delta = Int32(st.n_delta)
+    _bdpt_store_lvc_vertex(a, lvc, lp_idx, st.n_verts)
+    st.n_verts += 1
+    st.n_delta -= 1   # the slot is no path vertex: what happens at the hit counts itself
+    return VcmStrategies.walk_merge_density(sd, hit, mis_vm)
+
+
 def _bdpt_light_path_bounce[use_gpu: Bool](
     ref sd:      SceneView,
     mut pcg: PCG32,
@@ -391,6 +431,11 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
 
         var walks = False
         var dvcm_in = st.dvcm; var dvc_in = st.dvc; var dvm_in = st.dvm; var med_in = st.cur_med_idx
+        var entry_eta = Float32(0)
+        comptime if not _VCM_SSS_CAMERA_ONLY:
+            if sss_walks_below(mat, inter, med_in):
+                entry_eta = _vcm_skin_arrival(sd, inter, mat, hit, ray_dir, mis_vm_weight_factor, pcg, lvc, lp_idx, st,
+                                              dvcm_in, dvc_in, dvm_in)
         if mat.uses_lobe():
             if not mat.has_lobe():
                 return False   # e.g. a measured table that failed to load
@@ -455,39 +500,9 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
         if walks:
             comptime if _VCM_SSS_CAMERA_ONLY:
                 return False
-            if st.mnee.side > Float32(0) and st.mnee.n_glass > Int32(0):
-                # Reached through glass only: the camera exit's MNEE samples this entry too.
-                var gn_e = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
-                var d_m = _vcm_mnee_light_dvcm(sd, hit.to_simd(), gn_e, st.mnee.y, st.mnee.ny, st.mnee.side,
-                                               Int(st.mnee.n_glass), st.mnee.first_glass, pcg)
-                if d_m > Float32(0):
-                    dvcm_in = d_m * abs(dot(ray_dir, gn_e))   # the walk applies the arrival cosine
-            # On smooth skin the photon is stored where it arrives, before walking, for camera walk exits to merge
-            # (Scenes/vcm_sss_exit_merge_derivation.py); one slot stays free for the exit.
-            var entry_eta = Float32(0)
-            if not mat.is_rough_dielectric() and st.n_verts + 1 < _BDPT_MAX_VERTS:
-                var gn_a = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
-                var (a_vcm, a_vc, a_vm) = vcm_arrival_carries(dvcm_in, dvc_in, dvm_in, abs(dot(ray_dir, gn_a)))
-                var a = _null_vertex()
-                a.pos = hit
-                a.normal = vec3f(face_toward(gn_a, -ray_dir))
-                a.shading_normal = a.normal
-                a.beta = st.flux
-                a.alb = RGB(Float32(1))
-                a.is_surface = Int32(1)
-                a.mat_kind = LobeKind.sss_entry
-                a.pdf_bwd = mat.albedo.r
-                a.wo = vec3f(-ray_dir)
-                a.med_idx = st.cur_med_idx
-                a.wavelengths = st.wl
-                a.dVCM = a_vcm; a.dVC = a_vc; a.dVM = a_vm
-                st.n_verts += 1
-                a.n_delta = Int32(st.n_delta)
-                _bdpt_store_lvc_vertex(a, lvc, lp_idx, st.n_verts - 1)
-                entry_eta = VcmStrategies.walk_merge_density(sd, hit, mis_vm_weight_factor)
             var ex = _vcm_sss_walk[use_gpu](sd, inter, mat, hit, ray_dir, st.rd, st.wl, mis_vc_weight_factor, pcg, st.flux,
                                             st.dvcm, st.dvc, st.dvm, dvcm_in, dvc_in, dvm_in, entry_eta)
-            if not ex.ok or st.n_verts >= _BDPT_MAX_VERTS:   # rough skin's lobe vertex may have taken the last slot
+            if not ex.ok or st.n_verts >= _BDPT_MAX_VERTS:   # rough skin's entry may have taken the last slot
                 return False
             var v = _vcm_sss_exit_vertex(ex, mat.albedo.r, st.flux, st.cur_med_idx, st.wl, st.dvcm, st.dvc, st.dvm)
             st.n_verts += 1
