@@ -1,6 +1,7 @@
 """The thinned hash grid and the gather disk SPPM's photons and VCM's light vertices share."""
-from std.math import sqrt, cos, sin, abs
+from std.math import sqrt, cos, sin, abs, min, max
 from std.atomic import Atomic
+from std.collections import Array
 from std.memory import bitcast
 from gonzales.core.geometry import Point3f, Vec3f, Ray, dot, PI
 from gonzales.scene.shapes.primitives import Intersection, PrimId
@@ -141,6 +142,46 @@ def gather_disk_contains(e: Vec3f, dist2: Float32, r2: Float32, n: Vec3f) -> Boo
         return False
     var off = dot(e, n)
     return off * off <= r2 * Float32(0.01)
+
+
+comptime GATHER_BALL_PROBES = 16
+
+
+def gather_ball_reach[probes: Int = GATHER_BALL_PROBES](ref sd: SceneView, p: Point3f, r: Float32, salt: Int = 11) -> Float32:
+    """How far the gather BALL around a volume point p may reach, at most r: the distance to the nearest surface. A
+    dense medium keeps its visible points within a mean free path of the boundary; a ball reaching past it finds no
+    photons there and reads dark (a skin ball at sigma_t 40 lost 9%), and dividing by the covered fraction instead
+    reads bright, since the density climbs with depth. A ball that stays inside is symmetric about p, so a gradient
+    cancels. `probes` rays out of p on a spherical Fibonacci set that a hash of `salt` and p rotates at random
+    (uniform axis, uniform spin); 16 overshoot a plane's distance by under 4%."""
+    var _local = Array[Intersection, 1](fill=Intersection(
+        PrimId(Int64(-1), Int64(-1), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0)),
+        Float32(0), Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0)))
+    var mem = _local.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
+    var rot = Float32(grid_coin_bits(salt, p)) * Float32(2.3283064e-10) * Float32(6.2831853)
+    var az = Float32(1) - Float32(2) * Float32(grid_coin_bits(salt + 1, p)) * Float32(2.3283064e-10)
+    var aphi = Float32(grid_coin_bits(salt + 2, p)) * Float32(2.3283064e-10) * Float32(6.2831853)
+    var ar = sqrt(max(Float32(1) - az * az, Float32(0)))
+    var n = Vec3f(ar * cos(aphi), ar * sin(aphi), az)
+    var sgn = Float32(1) if n.z >= Float32(0) else Float32(-1)
+    var ka = Float32(-1) / (sgn + n.z)
+    var kb = n.x * n.y * ka
+    var t1 = Vec3f(Float32(1) + sgn * n.x * n.x * ka, sgn * kb, -sgn * n.x)
+    var t2 = Vec3f(kb, sgn + n.y * n.y * ka, -n.y)
+    var reach = r
+    comptime for i in range(probes):
+        var z = Float32(1) - (Float32(2 * i) + Float32(1)) / Float32(probes)
+        var rho = sqrt(max(Float32(1) - z * z, Float32(0)))
+        var ang = rot + Float32(i) * Float32(2.39996323)
+        var c = rho * cos(ang)
+        var sn = rho * sin(ang)
+        var ray = Ray(p, Vec3f(t1.x * c + t2.x * sn + n.x * z, t1.y * c + t2.y * sn + n.y * z, t1.z * c + t2.z * sn + n.z * z))
+        mem[unsafe_offset=0].hit = Int8(0)
+        traverse_dispatch(sd.bvh4, sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, reach, mem,
+                           sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances)
+        if mem[unsafe_offset=0].hit != Int8(0) and mem[unsafe_offset=0].primId.type != Int8(5):
+            reach = min(reach, mem[unsafe_offset=0].tHit)
+    return reach
 
 
 comptime GATHER_COVERAGE_PROBES = 8

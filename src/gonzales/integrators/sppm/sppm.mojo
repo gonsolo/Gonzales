@@ -36,7 +36,7 @@ from gonzales.transport.texturing import apply_surface_maps_at_hit
 from gonzales.scene.shapes.geom_normal import _geom_normal, _shading_normal_at
 from gonzales.estimators.photon_grid import (
     _HSIZE, _hash_cell, _PHOTON_BUCKET_CAP, grid_reset_cell, grid_count, grid_keep, grid_coin_bits, grid_push, grid_weight,
-    gather_disk_contains, gather_disk_coverage, disk_measure, ball_measure, ribbon_measure,
+    gather_disk_contains, gather_disk_coverage, gather_ball_reach, disk_measure, ball_measure, ribbon_measure,
 )
 from gonzales.transport.shadow_media import shadow_transmittance
 from gonzales.core.sampling import sample_ggx_vndf, camera_ray_from_film_xy, FilmFilter, film_filter_of, film_filter_offset
@@ -1500,6 +1500,7 @@ def _sppm_gather_one(
     var r2 = vp.r2
     if vp.is_volume == PhotonKind.volume and Int(vp.med_idx) >= 0:
         var cap = MediumView.at(sd, vp.med_idx).kernel_radius(vp.pos.to_simd())
+        cap = max(gather_ball_reach(sd, vp.pos, cap), Float32(0.05) * cap)   # the ball stays inside the medium
         if r2 > cap * cap:   # same history rescale as the update below
             var q = cap * cap / r2
             vp.tau = vp.tau * (q * sqrt(q))

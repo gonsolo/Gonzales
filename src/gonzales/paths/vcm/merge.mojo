@@ -7,7 +7,7 @@ from std.atomic import Atomic
 from gonzales.core.geometry import dot, PI, Vec3f
 from gonzales.scene.appearance.materials import LobeKind
 from gonzales.scene.accel.bvh import SceneView, _is_real_ptr, curve_radius
-from gonzales.estimators.photon_grid import disk_measure, ribbon_measure, _HSIZE, _hash_cell, _PHOTON_BUCKET_CAP, grid_keep, grid_weight, gather_disk_coverage, gather_disk_contains
+from gonzales.estimators.photon_grid import disk_measure, ribbon_measure, _HSIZE, _hash_cell, _PHOTON_BUCKET_CAP, grid_keep, grid_weight, gather_disk_coverage, gather_disk_contains, gather_ball_reach
 from gonzales.transport.medium import MediumView
 from gonzales.core.spectrum import SpectralSample
 from gonzales.paths.vcm.vertex import _BDPT_MAX_VERTS, BDPTVertex
@@ -39,6 +39,13 @@ struct MergeKernel(TrivialRegisterPassable):
                 var rq = _vcm_volume_radius_at(sd, cv)
                 r2 = rq * rq
                 norm = norm * (r_pass_vol * r_pass_vol * r_pass_vol) / max(rq * rq * rq, Float32(1e-20))
+            # The ball stays inside the medium: past its boundary there are no photons (gather_ball_reach).
+            var r_vol = sqrt(r2)
+            var reach = max(gather_ball_reach(sd, cv.pos, r_vol), Float32(0.05) * r_vol)
+            if reach < r_vol:
+                var q = r_vol / reach
+                norm = norm * (q * q * q)
+                r2 = reach * reach
         elif sd.vcmFootprint > Float32(0) and sd.vcmMergeR > Float32(0):
             var rq = _vcm_merge_radius_at(sd, cv.pos)
             r2 = rq * rq
@@ -54,7 +61,7 @@ struct MergeKernel(TrivialRegisterPassable):
         if _vcm_on_fibre(cv):   # photons on the same strand only
             return lv.hair_curve_idx == cv.hair_curve_idx and dist2 <= self.r2
         if cv.is_surface == Int32(0):
-            return dist2 <= self.r2
+            return dist2 <= self.r2 and lv.med_idx == cv.med_idx   # a photon across a boundary is another medium's
         # A photon on another surface within reach must not count against this disk's area.
         return dot(cv.normal.to_simd(), lv.normal.to_simd()) > Float32(0.7) and gather_disk_contains(e.to_simd(), dist2, self.r2, cv.normal.to_simd())
 
@@ -168,6 +175,7 @@ def _bdpt_merge_from_cache(
             var cov = gather_disk_coverage(sd, cv.pos, cv.normal, sqrt(r2))
             if cov > Float32(0):
                 result = result * (Float32(1) / cov)
+
     if _is_real_ptr(sd.vcmStatOut):
         # The per-cell budget's statistics for the NEXT pass: one merge query
         # in this cell, and its contribution's second moment, scaled by this
