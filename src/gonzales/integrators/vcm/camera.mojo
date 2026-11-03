@@ -566,7 +566,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                             var sn = (hit - sph_hit.center).to_simd() * (Float32(1) / sph_hit.radius)
                             var tng = cross(sn, Vec3f(Float32(1), Float32(0), Float32(0)) if abs(sn[0]) < Float32(0.9) else Vec3f(Float32(0), Float32(1), Float32(0)))
                             w_cam_sph += _vcm_mnee_hit_term(sd, st.mnee.x0, st.mnee.pdf0, Int(st.mnee.n_glass), st.ro.to_simd(), hit.to_simd(),
-                                                            tng, cross(sn, tng), Float32(1) / aw_hit, pcg)
+                                                            tng, cross(sn, tng), Float32(1) / aw_hit, st.cur_med_idx, st.wl, pcg)
                         mis_w_sph_hit = Float32(1) / (Float32(1) + w_cam_sph)
                     elif st.last_bsdf_pdf < Float32(0):
                         pass   # delta bounce off a vertex with placeholder carries: unweighted, as before
@@ -608,7 +608,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                             var (lmesh_h, lv0_h, lv1_h, lv2_h, _) = _get_tri_verts(inter, sd.meshes)
                             var lp0_h = mesh_pos(lmesh_h, lv0_h)
                             mnee_t = _vcm_mnee_hit_term(sd, st.mnee.x0, st.mnee.pdf0, Int(st.mnee.n_glass), st.ro.to_simd(), hit.to_simd(),
-                                                        mesh_pos(lmesh_h, lv1_h) - lp0_h, mesh_pos(lmesh_h, lv2_h) - lp0_h, p_a, pcg)
+                                                        mesh_pos(lmesh_h, lv1_h) - lp0_h, mesh_pos(lmesh_h, lv2_h) - lp0_h, p_a, st.cur_med_idx, st.wl, pcg)
                         var w_cam_hit = (p_a * st.dvcm + (Float32(0) if long_hit else emission_pdf_w * st.dvc)) / cos_l_hit + mnee_t
                         mis_w_al_hit = Float32(1) / (Float32(1) + w_cam_hit)
                     elif st.last_bsdf_pdf < Float32(0):

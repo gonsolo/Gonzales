@@ -8,7 +8,7 @@ from gonzales.scene.appearance.materials import LobeKind
 from gonzales.scene.shapes.primitives import Intersection, mesh_vi, mesh_pos
 from gonzales.scene.appearance.lights import area_light_pick_triangle
 from gonzales.scene.appearance.lights import area_light_side_pdf
-from gonzales.transport.manifold import _mnee_first_probe, _mnee_chain, _mnee_chain_t_eta, _mnee_bsdf_over_light, _mnee_reproduce, _emitter_face_normal
+from gonzales.transport.manifold import _mnee_first_probe, _mnee_chain, _mnee_chain_t_eta, _mnee_bsdf_over_light, _mnee_reproduce, _emitter_face_normal, _mnee_chain_transmittance, _mnee_pass
 from gonzales.transport.shade_context import _shade_context
 from gonzales.transport.mis_policy import MisPolicy
 from gonzales.scene.accel.bvh import curve_tangent, fibre_cos, SceneView, _scene_bounding_sphere, LightSample, _sample_infinite_light_nee, light_path_pick, light_path_pick_pdf
@@ -311,11 +311,13 @@ def _vcm_mnee(
     var le = _lobe_eval[want_pdfs=True](v, w0 * (Float32(1) / sqrt(dot(w0, w0))), sd, sd.spectral.coeffs, sd.spectral.res,
         sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wl)
     var (t_ch, eta_ch) = _mnee_chain_t_eta(hit_v, verts, n)
+    var t_med = _mnee_chain_transmittance(ctx, hit_v, verts, n, light_point, v.med_idx, wl)
+    t_ch *= _mnee_pass(t_med)   # every rival crosses the chain's media unscattered
     var g = c[5]
     var w_light = _mnee_bsdf_over_light(le.pdf_fwd, t_ch, g, p_a)
     var w_camera = side / PI / (eta_ch * eta_ch) * c[6] * g * t_ch * (eta_x + dvcm + dvc * le.pdf_rev)
     var w = Float32(1) / (w_light + Float32(1) + w_camera)
-    return (beta * le.f_cos
+    return (beta * le.f_cos * t_med
         * spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, emission.r, emission.g, emission.b, wl)
         * (g * c[4] / p_a * w))
 
@@ -323,7 +325,7 @@ def _vcm_mnee(
 @no_inline
 def _vcm_mnee_hit_term(
     ref sd: SceneView, x0: Vec3f, pdf_x0: Float32, n_glass: Int, last_glass: Vec3f, light_hit: Vec3f,
-    l_du: Vec3f, l_dv: Vec3f, p_a: Float32, mut pcg: PCG32,
+    l_du: Vec3f, l_dv: Vec3f, p_a: Float32, cur_med: Int32, wl: SampledWavelengths, mut pcg: PCG32,
 ) -> Float32:
     """MNEE's share in the weight of a camera path that reached light_hit from vertex x0 through n_glass glass
     vertices: p_A / (p_bsdf (1 - F) g) when MNEE's solve reproduces the path, else 0."""
@@ -333,13 +335,14 @@ def _vcm_mnee_hit_term(
     var rp = _mnee_reproduce(ctx, x0, n_glass, last_glass, light_hit, l_du, l_dv, pcg)
     if not rp[0] or rp[3] <= Float32(0):
         return Float32(0)
-    return Float32(1) / _mnee_bsdf_over_light(pdf_x0, _mnee_chain_t_eta(x0, rp[2], rp[1])[0], rp[3], p_a)
+    var t_pass = _mnee_pass(_mnee_chain_transmittance(ctx, x0, rp[2], rp[1], light_hit, cur_med, wl))
+    return Float32(1) / _mnee_bsdf_over_light(pdf_x0, _mnee_chain_t_eta(x0, rp[2], rp[1])[0] * t_pass, rp[3], p_a)
 
 
 @no_inline
 def _vcm_mnee_light_dvcm(
     ref sd: SceneView, x0: Vec3f, n_geo: Vec3f, y: Vec3f, ny: Vec3f, side: Float32, n_glass: Int, first_glass: Vec3f,
-    mut pcg: PCG32,
+    cur_med: Int32, wl: SampledWavelengths, mut pcg: PCG32,
 ) -> Float32:
     """dVCM on arriving at x0 for a light path that left light point y through n_glass glass vertices, the first at
     first_glass: 1 / (p_emit (1 - F) J_light) when MNEE's solve from x0 reproduces that chain, else 0 (no share).
@@ -353,6 +356,7 @@ def _vcm_mnee_light_dvcm(
     if not rp[0] or rp[3] <= Float32(0):
         return Float32(0)
     var (t_ch, eta_ch) = _mnee_chain_t_eta(x0, rp[2], rp[1])
+    t_ch *= _mnee_pass(_mnee_chain_transmittance(ctx, x0, rp[2], rp[1], y, cur_med, wl))
     var w0 = rp[2][0].pos - x0
     var cos0 = abs(dot(n_geo, w0)) / sqrt(max(dot(w0, w0), Float32(1e-30)))
     var den = side * cos0 * rp[3] * t_ch

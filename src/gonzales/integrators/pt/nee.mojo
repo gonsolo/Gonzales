@@ -21,7 +21,7 @@ from gonzales.transport.sms import MAX_SMS_VERTICES, SMSVertex, sms_vertex_init
 from gonzales.integrators.pt.restir_sms import SMSReservoir, sms_reservoir_init, sms_target_pdf, SMSReservoirIO, sms_reservoir_io_null, sms_spatial_combine
 from gonzales.transport.texturing import _get_tri_verts
 from gonzales.transport.shade_context import ShadeContext
-from gonzales.transport.manifold import _emitter_face_normal, _mnee_chain, _mnee_bsdf_over_light, _mnee_chain_t_eta, _mnee_first_probe, _mnee_reproduce, _sms_solve_from_probe
+from gonzales.transport.manifold import _emitter_face_normal, _mnee_chain, _mnee_bsdf_over_light, _mnee_chain_t_eta, _mnee_first_probe, _mnee_reproduce, _sms_solve_from_probe, _mnee_chain_transmittance, _mnee_pass
 from gonzales.integrators.pt.common import _clamped, _to_spec_diffuse_lit, _emitter_invisible, _shadow_inline, _shadow_blocked, _shadow_contribute
 
 
@@ -357,15 +357,16 @@ def _sms_probe_and_solve(
 @always_inline
 def _mnee_mis_weight(
     normal: Vec3f, x0: Vec3f, verts: Array[SMSVertex, MAX_SMS_VERTICES], n: Int, g: Float32, pdf_area: Float32,
+    t_pass: Float32,
 ) -> Float32:
     """Power-heuristic weight of MNEE against BSDF sampling for one solved chain; the BSDF path gets one minus it.
     The solve is deterministic, so MNEE's density is the light's area density over g, and both sides evaluate this on
-    the same chain: the weights sum to one. BSDF sampling: diffuse at x0, then refraction picked with 1 - F."""
+    the same chain: the weights sum to one. BSDF sampling: diffuse at x0, then refraction picked with 1 - F, then the chain's media crossed unscattered (t_pass)."""
     if g <= Float32(0.0) or pdf_area <= Float32(0.0):
         return Float32(1.0)
     var d = verts[0].pos - x0
     var p_bsdf = bxdf_pdf_diffuse(dot(normal, d) / sqrt(max(dot(d, d), Float32(1e-30))))
-    var q = _mnee_bsdf_over_light(p_bsdf, _mnee_chain_t_eta(x0, verts, n)[0], g, pdf_area)
+    var q = _mnee_bsdf_over_light(p_bsdf, _mnee_chain_t_eta(x0, verts, n)[0] * t_pass, g, pdf_area)
     return Float32(1.0) / (Float32(1.0) + q * q)
 
 
@@ -390,7 +391,8 @@ def _mnee_bsdf_weight(
     var al_idx = Int(inter.primId.id1)
     var al = ctx.lights.area_lights[unsafe_offset=al_idx]
     var pdf_area = light_sampler_pdf_at(ctx.lights.light_sampler, Int32(al_idx), x0) / max(al.total_area, Float32(1e-30))
-    return Float32(1.0) - _mnee_mis_weight(path_ptr[].last_ns_n, x0, rp[2], rp[1], rp[3], pdf_area)
+    var t_med = _mnee_chain_transmittance(ctx, x0, rp[2], rp[1], light_hit, path_ptr[].current_medium_idx, path_ptr[].wavelengths)
+    return Float32(1.0) - _mnee_mis_weight(path_ptr[].last_ns_n, x0, rp[2], rp[1], rp[3], pdf_area, _mnee_pass(t_med))
 
 
 @always_inline
@@ -483,8 +485,9 @@ def _mnee_area_light_contribute(
     if not c[1]:
         return True
     # MIS against the BSDF path through the same chain (_mnee_bsdf_weight gives it the rest).
-    var w_mnee = _mnee_mis_weight(normal, hit_point, c[3], c[2], c[5], Float32(1.0) / inv_pdf_area)
-    var mnee_wt = _to_spec_diffuse_lit(ctx, alb, al.emission, path_ptr[].wavelengths) * (c[6] * c[5] * c[4] * lobe_w * inv_pdf_area * w_mnee)
+    var t_med = _mnee_chain_transmittance(ctx, hit_point, c[3], c[2], light_point, path_ptr[].current_medium_idx, path_ptr[].wavelengths)
+    var w_mnee = _mnee_mis_weight(normal, hit_point, c[3], c[2], c[5], Float32(1.0) / inv_pdf_area, _mnee_pass(t_med))
+    var mnee_wt = _to_spec_diffuse_lit(ctx, alb, al.emission, path_ptr[].wavelengths) * t_med * (c[6] * c[5] * c[4] * lobe_w * inv_pdf_area * w_mnee)
     if exit_eta > Float32(0):
         mnee_wt *= sss_boundary_lobe(c[6], exit_eta)
     path_ptr[].estimate += _clamped(ctx, path_ptr[].throughput * mnee_wt, Int(path_ptr[].bounce))

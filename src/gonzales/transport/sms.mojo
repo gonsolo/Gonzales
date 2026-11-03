@@ -245,6 +245,9 @@ struct SMSVertex(TrivialRegisterPassable):
     # and that normal's derivatives at every step, as for a sphere. -1: not a mesh vertex.
     var mesh_idx: Int32
     var mesh_tri: Int32  # index base of the triangle it lies on
+    # The media on its two sides, toward the chain's start and toward the light; -2 where the surface binds none.
+    var med_in:  Int32
+    var med_out: Int32
 
 @always_inline
 def sms_curved(v: SMSVertex) -> Bool:
@@ -253,7 +256,7 @@ def sms_curved(v: SMSVertex) -> Bool:
 @always_inline
 def sms_vertex_init() -> SMSVertex:
     var z = Vec3f(Float32(0.0))
-    return SMSVertex(z, z, z, z, Float32(1.0), Int8(0), z, Float32(0.0), z, z, normal_slope_map_none(), Float32(1.0), Int32(-1), Int32(-1))
+    return SMSVertex(z, z, z, z, Float32(1.0), Int8(0), z, Float32(0.0), z, z, normal_slope_map_none(), Float32(1.0), Int32(-1), Int32(-1), Int32(-2), Int32(-2))
 
 @always_inline
 def sms_vertex_flat(
@@ -268,7 +271,7 @@ def sms_vertex_flat(
     named constructor so call sites don't each spell out the dummy
     sphere_center/sphere_radius padding a flat vertex never uses."""
     var z = Vec3f(Float32(0.0))
-    return SMSVertex(pos, normal, dp_du, dp_dv, eta, Int8(0), z, Float32(0.0), z, z, normal_slope_map_none(), eta, Int32(-1), Int32(-1))
+    return SMSVertex(pos, normal, dp_du, dp_dv, eta, Int8(0), z, Float32(0.0), z, z, normal_slope_map_none(), eta, Int32(-1), Int32(-1), Int32(-2), Int32(-2))
 
 @always_inline
 def sms_vertex_sphere(
@@ -287,7 +290,7 @@ def sms_vertex_sphere(
     perturbs the shading normal and its derivatives on top of that (see
     `_sms_apply_sphere_frame`)."""
     var z = Vec3f(Float32(0.0))
-    var vtx = SMSVertex(pos, z, z, z, eta, Int8(1), center, radius, z, z, nmap, eta_raw, Int32(-1), Int32(-1))
+    var vtx = SMSVertex(pos, z, z, z, eta, Int8(1), center, radius, z, z, nmap, eta_raw, Int32(-1), Int32(-1), Int32(-2), Int32(-2))
     _sms_apply_sphere_frame(vtx, _sms_reproject_onto_sphere(pos, center, radius))
     return vtx
 
@@ -678,7 +681,7 @@ def sms_vertex_mesh(
     eta: Float32, eta_raw: Float32,
 ) -> Tuple[SMSVertex, Bool]:
     var z = Vec3f(Float32(0.0))
-    var vtx = SMSVertex(z, z, z, z, eta, Int8(0), z, Float32(0.0), z, z, normal_slope_map_none(), eta_raw, Int32(mi), Int32(tri_base))
+    var vtx = SMSVertex(z, z, z, z, eta, Int8(0), z, Float32(0.0), z, z, normal_slope_map_none(), eta_raw, Int32(mi), Int32(tri_base), Int32(-2), Int32(-2))
     var f = sms_mesh_frame(meshes, mi, tri_base, bu, bv)
     _sms_apply_mesh_frame(vtx, f)
     return (vtx, f[6])

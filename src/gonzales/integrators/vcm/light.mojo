@@ -280,7 +280,7 @@ def _vcm_skin_arrival(
     if st.mnee.side > Float32(0) and st.mnee.n_glass > Int32(0):
         # Reached through glass only: the camera exit's MNEE samples this entry too.
         var d_m = _vcm_mnee_light_dvcm(sd, hit.to_simd(), gn, st.mnee.y, st.mnee.ny, st.mnee.side,
-                                       Int(st.mnee.n_glass), st.mnee.first_glass, pcg)
+                                       Int(st.mnee.n_glass), st.mnee.first_glass, st.cur_med_idx, st.wl, pcg)
         if d_m > Float32(0):
             dvcm_in = d_m * cos_a   # the walk applies the arrival cosine
     # Slots for this arrival, rough skin's lobe vertex and the walk's exit.
@@ -447,7 +447,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
                and LobeKind.is_diffuse(v.mat_kind):
                 # Reached through glass only: MNEE from here samples this path too (_vcm_mnee_light_dvcm).
                 var d_m = _vcm_mnee_light_dvcm(sd, hit.to_simd(), gn_geo, st.mnee.y, st.mnee.ny, st.mnee.side,
-                                               Int(st.mnee.n_glass), st.mnee.first_glass, pcg)
+                                               Int(st.mnee.n_glass), st.mnee.first_glass, st.cur_med_idx, st.wl, pcg)
                 if d_m > Float32(0):
                     st.dvcm = d_m
             v.dVCM = st.dvcm; v.dVC = st.dvc; v.dVM = st.dvm

@@ -13,6 +13,9 @@ from gonzales.core.transform import transform_normal, Mat4
 from gonzales.transport.sms import MAX_SMS_VERTICES, SMSVertex, sms_vertex_init, sms_vertex_flat, sms_vertex_sphere, sms_vertex_mats, mat22_mul, mat22_mul_v, mat22_inv, sms_walk, SMS_SOLVER_THRESHOLD, mnee_orthonormal_basis, sms_refresh_solved_frames, sms_refresh_mesh_frames, sms_vertex_mesh, sms_curved, tri_barycentrics
 from gonzales.transport.texturing import _get_tri_verts
 from gonzales.transport.shade_context import ShadeContext
+from gonzales.transport.shadow_media import segment_transmittance
+from gonzales.scene.shapes.geom_normal import _geom_normal
+from gonzales.core.spectrum import SampledWavelengths, SpectralSample
 
 
 # Orient an emitter triangle's WINDING normal to agree with the mesh's own
@@ -329,6 +332,24 @@ def _mnee_walk(
 @always_inline
 @always_inline
 def _sms_vertex_from_hit(
+    ctx: ShadeContext,
+    inter: Intersection,
+    ray_org: Vec3f,
+    shadow_dir: Vec3f,
+) -> Tuple[SMSVertex, Bool]:
+    """_sms_vertex_geom_from_hit's vertex, with the media on its two sides as medium_after gives them."""
+    var (v, ok) = _sms_vertex_geom_from_hit(ctx, inter, ray_org, shadow_dir)
+    var mi = ctx.materials[unsafe_offset=Int(inter.primId.materialIndex)].medium_interface_idx
+    if ok and mi >= Int32(0) and ctx.n_mediums > 0:
+        var iface = ctx.medium_ifaces[unsafe_offset=Int(mi)]
+        var gn = _geom_normal(inter, ctx.meshes, ctx.instances, ctx.lights.spheres, ray_org + shadow_dir * inter.tHit)
+        v.med_in = iface.toward(-shadow_dir, gn)
+        v.med_out = iface.toward(shadow_dir, gn)
+    return (v, ok)
+
+
+@always_inline
+def _sms_vertex_geom_from_hit(
     ctx: ShadeContext,
     inter: Intersection,
     ray_org: Vec3f,
@@ -670,8 +691,8 @@ def _sms_solve_from_probe(
     if extra_count == 0 and not is_sphere1 and not is_sphere2:
         # --- 2-vertex MNEE (unchanged fast path, Phase 5.4) ---
         var verts2 = Array[SMSVertex, MAX_SMS_VERTICES](fill=sms_vertex_init())
-        verts2[0] = sms_vertex_flat(x1_init, pgeo_n, pdp_du, pdp_dv, eta1)
-        verts2[1] = sms_vertex_flat(x2_init, pgeo_n2, pdp_du2, pdp_dv2, eta2)
+        verts2[0] = v1
+        verts2[1] = v2
         var (ok2, x1_f2, x2_f2, bsdf_prod, dx1_dxl2) = _mnee_walk2(
             hit_point, light_point,
             x1_init, pgeo_n, pdp_du, pdp_dv, eta1,
@@ -754,6 +775,44 @@ def _mnee_chain_t_eta(x0: Vec3f, verts: Array[SMSVertex, MAX_SMS_VERTICES], n: I
         t *= Float32(1.0) - fr_dielectric(cos_i, verts[i].eta)
         eta *= verts[i].eta
     return (t, eta)
+
+
+def _mnee_chain_transmittance(
+    ctx: ShadeContext, x0: Vec3f, verts: Array[SMSVertex, MAX_SMS_VERTICES], n: Int, light_point: Vec3f,
+    fallback_med: Int32, wl: SampledWavelengths,
+) -> SpectralSample:
+    """Transmittance of the media along a solved chain, x0 to the light. A segment's medium is the one its glass
+    vertices bind on that side, `fallback_med` where they bind none. Seeded from the segment so every strategy weighs
+    the same chain with the same value."""
+    var T = SpectralSample(Float32(1.0))
+    if ctx.n_mediums == 0:
+        return T
+    var prev = x0
+    for i in range(n + 1):
+        var nxt = verts[i].pos if i < n else light_point
+        var med = fallback_med
+        if i < n and verts[i].med_in != Int32(-2):
+            med = verts[i].med_in
+        elif i > 0 and verts[i-1].med_out != Int32(-2):
+            med = verts[i-1].med_out
+        var d = nxt - prev
+        var len = sqrt(dot(d, d))
+        if Int(med) >= 0 and len > Float32(0):
+            var h = UInt64(Int(abs(prev[0] + Float32(2) * nxt[1]) * Float32(1e5))) * UInt64(0x9E3779B97F4A7C15) \
+                    + UInt64(Int(abs(prev[2] + Float32(3) * nxt[0]) * Float32(1e5)))
+            var pcg = PCG32(h, UInt64(2 * i + 1))
+            T = T * segment_transmittance(ctx.mediums[unsafe_offset=Int(med)], prev, d * (Float32(1.0) / len), len,
+                                          ctx.grids, ctx.nvdb_grids, ctx.spectral, wl, pcg)
+            if T.is_black():
+                return T
+        prev = nxt
+    return T
+
+
+@always_inline
+def _mnee_pass(t_media: SpectralSample) -> Float32:
+    """The probability a free-flight path crosses the chain's media unscattered: the hero lanes' mixture."""
+    return (t_media.v0 + t_media.v1 + t_media.v2 + t_media.v3) * Float32(0.25)
 
 
 @always_inline
