@@ -510,11 +510,10 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 st.dvcm = dvcm_v; st.dvc = dvc_v; st.dvm = dvm_v
                 st.prev_sig_t = ff.sig_t
                 st.mnee.pdf0 = Float32(0)
+                # The global grid, not this pixel's paired light path: an empty path must not skip it.
+                if _bdpt_vertex_mis_scoped(v):
+                    st.total_merge += _bdpt_merge_from_cache(v, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm, mis_vc_weight_factor, st.cam_count(), st.cam_nd(), visit_naive=visit_naive, visit_footprint=visit_footprint, visit_thin=visit_thin)
                 if path_len > 0:
-                    # BUG FIX (found investigating volumetric-caustic's
-                    # colored-blob fireflies): merge is only safe to run
-                    if _bdpt_vertex_mis_scoped(v):
-                        st.total_merge += _bdpt_merge_from_cache(v, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm, mis_vc_weight_factor, st.cam_count(), st.cam_nd(), visit_naive=visit_naive, visit_footprint=visit_footprint, visit_thin=visit_thin)
                     st.total += _bdpt_connect_to_cache(v, sd, has_med, scratch, lvc, lp_idx, path_len, mis_vm_weight_factor, st.cam_count(), st.cam_nd())
                 st.total += _vcm_nee_surface(sd, v, _vertex_ctx(v), sp, Vec3f(Float32(0)), st.beta, eta_v, v.dVCM, v.dVC,
                                              st.cur_med_idx, scratch, st.wl, pcg, Float32(0), False,
