@@ -1258,7 +1258,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
             # unconditionally, which rendered every "uniformgrid"/"nanovdb"/
             # "cloud" medium as uniform density-1 fog -- bunny-cloud came out a
             # featureless sphere with no bunny in it. See sample_free_flight.
-            var ff = medv.free_flight(Vec3f(ro.x, ro.y, ro.z), rd, t_hit, pcg)
+            var ff = medv.free_flight(Vec3f(ro.x, ro.y, ro.z), rd, t_hit, pcg, ph_wavelengths)
             if ff.collided:
                 # A scattering event INSIDE a subsurface interior is a step of
                 # the subsurface random walk, not a path bounce, so it is not
