@@ -206,7 +206,8 @@ def _bdpt_connect_to_cache(
     lp_idx: Int,
     path_len: Int,
     mis_vm_weight_factor: Float32,
-    cam_count: Int,   # cv's non-delta interior-vertex count (see VcmStrategies.depth)
+    cam_count: Int,   # cv's interior-vertex count, delta bounces included (see VcmStrategies.depth)
+    cam_nd: Int,      # of them non-delta (see VcmStrategies.past_cache)
 ) -> SpectralSample:
     """VCM Stage 2b (2026-07-10): connect eye vertex `cv` to EVERY vertex of
     its deterministically PAIRED light path (`lp_idx` — standard Veach BDPT"""
@@ -218,7 +219,7 @@ def _bdpt_connect_to_cache(
         if VcmStrategies.past_depth(sd, lvc, lp_idx, local, cam_count):
             break   # see VcmStrategies.depth: a path longer than d has no strategy at all
         var lv = lvc[unsafe_offset=lp_idx * _BDPT_MAX_VERTS + local]
-        var long_path = VcmStrategies.past_cache(lvc, lp_idx, local, cam_count)
+        var long_path = VcmStrategies.past_cache(lvc, lp_idx, local, cam_nd)
         if long_path and lv.is_light != Int32(1):
             break
         if lv.mat_kind == LobeKind.sss_entry:
@@ -243,6 +244,7 @@ def _bdpt_connect_to_cache_deferred(
     shadow_valid: Pointer[Int8, MutUntrackedOrigin],
     shadow_seg_med: Pointer[Int32, MutUntrackedOrigin],
     cam_count: Int,
+    cam_nd: Int,
 ):
     """Task #163 stage 5: Vulkan-RT-batched counterpart to
     _bdpt_connect_to_cache -- instead of resolving each connection's shadow"""
@@ -251,7 +253,7 @@ def _bdpt_connect_to_cache_deferred(
     # _bdpt_connect_to_cache -- see its comment for the derivation and the
     var took_unweighted = False
     for local in range(_BDPT_MAX_VERTS):
-        if local < path_len and VcmStrategies.too_long(sd, lvc, lp_idx, local, cam_count):
+        if local < path_len and VcmStrategies.too_long(sd, lvc, lp_idx, local, cam_count, cam_nd):
             break   # see VcmStrategies.depth
         if local >= path_len:
             shadow_valid[unsafe_offset=base + local] = Int8(0)

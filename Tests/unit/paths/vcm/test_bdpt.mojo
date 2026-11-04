@@ -394,7 +394,7 @@ def test_bdpt_connect_to_cache_sums_one_paired_light_path() raises:
     lvc[unsafe_offset=0] = lv
     var scratch = unsafe_alloc[Intersection](1)
 
-    var result = _bdpt_connect_to_cache(cv, sd, False, scratch, lvc, 0, 1, Float32(0), 1)
+    var result = _bdpt_connect_to_cache(cv, sd, False, scratch, lvc, 0, 1, Float32(0), 1, 1)
 
     # Independently compute the single-connection value _connect would
     # produce, then verify the exhaustive-sum-over-the-path wrapper against

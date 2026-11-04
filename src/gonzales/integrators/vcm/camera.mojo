@@ -154,6 +154,10 @@ struct VCMCameraPathState(TrivialRegisterPassable):
         """Vertices so far, delta bounces included (see VcmStrategies.depth)."""
         return self.n_verts + self.n_vol + self.n_delta
 
+    def cam_nd(self) -> Int:
+        """Non-delta vertices so far: what the light cache's limit counts (VcmStrategies.past_cache)."""
+        return self.n_verts + self.n_vol
+
 def _bdpt_camera_path_init[use_gpu: Bool](
     r2c:     Pointer[Float32, MutUntrackedOrigin],
     c2w:     Pointer[Float32, MutUntrackedOrigin],
@@ -431,7 +435,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
         # Zero carries do not mean no competitor: a walk's exit behind glass has none, and MNEE still samples this path.
         var mnee_rival = st.last_bsdf_pdf == PDF_DELTA_FULL and st.mnee.pdf0 > Float32(0)
         # Past the cache only camera strategies exist: see VcmStrategies.past_cache.
-        var long_hit = VcmStrategies.beyond_cache(st.cam_count())
+        var long_hit = VcmStrategies.beyond_cache(st.cam_nd())
         if inter.hit == Int8(0):
             for inf_i in range(Int(sd.infiniteLightCount)):
                 var ilight = sd.infiniteLights[unsafe_offset=inf_i]
@@ -510,11 +514,11 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                     # BUG FIX (found investigating volumetric-caustic's
                     # colored-blob fireflies): merge is only safe to run
                     if _bdpt_vertex_mis_scoped(v):
-                        st.total_merge += _bdpt_merge_from_cache(v, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm, mis_vc_weight_factor, st.cam_count(), visit_naive=visit_naive, visit_footprint=visit_footprint, visit_thin=visit_thin)
-                    st.total += _bdpt_connect_to_cache(v, sd, has_med, scratch, lvc, lp_idx, path_len, mis_vm_weight_factor, st.cam_count())
+                        st.total_merge += _bdpt_merge_from_cache(v, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm, mis_vc_weight_factor, st.cam_count(), st.cam_nd(), visit_naive=visit_naive, visit_footprint=visit_footprint, visit_thin=visit_thin)
+                    st.total += _bdpt_connect_to_cache(v, sd, has_med, scratch, lvc, lp_idx, path_len, mis_vm_weight_factor, st.cam_count(), st.cam_nd())
                 st.total += _vcm_nee_surface(sd, v, _vertex_ctx(v), sp, Vec3f(Float32(0)), st.beta, eta_v, v.dVCM, v.dVC,
                                              st.cur_med_idx, scratch, st.wl, pcg, Float32(0), False,
-                                             VcmStrategies.beyond_cache(st.cam_count()))
+                                             VcmStrategies.beyond_cache(st.cam_nd()))
                 # Continuation beta = prev × alb_s (same as stored vertex beta)
                 st.beta *= spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (ff.albedo).r, (ff.albedo).g, (ff.albedo).b, st.wl)
                 st.rd = vec3f(wi_v)
@@ -657,21 +661,21 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 st.n_verts += 1
                 # Merging queries the GLOBAL photon grid and does not use this
                 # pixel's own paired light path, so unlike the connect below it
-                st.total_merge += _bdpt_merge_from_cache(v, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm, mis_vc_weight_factor, st.cam_count(), visit_naive=visit_naive, visit_footprint=visit_footprint, visit_thin=visit_thin)
+                st.total_merge += _bdpt_merge_from_cache(v, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm, mis_vc_weight_factor, st.cam_count(), st.cam_nd(), visit_naive=visit_naive, visit_footprint=visit_footprint, visit_thin=visit_thin)
                 if path_len > 0:
                     # Task #163 stage 5: the diffuse branch's connect shadow
                     # rays are the single highest-volume, cleanest shadow-ray
                     if defer_shadow_rays:
-                        _bdpt_connect_to_cache_deferred(v, sd, lvc, lp_idx, path_len, mis_vm_weight_factor, shadow_rays, shadow_pending, shadow_valid, shadow_seg_med, st.cam_count())
+                        _bdpt_connect_to_cache_deferred(v, sd, lvc, lp_idx, path_len, mis_vm_weight_factor, shadow_rays, shadow_pending, shadow_valid, shadow_seg_med, st.cam_count(), st.cam_nd())
                     else:
-                        st.total += _bdpt_connect_to_cache(v, sd, has_med, scratch, lvc, lp_idx, path_len, mis_vm_weight_factor, st.cam_count())
+                        st.total += _bdpt_connect_to_cache(v, sd, has_med, scratch, lvc, lp_idx, path_len, mis_vm_weight_factor, st.cam_count(), st.cam_nd())
 
                 # NEE to distant/point/sphere/infinite lights, via the shared
                 # Light interface (bvh.mojo's LightSample samplers) + BxDF
                 st.total += _vcm_nee_surface(sd, v, _vertex_ctx(v), hit, gn_geo, st.beta, eta_x, st.dvcm, st.dvc,
                                           st.cur_med_idx, scratch, st.wl, pcg, spawn_eps,
                                           v.mat_kind == LobeKind.diffuse_transmit or v.mat_kind == LobeKind.hair or v.mat_kind == LobeKind.rough_dielectric,
-                                          VcmStrategies.beyond_cache(st.cam_count()))
+                                          VcmStrategies.beyond_cache(st.cam_nd()))
                 # MNEE toward a light behind glass, one more strategy in the balance (_vcm_mnee).
                 if VcmStrategies.has_manifold(v):
                     st.total += _vcm_mnee(sd, v, hit.to_simd(), gn, st.beta, pcg, st.wl, eta_x, st.dvcm, st.dvc)
@@ -741,13 +745,13 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 return False   # a vertex past d starts no strategy (see VcmStrategies.depth)
             st.n_verts += 1
             st.total_merge += _bdpt_merge_from_cache(v, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2,
-                merge_norm, mis_vc_weight_factor, st.cam_count(), visit_naive=visit_naive,
+                merge_norm, mis_vc_weight_factor, st.cam_count(), st.cam_nd(), visit_naive=visit_naive,
                 visit_footprint=visit_footprint, visit_thin=visit_thin)
             if path_len > 0:
                 if defer_shadow_rays:
-                    _bdpt_connect_to_cache_deferred(v, sd, lvc, lp_idx, path_len, mis_vm_weight_factor, shadow_rays, shadow_pending, shadow_valid, shadow_seg_med, st.cam_count())
+                    _bdpt_connect_to_cache_deferred(v, sd, lvc, lp_idx, path_len, mis_vm_weight_factor, shadow_rays, shadow_pending, shadow_valid, shadow_seg_med, st.cam_count(), st.cam_nd())
                 else:
-                    st.total += _bdpt_connect_to_cache(v, sd, has_med, scratch, lvc, lp_idx, path_len, mis_vm_weight_factor, st.cam_count())
+                    st.total += _bdpt_connect_to_cache(v, sd, has_med, scratch, lvc, lp_idx, path_len, mis_vm_weight_factor, st.cam_count(), st.cam_nd())
             var ctx_x = BSDF(LobeKind.sss_exit, True, False, n_o, n_o, RGB(Float32(1)), Int32(-1), mat.albedo.r,
                                 Float32(0), Int32(-1), Float32(0), Float32(0), True, False)
             st.total += _vcm_nee_surface(sd, v, ctx_x, x_o, n_o, st.beta, exit_eta,

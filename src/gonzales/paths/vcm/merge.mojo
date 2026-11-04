@@ -77,7 +77,8 @@ def _bdpt_merge_from_cache(
     r2_pass: Float32,
     norm_pass: Float32,
     mis_vc_weight_factor: Float32,
-    cam_count: Int,   # cv's non-delta interior-vertex count (see VcmStrategies.depth)
+    cam_count: Int,   # cv's interior-vertex count, delta bounces included (see VcmStrategies.depth)
+    cam_nd: Int,      # of them non-delta (see VcmStrategies.past_cache)
     # Benchmark instrumentation only (not part of the real
     # estimator, never read by anything that affects `result`): three
     *,
@@ -126,7 +127,7 @@ def _bdpt_merge_from_cache(
                 while k != -1:
                     # The merged path shares cv and the photon, so its interior
                     # length is light count + camera count - 1 (see VcmStrategies.depth).
-                    if VcmStrategies.too_long(sd, lvc, k // _BDPT_MAX_VERTS, k % _BDPT_MAX_VERTS, cam_count - 1):
+                    if VcmStrategies.too_long(sd, lvc, k // _BDPT_MAX_VERTS, k % _BDPT_MAX_VERTS, cam_count - 1, cam_nd - 1):
                         k = Int(merge_next[unsafe_offset=k * _VCM_MN_STRIDE + lvl])
                         continue
                     var lv = lvc[unsafe_offset=k]

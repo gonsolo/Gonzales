@@ -29,15 +29,16 @@ struct VcmStrategies:
 
     @staticmethod
     @always_inline
-    def past_cache(lvc: Pointer[BDPTVertex, MutUntrackedOrigin], lp_idx: Int, local: Int, cam_count: Int) -> Bool:
-        """A path the light cache cannot hold whole: only the camera strategies (hit, NEE) exist for it, and only they share its weight."""
-        return _vcm_light_count(lvc, lp_idx, local) - Int(lvc[unsafe_offset=lp_idx * _BDPT_MAX_VERTS + local].n_delta) + cam_count > _VCM_MAX_STORED
+    def past_cache(lvc: Pointer[BDPTVertex, MutUntrackedOrigin], lp_idx: Int, local: Int, cam_nd: Int) -> Bool:
+        """A path the light cache cannot hold whole: only the camera strategies (hit, NEE) exist for it, and only they share its weight.
+        Both halves count non-delta vertices, so every split of a path classifies it alike."""
+        return _vcm_light_count(lvc, lp_idx, local) - Int(lvc[unsafe_offset=lp_idx * _BDPT_MAX_VERTS + local].n_delta) + cam_nd > _VCM_MAX_STORED
 
     @staticmethod
     @always_inline
-    def beyond_cache(cam_count: Int) -> Bool:
-        """Past the light cache from the camera side: only the camera strategies (hit, NEE) exist, see _vcm_past_cache."""
-        return cam_count > _VCM_MAX_STORED
+    def beyond_cache(cam_nd: Int) -> Bool:
+        """Past the light cache from the camera side, `cam_nd` non-delta camera vertices: only the camera strategies exist, see past_cache."""
+        return cam_nd > _VCM_MAX_STORED
 
     @staticmethod
     @always_inline
@@ -52,9 +53,10 @@ struct VcmStrategies:
 
     @staticmethod
     @always_inline
-    def too_long(ref sd: SceneView, lvc: Pointer[BDPTVertex, MutUntrackedOrigin], lp_idx: Int, local: Int, cam_count: Int) -> Bool:
-        """Light slot `local` plus `cam_count` camera vertices is no light strategy."""
-        return VcmStrategies.past_depth(sd, lvc, lp_idx, local, cam_count) or VcmStrategies.past_cache(lvc, lp_idx, local, cam_count)
+    def too_long(ref sd: SceneView, lvc: Pointer[BDPTVertex, MutUntrackedOrigin], lp_idx: Int, local: Int, cam_count: Int,
+                 cam_nd: Int) -> Bool:
+        """Light slot `local` plus `cam_count` camera vertices (`cam_nd` of them non-delta) is no light strategy."""
+        return VcmStrategies.past_depth(sd, lvc, lp_idx, local, cam_count) or VcmStrategies.past_cache(lvc, lp_idx, local, cam_nd)
 
     @staticmethod
     @always_inline
