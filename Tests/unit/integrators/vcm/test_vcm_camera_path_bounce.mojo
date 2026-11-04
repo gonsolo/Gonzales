@@ -137,6 +137,7 @@ def _build_scene() -> SceneView:
         Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),   # vcmStatIn
         Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),   # vcmStatOut
         Float32(0),   # vcmLambda
+        Float32(1),   # vcmShrink
         Int32(0),   # vcmBucketCap
         Int32(1),   # hasGlass
         ThinLens.pinhole(),

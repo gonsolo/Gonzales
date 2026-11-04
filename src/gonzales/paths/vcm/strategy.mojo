@@ -201,11 +201,12 @@ def _vcm_merge_radius_at(ref sd: SceneView, p: Point3f, is_volume: Bool = False)
 
 @always_inline
 def _vcm_volume_radius_at(ref sd: SceneView, v: BDPTVertex) -> Float32:
-    """Merge radius at volume vertex `v`."""
+    """Merge radius at volume vertex `v`. The medium's cap shrinks on the pass schedule too: a fixed one keeps the
+    kernel's bias at every pass, and VCM converges only if the radius goes to zero."""
     var r = _vcm_merge_radius_at(sd, v.pos, is_volume=True)
     if Int(v.med_idx) < 0:
         return r
-    return min(r, MediumView.at(sd, v.med_idx).kernel_radius(v.pos.to_simd()))
+    return min(r, MediumView.at(sd, v.med_idx).kernel_radius(v.pos.to_simd()) * sd.vcmShrink)
 
 
 @always_inline

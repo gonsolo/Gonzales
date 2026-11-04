@@ -178,6 +178,12 @@ struct SceneView(TrivialRegisterPassable, DevicePassable):
         s.vcmMergeR = merge_r
         return s
 
+    def with_vcm_shrink(self, shrink: Float32) -> Self:
+        """This scene with the progressive radius schedule's factor for this pass."""
+        var s = self
+        s.vcmShrink = shrink
+        return s
+
     var bvh2Nodes: Pointer[BVH2Node, MutUntrackedOrigin]
     var primIds: Pointer[PrimId, MutUntrackedOrigin]
     var meshes: Pointer[TriangleMesh, MutUntrackedOrigin]
@@ -298,6 +304,7 @@ struct SceneView(TrivialRegisterPassable, DevicePassable):
     var vcmStatIn:    Pointer[Float32, MutUntrackedOrigin]
     var vcmStatOut:   Pointer[Float32, MutUntrackedOrigin]
     var vcmLambda:    Float32
+    var vcmShrink:    Float32   # this VCM pass's merge radius over the first pass's: the progressive schedule
     # VCM's merge-bucket cap (--vcm-cap); 0 = _PHOTON_BUCKET_CAP.
     var vcmBucketCap: Int32
     # 0 when no material is smooth glass, so MNEE's per-sample probe toward the light can be skipped; 1 otherwise (always on the CPU).

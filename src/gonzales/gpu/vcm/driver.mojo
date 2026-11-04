@@ -247,7 +247,7 @@ struct VcmGpu(Movable):
             merge_heads = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling()
             merge_next = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling()
         var vsd = gsd.with_vcm(keep, keep_inv_cell, keep_scale, psc[unsafe_offset=0].max_depth, self.cam, vcm_footprint,
-                               radius_i).with_vcm_cap(self.cap)
+                               radius_i).with_vcm_cap(self.cap).with_vcm_shrink(radius_i / max(radius_0, Float32(1e-20)))
         if self.budget:
             # Accumulate into one table, read the other, whose lambda the last pass's reduction set (0 at first: the cap).
             var stat_a = Pointer[Float32, MutUntrackedOrigin](unsafe_from_address=Int(self.stat_a.unsafe_ptr()))

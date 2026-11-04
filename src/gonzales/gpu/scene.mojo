@@ -1004,6 +1004,7 @@ struct GpuSceneHandle(Movable):
             vcmStatIn=Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
             vcmStatOut=Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
             vcmLambda=Float32(0),
+            vcmShrink=Float32(1),
             vcmBucketCap=Int32(0),
             hasGlass=Int32(1) if self.has_glass_material else Int32(0),
             lens=self.lens,
