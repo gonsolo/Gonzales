@@ -564,6 +564,21 @@ def _vp_at_walk_exit(mut vp: SPPMPixel, ex: SssExit, mat: Material, mat_idx: Int
 
 
 @always_inline
+def _vp_at_dipole(mut vp: SPPMPixel, hit: Point3f, n_out: Vec3f, mat: Material, mat_idx: Int):
+    """Jensen-Buhler: the camera's refraction into skin ends at a visible point lit by the dipole."""
+    vp.pos = hit
+    vp.normal = n_out
+    vp.geo_normal = n_out
+    vp.wo = n_out
+    vp.alb = RGB(Float32(1))
+    vp.mat_kind = LobeKind.dipole
+    vp.alpha = mat.albedo.r
+    vp.mat_idx = Int32(mat_idx)
+    vp.is_volume = PhotonKind.surface
+    vp.valid = Int32(1)
+
+
+@always_inline
 def _film_rgb(c: RGB, wl: SampledWavelengths, ref sd: SceneView) -> RGB:
     """Seen radiance through the film's spectral response (a named sensor's curves), as the path tracer sees it."""
     var sp = rgb_illuminant_to_spectral_sample(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, c.r, c.g, c.b, wl)
@@ -584,6 +599,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
     film_filter: FilmFilter,
     vp_sample: Int,
     wl_pass: Int = -1,   # >=0: this pass's shared hero wavelengths (per-pass retrace)
+    dipole: Bool = False,   # Jensen-Buhler: skin gets a dipole visible point at the entry instead of a walk
 ) -> SPPMPixel:
     """Trace one primary ray for pixel (px,py), returning its visible point.
     Shared verbatim between the CPU driver (_sppm_camera_pass, [False]) and
@@ -850,6 +866,10 @@ def _sppm_trace_visible_point[use_gpu: Bool](
                         LobeTables(sd.materials, sd.curves, sd.measuredBrdfs, sd.spectral), vp.wavelengths)
                     if not s_v.valid:
                         break
+                    if s_v.transmit and dipole:
+                        vp.beta = vp.beta * _spectral_gain_rgb(sd, s_v.weight * SpectralSample(mat.albedo.r * mat.albedo.r), vp.wavelengths)
+                        _vp_at_dipole(vp, hit, vec3f(face_toward(gn_geo, (-rd).to_simd())), mat, mat_idx)
+                        break
                     if s_v.transmit:   # a walk leaves into the medium it came from, so no compression
                         var ex_r = sss_hop[use_gpu](sd, mat, inter, hit.to_simd(), _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd()),
                                                     s_v.wi, vp.wavelengths, pcg, current_dielectric_ior)
@@ -971,6 +991,10 @@ def _sppm_trace_visible_point[use_gpu: Bool](
                 not sss_walks_below(mat, inter, cur_med_idx), True, _vp_strat_u(vdc, pidx, n_events))
             if sss_entered(mat, inter, ray_dir, new_dir, cur_med_idx, sd, hit.to_simd()):
                 var g_w = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
+                if dipole:
+                    vp.beta = vp.beta * radiance_scale
+                    _vp_at_dipole(vp, hit, vec3f(face_toward(g_w, -ray_dir)), mat, mat_idx)
+                    break
                 var ex = sss_hop[use_gpu](sd, mat, inter, hit.to_simd(), g_w, new_dir, vp.wavelengths, pcg, current_dielectric_ior)
                 if ex.ok:
                     vp.beta = vp.beta * radiance_scale
@@ -1477,7 +1501,7 @@ def _sppm_gather_one(
     ever touches its own vps[i]. `sd` is only dereferenced for a mat_kind=2
     (hair) VP, to re-fetch the material + curve data _hair_precompute needs
     (see SPPMPixel's docstring for why that's not stored inline)."""
-    if vps[unsafe_offset=i].valid == Int32(0):
+    if vps[unsafe_offset=i].valid == Int32(0) or vps[unsafe_offset=i].mat_kind == LobeKind.dipole:
         return
     var vp = vps[unsafe_offset=i]
     var spectral_coeffs = sd.spectral.coeffs
@@ -1730,7 +1754,7 @@ def _sppm_nee_at(
     mutually exclusive per sample, so there's no competing strategy to
     double-count against."""
     var ld = SpectralSample(Float32(0))
-    if vp.valid == Int32(0):
+    if vp.valid == Int32(0) or vp.mat_kind == LobeKind.dipole:
         return ld
     var is_vol = vp.is_volume == PhotonKind.volume
     var vn   = vp.normal.to_simd()
