@@ -83,7 +83,7 @@ PFM = $(IMAGE:.exr=.pfm)
 
 OPTIONS = $(SINGLERAY) $(SYNC) $(VERBOSE) $(QUICK) $(PARSE) $(WRITE_GONZALES) $(USE_GONZALES)
 
-.PHONY: fuzz unittest-intel-src all c ca clean clean_all e edit es editScene em editMakefile lldb p perf tags t test smoke smoketest \
+.PHONY: dev fuzz unittest-intel-src all c ca clean clean_all e edit es editScene em editMakefile lldb p perf tags t test smoke smoketest \
 	test_debug test_release v view wc book book-html book-watch ut unittest \
 	caustics causticstest sms_mitsuba_ref release-amd unittest-amd intel-hello hydra gzreplay
 
@@ -340,6 +340,12 @@ sms_mitsuba_ref: $(OIIO_BRIDGE_LIB) $(VIEWER_LIB) $(VULKANRT_LIB) $(VULKANINTERO
 
 r: release
 release: $(GONZALES)
+# Fast debug build from a copy of src/ without inline hints: ~3 min instead of ~10, and GPU kernels compile in minutes.
+DEV_SRC = $(BUILD_DIR)/dev-src
+dev: $(MOJO_SRCS) pyproject.toml $(OIIO_BRIDGE_LIB) $(VIEWER_LIB) $(VULKANRT_LIB) $(VULKANINTEROP_LIB) $(RTCORE_LIB) $(XERT_LIB) $(OPTIXCURVES_LIB) $(NVDB_BRIDGE_LIB)
+	@mkdir -p $(DEV_SRC) && rsync -a --delete src/ $(DEV_SRC)/
+	@grep -rlE '^\s*@(always_inline|no_inline)' $(DEV_SRC) | xargs -r sed -i -E '/^\s*@(always_inline|no_inline)(\s|$$)/d'
+	uv run mojo build $(DEV_SRC)/gonzales/__init__.mojo -I $(DEV_SRC) -o $(BUILD_DIR)/gonzales_dev $(MOJO_BUILD_FLAGS) $(MOJO_LINK_FLAGS)
 # AMD RX 6800 (gfx1030): without CUDA the RT-core and interop bridges build as stubs
 release-amd:
 	$(MAKE) release BUILD_DIR=build-amd CUDA_HOME=/nonexistent MOJO_BUILD_FLAGS="--target-accelerator gfx1030"
