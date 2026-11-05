@@ -6,7 +6,7 @@ from gonzales.core.rng import PCG32
 from gonzales.core.spectrum import SampledWavelengths, SpectralSample, spectral_sample_to_rgb
 from gonzales.scene.accel.bvh import SceneView
 from gonzales.scene.appearance.materials import LobeKind, PhotonKind, sss_boundary_lobe
-from gonzales.estimators.photon_grid import _hash_cell, grid_weight, gather_disk_contains, gather_disk_coverage, disk_measure
+from gonzales.estimators.photon_grid import NEIGHBOUR_CELLS, neighbour_buckets, grid_weight, gather_disk_contains, gather_disk_coverage, disk_measure
 from gonzales.estimators.dipole import dipole_of
 from gonzales.estimators.irradiance_cache import IrradianceCache
 from gonzales.integrators.sppm.sppm import SPPMPixel, SPPMPhoton, _sppm_nee_at
@@ -33,20 +33,21 @@ def jb_point_photons(cache: IrradianceCache, i: Int, photons: Pointer[SPPMPhoton
     var eta = sd.materials[unsafe_offset=Int(mi)].albedo.r
     var phi = SpectralSample(Float32(0))
     var cix = Int(floor(p.x * inv_cell)); var ciy = Int(floor(p.y * inv_cell)); var ciz = Int(floor(p.z * inv_cell))
-    for dx in range(-1, 2):
-        for dy in range(-1, 2):
-            for dz in range(-1, 2):
-                var h = _hash_cell(cix + dx, ciy + dy, ciz + dz)
-                var bw = grid_weight(heads, h)
-                var k = Int(heads[unsafe_offset=h])
-                while k != -1:
-                    var ph = photons[unsafe_offset=k]
-                    var e = ph.pos - p
-                    var c = -dot(ph.dir_in.to_simd(), n.to_simd())
-                    if ph.is_volume == PhotonKind.surface and ph.curve < Int32(0) and c > Float32(0) \
-                            and gather_disk_contains(e.to_simd(), e.length_sq(), r2, n.to_simd()):
-                        phi += ph.flux * (bw * sss_boundary_lobe(c, eta) * INV_PI)
-                    k = Int(ph.nxt)
+    var buckets = neighbour_buckets(cix, ciy, ciz)
+    for b in range(NEIGHBOUR_CELLS):
+        var h = buckets[b]
+        if h < 0:
+            break
+        var bw = grid_weight(heads, h)
+        var k = Int(heads[unsafe_offset=h])
+        while k != -1:
+            var ph = photons[unsafe_offset=k]
+            var e = ph.pos - p
+            var c = -dot(ph.dir_in.to_simd(), n.to_simd())
+            if ph.is_volume == PhotonKind.surface and ph.curve < Int32(0) and c > Float32(0) \
+                    and gather_disk_contains(e.to_simd(), e.length_sq(), r2, n.to_simd()):
+                phi += ph.flux * (bw * sss_boundary_lobe(c, eta) * INV_PI)
+            k = Int(ph.nxt)
     var cov = gather_disk_coverage(sd, p, n, sqrt(r2), salt=13 + pass_idx * 1000003)
     if cov > Float32(0):
         return phi * (Float32(1) / (cov * disk_measure(r2)))
