@@ -31,7 +31,7 @@ struct MediumView(TrivialRegisterPassable):
     def ff_ratio(self, prev_vol: Bool, prev_sig_t: Float32, d: Float32, ff: FreeFlight, wl: SampledWavelengths) -> Float32:
         """dVC's free-flight factor on arrival: the other subpath's density of landing on the previous vertex over this
         flight's own. Both subpaths sample alike, so it is the lane mixture at the previous vertex (a collision when it
-        scattered in the medium, a survival otherwise) over ff.pdf; heterogeneous media sample red alone."""
+        scattered in the medium, a survival otherwise) over ff.pdf; a density field takes the lane-mean extinctions."""
         if not medium_is_heterogeneous(self.med) and self.spectral.res > 0:
             return free_flight_mixture_pdf(self.sigma_t(wl), 4, d, prev_vol) / max(ff.pdf, Float32(1e-30))
         return (prev_sig_t if prev_vol else Float32(1)) / (ff.sig_t if ff.collided else Float32(1))

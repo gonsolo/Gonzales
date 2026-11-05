@@ -4,7 +4,7 @@ from gonzales.scene.accel.bvh import LightSample, _sample_distant_light_nee, _sa
 from gonzales.core.geometry import Point2f, Point3f, RGB, Vec3f, _is_real_ptr, cross, dot, point3f, vec3f
 from gonzales.scene.appearance.lights import area_light_pick_triangle, light_sampler_sample
 from gonzales.scene.appearance.materials import Material, MatKind
-from gonzales.scene.appearance.media import Grid, MEDIUM_TRACK_MAX_ITERS, Medium, NvdbGrid, grid_ray_range, grid_sample_density, hg_phase, hg_sample, medium_emission_spectral, medium_grid_for, medium_nvdb_for, nvdb_index_ray, nvdb_majorant_at_world, nvdb_node_exit_t, nvdb_ray_range, nvdb_sample_density
+from gonzales.scene.appearance.media import Medium, grid_ray_range, hg_phase, hg_sample, medium_emission_spectral, medium_grid_for, medium_nvdb_for, medium_ratio_track, nvdb_ray_range
 from gonzales.scene.shapes.primitives import Intersection, PrimId, mesh_vi
 from gonzales.core.geometry import Ray
 from gonzales.scene.shapes.primitives import mesh_pos
@@ -39,14 +39,8 @@ def _volume_nee_light(
     ls: LightSample,
     scatter_pt_w: Vec3f,
     wo: Vec3f,
-    g: Float32,
+    medv: MediumView,
     mut pcg: PCG32,
-    use_nvdb: Bool,
-    use_dense: Bool,
-    grid: Grid,
-    nvdb_grid: NvdbGrid,
-    sigma_maj: Float32,
-    sigma_t_r: Float32,
     ref sd: SceneView,
 ):
     """One NEE sample from ONE non-area light toward a volume scatter point.
@@ -63,6 +57,11 @@ def _volume_nee_light(
     var n_spheres = Int(sd.sphereCount)
     if not ls.valid or ls.pdf <= Float32(0.0):
         return
+    var med = medv.med
+    var g = med.g
+    var sigma_t_r = (med.sigma_a + med.sigma_s).r
+    var use_nvdb = med.nvdb_idx >= Int32(0)
+    var use_dense = med.grid_idx >= Int32(0)
     var edir = Vec3f(ls.wi[0], ls.wi[1], ls.wi[2])
     var e_org = point3f(scatter_pt_w + edir * Float32(0.0002))
     var e_ray = Ray(e_org, vec3f(edir))
@@ -105,47 +104,11 @@ def _volume_nee_light(
         ls.Li, path_ptr[].wavelengths, sd.spectral.coeffs, sd.spectral.res,
         sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65) * (Th * ph_h * mis_h / ls.pdf)
         return
-    var rng = nvdb_ray_range(nvdb_grid, scatter_pt_w, edir) if use_nvdb else grid_ray_range(grid, scatter_pt_w, edir)
-    var t_lo = max(rng[0], Float32(0.0))
-    var t_hi = min(rng[1], ls.dist)
-    var Te = Float32(1.0)
-    if t_hi > t_lo and sigma_maj > Float32(0.0):
-        # Same local-majorant segment walk as the free-flight loop -- see the
-        # comment there. Ratio tracking stays unbiased under a piecewise
-        # majorant for the same memorylessness reason.
-        var eray = nvdb_index_ray(nvdb_grid, scatter_pt_w, edir) if use_nvdb else SIMD[DType.float32, 8](0)
-        var te = t_lo
-        var eseg_end = t_lo - Float32(1.0)
-        var esig = Float32(0.0)
-        var eiters = 0
-        while eiters < MEDIUM_TRACK_MAX_ITERS:
-            eiters += 1
-            if te >= eseg_end:
-                if te >= t_hi:
-                    break
-                if use_nvdb:
-                    var emr = nvdb_majorant_at_world(nvdb_grid, scatter_pt_w + edir * te)
-                    esig = emr[0] * sigma_t_r
-                    eseg_end = min(nvdb_node_exit_t(eray, te, emr[1]), t_hi)
-                else:
-                    esig = sigma_maj
-                    eseg_end = t_hi
-                if esig <= Float32(0.0):
-                    te = eseg_end
-                    continue
-            var ue = pcg.next_float()
-            var te_next = te + (-log(max(ue, Float32(1e-7))) / esig)
-            if te_next >= eseg_end:
-                te = eseg_end
-                continue
-            te = te_next
-            var pe = scatter_pt_w + edir * te
-            var de = nvdb_sample_density(nvdb_grid, pe) if use_nvdb else grid_sample_density(grid, pe)
-            Te *= Float32(1.0) - (de * sigma_t_r) / esig
-            if Te < Float32(1e-4):
-                Te = Float32(0.0)
-                break
-    if Te <= Float32(0.0):
+    var rng = (nvdb_ray_range(medium_nvdb_for(med, sd.nvdbGrids), scatter_pt_w, edir) if use_nvdb
+               else grid_ray_range(medium_grid_for(med, sd.grids), scatter_pt_w, edir))
+    var Te = medium_ratio_track(med, sd.grids, sd.nvdbGrids, scatter_pt_w, edir, max(rng[0], Float32(0.0)),
+                                min(rng[1], ls.dist), medv.sigma_t(path_ptr[].wavelengths), pcg)
+    if Te.is_black():
         return
     var ph = hg_phase(dot(wo, edir), g)
     var mis = Float32(1.0) if ls.is_delta else power_heuristic(ls.pdf, ph)
@@ -443,7 +406,6 @@ def _volume_area_light_nee(
                 var shad_ray = Ray(shad_org, vec3f(shadow_dir))
                 var shad_tmax = max(dist - Float32(0.0002), Float32(0.0)) * Float32(0.9995)
                 if not any_hit_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, shad_ray, shad_tmax, sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances, sd.spheres, n_spheres, materials=sd.materials):
-                    var T: RGB
                     # Both medium kinds attenuate only up to the medium's own boundary, the first interface surface.
                     var t_med = dist
                     var _exit_inter = Array[Intersection, 1](fill=Intersection(
@@ -462,36 +424,14 @@ def _volume_area_light_nee(
                         var exit_mat = sd.materials[unsafe_offset=Int(exit_ptr[unsafe_offset=0].primId.materialIndex)]
                         if exit_mat.type == MatKind.interface:
                             t_med = exit_ptr[unsafe_offset=0].tHit
+                    # Density fields ratio-track every lane up to t_med: a grid's box can reach past the medium's
+                    # shape, where it is vacuum. Homogeneous media keep their RGB Beer-Lambert below.
+                    var T = RGB(Float32(1))
+                    var T_lanes = SpectralSample(Float32(1))
                     if med.grid_idx >= Int32(0) or med.nvdb_idx >= Int32(0):
-                        # Ratio tracking up to t_med: a grid's box can reach past the medium's shape, where it is vacuum.
-                        var use_nvdb_s = med.nvdb_idx >= Int32(0)
-                        var grid_s = sd.grids[unsafe_offset=Int(med.grid_idx)] if not use_nvdb_s else Grid(
-                            Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(), Int32(0), Int32(0), Int32(0),
-                            Point3f(Float32(0), Float32(0), Float32(0)), Point3f(Float32(0), Float32(0), Float32(0)),
-                            SIMD[DType.float32, 16](0), Float32(0))
-                        var nvdb_grid_s = sd.nvdbGrids[unsafe_offset=Int(med.nvdb_idx)] if use_nvdb_s else NvdbGrid(
-                            Pointer[UInt8, MutUntrackedOrigin].unsafe_dangling(), Int64(0), SIMD[DType.float32, 16](0),
-                            SIMD[DType.float32, 16](0), Vec3f(Float32(0), Float32(0), Float32(0)),
-                            Point3f(Float32(0), Float32(0), Float32(0)), Point3f(Float32(0), Float32(0), Float32(0)), Float32(0))
-                        var majorant_s = nvdb_grid_s.max_density if use_nvdb_s else grid_s.max_density
-                        var sigma_maj_s = majorant_s * sigma_t.r
-                        var Tval = Float32(1.0)
-                        if sigma_maj_s > Float32(0.0):
-                            var ts = Float32(0.0)
-                            var siters = 0
-                            while siters < MEDIUM_TRACK_MAX_ITERS:
-                                siters += 1
-                                var us = pcg.next_float()
-                                ts += -log(max(us, Float32(1e-7))) / sigma_maj_s
-                                if ts >= t_med:
-                                    break
-                                var ps = resolve_pt + shadow_dir * ts
-                                var density_s = nvdb_sample_density(nvdb_grid_s, ps) if use_nvdb_s else grid_sample_density(grid_s, ps)
-                                Tval *= Float32(1.0) - (density_s * sigma_t.r) / sigma_maj_s
-                                if Tval < Float32(1e-4):
-                                    Tval = Float32(0.0)
-                                    break
-                        T = RGB(Tval, Tval, Tval)
+                        T_lanes = medium_ratio_track(med, sd.grids, sd.nvdbGrids, Vec3f(resolve_pt[0], resolve_pt[1], resolve_pt[2]),
+                            Vec3f(shadow_dir[0], shadow_dir[1], shadow_dir[2]), Float32(0), t_med,
+                            MediumView.at(sd, Int32(med_idx)).sigma_t(path_ptr[].wavelengths), pcg)
                     else:
                         # Beer-Lambert over the part of the segment that is
                         # actually INSIDE the medium, not the whole way to
@@ -566,7 +506,7 @@ def _volume_area_light_nee(
                         mis_w = power_heuristic(pdf_light, ph_a)
                     path_ptr[].estimate += path_ptr[].throughput * medium_emission_spectral(
                         res.le * T, path_ptr[].wavelengths, sd.spectral.coeffs, sd.spectral.res,
-                        sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65) * (geom * ph_a * mis_w * res.state.w)
+                        sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65) * T_lanes * (geom * ph_a * mis_w * res.state.w)
 
 
 def _sample_medium_core(
@@ -616,14 +556,9 @@ def _sample_medium_core(
     transmittance estimator, which naturally stops attenuating once the ray
     exits the density source's bounds.
 
-    Both heterogeneous sources use the RED channel exclusively for
-    majorant/accept-reject decisions: exact for the achromatic density
-    fields supported today, would need per-wavelength free-flight sampling
-    with spectral MIS to extend to a colored medium. The homogeneous branch
-    carries only the RATIO of each channel's transmittance to the
-    red-channel one actually sampled, lifted into the 4 hero lanes by
-    band-picking (see spectrum.mojo's rgb_bands_to_spectral_sample) — real
-    chromatic extinction is the same unimplemented, separate piece of work.
+    Both medium kinds sample the hero-lane mixture and carry per-lane
+    f_i/pdf weights (sample_free_flight); NEE shadow rays ratio-track all
+    lanes of a density field on one grey majorant (medium_ratio_track).
     """
     var n_spheres = Int(sd.sphereCount)
     var path_ptr = paths.unsafe_offset(i)
@@ -654,17 +589,8 @@ def _sample_medium_core(
     # was the path tracer's alone -- SPPM and BDPT/VCM called the homogeneous
     # sampler unconditionally and rendered every density field as uniform fog.
     # See sample_free_flight's own comment for that bug.
-    #
-    # `use_dense`/`use_nvdb`/`grid`/`nvdb_grid`/`sigma_maj` stay resolved HERE
-    # too, not because the free flight needs them (it resolves its own), but
-    # because the volume-scatter NEE further down ratio-tracks its shadow ray
-    # against the same grid and majorant.
     var use_nvdb = med.nvdb_idx >= Int32(0)
     var use_dense = med.grid_idx >= Int32(0)
-    var grid = medium_grid_for(med, sd.grids)
-    var nvdb_grid = medium_nvdb_for(med, sd.nvdbGrids)
-    var majorant_density = nvdb_grid.max_density if use_nvdb else grid.max_density
-    var sigma_maj = majorant_density * sigma_t.r
 
     var ff = medv.free_flight_emitting(ray_org, ray_dir, t_surf, pcg, path_ptr[].wavelengths)
     # Volumetric emission (pbrt NanoVDBMedium's temperature grid) accumulated
@@ -762,6 +688,18 @@ def _sample_medium_core(
                 var sig_s_spec = medv.sigma_s(path_ptr[].wavelengths)
                 path_ptr[].throughput *= (sig_s_spec * (Float32(1.0) / ss_r)) * sigma_t.r
 
+    elif sd.spectral.res > 0:
+        # Density field: the tracker's per-lane f_i/pdf, then the same lane-mean albedo coin as above.
+        path_ptr[].throughput *= ff.lane_weight
+        if ff.collided:
+            # Density cancels in sigma_s / sigma_t.
+            var sig_t_h = medv.sigma_t(path_ptr[].wavelengths)
+            var sig_s_h = medv.sigma_s(path_ptr[].wavelengths)
+            var h = SpectralSample(sig_s_h.v0 / max(sig_t_h.v0, Float32(1e-30)), sig_s_h.v1 / max(sig_t_h.v1, Float32(1e-30)),
+                                   sig_s_h.v2 / max(sig_t_h.v2, Float32(1e-30)), sig_s_h.v3 / max(sig_t_h.v3, Float32(1e-30)))
+            p_scatter_spec = max(h.average(), Float32(1e-6))
+            path_ptr[].throughput *= h * (Float32(1.0) / p_scatter_spec)
+
     if not ff.collided:
         path_ptr[].pcgState = pcg.state
         return
@@ -817,22 +755,18 @@ def _sample_medium_core(
         var wo_v = -ray_dir
         for dl_i in range(Int(sd.distantLightCount)):
             _volume_nee_light(path_ptr, _sample_distant_light_nee(sd.distantLights[unsafe_offset=dl_i]),
-                scatter_w, wo_v, med.g, pcg, use_nvdb, use_dense, grid, nvdb_grid, sigma_maj, sigma_t.r,
-                sd)
+                scatter_w, wo_v, medv, pcg, sd)
         for pl_i in range(Int(sd.pointLightCount)):
             _volume_nee_light(path_ptr, _sample_point_light_nee(sd.pointLights[unsafe_offset=pl_i], scatter_w),
-                scatter_w, wo_v, med.g, pcg, use_nvdb, use_dense, grid, nvdb_grid, sigma_maj, sigma_t.r,
-                sd)
+                scatter_w, wo_v, medv, pcg, sd)
         for sph_i in range(n_spheres):
             if sd.spheres[unsafe_offset=sph_i].isAreaLight == Int8(1):
                 _volume_nee_light(path_ptr, _sample_sphere_light_nee(sd.spheres[unsafe_offset=sph_i], n_spheres, scatter_w, pcg),
-                    scatter_w, wo_v, med.g, pcg, use_nvdb, use_dense, grid, nvdb_grid, sigma_maj, sigma_t.r,
-                    sd)
+                    scatter_w, wo_v, medv, pcg, sd)
         for inf_i in range(Int(sd.infiniteLightCount)):
             _volume_nee_light(path_ptr,
                 _sample_infinite_light_nee(sd.infiniteLights[unsafe_offset=inf_i], Point2f(pcg.next_float(), pcg.next_float()), scatter_pt),
-                scatter_w, wo_v, med.g, pcg, use_nvdb, use_dense, grid, nvdb_grid, sigma_maj, sigma_t.r,
-                sd)
+                scatter_w, wo_v, medv, pcg, sd)
         # Sample the scatter direction from the medium's Henyey-Greenstein
         # phase function. `g` was parsed into Medium all along but never
         # used: scattering was hardcoded isotropic (uniform sphere), so a

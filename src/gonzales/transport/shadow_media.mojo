@@ -1,12 +1,12 @@
 # Transmittance of a surface-NEE shadow segment through interface-bounded media.
 from std.collections import Array
-from std.math import exp, log, max
+from std.math import exp
 from gonzales.core.geometry import Point3f, Vec3f, dot
 from gonzales.scene.appearance.materials import Material, MatKind
 from gonzales.scene.shapes.primitives import Intersection, PrimId, TriangleMesh, Sphere, Instance
 from gonzales.core.geometry import Ray
 from gonzales.scene.shapes.curves import Curve
-from gonzales.scene.appearance.media import Medium, MediumInterface, Grid, NvdbGrid, MEDIUM_TRACK_MAX_ITERS, medium_sigma_t_spectral, grid_sample_density, nvdb_sample_density
+from gonzales.scene.appearance.media import Medium, MediumInterface, Grid, NvdbGrid, medium_sigma_t_spectral, medium_ratio_track
 from gonzales.scene.accel.bvh import BVH2Node, traverse_bvh2_core, test_spheres
 from gonzales.scene.shapes.geom_normal import _geom_normal
 from gonzales.core.rng import PCG32
@@ -23,24 +23,7 @@ def segment_transmittance(
     var use_nvdb = med.nvdb_idx >= Int32(0)
     if not use_nvdb and med.grid_idx < Int32(0):
         return SpectralSample(exp(-st.v0 * t), exp(-st.v1 * t), exp(-st.v2 * t), exp(-st.v3 * t))
-    # Ratio tracking against the grid's majorant, all four hero lanes on one track.
-    var majorant = nvdb_grids[unsafe_offset=Int(med.nvdb_idx)].max_density if use_nvdb else grids[unsafe_offset=Int(med.grid_idx)].max_density
-    var sigma_maj = majorant * max(max(st.v0, st.v1), max(st.v2, st.v3))
-    var T = SpectralSample(Float32(1.0))
-    if sigma_maj <= Float32(0.0):
-        return T
-    var ts = Float32(0.0)
-    for _ in range(MEDIUM_TRACK_MAX_ITERS):
-        ts += -log(max(pcg.next_float(), Float32(1e-7))) / sigma_maj
-        if ts >= t:
-            break
-        var p = org + dir * ts
-        var density = nvdb_sample_density(nvdb_grids[unsafe_offset=Int(med.nvdb_idx)], p) if use_nvdb else grid_sample_density(grids[unsafe_offset=Int(med.grid_idx)], p)
-        var k = density / sigma_maj
-        T = T * SpectralSample(Float32(1.0) - k * st.v0, Float32(1.0) - k * st.v1, Float32(1.0) - k * st.v2, Float32(1.0) - k * st.v3)
-        if max(max(T.v0, T.v1), max(T.v2, T.v3)) < Float32(1e-4):
-            return SpectralSample(Float32(0.0))
-    return T
+    return medium_ratio_track(med, grids, nvdb_grids, org, dir, Float32(0), t, st, pcg)
 
 
 def shadow_transmittance(

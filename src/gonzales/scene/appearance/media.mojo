@@ -119,22 +119,16 @@ struct FreeFlight(TrivialRegisterPassable):
                             # reconstructs is silently wrong the moment the medium is
                             # chromatic; use this field.
     var albedo:  RGB        # single-scattering albedo at the collision point (only if collided)
-    var weight:  RGB        # per-channel chromatic WEIGHT, meaningful in BOTH branches.
-                            # A pure RATIO to the sampled (red) channel, never a raw
-                            # Beer-Lambert factor -- exactly 1 on red, and exactly 1 on
-                            # every channel for a grey medium. Callers must multiply it
-                            # into beta/flux in BOTH branches. Heterogeneous media leave
-                            # it at 1: their majorant/accept-reject decisions are
-                            # red-channel-only, so there is no per-channel ratio to carry
-                            # (real chromatic extinction in a density field is the same
-                            # separate, unimplemented piece of work the path tracer's own
-                            # heterogeneous branch documents).
+    var weight:  RGB        # per-channel chromatic WEIGHT f_c/pdf, meaningful in BOTH branches;
+                            # exactly 1 on every channel for a grey medium. Callers must
+                            # multiply it into beta/flux in BOTH branches.
     var emission: SpectralSample  # in-scattered volumetric EMISSION accumulated along the
                             # tracked segment (pbrt NanoVDBMedium's temperature grid),
                             # already spectral and already weighted by each candidate's
                             # absorption fraction -- the caller multiplies by its own
                             # throughput and adds. Zero for every non-emissive medium and
                             # for the whole homogeneous branch.
+    var lane_weight: SpectralSample  # density field: per-lane f_i/pdf of the tracked flight (1 if homogeneous)
 
 @always_inline
 @always_inline
@@ -220,6 +214,27 @@ def _ff_pick_lane(sig: SpectralSample, n: Int, mut pcg: PCG32) -> Float32:
     return Float32(0.0)
 
 
+@always_inline
+def _ff_lane_mean(x: SpectralSample, sig: SpectralSample, n: Int) -> Float32:
+    """Mean of x over the sampleable lanes (sig > 0), the set _ff_pick_lane draws from; 1 if there are none."""
+    var acc = Float32(0.0)
+    var cnt = 0
+    for i in range(n):
+        if _ff_lane(sig, i) > Float32(0.0):
+            acc += _ff_lane(x, i)
+            cnt += 1
+    return acc / Float32(cnt) if cnt > 0 else Float32(1.0)
+
+
+@always_inline
+def _ff_null(sig: SpectralSample, density: Float32, mu: Float32) -> SpectralSample:
+    """Per-lane null-collision probability 1 - density*sigma_t/mu at a majorant candidate."""
+    return SpectralSample(max(Float32(1) - (density * sig.v0) / mu, Float32(0)),
+                          max(Float32(1) - (density * sig.v1) / mu, Float32(0)),
+                          max(Float32(1) - (density * sig.v2) / mu, Float32(0)),
+                          max(Float32(1) - (density * sig.v3) / mu, Float32(0)))
+
+
 def sample_homogeneous_free_flight(
     med: Medium, t_surf: Float32, mut pcg: PCG32,
     # Hero-wavelength MIS. Supply these and the free flight is drawn from the
@@ -235,7 +250,7 @@ def sample_homogeneous_free_flight(
     var sigma_t = med.sigma_a + med.sigma_s
     var sig_t = sigma_t.r
     if sig_t <= Float32(0.0):
-        return FreeFlight(False, t_surf, sig_t, Float32(1.0), RGB(Float32(0)), RGB(Float32(1)), SpectralSample(Float32(0)))
+        return FreeFlight(False, t_surf, sig_t, Float32(1.0), RGB(Float32(0)), RGB(Float32(1)), SpectralSample(Float32(0)), SpectralSample(Float32(1)))
     # n == 1 with lane 0 = red reproduces the pre-MIS sampler bit-for-bit.
     var sig = lane_sig if lane_n > 0 else SpectralSample(sig_t, Float32(0), Float32(0), Float32(0))
     var n = lane_n if lane_n > 0 else 1
@@ -280,7 +295,7 @@ def sample_homogeneous_free_flight(
         return FreeFlight(True, t_free, sig_t, p_bar,
                                      RGB(alb_s, alb_g_s, alb_b_s),
                                      RGB(wr, wg, wb),
-                                     SpectralSample(Float32(0)))
+                                     SpectralSample(Float32(0)), SpectralSample(Float32(1)))
     # Pass-through WEIGHT, not the raw Beer-Lambert factor. The distance was
     # sampled from the red channel, so P(reach the surface) is ALREADY
     # exp(-sigma_t.r * t_surf) -- that channel's transmittance is carried by
@@ -304,7 +319,7 @@ def sample_homogeneous_free_flight(
     var Tr = RGB(exp(-sigma_t.r * t_surf) / p_bar,
                  exp(-sigma_t.g * t_surf) / p_bar,
                  exp(-sigma_t.b * t_surf) / p_bar)
-    return FreeFlight(False, t_free, sig_t, p_bar, RGB(Float32(0)), Tr, SpectralSample(Float32(0)))
+    return FreeFlight(False, t_free, sig_t, p_bar, RGB(Float32(0)), Tr, SpectralSample(Float32(0)), SpectralSample(Float32(1)))
 
 
 # ── Genuinely spectral free-flight weight (chromatic media) ─────────────────
@@ -458,20 +473,11 @@ def spectral_free_flight_weight(
     reproduces a grey coefficient exactly and the sig_t_r reference cancels
     to 1 on every lane. See docs/02_spectra_and_color.md, "Chromatic
     extinction" for the derivation and the measured before/after."""
+    # A density field's weight is not analytic: the tracker carried it (its sigma_a/sigma_s are per unit density).
+    if medium_is_heterogeneous(med):
+        return ff.lane_weight
     var sig_t_r = med.sigma_a.r + med.sigma_s.r
     if sig_t_r <= Float32(0.0):
-        return SpectralSample(Float32(1.0))
-    # A density-modulated medium has NO chromatic ratio to carry: its free
-    # flight accepts/rejects on the red channel alone, so `ff.weight` comes
-    # back at 1 and the correct spectral weight is 1 too. Guarding HERE rather
-    # than at all five consumers (bdpt_*.mojo x4, sppm.mojo x1) keeps the rule in
-    # the one place that owns it -- and it matters: sigma_a/sigma_s are
-    # PER-UNIT-DENSITY coefficients for such a medium (see Medium), so
-    # feeding them to the Beer-Lambert exponential below would weight by an
-    # extinction the sampler never used. Real chromatic extinction in a density
-    # field is the same separate, unimplemented piece of work the path tracer's
-    # own heterogeneous branch documents.
-    if medium_is_heterogeneous(med):
         return SpectralSample(Float32(1.0))
     # sig_t_spec computed ONCE and reused for both the d0..d3 ratio and (on
     # collision) the extra r0..r3 factor -- deliberately NOT routed through
@@ -1188,12 +1194,10 @@ def sample_free_flight(
     nanovdb medium (pbrt NanoVDBMedium's temperature grid); a caller that does
     not model volumetric emission can omit them and ignore `.emission`.
 
-    Both heterogeneous sources use the RED channel exclusively for
-    majorant/accept-reject decisions: exact for the achromatic density fields
-    supported today, would need per-wavelength free-flight sampling with
-    spectral MIS to extend to a colored density field. See
-    docs/09_volumetric_media.md for the delta/ratio-tracking theory and the
-    local-majorant optimization."""
+    Density fields track every hero lane on one grey majorant and play the
+    collision coin on a uniformly picked lane, the same lane mixture as the
+    homogeneous sampler (pbrt's SampleT_maj with spectral MIS); the per-lane
+    f_i/pdf comes back in `lane_weight`. See docs/09_volumetric_media.md."""
     if not medium_is_heterogeneous(med):
         # Hand the homogeneous sampler its 4 hero-lane extinctions when a real
         # spectral table is available, so the free flight is drawn from the
@@ -1213,11 +1217,19 @@ def sample_free_flight(
     var use_nvdb = med.nvdb_idx >= Int32(0)
     var grid = medium_grid_for(med, grids)
     var nvdb_grid = medium_nvdb_for(med, nvdb_grids)
+    # Hero lanes with a table; without one, red alone (n == 1 is the pre-MIS tracker bit for bit).
+    var lanes = spectral_res > 0
+    var sig = medium_sigma_t_spectral(med, wavelengths, spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y,
+        spectral_cie_z, spectral_d65) if lanes else SpectralSample(sigma_t.r, Float32(0), Float32(0), Float32(0))
+    var n = 4 if lanes else 1
+    # One grey majorant bounds every lane and RGB channel, so each lane's null probability stays in [0, 1].
+    var sig_hi = max(sig.max_component(), max(sigma_t.r, max(sigma_t.g, sigma_t.b))) if lanes else sigma_t.r
     var majorant_density = nvdb_grid.max_density if use_nvdb else grid.max_density
-    var sigma_maj = majorant_density * sigma_t.r
+    var sigma_maj = majorant_density * sig_hi
     var emission = SpectralSample(Float32(0))
     if sigma_maj <= Float32(0.0):
-        return FreeFlight(False, t_surf, Float32(0), Float32(1.0), RGB(Float32(0)), RGB(Float32(1)), emission)
+        return FreeFlight(False, t_surf, Float32(0), Float32(1.0), RGB(Float32(0)), RGB(Float32(1)), emission, SpectralSample(Float32(1)))
+    var sig_k = _ff_pick_lane(sig, n, pcg)
 
     # ── Segment-wise tracking with LOCAL majorants ─────────────────────────
     # Walk the ray one NanoVDB tree node at a time, using that node's own max
@@ -1229,7 +1241,8 @@ def sample_free_flight(
     # global majorant (no per-node structure to walk).
     var t = Float32(0.0)
     var collided = False
-    var tr = Float32(1)
+    var tr = SpectralSample(Float32(1))   # per-lane product of null probabilities along the candidates
+    var tr_rgb = RGB(Float32(1))
     var iters = 0
     var seg_end = Float32(-1.0)       # < t forces a majorant query on entry
     var sigma_maj_seg = Float32(0.0)
@@ -1242,7 +1255,7 @@ def sample_free_flight(
                 break
             if use_nvdb:
                 var mr = nvdb_majorant_at_world(nvdb_grid, ray_org + t * ray_dir)
-                sigma_maj_seg = mr[0] * sigma_t.r
+                sigma_maj_seg = mr[0] * sig_hi
                 seg_end = min(nvdb_node_exit_t(iray, t, mr[1]), t_surf)
             else:
                 sigma_maj_seg = sigma_maj
@@ -1282,16 +1295,26 @@ def sample_free_flight(
                 # NanoVDBMedium::Le is NOT photometrically normalized, so
                 # without this factor medium emission came out 106.86x too
                 # dim (explosion's hot core: top-1% ratio 0.0101 ~= 1/99).
-                emission += blackbody_spectral_sample(wavelengths, tk) * (
+                var e = blackbody_spectral_sample(wavelengths, tk) * (
                     med.le_scale * CIE_Y_INTEGRAL * sigma_a_real / sigma_maj_seg)
-        var sigma_t_real = density * sigma_t.r
+                # Each lane reaches this candidate with its own null product, over the mixture's.
+                emission += e * tr * (Float32(1) / max(_ff_lane_mean(tr, sig, n), Float32(1e-30))) if lanes else e
+        var sigma_t_real = density * sig_k
         var u2 = pcg.next_float()
         if u2 < sigma_t_real / sigma_maj_seg:
             collided = True
             break
-        tr *= max(Float32(1) - sigma_t_real / sigma_maj_seg, Float32(0))   # ratio tracking along the same candidates
+        tr *= _ff_null(sig, density, sigma_maj_seg)
+        if lanes:
+            tr_rgb = tr_rgb * RGB(max(Float32(1) - (density * sigma_t.r) / sigma_maj_seg, Float32(0)),
+                                  max(Float32(1) - (density * sigma_t.g) / sigma_maj_seg, Float32(0)),
+                                  max(Float32(1) - (density * sigma_t.b) / sigma_maj_seg, Float32(0)))
     if not collided:
-        return FreeFlight(False, t, Float32(0), tr, RGB(Float32(0)), RGB(Float32(1)), emission)
+        var p_pass = _ff_lane_mean(tr, sig, n)
+        if not lanes:
+            return FreeFlight(False, t, Float32(0), p_pass, RGB(Float32(0)), RGB(Float32(1)), emission, SpectralSample(Float32(1)))
+        var inv_p = Float32(1) / max(p_pass, Float32(1e-30))
+        return FreeFlight(False, t, Float32(0), p_pass, RGB(Float32(0)), tr_rgb * inv_p, emission, tr * inv_p)
 
     # `sig_t` is the extinction ACTUALLY in force at the collision point
     # (density-scaled), so a caller's analytic `sig_t * exp(-sig_t * t_free)`
@@ -1302,7 +1325,54 @@ def sample_free_flight(
     var alb = RGB(med.sigma_s.r * inv_sig_t,
                   med.sigma_s.g / max(sigma_t.g, Float32(1e-7)) if sigma_t.g > Float32(0.0) else med.sigma_s.r * inv_sig_t,
                   med.sigma_s.b / max(sigma_t.b, Float32(1e-7)) if sigma_t.b > Float32(0.0) else med.sigma_s.r * inv_sig_t)
-    # Delta tracking's collision density is not analytic and carries no chromatic
-    # ratio (weight 1): the red lane's sigma_t here times the tracked transmittance.
-    var het_sig = density * sigma_t.r
-    return FreeFlight(True, t, het_sig, het_sig * tr, alb, RGB(Float32(1)), emission)
+    # The mixture over the lanes of sigma_t,k(x) times its null product; sig_t is the lane mean in force.
+    var s = sig * density
+    var het_sig = _ff_lane_mean(s, sig, n)
+    var pdf = _ff_lane_mean(s * tr, sig, n)
+    if not lanes:
+        return FreeFlight(True, t, het_sig, pdf, alb, RGB(Float32(1)), emission, SpectralSample(Float32(1)))
+    var inv_pdf = Float32(1) / max(pdf, Float32(1e-30))
+    var w_rgb = RGB(density * sigma_t.r * tr_rgb.r, density * sigma_t.g * tr_rgb.g, density * sigma_t.b * tr_rgb.b) * inv_pdf
+    return FreeFlight(True, t, het_sig, pdf, alb, w_rgb, emission, s * tr * inv_pdf)
+
+
+def medium_ratio_track(
+    med: Medium, grids: Pointer[Grid, MutUntrackedOrigin], nvdb_grids: Pointer[NvdbGrid, MutUntrackedOrigin],
+    org: Vec3f, dir: Vec3f, t_lo: Float32, t_hi: Float32, sig: SpectralSample, mut pcg: PCG32,
+) -> SpectralSample:
+    """Ratio-tracked transmittance of a density field over [t_lo, t_hi], every lane of `sig` (per unit density) on one
+    track under a grey majorant, so each lane's estimate is unbiased on its own. Local majorants per NanoVDB node."""
+    var use_nvdb = med.nvdb_idx >= Int32(0)
+    var grid = medium_grid_for(med, grids)
+    var nvdb_grid = medium_nvdb_for(med, nvdb_grids)
+    var sig_hi = sig.max_component()
+    var T = SpectralSample(Float32(1))
+    var iray = nvdb_index_ray(nvdb_grid, org, dir) if use_nvdb else SIMD[DType.float32, 8](0)
+    var t = t_lo
+    var seg_end = t_lo - Float32(1.0)   # < t forces a majorant query on entry
+    var mu = Float32(0.0)
+    for _ in range(MEDIUM_TRACK_MAX_ITERS):
+        if t >= seg_end:
+            if t >= t_hi:
+                break
+            if use_nvdb:
+                var mr = nvdb_majorant_at_world(nvdb_grid, org + t * dir)
+                mu = mr[0] * sig_hi
+                seg_end = min(nvdb_node_exit_t(iray, t, mr[1]), t_hi)
+            else:
+                mu = grid.max_density * sig_hi
+                seg_end = t_hi
+            if mu <= Float32(0.0):
+                t = seg_end
+                continue
+        var t_next = t + (-log(max(pcg.next_float(), Float32(1e-7))) / mu)
+        if t_next >= seg_end:
+            t = seg_end
+            continue
+        t = t_next
+        var p = org + t * dir
+        var density = nvdb_sample_density(nvdb_grid, p) if use_nvdb else grid_sample_density(grid, p)
+        T *= _ff_null(sig, density, mu)
+        if T.max_component() < Float32(1e-4):
+            return SpectralSample(Float32(0.0))
+    return T
