@@ -444,15 +444,26 @@ def _volume_area_light_nee(
                 var shad_tmax = max(dist - Float32(0.0002), Float32(0.0)) * Float32(0.9995)
                 if not any_hit_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, shad_ray, shad_tmax, sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances, sd.spheres, n_spheres, materials=sd.materials):
                     var T: RGB
+                    # Both medium kinds attenuate only up to the medium's own boundary, the first interface surface.
+                    var t_med = dist
+                    var _exit_inter = Array[Intersection, 1](fill=Intersection(
+                        PrimId(Int64(-1), Int64(-1), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0)),
+                        Float32(0), Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0)))
+                    var exit_ptr = _exit_inter.unsafe_ptr()   # tracked: keeps _exit_inter alive while read
+                    exit_ptr[unsafe_offset=0].hit = Int8(0)
+                    traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, shad_ray,
+                                       shad_tmax, exit_ptr, sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances)
+                    test_spheres(sd.spheres, n_spheres, shad_ray, exit_ptr.unsafe_origin_cast[MutUntrackedOrigin]())
+                    # test_spheres ignores shad_tmax (it bounds only by
+                    # an already-recorded closer hit), so a sphere past
+                    # the light would otherwise set t_med > dist and
+                    # over-attenuate instead of under-.
+                    if exit_ptr[unsafe_offset=0].hit != Int8(0) and exit_ptr[unsafe_offset=0].tHit <= shad_tmax:
+                        var exit_mat = sd.materials[unsafe_offset=Int(exit_ptr[unsafe_offset=0].primId.materialIndex)]
+                        if exit_mat.type == MatKind.interface:
+                            t_med = exit_ptr[unsafe_offset=0].tHit
                     if med.grid_idx >= Int32(0) or med.nvdb_idx >= Int32(0):
-                        # Ratio-tracking transmittance through the grid (see
-                        # sample_medium_gpu's docstring). The density
-                        # lookup returns 0 past the grid's bounds for
-                        # EITHER source (grid_sample_density's [p0,p1] box,
-                        # nvdb_sample_density's index bbox), so this
-                        # naturally stops attenuating once the shadow ray
-                        # exits the medium -- same dual-source dispatch as
-                        # the free-flight sampling above.
+                        # Ratio tracking up to t_med: a grid's box can reach past the medium's shape, where it is vacuum.
                         var use_nvdb_s = med.nvdb_idx >= Int32(0)
                         var grid_s = sd.grids[unsafe_offset=Int(med.grid_idx)] if not use_nvdb_s else Grid(
                             Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(), Int32(0), Int32(0), Int32(0),
@@ -472,7 +483,7 @@ def _volume_area_light_nee(
                                 siters += 1
                                 var us = pcg.next_float()
                                 ts += -log(max(us, Float32(1e-7))) / sigma_maj_s
-                                if ts >= dist:
+                                if ts >= t_med:
                                     break
                                 var ps = resolve_pt + shadow_dir * ts
                                 var density_s = nvdb_sample_density(nvdb_grid_s, ps) if use_nvdb_s else grid_sample_density(grid_s, ps)
@@ -526,23 +537,6 @@ def _volume_area_light_nee(
                         # the vacuum-attenuation bug this very branch was
                         # written to fix -- that fix just never covered the
                         # sphere-bounded case.
-                        var t_med = dist
-                        var _exit_inter = Array[Intersection, 1](fill=Intersection(
-                            PrimId(Int64(-1), Int64(-1), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0)),
-                            Float32(0), Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0)))
-                        var exit_ptr = _exit_inter.unsafe_ptr()   # tracked: keeps _exit_inter alive while read
-                        exit_ptr[unsafe_offset=0].hit = Int8(0)
-                        traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, shad_ray,
-                                           shad_tmax, exit_ptr, sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances)
-                        test_spheres(sd.spheres, n_spheres, shad_ray, exit_ptr.unsafe_origin_cast[MutUntrackedOrigin]())
-                        # test_spheres ignores shad_tmax (it bounds only by
-                        # an already-recorded closer hit), so a sphere past
-                        # the light would otherwise set t_med > dist and
-                        # over-attenuate instead of under-.
-                        if exit_ptr[unsafe_offset=0].hit != Int8(0) and exit_ptr[unsafe_offset=0].tHit <= shad_tmax:
-                            var exit_mat = sd.materials[unsafe_offset=Int(exit_ptr[unsafe_offset=0].primId.materialIndex)]
-                            if exit_mat.type == MatKind.interface:
-                                t_med = exit_ptr[unsafe_offset=0].tHit
                         T = RGB(exp(-sigma_t.r * t_med), exp(-sigma_t.g * t_med), exp(-sigma_t.b * t_med))
                     # The old `geom` also carried al.total_area/light_sel_pdf,
                     # i.e. 1/q -- that now lives inside res.state.w, so the
