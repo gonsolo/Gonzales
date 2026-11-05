@@ -77,7 +77,7 @@ def shadow_transmittance(
             inter_mem[unsafe_offset=0].hit = Int8(1)
             inter_mem[unsafe_offset=0].tHit = remaining
             inter_mem[unsafe_offset=0].primId.type = Int8(0)
-        test_spheres(spheres, n_spheres, ray, inter_mem.unsafe_origin_cast[MutUntrackedOrigin]())
+        test_spheres(spheres, n_spheres, ray, inter_mem)
         if not had_bvh_hit and inter_mem[unsafe_offset=0].primId.type != Int8(4):
             inter_mem[unsafe_offset=0].hit = Int8(0)
         var hit = inter_mem[unsafe_offset=0].hit != Int8(0)

@@ -66,7 +66,7 @@ def _visible_transmittance(
             # Clear the primId along with the sentinel. `scratch` is a
             # caller-owned slot reused across bounces, samples and (on GPU)
             inter_mem[unsafe_offset=0].primId.type = Int8(0)
-        test_spheres(sd.spheres, Int(sd.sphereCount), ray, inter_mem.unsafe_origin_cast[MutUntrackedOrigin]())
+        test_spheres(sd.spheres, Int(sd.sphereCount), ray, inter_mem)
         if not had_bvh_hit and inter_mem[unsafe_offset=0].primId.type != Int8(4):
             inter_mem[unsafe_offset=0].hit = Int8(0)
         if inter_mem[unsafe_offset=0].hit == Int8(0):

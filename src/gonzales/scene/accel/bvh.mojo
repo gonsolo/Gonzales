@@ -1231,11 +1231,11 @@ def ray_sphere_hit(center: Point3f, radius: Float32,
     return Float32(-1.0)
 
 @always_inline
-def test_spheres(
+def test_spheres[O: Origin[mut=True]](
     spheres: Pointer[Sphere, MutUntrackedOrigin],
     n_spheres: Int,
     ray: Ray,
-    result: Pointer[Intersection, MutUntrackedOrigin],
+    result: Pointer[Intersection, O],
 ):
     """Test all analytical spheres against the ray, updating result if closer.
     Sets primId.type = 4 and primId.id1 = sphere_index on a sphere hit.
