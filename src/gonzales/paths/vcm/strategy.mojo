@@ -1,5 +1,6 @@
 """Which of VCM's strategies exist at a vertex and with what merge density."""
 from std.math import sqrt, floor, max, min
+from std.sys import get_defined_int
 from gonzales.core.geometry import Point3f, PI
 from gonzales.scene.appearance.materials import LobeKind
 from gonzales.paths.vcm.eval import _bdpt_vertex_mis_scoped
@@ -9,6 +10,8 @@ from gonzales.paths.vcm.vertex import _BDPT_MAX_VERTS, BDPTVertex
 from gonzales.transport.medium import MediumView
 
 
+# Exit merging (Scenes/vcm_sss_exit_merge_derivation.py); -D VCM_EXIT_MERGE=0 drops it and its MIS share.
+comptime _VCM_EXIT_MERGE = get_defined_int["VCM_EXIT_MERGE", 1]() != 0
 comptime _VCM_MAX_STORED = _BDPT_MAX_VERTS - 1   # non-delta vertices of a full path, or a strategy would not fit the cache
 
 
@@ -70,6 +73,8 @@ struct VcmStrategies:
         """This vertex's own eta(x) = N * (kernel measure at x), fully scaled --
         a DISK area on a surface, a BALL volume in a medium; 0 where it cannot merge. `mis_vm_weight_factor`"""
         if v.mat_kind == LobeKind.sss_exit:   # a light exit never merges, a camera exit does (mat_idx set)
+            comptime if not _VCM_EXIT_MERGE:
+                return Float32(0)
             return VcmStrategies.walk_merge_density(sd, v.pos, mis_vm_weight_factor) if v.mat_idx >= Int32(0) else Float32(0)
         if _vcm_on_fibre(v):
             return mis_vm_weight_factor * _vcm_fibre_scale(sd, v.pos, Int(v.hair_curve_idx), v.hair_v)

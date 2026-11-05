@@ -19,7 +19,7 @@ from gonzales.core.spectrum import SampledWavelengths, SpectralSample, spec_refl
 from gonzales.scene.shapes.geom_normal import _geom_normal
 from gonzales.paths.vcm.vertex import _VCM_SSS_CAMERA_ONLY, _vcm_walk_limit, _BDPT_MAX_VERTS, BDPTVertex, _null_vertex
 from gonzales.paths.vcm.eval import _bdpt_vertex_mis_scoped, _vcm_mnee_light_dvcm
-from gonzales.paths.vcm.strategy import VcmStrategies, _vcm_keep, _vcm_eta_scale, _vcm_fibre_scale
+from gonzales.paths.vcm.strategy import VcmStrategies, _VCM_EXIT_MERGE, _vcm_keep, _vcm_eta_scale, _vcm_fibre_scale
 from gonzales.paths.vcm.connect import _bdpt_store_lvc_vertex
 from gonzales.integrators.vcm.camera import (
     _vcm_scatter, _vcm_lobe_vertex, _vcm_sss_walk, _vcm_sss_exit_vertex,
@@ -283,6 +283,8 @@ def _vcm_skin_arrival(
                                        Int(st.mnee.n_glass), st.mnee.first_glass, st.cur_med_idx, st.wl, pcg)
         if d_m > Float32(0):
             dvcm_in = d_m * cos_a   # the walk applies the arrival cosine
+    comptime if not _VCM_EXIT_MERGE:
+        return Float32(0)
     # Slots for this arrival, rough skin's lobe vertex and the walk's exit.
     if st.n_verts + (3 if mat.uses_lobe() else 2) > _BDPT_MAX_VERTS:
         return Float32(0)
