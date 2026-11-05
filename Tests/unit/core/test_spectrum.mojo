@@ -1,6 +1,6 @@
 from std.math import abs
 from std.testing import assert_true, TestSuite
-from gonzales.core.spectrum import sample_wavelengths, visible_wavelength_pdf, rgb_to_spectral_sample, rgb_illuminant_to_spectral_sample, spectral_sample_to_rgb, SpectralContext, spectral_handle, LAMBDA_MIN, LAMBDA_MAX, N_SPECTRAL_SAMPLES
+from gonzales.core.spectrum import sample_wavelengths, SampledWavelengths, visible_wavelength_pdf, rgb_to_spectral_sample, rgb_illuminant_to_spectral_sample, spectral_sample_to_rgb, SpectralContext, spectral_handle, LAMBDA_MIN, LAMBDA_MAX, N_SPECTRAL_SAMPLES
 from gonzales.core.rgb2spec import build_spectrum_table, build_cie_xyz_tables, SpectrumTable
 
 comptime EPS: Float32 = 1e-3
@@ -132,6 +132,16 @@ def test_roundtrip_grey_scales_linearly() raises:
     # drop ctx right after spectral_handle() and every later read is a
     # use-after-free. That is why these tests failed intermittently -- whether
     # it showed depended on whether the freed pages had been reused yet.
+    _ = ctx^
+
+def test_grey_reflectance_is_flat() raises:
+    var ctx = _test_ctx()
+    var h = spectral_handle(ctx)
+    for a in [Float32(0.02), Float32(0.3), Float32(0.8), Float32(0.99)]:
+        var wl = SampledWavelengths(Float32(360), Float32(450), Float32(600), Float32(830))
+        var s = rgb_to_spectral_sample(h.coeffs, h.res, h.cie_x, h.cie_y, h.cie_z, h.d65, a, a, a, wl)
+        for v in [s.v0, s.v1, s.v2, s.v3]:
+            assert_true(_close(v, a, a * Float32(1e-5)))   # a subsurface walk compounds any drift per scatter
     _ = ctx^
 
 def test_roundtrip_black_is_black() raises:

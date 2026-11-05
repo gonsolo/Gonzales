@@ -506,6 +506,8 @@ def rgb_to_coeffs_table_lookup(table: List[Float32], res: Int, r: Float64, g: Fl
 
     if maxv <= Float64(0.0):
         return RGBSigmoidCoeffs(Float32(0.0), Float32(0.0), Float32(-1e6))
+    if r == g and g == b and r < Float64(1.0):   # grey: the constant sigmoid is exact, as in pbrt
+        return RGBSigmoidCoeffs(Float32(0.0), Float32(0.0), Float32((r - 0.5) / sqrt(r * (1.0 - r))))
 
     var other1: Float64
     var other2: Float64
@@ -717,6 +719,8 @@ def rgb_to_coeffs_table_lookup_ptr(table: Pointer[Float32, MutUntrackedOrigin], 
 
     if maxv <= Float32(0.0):
         return RGBSigmoidCoeffs(Float32(0.0), Float32(0.0), Float32(-1e6))
+    if r == g and g == b and r < Float32(1.0):   # grey: the constant sigmoid is exact, as in pbrt
+        return RGBSigmoidCoeffs(Float32(0.0), Float32(0.0), (r - Float32(0.5)) / sqrt(r * (Float32(1.0) - r)))
 
     var other1: Float32
     var other2: Float32
