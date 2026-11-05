@@ -1538,21 +1538,8 @@ def _sppm_gather_one(
                         # Lambertian/phase branches already rely on).
                         if vp.is_volume == PhotonKind.volume:
                             if Int(vp.med_idx) >= 0:   # no `continue`: k advances at the bottom of this loop
-                                # 1/sigma_t, not albedo/sigma_s: two independently upsampled spectra would exceed 1 (6de092a1).
-                                var inv_sig = MediumView.at(sd, vp.med_idx).inv_sigma_t_at(vp.pos.to_simd(), ph.wavelengths)
-                                # Keep `alb`, and divide by sigma_t (NOT
-                                # sigma_s): this implementation stores a photon
-                                # at every COLLISION, before the scatter/absorb
-                                # decision, so deposit density goes as sigma_t
-                                # and the flux is pre-albedo. Jensen's 1/sigma_s
-                                # assumes deposits at SCATTERING events; matching
-                                # the divisor to where photons are actually
-                                # stored is what makes the two conventions agree.
-                                var term_2 = spec_refl(spectral_coeffs, spectral_res,
-                                                 spectral_cie_x, spectral_cie_y,
-                                                 spectral_cie_z, spectral_d65,
-                                                 vp.alb.r, vp.alb.g, vp.alb.b, ph.wavelengths) \
-                                       * inv_sig * _vp_phase(sd, vp, -ph.dir_in.to_simd()) * ph.flux
+                                var term_2 = MediumView.at(sd, vp.med_idx).photon_scale(vp.alb, vp.pos.to_simd(), ph.wavelengths) \
+                                       * _vp_phase(sd, vp, -ph.dir_in.to_simd()) * ph.flux
                                 var (tr_2, tg_2, tb_2) = spectral_sample_to_rgb(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, term_2, ph.wavelengths)
                                 phi_rgb += RGB(tr_2, tg_2, tb_2)
                         else:

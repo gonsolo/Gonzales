@@ -1,7 +1,7 @@
 """A medium as a shading point sees it: free flight, extinction and the phase function, in one place."""
-from gonzales.core.geometry import Vec3f, dot
+from gonzales.core.geometry import RGB, Vec3f, dot
 from gonzales.core.rng import PCG32
-from gonzales.core.spectrum import SampledWavelengths, SpectralHandle, SpectralSample
+from gonzales.core.spectrum import SampledWavelengths, SpectralHandle, SpectralSample, spec_refl
 from gonzales.scene.accel.bvh import SceneView
 from gonzales.scene.appearance.media import (
     FreeFlight, Grid, Medium, NvdbGrid, hg_phase, hg_sample, medium_inv_sigma_t_spectral, medium_kernel_radius,
@@ -73,6 +73,12 @@ struct MediumView(TrivialRegisterPassable):
     def inv_sigma_t_at(self, p: Vec3f, wl: SampledWavelengths) -> SpectralSample:
         var s = self.spectral
         return medium_inv_sigma_t_spectral(self.med, self.grids, self.nvdb_grids, p, wl, s.coeffs, s.res, s.cie_x, s.cie_y, s.cie_z, s.d65)
+
+    def photon_scale(self, alb: RGB, p: Vec3f, wl: SampledWavelengths) -> SpectralSample:
+        """A volume photon's term without its phase and weight: the albedo every strategy scatters with, over sigma_t,
+        since photons are stored at each collision (VCM's merge and SPPM's gather)."""
+        var s = self.spectral
+        return spec_refl(s.coeffs, s.res, s.cie_x, s.cie_y, s.cie_z, s.d65, alb.r, alb.g, alb.b, wl) * self.inv_sigma_t_at(p, wl)
 
     @always_inline
     def kernel_radius(self, p: Vec3f) -> Float32:

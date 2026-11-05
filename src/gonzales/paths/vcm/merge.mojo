@@ -9,6 +9,7 @@ from gonzales.scene.appearance.materials import LobeKind
 from gonzales.scene.accel.bvh import SceneView, _is_real_ptr, curve_radius
 from gonzales.estimators.photon_grid import disk_measure, ribbon_measure, _HSIZE, _hash_cell, _PHOTON_BUCKET_CAP, grid_keep, grid_weight, gather_disk_coverage, gather_disk_contains, gather_ball_reach
 from gonzales.transport.medium import MediumView
+from gonzales.scene.appearance.media import hg_phase
 from gonzales.core.spectrum import SpectralSample
 from gonzales.paths.vcm.vertex import _BDPT_MAX_VERTS, BDPTVertex
 from gonzales.paths.vcm.eval import _lobe_eval, _bdpt_vertex_mis_scoped
@@ -99,6 +100,7 @@ def _bdpt_merge_from_cache(
     if not _bdpt_vertex_mis_scoped(cv) or not VcmStrategies.can_merge_at(sd, cv):
         return SpectralSample(Float32(0))
     var total = SpectralSample(Float32(0))
+    var vol_cv = cv.is_surface == Int32(0) and Int(cv.med_idx) >= 0
     var kernel = MergeKernel.at(sd, cv, r2_pass, norm_pass)
     var r2 = kernel.r2
     var inv_eta_cv = VcmStrategies.inv_merge_density(sd, cv, mis_vc_weight_factor)
@@ -145,17 +147,21 @@ def _bdpt_merge_from_cache(
                                     if grid_keep(heads, _hash_cell(Int(floor(lv.pos.x * inv_cell)), Int(floor(lv.pos.y * inv_cell)), Int(floor(lv.pos.z * inv_cell))), k, lv.pos, _PHOTON_BUCKET_CAP):
                                         visit_thin += Int32(1)
                         if kernel.accepts(cv, lv, e, dist2):
-                            var le_cv = _lobe_eval[want_pdfs=False](cv, lv.wo.to_simd(), sd, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, cv.wavelengths)
-                            var f_cv = le_cv.f_cos
-                            # MERGING TAKES THE BARE BSDF, NOT f*cos.
-                            # _eval_vertex_spectral returns f*|cos| because
-                            var cos_div = le_cv.cos_used
-                            if cv.is_surface == Int32(1) and cv.mat_kind != LobeKind.hair:
-                                cos_div = abs(dot(lv.wo.to_simd(), cv.normal.to_simd()))
-                            if cos_div > Float32(1e-6):
-                                f_cv = f_cv * (Float32(1.0) / cos_div)
+                            var f_cv: SpectralSample
+                            if vol_cv:   # the phase alone; photon_scale carries albedo / sigma_t, after the sum
+                                f_cv = SpectralSample(hg_phase(dot(cv.wo.to_simd(), lv.wo.to_simd()), cv.pdf_bwd))
                             else:
-                                f_cv = SpectralSample(Float32(0.0))
+                                var le_cv = _lobe_eval[want_pdfs=False](cv, lv.wo.to_simd(), sd, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, cv.wavelengths)
+                                f_cv = le_cv.f_cos
+                                # MERGING TAKES THE BARE BSDF, NOT f*cos.
+                                # _eval_vertex_spectral returns f*|cos| because
+                                var cos_div = le_cv.cos_used
+                                if cv.is_surface == Int32(1) and cv.mat_kind != LobeKind.hair:
+                                    cos_div = abs(dot(lv.wo.to_simd(), cv.normal.to_simd()))
+                                if cos_div > Float32(1e-6):
+                                    f_cv = f_cv * (Float32(1.0) / cos_div)
+                                else:
+                                    f_cv = SpectralSample(Float32(0.0))
                             var w = _bdpt_merge_mis_weight(cv, lv, sd, inv_eta_cv)
                             # 1 / keep: the bucket's under the fixed cap; under
                             # the per-cell budget the vertex's own (_vcm_keep,
@@ -166,8 +172,8 @@ def _bdpt_merge_from_cache(
                             total += f_cv * lv.beta * (w * keep_w)
                     k = Int(merge_next[unsafe_offset=k * _VCM_MN_STRIDE + lvl])
     var result = total * cv.beta * kernel.norm
-    if cv.is_surface == Int32(0) and Int(cv.med_idx) >= 0:
-        result *= MediumView.at(sd, cv.med_idx).inv_sigma_t_at(cv.pos.to_simd(), cv.wavelengths)
+    if vol_cv:
+        result *= MediumView.at(sd, cv.med_idx).photon_scale(cv.alb, cv.pos.to_simd(), cv.wavelengths)
     # Truncation: the photons came only from the part of the disk that is
     # surface (gather_disk_coverage). Queries that found nothing have nothing
     # to correct, and a disk the probes find empty keeps the plain estimate.
