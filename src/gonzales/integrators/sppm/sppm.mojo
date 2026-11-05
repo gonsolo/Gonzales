@@ -291,9 +291,10 @@ def _cosine_hemisphere_sample(n: Vec3f, u1: Float32, u2: Float32) -> Vec3f:
 # behavior-preserving signature change for any caller that doesn't thread
 # real values through.
 @always_inline
-def _vp_strat_u(vdc: Float32, pidx: Int32, bounce: Int) -> Float32:
-    """vdc shifted by a per-(pixel, bounce) random offset (Cranley-Patterson), wrapped to [0,1)."""
-    var shift_rng = PCG32(UInt64(pidx) * UInt64(0x9E3779B97F4A7C15) + UInt64(bounce + 1), UInt64(3))
+def _vp_strat_u(vdc: Float32, pidx: Int32, event: Int) -> Float32:
+    """vdc shifted by a per-(pixel, event) random offset (Cranley-Patterson), wrapped to [0,1). The event index must
+    differ per crossing: depth stays put across a subsurface boundary, and a shared offset ties two choices together."""
+    var shift_rng = PCG32(UInt64(pidx) * UInt64(0x9E3779B97F4A7C15) + UInt64(event + 1), UInt64(3))
     var sh = shift_rng.next_float()
     var v = vdc + sh
     return v - floor(v) if v >= Float32(1.0) else v
@@ -966,7 +967,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
                 sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
             var (new_dir, new_org, radiance_scale, new_cur_ior, new_prev_ior) = _dielectric_bounce(
                 ray_dir, hit.to_simd(), gn, ior, False, pcg, current_dielectric_ior, previous_dielectric_ior, mat.type == MatKind.thin_dielectric,
-                not sss_walks_below(mat, inter, cur_med_idx), True, _vp_strat_u(vdc, pidx, bounce))
+                not sss_walks_below(mat, inter, cur_med_idx), True, _vp_strat_u(vdc, pidx, n_events))
             if sss_entered(mat, inter, ray_dir, new_dir, cur_med_idx, sd, hit.to_simd()):
                 var g_w = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
                 var ex = sss_hop[use_gpu](sd, mat, inter, hit.to_simd(), g_w, new_dir, vp.wavelengths, pcg)
