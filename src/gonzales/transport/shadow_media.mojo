@@ -64,7 +64,7 @@ def shadow_transmittance(
     var _local = Array[Intersection, 1](fill=Intersection(
         PrimId(Int64(-1), Int64(-1), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0)),
         Float32(0), Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0)))
-    var inter_mem = _local.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
+    var inter_mem = _local.unsafe_ptr()   # tracked: keeps _local alive while read
     for _ in range(8):
         if remaining < Float32(1e-4):
             break
@@ -77,7 +77,7 @@ def shadow_transmittance(
             inter_mem[unsafe_offset=0].hit = Int8(1)
             inter_mem[unsafe_offset=0].tHit = remaining
             inter_mem[unsafe_offset=0].primId.type = Int8(0)
-        test_spheres(spheres, n_spheres, ray, inter_mem)
+        test_spheres(spheres, n_spheres, ray, inter_mem.unsafe_origin_cast[MutUntrackedOrigin]())
         if not had_bvh_hit and inter_mem[unsafe_offset=0].primId.type != Int8(4):
             inter_mem[unsafe_offset=0].hit = Int8(0)
         var hit = inter_mem[unsafe_offset=0].hit != Int8(0)

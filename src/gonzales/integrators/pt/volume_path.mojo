@@ -530,11 +530,11 @@ def _volume_area_light_nee(
                         var _exit_inter = Array[Intersection, 1](fill=Intersection(
                             PrimId(Int64(-1), Int64(-1), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0)),
                             Float32(0), Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0)))
-                        var exit_ptr = _exit_inter.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
+                        var exit_ptr = _exit_inter.unsafe_ptr()   # tracked: keeps _exit_inter alive while read
                         exit_ptr[unsafe_offset=0].hit = Int8(0)
                         traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, shad_ray,
                                            shad_tmax, exit_ptr, sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances)
-                        test_spheres(sd.spheres, n_spheres, shad_ray, exit_ptr)
+                        test_spheres(sd.spheres, n_spheres, shad_ray, exit_ptr.unsafe_origin_cast[MutUntrackedOrigin]())
                         # test_spheres ignores shad_tmax (it bounds only by
                         # an already-recorded closer hit), so a sphere past
                         # the light would otherwise set t_med > dist and

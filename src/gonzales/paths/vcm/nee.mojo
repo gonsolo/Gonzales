@@ -50,7 +50,7 @@ def _visible_transmittance(
     var _local_inter = Array[Intersection, 1](fill=Intersection(
         PrimId(Int64(-1), Int64(-1), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0)),
         Float32(0), Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0)))
-    var inter_mem = _local_inter.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
+    var inter_mem = _local_inter.unsafe_ptr()   # tracked: keeps _local_inter alive while read
     for _ in range(8):
         if remaining < Float32(1e-4): break
         var ray = Ray(org, Vec3f(dir[0], dir[1], dir[2]))
@@ -66,7 +66,7 @@ def _visible_transmittance(
             # Clear the primId along with the sentinel. `scratch` is a
             # caller-owned slot reused across bounces, samples and (on GPU)
             inter_mem[unsafe_offset=0].primId.type = Int8(0)
-        test_spheres(sd.spheres, Int(sd.sphereCount), ray, inter_mem)
+        test_spheres(sd.spheres, Int(sd.sphereCount), ray, inter_mem.unsafe_origin_cast[MutUntrackedOrigin]())
         if not had_bvh_hit and inter_mem[unsafe_offset=0].primId.type != Int8(4):
             inter_mem[unsafe_offset=0].hit = Int8(0)
         if inter_mem[unsafe_offset=0].hit == Int8(0):

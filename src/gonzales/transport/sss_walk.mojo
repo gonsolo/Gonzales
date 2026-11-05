@@ -73,8 +73,8 @@ def sss_walk_to_exit(ref sd: SceneView, mat: Material, inter: Intersection, hit:
     var (ray, walk) = sss_walk_start(mat, inter, hit, geo_normal, wi, wl, sd.spectral)
     var state = Array[PathState, 1](uninitialized=True)
     var store = Array[Intersection, 1](fill=inter)
-    var ps = state.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
-    var hits = store.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
+    var ps = state.unsafe_ptr()   # tracked: keep state and store alive while read
+    var hits = store.unsafe_ptr()
     ps[].ray = ray
     ps[].sss = walk
     ps[].throughput = SpectralSample(Float32(1))
@@ -83,8 +83,8 @@ def sss_walk_to_exit(ref sd: SceneView, mat: Material, inter: Intersection, hit:
     ps[].volume_scattered = Int8(0)
     ps[].pcgState = pcg.state
     ps[].pcgInc = pcg.inc
-    _sss_walk_trace(sd, walk, ray, hits)
-    _sss_walk_step(ps, hits, 0, sd)
+    _sss_walk_trace(sd, walk, ray, hits.unsafe_origin_cast[MutUntrackedOrigin]())
+    _sss_walk_step(ps.unsafe_origin_cast[MutUntrackedOrigin](), hits.unsafe_origin_cast[MutUntrackedOrigin](), 0, sd)
     pcg.state = ps[].pcgState
     if ps[].active == 0 or ps[].sss.exiting == Int32(0):
         return SssExit(False, Point3f(hit[0], hit[1], hit[2]), geo_normal, SpectralSample(Float32(0)))

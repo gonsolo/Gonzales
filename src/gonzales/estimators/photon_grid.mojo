@@ -157,7 +157,7 @@ def gather_ball_reach[probes: Int = GATHER_BALL_PROBES](ref sd: SceneView, p: Po
     var _local = Array[Intersection, 1](fill=Intersection(
         PrimId(Int64(-1), Int64(-1), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0)),
         Float32(0), Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0)))
-    var mem = _local.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
+    var mem = _local.unsafe_ptr()   # tracked: keeps _local alive while read
     var rot = Float32(grid_coin_bits(salt, p)) * Float32(2.3283064e-10) * Float32(6.2831853)
     var az = Float32(1) - Float32(2) * Float32(grid_coin_bits(salt + 1, p)) * Float32(2.3283064e-10)
     var aphi = Float32(grid_coin_bits(salt + 2, p)) * Float32(2.3283064e-10) * Float32(6.2831853)
@@ -241,7 +241,7 @@ def gather_disk_coverage[probes: Int = GATHER_COVERAGE_PROBES](
     var _local = Array[Intersection, 1](fill=Intersection(
         PrimId(Int64(-1), Int64(-1), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0)),
         Float32(0), Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0)))
-    var mem = _local.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
+    var mem = _local.unsafe_ptr()   # tracked: keeps _local alive while read
     var rot = Float32(grid_coin_bits(salt, p)) * Float32(2.3283064e-10) * Float32(6.2831853)
     var lift = Float32(0.1) * r
     var hits = 0
