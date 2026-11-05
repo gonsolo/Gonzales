@@ -35,7 +35,7 @@ def sss_walk_start(mat: Material, inter: Intersection, hit: Vec3f, geo_normal: V
 def sss_entry_lobe(in_n: Vec3f, eta: Float32, mut pcg: PCG32) -> Vec3f:
     """A walk's first direction: a cosine lobe weighted by interior transmission, the mirror of its exit."""
     var wi = sample_cosine_hemisphere_world(pcg.next_float(), pcg.next_float(), in_n)[0]
-    for _ in range(8):
+    for _ in range(32):   # a lower cap leaves R^cap of the lobe unweighted by 1 - F: not reciprocal
         if pcg.next_float() >= fr_dielectric(abs(dot(wi, in_n)), Float32(1) / max(eta, Float32(1.0001))):
             break
         wi = sample_cosine_hemisphere_world(pcg.next_float(), pcg.next_float(), in_n)[0]
