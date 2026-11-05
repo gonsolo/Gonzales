@@ -285,8 +285,9 @@ def _vcm_skin_arrival(
             dvcm_in = d_m * cos_a   # the walk applies the arrival cosine
     comptime if not _VCM_EXIT_MERGE:
         return Float32(0)
-    # Slots for this arrival, rough skin's lobe vertex and the walk's exit.
-    if st.n_verts + (3 if mat.uses_lobe() else 2) > _BDPT_MAX_VERTS:
+    # Stored whenever a slot is left: the camera counts one per skin hit (cam_nd), so every split of a path classifies
+    # it alike and the exit merge runs wherever that classification counts it (Scenes/vcm_sss_arrival_slots.py).
+    if st.n_verts >= _BDPT_MAX_VERTS:
         return Float32(0)
     var (a_vcm, a_vc, a_vm) = vcm_arrival_carries(dvcm_in, dvc_in, dvm_in, cos_a)
     var a = _null_vertex()
@@ -438,6 +439,8 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
             if sss_walks_below(mat, inter, med_in):
                 entry_eta = _vcm_skin_arrival(sd, inter, mat, hit, ray_dir, mis_vm_weight_factor, pcg, lvc, lp_idx, st,
                                               dvcm_in, dvc_in, dvm_in)
+                if st.n_verts >= _BDPT_MAX_VERTS:
+                    return False   # the arrival took the last slot: whatever follows is past the cache
         if mat.uses_lobe():
             if not mat.has_lobe():
                 return False   # e.g. a measured table that failed to load
