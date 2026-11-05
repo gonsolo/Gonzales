@@ -18,6 +18,29 @@ def _hash_cell(ix: Int, iy: Int, iz: Int) -> Int:
     return (h % _HSIZE + _HSIZE) % _HSIZE
 
 
+comptime NEIGHBOUR_CELLS = 27
+
+
+@always_inline
+def neighbour_buckets(cix: Int, ciy: Int, ciz: Int) -> Array[Int, NEIGHBOUR_CELLS]:
+    """The buckets of the 3x3x3 cells around (cix, ciy, ciz), each once, then -1s. The hash maps cells (x, -1, -1)
+    and (x, 1, 1) alike next to every axis (its constants are odd), and a bucket walked twice counts its photons twice."""
+    var out = Array[Int, NEIGHBOUR_CELLS](fill=-1)
+    var n = 0
+    for dx in range(-1, 2):
+        for dy in range(-1, 2):
+            for dz in range(-1, 2):
+                var h = _hash_cell(cix + dx, ciy + dy, ciz + dz)
+                var seen = False
+                for j in range(n):
+                    if out[j] == h:
+                        seen = True
+                if not seen:
+                    out[n] = h
+                    n += 1
+    return out^
+
+
 # ── Thinned hash grid: SPPM's photons and VCM's light vertices ────────────────
 # The bucket table is 2 * _HSIZE Int32s: heads[h] is bucket h's chain head,
 # heads[_HSIZE + h] how many elements fell into it before thinning. A bucket

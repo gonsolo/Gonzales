@@ -35,7 +35,7 @@ from gonzales.integrators.pt.common import area_light_hit_cos
 from gonzales.transport.texturing import apply_surface_maps_at_hit
 from gonzales.scene.shapes.geom_normal import _geom_normal, _shading_normal_at
 from gonzales.estimators.photon_grid import (
-    _HSIZE, _hash_cell, _PHOTON_BUCKET_CAP, grid_reset_cell, grid_count, grid_keep, grid_coin_bits, grid_push, grid_weight,
+    _HSIZE, _hash_cell, NEIGHBOUR_CELLS, neighbour_buckets, _PHOTON_BUCKET_CAP, grid_reset_cell, grid_count, grid_keep, grid_coin_bits, grid_push, grid_weight,
     gather_disk_contains, gather_disk_coverage, gather_ball_reach, disk_measure, ball_measure, ribbon_measure,
 )
 from gonzales.transport.shadow_media import shadow_transmittance
@@ -1502,51 +1502,52 @@ def _sppm_gather_one(
     var cix = Int(floor(vp.pos.x * inv_cell))
     var ciy = Int(floor(vp.pos.y * inv_cell))
     var ciz = Int(floor(vp.pos.z * inv_cell))
-    for ddx in range(-1, 2):
-        for ddy in range(-1, 2):
-            for ddz in range(-1, 2):
-                var h = _hash_cell(cix + ddx, ciy + ddy, ciz + ddz)
-                # Survivors of a thinned bucket stand for n/cap photons each
-                # (grid_keep): their flux AND their count, so the radius
-                # update sees the same photon count in expectation.
-                var bucket_w = grid_weight(heads, h)
-                var k = Int(heads[unsafe_offset=h])
-                while k != -1:
-                    var ph = photons[unsafe_offset=k]
-                    ph.flux *= bucket_w
-                    var e = ph.pos - vp.pos
-                    var dist2 = e.length_sq()
-                    # A hair visible point gathers its own strand's photons, every other one no hair photon.
-                    var same_strand = ph.curve == vp.hair_curve_idx if vp.mat_kind == LobeKind.hair else ph.curve < Int32(0)
-                    if dist2 <= r2 and ph.is_volume == vp.is_volume and same_strand and _sppm_photon_on_vp_surface(
-                            Int32(vp.is_volume), Int32(vp.mat_kind), vp.geo_normal.to_simd(), e.to_simd(), dist2, r2,
-                            ph.dir_in.to_simd()):
-                        # Volume VP: isotropic phase f=alb/(4π). Surface VP:
-                        # Lambertian f=alb/π (angle-independent, pulled out
-                        # of the sum) or, for a conductor VP, the raw GGX
-                        # BRDF evaluated per-photon (wi reconstructed from
-                        # the photon's stored incoming travel direction) —
-                        # NOT multiplied by any extra cosine, since the
-                        # photon's flux already encodes the appropriate
-                        # cosine-weighted density (same convention the
-                        # Lambertian/phase branches already rely on).
-                        if vp.is_volume == PhotonKind.volume:
-                            if Int(vp.med_idx) >= 0:   # no `continue`: k advances at the bottom of this loop
-                                var term_2 = MediumView.at(sd, vp.med_idx).photon_scale(vp.alb, vp.pos.to_simd(), ph.wavelengths) \
-                                       * _vp_phase(sd, vp, -ph.dir_in.to_simd()) * ph.flux
-                                var (tr_2, tg_2, tb_2) = spectral_sample_to_rgb(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, term_2, ph.wavelengths)
-                                phi_rgb += RGB(tr_2, tg_2, tb_2)
-                        else:
-                            # The VP's BSDF, bare f: the density estimate carries the cosine.
-                            var le = (BSDF(vp.mat_kind, True, False, vp.normal.to_simd(), vp.wo.to_simd(), vp.alb,
-                                        vp.mat_idx, _vp_base_alpha(vp.alpha), Float32(0), vp.hair_curve_idx,
-                                        vp.hair_h, vp.hair_v, True, False)).f[want_pdfs=False]((-ph.dir_in).to_simd(), LobeTables(sd.materials, sd.curves, sd.measuredBrdfs, sd.spectral), ph.wavelengths)
-                            if le.cos_used > Float32(1e-6):
-                                var term_3 = le.f_cos * (Float32(1.0) / le.cos_used) * ph.flux
-                                var (tr_3, tg_3, tb_3) = spectral_sample_to_rgb(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, term_3, ph.wavelengths)
-                                phi_rgb += RGB(tr_3, tg_3, tb_3)
-                        M += bucket_w
-                    k = Int(ph.nxt)
+    var buckets = neighbour_buckets(cix, ciy, ciz)
+    for b in range(NEIGHBOUR_CELLS):
+        var h = buckets[b]
+        if h < 0:
+            break
+        # Survivors of a thinned bucket stand for n/cap photons each
+        # (grid_keep): their flux AND their count, so the radius
+        # update sees the same photon count in expectation.
+        var bucket_w = grid_weight(heads, h)
+        var k = Int(heads[unsafe_offset=h])
+        while k != -1:
+            var ph = photons[unsafe_offset=k]
+            ph.flux *= bucket_w
+            var e = ph.pos - vp.pos
+            var dist2 = e.length_sq()
+            # A hair visible point gathers its own strand's photons, every other one no hair photon.
+            var same_strand = ph.curve == vp.hair_curve_idx if vp.mat_kind == LobeKind.hair else ph.curve < Int32(0)
+            if dist2 <= r2 and ph.is_volume == vp.is_volume and same_strand and _sppm_photon_on_vp_surface(
+                    Int32(vp.is_volume), Int32(vp.mat_kind), vp.geo_normal.to_simd(), e.to_simd(), dist2, r2,
+                    ph.dir_in.to_simd()):
+                # Volume VP: isotropic phase f=alb/(4π). Surface VP:
+                # Lambertian f=alb/π (angle-independent, pulled out
+                # of the sum) or, for a conductor VP, the raw GGX
+                # BRDF evaluated per-photon (wi reconstructed from
+                # the photon's stored incoming travel direction) —
+                # NOT multiplied by any extra cosine, since the
+                # photon's flux already encodes the appropriate
+                # cosine-weighted density (same convention the
+                # Lambertian/phase branches already rely on).
+                if vp.is_volume == PhotonKind.volume:
+                    if Int(vp.med_idx) >= 0:   # no `continue`: k advances at the bottom of this loop
+                        var term_2 = MediumView.at(sd, vp.med_idx).photon_scale(vp.alb, vp.pos.to_simd(), ph.wavelengths) \
+                               * _vp_phase(sd, vp, -ph.dir_in.to_simd()) * ph.flux
+                        var (tr_2, tg_2, tb_2) = spectral_sample_to_rgb(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, term_2, ph.wavelengths)
+                        phi_rgb += RGB(tr_2, tg_2, tb_2)
+                else:
+                    # The VP's BSDF, bare f: the density estimate carries the cosine.
+                    var le = (BSDF(vp.mat_kind, True, False, vp.normal.to_simd(), vp.wo.to_simd(), vp.alb,
+                                vp.mat_idx, _vp_base_alpha(vp.alpha), Float32(0), vp.hair_curve_idx,
+                                vp.hair_h, vp.hair_v, True, False)).f[want_pdfs=False]((-ph.dir_in).to_simd(), LobeTables(sd.materials, sd.curves, sd.measuredBrdfs, sd.spectral), ph.wavelengths)
+                    if le.cos_used > Float32(1e-6):
+                        var term_3 = le.f_cos * (Float32(1.0) / le.cos_used) * ph.flux
+                        var (tr_3, tg_3, tb_3) = spectral_sample_to_rgb(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, term_3, ph.wavelengths)
+                        phi_rgb += RGB(tr_3, tg_3, tb_3)
+                M += bucket_w
+            k = Int(ph.nxt)
 
     # SPPM update (only if new photons found)
     if M > Float32(0.0):
