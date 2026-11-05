@@ -8,7 +8,7 @@ from gonzales.core.sampling import sample_ggx_vndf, sample_cosine_hemisphere_wor
 from gonzales.transport.mis_policy import MisPolicy, mis_policy_power, nee_mis_weight
 from gonzales.transport.measured_bxdf_eval import bxdf_eval_measured, bxdf_pdf_measured, bxdf_sample_measured
 from gonzales.scene.accel.bvh import LightSample, HairLobeConstants, _hair_eval_lobes, _hair_precompute, _hair_sample_dir_u
-from gonzales.core.spectrum import SampledWavelengths, SpectralHandle, SpectralSample, rgb_to_spectral_sample, spec_refl_unbounded, rgb_illuminant_to_spectral_sample, rgb_bands_to_spectral_sample
+from gonzales.core.spectrum import SampledWavelengths, SpectralHandle, SpectralSample, rgb_to_spectral_sample, spec_refl_unbounded, rgb_illuminant_to_spectral_sample
 
 # ── Isotropic GGX (Trowbridge-Reitz) evaluation ───────────────────────────────
 # Companion to sample_ggx_vndf: that function only *samples* a half-vector: NEE
@@ -1022,7 +1022,8 @@ def _lobe_eval[want_pdfs: Bool = True, want_rev: Bool = True](
 
     if not c.is_surface:
         # Volume: the phase function (`param` is g), no surface, and so NO cosine at all.
-        var alb_v = rgb_bands_to_spectral_sample(c.alb.r, c.alb.g, c.alb.b, wavelengths)
+        var alb_v = rgb_to_spectral_sample(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z,
+                                           spectral_d65, c.alb.r, c.alb.g, c.alb.b, wavelengths)   # as the continuation
         var ph = hg_phase(dot(c.wo, dir_to_other), c.param)
         return LobeEval(alb_v * ph, Float32(1), ph, ph, False)
 

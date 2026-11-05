@@ -48,7 +48,7 @@ from gonzales.integrators.outputs import finish_render
 from gonzales.core.spectrum import (
     SampledWavelengths, SpectralSample, sample_wavelengths,
     rgb_illuminant_to_spectral_sample, spectral_sample_to_rgb,
-    rgb_bands_to_spectral_sample, spec_refl, spec_refl_unbounded, spec_illum, pass_wavelengths,
+    spec_refl, spec_refl_unbounded, spec_illum, pass_wavelengths,
 )
 
 
@@ -1281,17 +1281,9 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
                         SPPMPhoton(pos=sp, flux=flux, nxt=Int32(-1), is_volume=PhotonKind.volume, dir_in=rd, wavelengths=ph_wavelengths,
                                    curve=Int32(-1)),
                         photons, max_photons, counter)
-                # Scatter: isotropic phase function, modulate by albedo
-                # Single-scattering albedo is a per-channel COEFFICIENT
-                # (sigma_s/sigma_t), not a reflectance: band-pick it, never
-                # push it through the reflectance upsampler. spec_refl was
-                # used here, and RGB(a,a,a) does NOT upsample to a in every
-                # lane, so even a GREY medium picked up a spurious D65-shaped
-                # tint compounding once per scattering event -- the exact
-                # bug class docs/02_spectra_and_color.md documents ("A
-                # coefficient is not a color"). Band-picking degenerates to
-                # exactly the channel value in every lane.
-                flux *= rgb_bands_to_spectral_sample((ff.albedo).r, (ff.albedo).g, (ff.albedo).b, ph_wavelengths)
+                # Scatter: the albedo the gather and the path tracer use, sigma_s/sigma_t per wavelength.
+                flux *= spec_refl(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
+                                  (ff.albedo).r, (ff.albedo).g, (ff.albedo).b, ph_wavelengths)
                 # Sample new isotropic direction (uniform sphere)
                 var hs = medv.sample_phase((-rd).to_simd(), pcg.next_float(), pcg.next_float())
                 rd = vec3f(Vec3f(hs[0], hs[1], hs[2]))

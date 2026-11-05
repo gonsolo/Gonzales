@@ -152,6 +152,15 @@ reflectance upsampler instead, so a grey medium acquired a D65-shaped tint
 once per scattering event — the same defect this section describes, just in
 a spot nobody had checked.
 
+**Update (2026-11-05).** The single-scattering albedo now goes through the
+smooth reflectance upsampler everywhere, as pbrt's `RGBUnboundedSpectrum`
+media do: the path tracer, the subsurface walk and VCM's continuations already
+did, while VCM's merge, connections and NEE at a medium vertex and SPPM's photon
+walk still band-picked. A vertex whose strategies see two different albedos is
+blended by MIS into a biased estimate. A grey RGB now upsamples to an exactly
+flat spectrum (pbrt's constant sigmoid for r = g = b); before, the table's fit
+drifted up to 0.7% at 360 nm for dark greys, which a subsurface walk compounds.
+
 ### Where this still falls short, measured
 
 It is tempting to grade chromatic media against the obvious closed form:
