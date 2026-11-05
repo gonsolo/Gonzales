@@ -100,6 +100,52 @@ chromatic scatterer VCM read blue at 0.36x the path tracer, and about 0.97x
 once the weight was restored. Neither defect is visible in a grey fog, which
 is why both survived so long.
 
+### Chromatic density fields
+
+A density field (`uniformgrid`, `nanovdb`) has no closed-form exponential,
+so the hero-lane mixture of the homogeneous sampler is carried through
+delta tracking instead, as in pbrt's `SampleT_maj`. One grey majorant
+`mu = max_density * max_k sigma_t,k` bounds every lane, so the candidate
+positions do not depend on the lane and each lane's null probability
+`1 - sigma_t,k(x)/mu` lies in [0, 1]. A lane `j` is picked uniformly per
+flight and plays the collision coin; every lane accumulates its own product
+of null probabilities `P_k` along the same candidates. With
+`s_k = density(x) * sigma_t,k` at the collision:
+
+- collision: `pdf = mean_k s_k P_k`, lane weight `s_i P_i / pdf`
+- survival: `pdf = mean_k P_k`, lane weight `P_i / pdf`
+
+the single-sample balance heuristic over lanes, bounded by the lane count,
+and exactly 1 for a grey medium. `FreeFlight.lane_weight` carries it, and
+`spectral_free_flight_weight` returns it for a density field, so PT, VCM and
+SPPM consume it unchanged. Shadow rays ratio-track all lanes on the same
+kind of grey majorant (`medium_ratio_track`), which is unbiased per lane.
+
+Before, the tracker accepted on red's extinction and weighted every lane 1,
+so a chromatic grid rendered as if each lane had red's sigma_t. On
+`media-chromatic-scatter` as a density-1 `uniformgrid`, PT, against pbrt:
+
+| | R | G | B |
+|---|---|---|---|
+| homogeneous | 0.994 | 1.000 | 1.017 |
+| grid, before | 1.038 | 1.517 | 2.943 |
+| grid, after | 0.988 | 0.997 | 0.986 |
+| 4^3 grid, densities 0.5..2, after | 0.982 | 0.996 | 0.994 |
+
+The remaining grid/homogeneous difference in blue is the homogeneous NEE:
+it attenuates the light's RGB by an RGB Beer-Lambert before upsampling,
+where the grid's shadow ray is spectral. Made spectral, the homogeneous
+medium reads 0.987/0.997/0.993, the grid's numbers.
+
+VCM and SPPM take the same weight through `spectral_free_flight_weight`
+(VCM grid 0.988/0.995/1.000, 4^3 grid 0.984/0.997/1.038). A grey grid read
+1.088x its homogeneous twin in VCM for an unrelated reason: on the CPU,
+light subpath k and camera subpath k were seeded identically and replayed
+one random stream. With its own sequence the grid reads 0.999. Leaving a
+density field's tracked transmittance out of VCM's MIS densities, which
+in principle differ per strategy, changed nothing measurable and was not
+kept.
+
 ### One shared free-flight core
 
 Until 2026-09-10 this "sample one channel, weight the rest" logic existed
