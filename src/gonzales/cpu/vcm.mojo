@@ -127,8 +127,9 @@ def _bdpt_render_core(
         # No atomics needed: light path lp_idx writes only its own dedicated
         # slice of lvc (see _bdpt_store_lvc_vertex's docstring).
         def emit_light_path(lp_idx: Int) {imm}:
+            # Its own sequence: the paired camera path pix == lp_idx would otherwise replay the same numbers.
             var lpcg = PCG32(base_seed ^ UInt64(lp_idx * 6364136223846793005 + 1442695040888963407),
-                              UInt64(si * 2654435761 + 1))
+                              UInt64(si * 2654435761 + 1) ^ UInt64(0x5851F42D4C957F2D))
             _bdpt_trace_light_path[False](sd, lpcg, has_med, default_emit_med,
                                          scratch_light.unsafe_offset(lp_idx), lvc, lp_idx, lvc_path_len,
                                          mis_vc_weight_factor, mis_vm_weight_factor, pass_wl)
