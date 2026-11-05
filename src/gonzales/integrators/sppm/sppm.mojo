@@ -534,13 +534,14 @@ def _after_glossy_weight(glossy_pdf: Float32, light_pdf: Float32) -> Float32:
 
 @always_inline
 def _photon_walk[tex_gpu: Bool](ref sd: SceneView, mat: Material, inter: Intersection, hit: Point3f, refracted: Vec3f,
-                                wl: SampledWavelengths, mut pcg: PCG32, mut flux: SpectralSample) -> Tuple[Vec3f, Point3f, Bool]:
+                                wl: SampledWavelengths, mut pcg: PCG32, mut flux: SpectralSample,
+                                outside_ior: Float32) -> Tuple[Vec3f, Point3f, Bool]:
     """A photon through the walk and out of its exit: the next ray, and whether it lives."""
     var g_w = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
-    var ex = sss_hop[tex_gpu, adjoint=True](sd, mat, inter, hit.to_simd(), g_w, refracted, wl, pcg)
+    var ex = sss_hop[tex_gpu, adjoint=True](sd, mat, inter, hit.to_simd(), g_w, refracted, wl, pcg, outside_ior)
     if not ex.ok:
         return (vec3f(refracted), hit, False)
-    var out = sss_leave(ex.n_o, mat.albedo.r, pcg.next_float(), pcg.next_float())
+    var out = sss_leave(ex.n_o, ex.eta, pcg.next_float(), pcg.next_float())
     flux *= ex.weight * SpectralSample(out.weight)
     var wi = vec3f(out.wi)
     return (wi, ex.x_o + wi * Float32(0.0002), True)
@@ -556,7 +557,7 @@ def _vp_at_walk_exit(mut vp: SPPMPixel, ex: SssExit, mat: Material, mat_idx: Int
     vp.wo = vec3f(ex.n_o)
     vp.alb = RGB(Float32(1))
     vp.mat_kind = LobeKind.sss_exit
-    vp.alpha = mat.albedo.r
+    vp.alpha = ex.eta
     vp.mat_idx = Int32(mat_idx)
     vp.is_volume = PhotonKind.surface
     vp.valid = Int32(1)
@@ -851,7 +852,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
                         break
                     if s_v.transmit:   # a walk leaves into the medium it came from, so no compression
                         var ex_r = sss_hop[use_gpu](sd, mat, inter, hit.to_simd(), _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd()),
-                                                    s_v.wi, vp.wavelengths, pcg)
+                                                    s_v.wi, vp.wavelengths, pcg, current_dielectric_ior)
                         if ex_r.ok:
                             vp.beta = vp.beta * _spectral_gain_rgb(sd, s_v.weight * SpectralSample(mat.albedo.r * mat.albedo.r), vp.wavelengths)
                             _vp_at_walk_exit(vp, ex_r, mat, mat_idx, sd)
@@ -970,7 +971,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
                 not sss_walks_below(mat, inter, cur_med_idx), True, _vp_strat_u(vdc, pidx, n_events))
             if sss_entered(mat, inter, ray_dir, new_dir, cur_med_idx, sd, hit.to_simd()):
                 var g_w = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
-                var ex = sss_hop[use_gpu](sd, mat, inter, hit.to_simd(), g_w, new_dir, vp.wavelengths, pcg)
+                var ex = sss_hop[use_gpu](sd, mat, inter, hit.to_simd(), g_w, new_dir, vp.wavelengths, pcg, current_dielectric_ior)
                 if ex.ok:
                     vp.beta = vp.beta * radiance_scale
                     _vp_at_walk_exit(vp, ex, mat, mat_idx, sd)
@@ -1327,7 +1328,8 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
             flux *= s_l.weight * (Float32(1.0) / rr_l)
             if s_l.transmit and sss_walks_below(mat, inter, cur_med_idx):
                 bounce -= 1
-                var (wr, or_w, ok_w) = _photon_walk[tex_gpu](sd, mat, inter, hit, s_l.wi, ph_wavelengths, pcg, flux)
+                var (wr, or_w, ok_w) = _photon_walk[tex_gpu](sd, mat, inter, hit, s_l.wi, ph_wavelengths, pcg, flux,
+                                                     current_dielectric_ior)
                 if not ok_w:
                     break
                 rd = wr; ro = or_w
@@ -1365,7 +1367,8 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
             var (new_dir, new_org, _, new_cur_ior, new_prev_ior) = _dielectric_bounce(
                 ray_dir, hit.to_simd(), gn, ior, False, pcg, current_dielectric_ior, previous_dielectric_ior, mat.type == MatKind.thin_dielectric, radiance_mode=False)
             if sss_entered(mat, inter, ray_dir, new_dir, cur_med_idx, sd, hit.to_simd()):
-                var (wr, or_w, ok_w) = _photon_walk[tex_gpu](sd, mat, inter, hit, new_dir, ph_wavelengths, pcg, flux)
+                var (wr, or_w, ok_w) = _photon_walk[tex_gpu](sd, mat, inter, hit, new_dir, ph_wavelengths, pcg, flux,
+                                                     current_dielectric_ior)
                 if not ok_w:
                     break
                 rd = wr; ro = or_w

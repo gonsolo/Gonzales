@@ -59,11 +59,13 @@ struct SssWalk(TrivialRegisterPassable):
     var fwd_pdf: Float32           # guided over classic phase pdf, toward and away from the surface
     var bwd_pdf: Float32
     var bwd_fraction: Float32
+    var eta: Float32               # the boundary's index, interior over the medium the walk leaves into
 
     @staticmethod
     def none() -> SssWalk:
         return SssWalk(SpectralSample(Float32(0)), SpectralSample(Float32(0)), Float32(0), Int32(-1), Int32(-1), Int32(0), Int32(0),
-                       Vec3f(Float32(0)), Vec3f(Float32(0)), Float32(-1), Float32(1), Float32(1), Float32(1), Float32(0), Float32(0), Float32(0))
+                       Vec3f(Float32(0)), Vec3f(Float32(0)), Float32(-1), Float32(1), Float32(1), Float32(1), Float32(0), Float32(0), Float32(0),
+                       Float32(1))
 
 @fieldwise_init
 struct PathState(TrivialRegisterPassable):

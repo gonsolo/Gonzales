@@ -3,7 +3,7 @@
 
 from std.math import sqrt, cos, sin, log, exp, max
 from gonzales.transport.medium import MediumView
-from gonzales.transport.sss_walk import sss_entered, sss_walks_below
+from gonzales.transport.sss_walk import sss_entered, sss_walks_below, sss_relative_eta
 from gonzales.transport.medium_interface import medium_after
 from gonzales.core.geometry import Point3f, Point2f, Vec3f, vec3f, point3f, dot, face_toward, PI, INV_FOUR_PI, RGB
 from gonzales.scene.appearance.materials import MatKind, LobeKind, Material, resolve_mix
@@ -298,7 +298,7 @@ def _vcm_skin_arrival(
     a.alb = RGB(Float32(1))
     a.is_surface = Int32(1)
     a.mat_kind = LobeKind.sss_entry
-    a.pdf_bwd = mat.albedo.r
+    a.pdf_bwd = sss_relative_eta(mat, st.current_dielectric_ior)
     a.wo = vec3f(-ray_dir)
     a.med_idx = st.cur_med_idx
     a.wavelengths = st.wl
@@ -506,14 +506,14 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
             comptime if _VCM_SSS_CAMERA_ONLY:
                 return False
             var ex = _vcm_sss_walk[use_gpu, adjoint=True](sd, inter, mat, hit, ray_dir, st.rd, st.wl, mis_vc_weight_factor, pcg, st.flux,
-                                            st.dvcm, st.dvc, st.dvm, dvcm_in, dvc_in, dvm_in, entry_eta)
+                                            st.dvcm, st.dvc, st.dvm, dvcm_in, dvc_in, dvm_in, st.current_dielectric_ior, entry_eta)
             if not ex.ok or st.n_verts >= _BDPT_MAX_VERTS:   # rough skin's entry may have taken the last slot
                 return False
-            var v = _vcm_sss_exit_vertex(ex, mat.albedo.r, st.flux, st.cur_med_idx, st.wl, st.dvcm, st.dvc, st.dvm)
+            var v = _vcm_sss_exit_vertex(ex, ex.eta, st.flux, st.cur_med_idx, st.wl, st.dvcm, st.dvc, st.dvm)
             st.n_verts += 1
             v.n_delta = Int32(st.n_delta)
             _bdpt_store_lvc_vertex(v, lvc, lp_idx, st.n_verts - 1)
-            _ = _vcm_sss_exit_scatter(sd, ex, mat.albedo.r, mis_vc_weight_factor, Float32(0), pcg,   # a light exit does not merge
+            _ = _vcm_sss_exit_scatter(sd, ex, ex.eta, mis_vc_weight_factor, Float32(0), pcg,   # a light exit does not merge
                                       st.ro, st.rd, st.flux, st.dvcm, st.dvc, st.dvm)
             st.mnee.side = Float32(0)
 

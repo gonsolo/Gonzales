@@ -17,9 +17,18 @@ from std.math import abs, cos, exp, log, pow, sin, sqrt
 
 
 @always_inline
-def sss_walk_start(mat: Material, inter: Intersection, hit: Vec3f, geo_normal: Vec3f, wi: Vec3f, wl: SampledWavelengths, h: SpectralHandle) -> Tuple[Ray, SssWalk]:
-    """The ray and state of a walk entering a pbrt subsurface boundary at `hit` along the refracted direction wi.
-    Its coefficients are upsampled as any medium's (medium_sigma_s_spectral: unbounded sigma_t, bounded albedo)."""
+def sss_relative_eta(mat: Material, outside_ior: Float32) -> Float32:
+    """A subsurface boundary's index relative to the medium outside it (skin under water is nearly matched); below 1
+    it counts as matched."""
+    return max(mat.albedo.r / max(outside_ior, Float32(1e-6)), Float32(1.0001))
+
+
+@always_inline
+def sss_walk_start(mat: Material, inter: Intersection, hit: Vec3f, geo_normal: Vec3f, wi: Vec3f, wl: SampledWavelengths, h: SpectralHandle,
+                   outside_ior: Float32) -> Tuple[Ray, SssWalk]:
+    """The ray and state of a walk entering a pbrt subsurface boundary at `hit` along the refracted direction wi, from a
+    medium of index `outside_ior`. Its coefficients are upsampled as any medium's (medium_sigma_s_spectral: unbounded
+    sigma_t, bounded albedo)."""
     var st = mat.checker_tex1
     var al = mat.checker_tex2
     var out_n = face_toward(geo_normal, -wi)
@@ -28,7 +37,8 @@ def sss_walk_start(mat: Material, inter: Intersection, hit: Vec3f, geo_normal: V
             SssWalk(spec_refl_unbounded(h.coeffs, h.res, h.cie_x, h.cie_y, h.cie_z, h.d65, st.r, st.g, st.b, wl),
                     spec_refl(h.coeffs, h.res, h.cie_x, h.cie_y, h.cie_z, h.d65, al.r, al.g, al.b, wl),
                     mat.checker_uscale, Int32(inter.primId.id1), inter.primId.instanceIdx, Int32(0), Int32(0),
-                    hit, out_n, Float32(-1), Float32(1), Float32(1), Float32(1), Float32(0), Float32(0), Float32(0)))
+                    hit, out_n, Float32(-1), Float32(1), Float32(1), Float32(1), Float32(0), Float32(0), Float32(0),
+                    sss_relative_eta(mat, outside_ior)))
 
 
 @always_inline
@@ -65,13 +75,14 @@ struct SssExit(TrivialRegisterPassable):
     var n_o: Vec3f                  # outward geometric normal
     var weight: SpectralSample
     var inter_o: Intersection       # the exit's hit, where a light walk looks up the surface tint
+    var eta: Float32                # the boundary's relative index (SssWalk.eta), for the exit lobe
 
 
 @always_inline
 def sss_walk_to_exit(ref sd: SceneView, mat: Material, inter: Intersection, hit: Vec3f, geo_normal: Vec3f, wi: Vec3f,
-                     wl: SampledWavelengths, mut pcg: PCG32) -> SssExit:
+                     wl: SampledWavelengths, mut pcg: PCG32, outside_ior: Float32) -> SssExit:
     """The path tracer's walk, run to its end in one go for the integrators without a walking wavefront."""
-    var (ray, walk) = sss_walk_start(mat, inter, hit, geo_normal, wi, wl, sd.spectral)
+    var (ray, walk) = sss_walk_start(mat, inter, hit, geo_normal, wi, wl, sd.spectral, outside_ior)
     var state = Array[PathState, 1](uninitialized=True)
     var store = Array[Intersection, 1](fill=inter)
     var ps = state.unsafe_ptr()   # tracked: keep state and store alive while read
@@ -88,14 +99,14 @@ def sss_walk_to_exit(ref sd: SceneView, mat: Material, inter: Intersection, hit:
     _sss_walk_step(ps.unsafe_origin_cast[MutUntrackedOrigin](), hits.unsafe_origin_cast[MutUntrackedOrigin](), 0, sd)
     pcg.state = ps[].pcgState
     if ps[].active == 0 or ps[].sss.exiting == Int32(0):
-        return SssExit(False, Point3f(hit[0], hit[1], hit[2]), geo_normal, SpectralSample(Float32(0)), inter)
+        return SssExit(False, Point3f(hit[0], hit[1], hit[2]), geo_normal, SpectralSample(Float32(0)), inter, walk.eta)
     var e = hits[unsafe_offset=0]
     var r = ps[].ray
     var x = Point3f(r.origin.x + r.direction.x * e.tHit, r.origin.y + r.direction.y * e.tHit, r.origin.z + r.direction.z * e.tHit)
     var n = _geom_normal(e, sd.meshes, sd.instances, sd.spheres, x.to_simd())
     if dot(n, Vec3f(r.direction.x, r.direction.y, r.direction.z)) < Float32(0):
         n = -n
-    return SssExit(True, x, n, ps[].throughput, e)
+    return SssExit(True, x, n, ps[].throughput, e, walk.eta)
 
 
 @always_inline
@@ -219,7 +230,7 @@ def _sss_walk_step[steps: Int = 256](
                 var gn = cross(mesh_pos(m, Int(mesh_vi(m, bv + 1))) - p0, mesh_pos(m, Int(mesh_vi(m, bv + 2))) - p0)
                 gn = gn * (Float32(1) / max(sqrt(dot(gn, gn)), Float32(1e-30)))
                 var cos_i = abs(dot(dir, gn))
-                if pcg.next_float() < fr_dielectric(cos_i, Float32(1) / max(emat.albedo.r, Float32(1.0001))):
+                if pcg.next_float() < fr_dielectric(cos_i, Float32(1) / walk.eta):
                     var on = gn if dot(dir, gn) > Float32(0) else -gn
                     var rd = dir - on * (Float32(2) * dot(dir, on))
                     var back = org + dir * inter.tHit - on * Float32(1e-4)
@@ -312,11 +323,13 @@ def sss_entered(mat: Material, inter: Intersection, ray_dir: Vec3f, new_dir: Vec
 
 @always_inline
 def sss_hop[use_gpu: Bool, adjoint: Bool = False](ref sd: SceneView, mat: Material, inter: Intersection, hit: Vec3f, gn: Vec3f,
-                                                  refracted: Vec3f, wl: SampledWavelengths, mut pcg: PCG32) -> SssExit:
+                                                  refracted: Vec3f, wl: SampledWavelengths, mut pcg: PCG32,
+                                                  outside_ior: Float32) -> SssExit:
     """The whole hop for an integrator that does not walk across wavefront rounds: entry lobe, walk, surface tint.
     The tint is the camera walk's, at its entry; a light walk (`adjoint`) looks it up at its exit, the camera's entry, so
     both directions estimate the same transport (Scenes/vcm_sss_exit_merge_reciprocity.py)."""
-    var ex = sss_walk_to_exit(sd, mat, inter, hit, gn, sss_entry_lobe(face_toward(gn, refracted), mat.albedo.r, pcg), wl, pcg)
+    var ex = sss_walk_to_exit(sd, mat, inter, hit, gn, sss_entry_lobe(face_toward(gn, refracted), sss_relative_eta(mat, outside_ior), pcg),
+                              wl, pcg, outside_ior)
     if ex.ok:
         ex.weight = ex.weight * sss_entry_tint[use_gpu](sd, mat, ex.inter_o if adjoint else inter, wl)
     return ex

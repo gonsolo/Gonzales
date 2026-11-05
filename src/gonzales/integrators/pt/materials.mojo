@@ -3,7 +3,7 @@ from std.math import sqrt, atan, exp, pow
 from gonzales.core.geometry import offset_point, offset_eps, RGB, Point3f, Point2f, Vec3f, dot, face_toward, cross, Frame, PI, INV_PI, _is_real_ptr
 from gonzales.core.geometry import point3f
 from gonzales.scene.appearance.materials import Material, MatKind, LobeKind, sss_boundary_lobe
-from gonzales.transport.sss_walk import sss_leave, sss_entry_lobe, sss_walk_start
+from gonzales.transport.sss_walk import sss_leave, sss_entry_lobe, sss_relative_eta, sss_walk_start
 from gonzales.transport.render_state import PathState, SssWalk
 from gonzales.scene.shapes.primitives import Intersection, TriangleMesh, Sphere, mesh_uv, mesh_has_uvs
 from gonzales.core.geometry import Ray
@@ -302,7 +302,8 @@ def _sss_walk_enter(
     path_ptr[].ray = Ray(Point3f(org[0], org[1], org[2]), Vec3f(d[0], d[1], d[2]))
     path_ptr[].throughput *= lift * transmit
     path_ptr[].sss = SssWalk(sigma_t, a, g, Int32(inter.primId.id1), inter.primId.instanceIdx, Int32(0), Int32(0),
-                             raw, normal, Float32(-1), Float32(1), Float32(1), Float32(1), Float32(0), Float32(0), Float32(0))
+                             raw, normal, Float32(-1), Float32(1), Float32(1), Float32(1), Float32(0), Float32(0), Float32(0),
+                             Float32(1))
     path_ptr[].specularBounce = Int8(0)
     path_ptr[].lastBsdfPdf = Float32(0)
     path_ptr[].bounce += 1
@@ -316,7 +317,8 @@ def _sss_walk_enter_interior(
     """Start the walk below a pbrt subsurface boundary along the refracted direction wi, with the interior's own
     extinction and albedo (Material.sss_walk_interior). It leaves through the walk's Lambertian exit, which carries all
     the energy out as pbrt's normalized Fresnel exit lobe does."""
-    var (ray, walk) = sss_walk_start(mat, inter, hit, geo_normal, wi, path_ptr[].wavelengths, spectral)
+    var (ray, walk) = sss_walk_start(mat, inter, hit, geo_normal, wi, path_ptr[].wavelengths, spectral,
+                                     path_ptr[].current_dielectric_ior)
     path_ptr[].ray = ray
     path_ptr[].sss = walk
     if path_ptr[].bounce == 0 or path_ptr[].specularBounce == Int8(1):
@@ -367,11 +369,11 @@ def _shade_sss_exit[enqueue_shadow: Bool](
     var exit_mat = ctx.materials[unsafe_offset=Int(inter.primId.materialIndex)]
     var interior = exit_mat.sss_walk_interior()   # pbrt's subsurface; Principled keeps Cycles' plain Lambertian exit
     var white = BSDF(LobeKind.sss_exit if interior else LobeKind.lambertian, True, False, n, n, RGB(Float32(1)), Int32(-1),
-                     exit_mat.albedo.r if interior else Float32(0), Float32(0), Int32(-1), Float32(0), Float32(0), True, False)
+                     path_ptr[].sss.eta if interior else Float32(0), Float32(0), Int32(-1), Float32(0), Float32(0), True, False)
     _lobe_nee[enqueue_shadow](path_ptr, ctx, white, hit_point, pcg)
     if interior:
-        _mnee_at_walk_exit(path_ptr, ctx, n, hit_point, exit_mat.albedo.r, pcg)
-    var out = sss_leave(n, exit_mat.albedo.r, pcg.next_float(), pcg.next_float())
+        _mnee_at_walk_exit(path_ptr, ctx, n, hit_point, path_ptr[].sss.eta, pcg)
+    var out = sss_leave(n, path_ptr[].sss.eta, pcg.next_float(), pcg.next_float())
     path_ptr[].pcgState = pcg.state
     if out.pdf <= Float32(0) or dot(out.wi, gn) <= Float32(0):
         path_ptr[].active = 0
@@ -582,7 +584,7 @@ def shade_dielectric[use_gpu: Bool, enqueue_shadow: Bool](
             path_ptr[].throughput *= sss_texel_tint(a_pt, mat.sss_mean_refl, path_ptr[].wavelengths)
     if mat.sss_walk_interior() and not is_reflect and inter.primId.type == Int8(0) and \
        (force_entering or dot(ray_dir, geom_normal) < Float32(0.0)):
-        var wi_lobe = sss_entry_lobe(face_toward(geom_normal, bs.wi), mat.albedo.r, pcg)
+        var wi_lobe = sss_entry_lobe(face_toward(geom_normal, bs.wi), sss_relative_eta(mat, path_ptr[].current_dielectric_ior), pcg)
         _sss_walk_enter_interior(path_ptr, mat, inter, ray_org + ray_dir * inter.tHit, geom_normal, wi_lobe, ctx.spectral)
         path_ptr[].pcgState = pcg.state
         return
@@ -656,7 +658,8 @@ def _shade_rough_dielectric[enqueue_shadow: Bool](
         var etap = ior if entering else Float32(1.0) / ior
         if walks and entering:   # a walk leaves into the medium it came from, so no compression
             path_ptr[].throughput *= s.weight * SpectralSample(etap * etap) * tint
-            _sss_walk_enter_interior(path_ptr, mat, inter, hit_raw, n, sss_entry_lobe(face_toward(n, s.wi), mat.albedo.r, pcg), ctx.spectral)
+            _sss_walk_enter_interior(path_ptr, mat, inter, hit_raw, n, sss_entry_lobe(face_toward(n, s.wi), sss_relative_eta(mat, path_ptr[].current_dielectric_ior), pcg),
+                                      ctx.spectral)
             path_ptr[].pcgState = pcg.state
             return
         path_ptr[].eta_scale *= etap * etap

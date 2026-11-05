@@ -5,7 +5,7 @@ from std.collections import Array
 from std.math import sqrt, cos, sin, log, exp, max, abs
 from gonzales.transport.medium import MediumView
 from gonzales.core.geometry import face_toward
-from gonzales.transport.sss_walk import SssExit, sss_entered, sss_walks_below, sss_hop, sss_leave
+from gonzales.transport.sss_walk import SssExit, sss_entered, sss_walks_below, sss_hop, sss_leave, sss_relative_eta
 from gonzales.transport.medium_interface import medium_after
 from gonzales.scene.appearance.materials import fr_dielectric, sss_boundary_lobe
 from gonzales.core.geometry import offset_eps, RGB, Point3f, Point2f, Vec3f, vec3f, point3f, dot, cross, PI, INV_FOUR_PI, INV_PI
@@ -269,7 +269,7 @@ def _vcm_skin_arrival_here(mat: Material, inter: Intersection, med_in: Int32) ->
 def _vcm_sss_walk[use_gpu: Bool, adjoint: Bool = False](
     ref sd: SceneView, inter: Intersection, mat: Material, hit: Point3f, ray_dir: Vec3f, rd: Vec3f, wl: SampledWavelengths,
     mis_vc: Float32, mut pcg: PCG32, mut beta: SpectralSample, mut dvcm: Float32, mut dvc: Float32, mut dvm: Float32,
-    dvcm_in: Float32, dvc_in: Float32, dvm_in: Float32, entry_eta: Float32 = Float32(0),
+    dvcm_in: Float32, dvc_in: Float32, dvm_in: Float32, outside_ior: Float32, entry_eta: Float32 = Float32(0),
 ) -> SssExit:
     """The path tracer's walk below a subsurface boundary the dielectric cross just refracted into, and its MIS carries:
     Scenes/vcm_sss_hop_mis_derivation.py. The interior is one symmetric hop, so its density cancels between the
@@ -277,12 +277,12 @@ def _vcm_sss_walk[use_gpu: Bool, adjoint: Bool = False](
     skin, which a camera walk exit merges (Scenes/vcm_sss_exit_merge_derivation.py); 0 on the camera side. `adjoint`: a
     light walk, see sss_hop."""
     var gn = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
-    var ex = sss_hop[use_gpu, adjoint](sd, mat, inter, hit.to_simd(), gn, rd, wl, pcg)
+    var ex = sss_hop[use_gpu, adjoint](sd, mat, inter, hit.to_simd(), gn, rd, wl, pcg, outside_ior)
     if ex.ok:
         beta *= ex.weight
         var cos_e = abs(dot(-ray_dir, gn))
         var (a_vcm, a_vc, a_vm) = vcm_arrival_carries(dvcm_in, dvc_in, dvm_in, cos_e)
-        var inv_t = Float32(1) / max(Float32(1) - fr_dielectric(cos_e, mat.albedo.r), Float32(1e-6))
+        var inv_t = Float32(1) / max(Float32(1) - fr_dielectric(cos_e, ex.eta), Float32(1e-6))
         var pdf_rev = cos_e * INV_PI
         dvcm = Float32(0)
         comptime if _VCM_SSS_CAMERA_ONLY:
@@ -748,13 +748,13 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
 
         if walks:
             var ex = _vcm_sss_walk[use_gpu](sd, inter, mat, hit, ray_dir, st.rd, st.wl, mis_vc_weight_factor, pcg, st.beta,
-                                            st.dvcm, st.dvc, st.dvm, dvcm_in, dvc_in, dvm_in)
+                                            st.dvcm, st.dvc, st.dvm, dvcm_in, dvc_in, dvm_in, st.current_dielectric_ior)
             if not ex.ok:
                 return False
             var x_o = ex.x_o
             var n_o = ex.n_o
             # The exit merges with photons that arrived there before walking: one walk, not two.
-            var v = _vcm_sss_exit_vertex(ex, mat.albedo.r, st.beta, st.cur_med_idx, st.wl, st.dvcm, st.dvc, st.dvm,
+            var v = _vcm_sss_exit_vertex(ex, ex.eta, st.beta, st.cur_med_idx, st.wl, st.dvcm, st.dvc, st.dvm,
                                          Int32(inter.primId.materialIndex))
             var exit_eta = VcmStrategies.merge_density(sd, v, mis_vm_weight_factor)
             if st.n_verts == 0: st.first_alb = mat.sss_mean_refl
@@ -769,13 +769,13 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                     _bdpt_connect_to_cache_deferred(v, sd, lvc, lp_idx, path_len, mis_vm_weight_factor, shadow_rays, shadow_pending, shadow_valid, shadow_seg_med, st.cam_count(), st.cam_nd())
                 else:
                     st.total += _bdpt_connect_to_cache(v, sd, has_med, scratch, lvc, lp_idx, path_len, mis_vm_weight_factor, st.cam_count(), st.cam_nd())
-            var ctx_x = BSDF(LobeKind.sss_exit, True, False, n_o, n_o, RGB(Float32(1)), Int32(-1), mat.albedo.r,
+            var ctx_x = BSDF(LobeKind.sss_exit, True, False, n_o, n_o, RGB(Float32(1)), Int32(-1), ex.eta,
                                 Float32(0), Int32(-1), Float32(0), Float32(0), True, False)
             st.total += _vcm_nee_surface(sd, v, ctx_x, x_o, n_o, st.beta, exit_eta,
                                       v.dVCM, v.dVC, st.cur_med_idx, scratch, st.wl, pcg,
                                       offset_eps(x_o.x, x_o.y, x_o.z), False)
             st.total += _vcm_mnee(sd, v, x_o.to_simd(), n_o, st.beta, pcg, st.wl, exit_eta, v.dVCM, v.dVC)
-            var cos_out_x = _vcm_sss_exit_scatter(sd, ex, mat.albedo.r, mis_vc_weight_factor, exit_eta, pcg,
+            var cos_out_x = _vcm_sss_exit_scatter(sd, ex, ex.eta, mis_vc_weight_factor, exit_eta, pcg,
                                                   st.ro, st.rd, st.beta, st.dvcm, st.dvc, st.dvm)
             st.last_bsdf_pdf = cos_out_x * INV_PI
             st.mnee = VCMMneeTrack(x_o.to_simd(), cos_out_x * INV_PI, Int32(0))
