@@ -731,16 +731,8 @@ def _sppm_trace_visible_point[use_gpu: Bool](
             vp.env += vp.beta * RGB(em_r, em_g, em_b)
             if ff.collided:
                 # Volume scatter — store VP here
-                # NOTE: ff.weight (the chromatic collision ratio) is deliberately
-                # NOT applied here, unlike bdpt_*.mojo. Applying it to both the VP
-                # and photon subpaths measurably WORSENED SPPM's agreement with
-                # the path tracer on a chromatic scatterer (blue 1.22x -> 2.03x
-                # of PT; chroma spread 1.38 -> 2.14), while VCM improved sharply
-                # under the same change. SPPM's volume path has a separate,
-                # unresolved discrepancy -- it already sits ~5% off PT on a GREY
-                # scatterer -- so the weight is withheld here until that is
-                # root-caused rather than shipping a measured regression.
-                # See Scenes/media-chromatic-scatter.pbrt.
+                # Chromatic collision weight, as on pass-through and on the photon side.
+                vp.beta *= ff.weight
                 vp.pos = ro + rd * ff.t_free
                 vp.normal = Vec3f(Float32(0), Float32(1), Float32(0))
                 vp.geo_normal = Vec3f(Float32(0), Float32(1), Float32(0))
@@ -1260,6 +1252,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
             # featureless sphere with no bunny in it. See sample_free_flight.
             var ff = medv.free_flight(Vec3f(ro.x, ro.y, ro.z), rd, t_hit, pcg, ph_wavelengths)
             if ff.collided:
+                flux *= medv.weight(ff, t_hit, ph_wavelengths)   # chromatic collision weight, as VCM's light path
                 # A scattering event INSIDE a subsurface interior is a step of
                 # the subsurface random walk, not a path bounce, so it is not
                 # charged to maxdepth -- the same exemption Medium.is_sss
