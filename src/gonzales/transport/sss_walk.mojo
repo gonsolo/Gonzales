@@ -64,6 +64,7 @@ struct SssExit(TrivialRegisterPassable):
     var x_o: Point3f
     var n_o: Vec3f                  # outward geometric normal
     var weight: SpectralSample
+    var inter_o: Intersection       # the exit's hit, where a light walk looks up the surface tint
 
 
 @always_inline
@@ -87,14 +88,14 @@ def sss_walk_to_exit(ref sd: SceneView, mat: Material, inter: Intersection, hit:
     _sss_walk_step(ps.unsafe_origin_cast[MutUntrackedOrigin](), hits.unsafe_origin_cast[MutUntrackedOrigin](), 0, sd)
     pcg.state = ps[].pcgState
     if ps[].active == 0 or ps[].sss.exiting == Int32(0):
-        return SssExit(False, Point3f(hit[0], hit[1], hit[2]), geo_normal, SpectralSample(Float32(0)))
+        return SssExit(False, Point3f(hit[0], hit[1], hit[2]), geo_normal, SpectralSample(Float32(0)), inter)
     var e = hits[unsafe_offset=0]
     var r = ps[].ray
     var x = Point3f(r.origin.x + r.direction.x * e.tHit, r.origin.y + r.direction.y * e.tHit, r.origin.z + r.direction.z * e.tHit)
     var n = _geom_normal(e, sd.meshes, sd.instances, sd.spheres, x.to_simd())
     if dot(n, Vec3f(r.direction.x, r.direction.y, r.direction.z)) < Float32(0):
         n = -n
-    return SssExit(True, x, n, ps[].throughput)
+    return SssExit(True, x, n, ps[].throughput, e)
 
 
 @always_inline
@@ -310,10 +311,12 @@ def sss_entered(mat: Material, inter: Intersection, ray_dir: Vec3f, new_dir: Vec
 
 
 @always_inline
-def sss_hop[use_gpu: Bool](ref sd: SceneView, mat: Material, inter: Intersection, hit: Vec3f, gn: Vec3f, refracted: Vec3f,
-                           wl: SampledWavelengths, mut pcg: PCG32) -> SssExit:
-    """The whole hop for an integrator that does not walk across wavefront rounds: entry lobe, walk, surface tint."""
+def sss_hop[use_gpu: Bool, adjoint: Bool = False](ref sd: SceneView, mat: Material, inter: Intersection, hit: Vec3f, gn: Vec3f,
+                                                  refracted: Vec3f, wl: SampledWavelengths, mut pcg: PCG32) -> SssExit:
+    """The whole hop for an integrator that does not walk across wavefront rounds: entry lobe, walk, surface tint.
+    The tint is the camera walk's, at its entry; a light walk (`adjoint`) looks it up at its exit, the camera's entry, so
+    both directions estimate the same transport (Scenes/vcm_sss_exit_merge_reciprocity.py)."""
     var ex = sss_walk_to_exit(sd, mat, inter, hit, gn, sss_entry_lobe(face_toward(gn, refracted), mat.albedo.r, pcg), wl, pcg)
     if ex.ok:
-        ex.weight = ex.weight * sss_entry_tint[use_gpu](sd, mat, inter, wl)
+        ex.weight = ex.weight * sss_entry_tint[use_gpu](sd, mat, ex.inter_o if adjoint else inter, wl)
     return ex

@@ -536,7 +536,7 @@ def _photon_walk[tex_gpu: Bool](ref sd: SceneView, mat: Material, inter: Interse
                                 wl: SampledWavelengths, mut pcg: PCG32, mut flux: SpectralSample) -> Tuple[Vec3f, Point3f, Bool]:
     """A photon through the walk and out of its exit: the next ray, and whether it lives."""
     var g_w = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
-    var ex = sss_hop[tex_gpu](sd, mat, inter, hit.to_simd(), g_w, refracted, wl, pcg)
+    var ex = sss_hop[tex_gpu, adjoint=True](sd, mat, inter, hit.to_simd(), g_w, refracted, wl, pcg)
     if not ex.ok:
         return (vec3f(refracted), hit, False)
     var out = sss_leave(ex.n_o, mat.albedo.r, pcg.next_float(), pcg.next_float())

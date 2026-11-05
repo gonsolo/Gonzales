@@ -502,7 +502,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
         if walks:
             comptime if _VCM_SSS_CAMERA_ONLY:
                 return False
-            var ex = _vcm_sss_walk[use_gpu](sd, inter, mat, hit, ray_dir, st.rd, st.wl, mis_vc_weight_factor, pcg, st.flux,
+            var ex = _vcm_sss_walk[use_gpu, adjoint=True](sd, inter, mat, hit, ray_dir, st.rd, st.wl, mis_vc_weight_factor, pcg, st.flux,
                                             st.dvcm, st.dvc, st.dvm, dvcm_in, dvc_in, dvm_in, entry_eta)
             if not ex.ok or st.n_verts >= _BDPT_MAX_VERTS:   # rough skin's entry may have taken the last slot
                 return False

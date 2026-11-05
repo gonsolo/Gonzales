@@ -256,7 +256,7 @@ def _area_light_hit(ref sd: SceneView, inter: Intersection, mat: Material,
             area_light_hit_cos(inter, sd.meshes, sd.instances, ray_dir))
 
 
-def _vcm_sss_walk[use_gpu: Bool](
+def _vcm_sss_walk[use_gpu: Bool, adjoint: Bool = False](
     ref sd: SceneView, inter: Intersection, mat: Material, hit: Point3f, ray_dir: Vec3f, rd: Vec3f, wl: SampledWavelengths,
     mis_vc: Float32, mut pcg: PCG32, mut beta: SpectralSample, mut dvcm: Float32, mut dvc: Float32, mut dvm: Float32,
     dvcm_in: Float32, dvc_in: Float32, dvm_in: Float32, entry_eta: Float32 = Float32(0),
@@ -264,9 +264,10 @@ def _vcm_sss_walk[use_gpu: Bool](
     """The path tracer's walk below a subsurface boundary the dielectric cross just refracted into, and its MIS carries:
     Scenes/vcm_sss_hop_mis_derivation.py. The interior is one symmetric hop, so its density cancels between the
     subpaths, and nothing connects across it. `entry_eta`: the merge share of the entry, a light path's arrival on smooth
-    skin, which a camera walk exit merges (Scenes/vcm_sss_exit_merge_derivation.py); 0 on the camera side."""
+    skin, which a camera walk exit merges (Scenes/vcm_sss_exit_merge_derivation.py); 0 on the camera side. `adjoint`: a
+    light walk, see sss_hop."""
     var gn = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
-    var ex = sss_hop[use_gpu](sd, mat, inter, hit.to_simd(), gn, rd, wl, pcg)
+    var ex = sss_hop[use_gpu, adjoint](sd, mat, inter, hit.to_simd(), gn, rd, wl, pcg)
     if ex.ok:
         beta *= ex.weight
         var cos_e = abs(dot(-ray_dir, gn))
