@@ -2,9 +2,10 @@
 # Part of the BDPT/VCM machinery that used to be one file (bdpt_*.mojo).
 
 from std.sys import has_accelerator
+from max.gpu.host import DeviceContext, DeviceBuffer
 from std.sys.info import size_of
 from max.gpu import block_dim
-from std.math import max, min, ceildiv
+from std.math import max, min, ceildiv, pow
 from std.memory.alloc import unsafe_alloc
 from gonzales.transport.medium_interface import default_emit_medium
 from gonzales.scene.appearance.materials import LobeKind
@@ -14,15 +15,32 @@ from gonzales.scene.accel.bvh import SceneView
 from gonzales.core.sampling import film_filter_of
 from gonzales.scene.appearance.footprint import camera_footprint
 from gonzales.scene.description.pbrt_parser import ParsedScene_Mojo
-from gonzales.integrators.sppm.sppm import SPPMPixel, SPPMPhoton, _vp_samples_for, _VP_SAMPLES, _photon_depth_cap
+from gonzales.integrators.sppm.sppm import SPPMPixel, SPPMPhoton, _vp_samples_for, _VP_SAMPLES, _photon_depth_cap, _ALPHA
 from gonzales.estimators.photon_grid import _HSIZE
 from gonzales.gpu.scene import GpuSceneHandle
 from gonzales.core.progress import Progress
 from gonzales.integrators.outputs import finish_render
+from gonzales.estimators.irradiance_cache import IrradianceCache
+from gonzales.core.geometry import Point3f, Vec3f
+from gonzales.core.spectrum import SpectralSample
 from gonzales.gpu.sppm.kernels import (
+    sppm_jb_points_gpu, sppm_jb_aggregate_gpu, sppm_jb_vp_gpu,
     sppm_reset_i32_gpu, sppm_gen_vp_gpu, sppm_emit_photons_gpu, sppm_grid_reset_gpu, sppm_grid_count_gpu,
     sppm_grid_insert_gpu, sppm_gather_gpu, sppm_nee_gpu, sppm_finalize_gpu, sppm_flush_gpu, sppm_retrace_vp_gpu,
 )
+
+
+def _upload(ctx: DeviceContext, src: Pointer[UInt8, MutUntrackedOrigin], nbytes: Int) raises -> DeviceBuffer[DType.uint8]:
+    var buf = ctx.enqueue_create_buffer[DType.uint8](max(nbytes, 1))
+    with buf.map_to_host() as h:
+        var dst = h.unsafe_ptr()
+        for i in range(nbytes):
+            dst[unsafe_offset=i] = src[unsafe_offset=i]
+    return buf^
+
+
+def _dev[T: AnyType](buf: DeviceBuffer[DType.uint8]) -> Pointer[T, MutUntrackedOrigin]:
+    return buf.unsafe_ptr().unsafe_bitcast[T]().unsafe_origin_cast[MutUntrackedOrigin]()
 
 def sppm_render_gpu(
     handlePtr: Pointer[GpuSceneHandle, MutUntrackedOrigin],
@@ -33,6 +51,9 @@ def sppm_render_gpu(
     initial_radius: Float32,
     no_denoise: Bool,
     verbose:  Bool,
+    jb: Bool = False,
+    jb_spacing: Float32 = Float32(0),
+    jb_near: Float32 = Float32(4),
 ) -> Int32:
     """GPU-accelerated Stochastic Progressive Photon Mapping — same algorithm
     as sppm_render, parallelized: one thread per visible-point sample for the"""
@@ -127,6 +148,34 @@ def sppm_render_gpu(
             var grid_vps = ceildiv(n_vps, block_size)
             var grid_hsize = ceildiv(_HSIZE, block_size)
 
+            # Jensen-Buhler: the points and their tree are built on the host, then live on the device.
+            var cache = IrradianceCache.build(sd, psc[unsafe_offset=0].prim_ids_cpu, Int(psc[unsafe_offset=0].prim_count_cpu) if jb else 0,
+                                              jb_spacing, jb_near, psc[unsafe_offset=0].rng_seed ^ UInt64(0x51ED))
+            if jb:
+                print("Jensen-Buhler (GPU): " + String(cache.n) + " irradiance points, spacing " + String(cache.spacing)
+                      + ", " + String(cache.n_nodes) + " nodes")
+            var n_pts = max(cache.n, 1)
+            var n_nodes = max(cache.n_nodes, 1)
+            var n_mat = max(Int(sd.materialCount), 1)
+            var jb_pos = _upload(handle[].ctx, cache.pos.unsafe_bitcast[UInt8](), n_pts * size_of[Point3f]())
+            var jb_nrm = _upload(handle[].ctx, cache.nrm.unsafe_bitcast[UInt8](), n_pts * size_of[Vec3f]())
+            var jb_mat = _upload(handle[].ctx, cache.mat.unsafe_bitcast[UInt8](), n_pts * size_of[Int32]())
+            var jb_area = _upload(handle[].ctx, cache.area.unsafe_bitcast[UInt8](), n_pts * size_of[Float32]())
+            var jb_lx = handle[].ctx.enqueue_create_buffer[DType.uint8](n_pts * size_of[SpectralSample]())
+            var jb_center = _upload(handle[].ctx, cache.center.unsafe_bitcast[UInt8](), n_nodes * size_of[Point3f]())
+            var jb_far2 = _upload(handle[].ctx, cache.far2.unsafe_bitcast[UInt8](), n_nodes * size_of[Float32]())
+            var jb_skip = _upload(handle[].ctx, cache.skip.unsafe_bitcast[UInt8](), n_nodes * size_of[Int32]())
+            var jb_begin = _upload(handle[].ctx, cache.begin.unsafe_bitcast[UInt8](), n_nodes * size_of[Int32]())
+            var jb_end = _upload(handle[].ctx, cache.end.unsafe_bitcast[UInt8](), n_nodes * size_of[Int32]())
+            var jb_sum = handle[].ctx.enqueue_create_buffer[DType.uint8](n_nodes * size_of[SpectralSample]())
+            var jb_first = _upload(handle[].ctx, cache.mat_first.unsafe_bitcast[UInt8](), n_mat * size_of[Int32]())
+            var jb_last = _upload(handle[].ctx, cache.mat_end.unsafe_bitcast[UInt8](), n_mat * size_of[Int32]())
+            var dcache = IrradianceCache(cache.n, _dev[Point3f](jb_pos), _dev[Vec3f](jb_nrm), _dev[Int32](jb_mat), _dev[Float32](jb_area),
+                                         _dev[SpectralSample](jb_lx), cache.n_nodes, _dev[Point3f](jb_center), _dev[Float32](jb_far2),
+                                         _dev[Int32](jb_skip), _dev[Int32](jb_begin), _dev[Int32](jb_end), _dev[SpectralSample](jb_sum),
+                                         _dev[Int32](jb_first), _dev[Int32](jb_last), cache.spacing)
+            cache.free()
+
             # Visible points are traced once per render, not per pass, unless retraced.
             var cam_seed = psc[unsafe_offset=0].rng_seed ^ UInt64(0x9E3779B97F4A7C15 + 7)
             if not retrace:
@@ -144,6 +193,7 @@ def sppm_render_gpu(
                     film_filter_of(psc[unsafe_offset=0].filter_type, psc[unsafe_offset=0].filter_sigma,
                                    psc[unsafe_offset=0].filter_support_x, psc[unsafe_offset=0].filter_support_y),
                     gsd,
+                    Int32(1) if jb else Int32(0),
                     grid_dim=grid_vps,
                     block_dim=block_size,
                 )
@@ -161,7 +211,7 @@ def sppm_render_gpu(
                         Int64(psc[unsafe_offset=0].max_depth),
                         film_filter_of(psc[unsafe_offset=0].filter_type, psc[unsafe_offset=0].filter_sigma,
                                        psc[unsafe_offset=0].filter_support_x, psc[unsafe_offset=0].filter_support_y),
-                        Int64(pass_idx), gsd,
+                        Int64(pass_idx), gsd, Int32(1) if jb else Int32(0),
                         grid_dim=grid_vps, block_dim=block_size)
                 var grid_emit = ceildiv(max(n_photons_per_pass, 1), block_size)
                 handle[].ctx.enqueue_function[sppm_emit_photons_gpu](
@@ -175,6 +225,7 @@ def sppm_render_gpu(
                     Int64(pass_idx),
                     Int64(psc[unsafe_offset=0].max_depth),
                     gsd,
+                    Int32(1) if jb else Int32(0),
                     grid_dim=grid_emit,
                     block_dim=block_size,
                 )
@@ -213,6 +264,18 @@ def sppm_render_gpu(
                         grid_dim=grid_vps,
                         block_dim=block_size,
                     )
+
+                if jb and cache.n > 0:
+                    if n_stored == 0:   # the points still take their NEE share
+                        handle[].ctx.enqueue_function[sppm_grid_reset_gpu](
+                            heads_ptr, Int64(_HSIZE), grid_dim=grid_hsize, block_dim=block_size)
+                    var r2 = init_r2 * pow(Float32(pass_idx + 1), _ALPHA - Float32(1))
+                    handle[].ctx.enqueue_function[sppm_jb_points_gpu](
+                        dcache, photons_ptr, heads_ptr, inv_cell, r2, psc[unsafe_offset=0].rng_seed, Int64(pass_idx), gsd,
+                        grid_dim=ceildiv(cache.n, block_size), block_dim=block_size)
+                    handle[].ctx.enqueue_function[sppm_jb_aggregate_gpu](dcache, grid_dim=1, block_dim=1)
+                    handle[].ctx.enqueue_function[sppm_jb_vp_gpu](
+                        vps_ptr, Int64(n_vps), dcache, Int64(pass_idx), gsd, grid_dim=grid_vps, block_dim=block_size)
 
                 var nee_seed = psc[unsafe_offset=0].rng_seed ^ UInt64(pass_idx * 0xBF58476D1CE4E5B9 + 3)
                 handle[].ctx.enqueue_function[sppm_nee_gpu](
@@ -283,6 +346,8 @@ def sppm_render_gpu(
             # Keep the device buffers alive until the kernels that use them are done.
             _ = vps_buf^; _ = photons_buf^; _ = heads_buf^
             _ = inter_cam_buf^; _ = inter_ph_buf^; _ = r2c_buf^; _ = c2w_buf^
+            _ = jb_pos^; _ = jb_nrm^; _ = jb_mat^; _ = jb_area^; _ = jb_lx^; _ = jb_center^; _ = jb_far2^
+            _ = jb_skip^; _ = jb_begin^; _ = jb_end^; _ = jb_sum^; _ = jb_first^; _ = jb_last^
 
             var out_pixels = unsafe_alloc[Float32](n_pix * 3)
             var caustic_pixels = unsafe_alloc[Float32](n_pix * 3)

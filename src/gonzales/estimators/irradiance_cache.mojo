@@ -1,6 +1,7 @@
 """Jensen and Buhler 2002's irradiance samples on translucent surfaces and their hierarchical dipole integral."""
 from std.math import floor, max, min, sqrt
 from std.memory.alloc import unsafe_alloc
+from std.builtin.device_passable import DevicePassable, DeviceTypeEncoder
 from gonzales.core.geometry import Point3f, Vec3f, cross, dot, _is_real_ptr
 from gonzales.core.rng import PCG32
 from gonzales.core.spectrum import SpectralSample
@@ -19,7 +20,7 @@ def is_translucent(ref sd: SceneView, p: PrimId) -> Bool:
 
 
 @fieldwise_init
-struct IrradianceCache(TrivialRegisterPassable):
+struct IrradianceCache(TrivialRegisterPassable, DevicePassable):
     """Points in a binary tree per material, nodes in preorder with skip links (JB's octree, median split instead).
     `lx` holds each point's radiance through the boundary's exit lobe for the current pass, E_t / (c pi): the lobe at
     the camera hit carries the same 1 / (c pi), so A * lx stands in for A * E_t in the dipole sum."""
@@ -39,6 +40,14 @@ struct IrradianceCache(TrivialRegisterPassable):
     var mat_first: Pointer[Int32, MutUntrackedOrigin]  # a material's nodes [mat_first, mat_end)
     var mat_end: Pointer[Int32, MutUntrackedOrigin]
     var spacing: Float32
+    comptime device_type: AnyType = Self
+
+    def _to_device_type(self, mut encoder: Some[DeviceTypeEncoder], target: MutOpaquePointer[_]):
+        encoder.encode(self, target)
+
+    @staticmethod
+    def get_type_name() -> String:
+        return "IrradianceCache"
 
     @staticmethod
     def build(ref sd: SceneView, prims: Pointer[PrimId, MutUntrackedOrigin], n_prims: Int, spacing_in: Float32,
