@@ -1,5 +1,5 @@
 from std.ffi import external_call
-from std.sys import argv, exit
+from std.sys import argv, exit, get_defined_int
 from std.sys.info import _accelerator_arch
 from std.time import perf_counter_ns
 from std.os import getenv, setenv
@@ -119,7 +119,12 @@ def _ply_loader_thread(arg: ThreadArg) -> ThreadArg:
     arg.unsafe_bitcast[PlyPrefetch]()[unsafe_offset=0].run_loader()
     return arg
 
+comptime _GZ_DEV = get_defined_int["GZ_DEV", 0]() != 0
+
 def main() raises:
+    # IGC miscompiles a hint-free build's subroutine calls (VCM 9% dark); its stack calls are right.
+    comptime if _GZ_DEV:
+        _ = setenv("IGC_FunctionControl", "3", False)
     var t0 = perf_counter_ns()
 
     var args = argv()

@@ -345,7 +345,7 @@ DEV_SRC = $(BUILD_DIR)/dev-src
 dev: $(MOJO_SRCS) pyproject.toml $(OIIO_BRIDGE_LIB) $(VIEWER_LIB) $(VULKANRT_LIB) $(VULKANINTEROP_LIB) $(RTCORE_LIB) $(XERT_LIB) $(OPTIXCURVES_LIB) $(NVDB_BRIDGE_LIB)
 	@mkdir -p $(DEV_SRC) && rsync -a --delete src/ $(DEV_SRC)/
 	@grep -rlE '^\s*@(always_inline|no_inline)' $(DEV_SRC) | xargs -r sed -i -E '/^\s*@(always_inline|no_inline)(\s|$$)/d'
-	uv run mojo build $(DEV_SRC)/gonzales/__init__.mojo -I $(DEV_SRC) -o $(BUILD_DIR)/gonzales_dev $(MOJO_BUILD_FLAGS) $(MOJO_LINK_FLAGS)
+	uv run mojo build $(DEV_SRC)/gonzales/__init__.mojo -I $(DEV_SRC) -o $(BUILD_DIR)/gonzales_dev -D GZ_DEV=1 $(MOJO_BUILD_FLAGS) $(MOJO_LINK_FLAGS)
 # AMD RX 6800 (gfx1030): without CUDA the RT-core and interop bridges build as stubs
 release-amd:
 	$(MAKE) release BUILD_DIR=build-amd CUDA_HOME=/nonexistent MOJO_BUILD_FLAGS="--target-accelerator gfx1030"
