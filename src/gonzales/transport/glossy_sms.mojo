@@ -19,7 +19,7 @@ from gonzales.transport.manifold import _sms_vertex_from_hit, _mnee_chain_g, _mn
 # Glossy lobes up to this GGX alpha start SMS; MIS keeps any threshold unbiased, a wider lobe just gains little.
 comptime GLOSSY_SMS_MAX_ALPHA: Float32 = Float32(0.3)
 # Cap on the reciprocal estimate's re-solves. Truncation darkens a root a seed finds with chance q by (1 - q)^cap.
-comptime GLOSSY_SMS_MAX_TRIALS: Int = 64
+comptime GLOSSY_SMS_MAX_TRIALS: Int = get_defined_int["GSMS_CAP", 64]()
 comptime _OFF: Float32 = Float32(2e-4)
 # DEBUG (-D GSMS_DEBUG=n): only glossy SMS (1), only BSDF chain paths from glossy vertices with their MIS share (2) or
 # unweighted (3); 1 + 2 must match 3. Everything else contributes nothing.
