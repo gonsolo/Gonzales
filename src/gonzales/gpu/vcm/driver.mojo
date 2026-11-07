@@ -2,6 +2,8 @@
 # Part of the BDPT/VCM machinery that used to be one file (bdpt_*.mojo).
 
 from std.sys import has_accelerator
+from std.os import getenv
+from std.time import perf_counter_ns
 from std.sys.info import size_of
 from max.gpu import block_dim
 from max.gpu.host import DeviceBuffer
@@ -104,6 +106,8 @@ struct VcmGpu(Movable):
     var shadow_scratch: DeviceBuffer[DType.uint8]
     var mnee_stats: DeviceBuffer[DType.int32]    # pass 0's MNEE probes and glass hits
     var mnee_off: Bool                           # glass on under 5% of them: MNEE costs more than it adds
+    var vt_on: Bool                              # GZ_VCM_TIMING: per-phase GPU time of the wavefront pass
+    var vt: SIMD[DType.int64, 8]
 
     def __init__(
         out self, handle: Pointer[GpuSceneHandle, MutUntrackedOrigin], psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin],
@@ -167,6 +171,8 @@ struct VcmGpu(Movable):
         self.mnee_stats = ctx.enqueue_create_buffer[DType.int32](2)
         self.mnee_stats.enqueue_fill(Int32(0))
         self.mnee_off = False
+        self.vt_on = getenv("GZ_VCM_TIMING") != ""
+        self.vt = SIMD[DType.int64, 8](0)
         var n_l = self.n_light_paths if wavefront else 0
         var n_c = self.n_pix if wavefront else 0
         var n_s = self.n_pix * _BDPT_MAX_VERTS if wavefront else 0
@@ -342,6 +348,15 @@ struct VcmGpu(Movable):
             grid_dim=ceildiv(self.n_pix, block_size), block_dim=block_size)
         self._end_pass(p, film, verbose)
 
+    def _vt_mark(mut self, mut t0: Int, slot: Int) raises:
+        """GZ_VCM_TIMING: wait for the queue and charge the time since t0 to `slot`."""
+        if not self.vt_on:
+            return
+        self.handle[].ctx.synchronize()
+        var t = perf_counter_ns()
+        self.vt[slot] += Int64(t - t0)
+        t0 = t
+
     def run_pass_wavefront(mut self, psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin], si: Int,
                            film: Pointer[Float32, MutUntrackedOrigin], albedo: Pointer[Float32, MutUntrackedOrigin],
                            rt: VcmRt, ref sd: SceneView, verbose: Bool = False) raises:
@@ -358,6 +373,8 @@ struct VcmGpu(Movable):
         var inter_cam = self.inter_cam.unsafe_ptr().unsafe_bitcast[Intersection]()
         var grid_light = ceildiv(max(self.n_light_paths, 1), block_size)
         var grid_pix = ceildiv(self.n_pix, block_size)
+        var t0 = perf_counter_ns()
+        self._vt_mark(t0, 7)
         ctx.enqueue_function[_bdpt_light_path_init_gpu](
             light_states, lvc, path_len, p.mis_vc, Int64(self.n_light_paths), self.default_emit_med, p.pass_seed,
             Int64(si), p.gsd, grid_dim=grid_light, block_dim=block_size)
@@ -370,7 +387,9 @@ struct VcmGpu(Movable):
             ctx.enqueue_function[_bdpt_light_path_bounce_gpu](
                 light_states, inter_light, lvc, path_len, p.mis_vc, p.mis_vm, Int64(self.n_light_paths), _f32(self.c2w),
                 self.px_scale, p.vsd, grid_dim=grid_light, block_dim=block_size)
+        self._vt_mark(t0, 0)
         self._build_grid(p)
+        self._vt_mark(t0, 1)
         if si == 0:
             # Batched shadow rays only pay off when light paths fill their slots.
             self.shadow_batch = rt.active
@@ -401,6 +420,7 @@ struct VcmGpu(Movable):
             else:
                 ctx.enqueue_function[_bdpt_camera_path_intersect_gpu](
                     p.gsd, cam_states, inter_cam, Int64(self.n_pix), grid_dim=grid_pix, block_dim=block_size)
+            self._vt_mark(t0, 2)
             if self.shadow_batch:
                 ctx.enqueue_function[reset_shadow_valid_gpu](
                     shadow_valid, Int64(self.n_pix), grid_dim=grid_pix, block_dim=block_size)
@@ -409,6 +429,7 @@ struct VcmGpu(Movable):
                 p.merge_norm, p.mis_vc, p.mis_vm, Int64(self.n_pix), _f32(self.c2w), self.px_scale, p.vsd,
                 Int8(1) if self.shadow_batch else Int8(0), shadow_rays, shadow_pending, shadow_valid, shadow_seg_med,
                 grid_dim=grid_pix, block_dim=block_size)
+            self._vt_mark(t0, 3)
             if self.shadow_batch:
                 # This bounce's connect shadow rays, traced together, then summed into the path states.
                 var instance_base = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling()
@@ -423,10 +444,12 @@ struct VcmGpu(Movable):
                     grid_dim=ceildiv(shadow_cap, block_size), block_dim=block_size)
                 ctx.enqueue_function[sum_shadow_connect_gpu](
                     cam_states, shadow_pending, shadow_valid, Int64(self.n_pix), grid_dim=grid_pix, block_dim=block_size)
+                self._vt_mark(t0, 4)
         ref spec = sd.spectral
         ctx.enqueue_function[_bdpt_camera_path_accumulate_gpu](
             cam_states, film, _f32(self.accum_merge), albedo, Int64(self.n_pix), spec.coeffs, Int64(spec.res),
             spec.cie_x, spec.cie_y, spec.cie_z, spec.d65, self.sample_clamp, grid_dim=grid_pix, block_dim=block_size)
+        self._vt_mark(t0, 5)
         self._end_pass(p, film, verbose)
 
 
@@ -493,6 +516,16 @@ def vcm_render_gpu(
                 handlePtr[].ctx.synchronize()   # the progress line reports finished work
                 prog.update(si + 1)
             _ = prog.finish()
+            if v.vt_on:
+                var names = List[String]()
+                for nm in ["light walk", "grid", "cam intersect", "cam bounce", "shadow rays", "accumulate"]:
+                    names.append(String(nm))
+                var tot = Int64(0)
+                for k in range(6):
+                    tot += v.vt[k]
+                for k in range(6):
+                    print("VCM timing " + names[k] + ": " + String(Float64(v.vt[k]) * 1e-9) + " s ("
+                          + String(Float64(v.vt[k]) * 100.0 / Float64(max(tot, Int64(1)))) + "%)")
             comptime if _VCM_VISIT_INSTRUMENT:   # benchmark only: the kernels count merge visits only then
                 var visit_sidecar = _sidecar_name(psc[unsafe_offset=0].film_filename, ".mergevisits.exr")
                 with v.visit_accum.map_to_host() as vhost:
