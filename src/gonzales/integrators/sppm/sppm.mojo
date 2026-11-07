@@ -824,9 +824,11 @@ def _sppm_trace_visible_point[use_gpu: Bool](
             var gn_geo = sh.gn_geo   # before any bump/normal map -- see SPPMPixel.geo_normal
             var eff_alb = sh.alb
             var rough_skin = mat.is_rough_dielectric() and sss_walks_below(mat, inter, cur_med_idx)
-            if (mat.type == MatKind.hair or rough_skin) and bounce < max_charged:
-                # pbrt's SPPM: hair and rough skin are glossy, so no visible point on them before the last bounce. Light
-                # it here, radiance into env, and scatter on with the sampler's own f/pdf.
+            var glossy_metal = mat.type == MatKind.conductor and max(mat.roughU, mat.roughV) > Float32(0.02)
+            var sampled_glossy = rough_skin or glossy_metal
+            if (mat.type == MatKind.hair or sampled_glossy) and bounce < max_charged:
+                # pbrt's SPPM: hair, rough skin and glossy metal are glossy, so no visible point on them before the last
+                # bounce. Light it here, radiance into env, and scatter on with the sampler's own f/pdf.
                 var hv = vp
                 hv.pos = hit
                 hv.normal = vec3f(gn)
@@ -835,7 +837,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
                 hv.mat_kind = mat.lobe()
                 hv.mat_idx = Int32(mat_idx)
                 hv.wo = vec3f((-rd).to_simd())
-                hv.alpha = mat.lobe_param() if rough_skin else Float32(0)
+                hv.alpha = mat.lobe_param() if sampled_glossy else Float32(0)
                 hv.hair_curve_idx = sh.curve_idx
                 hv.hair_h = sh.curve_h
                 hv.hair_v = sh.curve_v
@@ -843,14 +845,14 @@ def _sppm_trace_visible_point[use_gpu: Bool](
                 hv.med_idx = cur_med_idx
                 hv.valid = Int32(1)
                 var (lr, lg, lb) = spectral_sample_to_rgb(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x,
-                    sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, _sppm_nee_at(hv, sd, pcg, rough_skin), vp.wavelengths)
+                    sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, _sppm_nee_at(hv, sd, pcg, sampled_glossy), vp.wavelengths)
                 vp.env += vp.beta * RGB(lr, lg, lb)
-                if rough_skin:
+                if sampled_glossy:
                     var s_v = sh.bsdf(mat, mat_idx).sample(pcg.next_float(), pcg.next_float(), pcg.next_float(), pcg.next_float(),
                         LobeTables(sd.materials, sd.curves, sd.measuredBrdfs, sd.spectral), vp.wavelengths)
                     if not s_v.valid:
                         break
-                    if s_v.transmit:   # a walk leaves into the medium it came from, so no compression
+                    if rough_skin and s_v.transmit:   # a walk leaves into the medium it came from, so no compression
                         var ex_r = sss_hop[use_gpu](sd, mat, inter, hit.to_simd(), _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd()),
                                                     s_v.wi, vp.wavelengths, pcg, current_dielectric_ior)
                         if ex_r.ok:
