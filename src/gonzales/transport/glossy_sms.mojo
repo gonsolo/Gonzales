@@ -17,9 +17,14 @@ from gonzales.transport.sms import (MAX_SMS_VERTICES, SMSVertex, sms_vertex_init
 from gonzales.transport.manifold import _sms_vertex_from_hit, _mnee_chain_g, _mnee_chain_t_eta, _mnee_bsdf_over_light
 
 # Glossy lobes up to this GGX alpha start SMS; MIS keeps any threshold unbiased, a wider lobe just gains little.
-comptime GLOSSY_SMS_MAX_ALPHA: Float32 = Float32(0.3)
+comptime GLOSSY_SMS_MAX_ALPHA: Float32 = Float32(0.2)
+# Glossy SMS takes no share of a chain whose first direction the lobe samples with less density than this: seeds come
+# from the lobe, so such a root's chance q is tiny, and its reciprocal estimate would run into the cap below. Both
+# sides of MIS test the same density, so the paths it gives up stay with BSDF sampling, unbiased.
+comptime GLOSSY_SMS_MIN_PDF: Float32 = Float32(1.0)
 # Cap on the reciprocal estimate's re-solves. Truncation darkens a root a seed finds with chance q by (1 - q)^cap.
-comptime GLOSSY_SMS_MAX_TRIALS: Int = get_defined_int["GSMS_CAP", 64]()
+comptime GLOSSY_SMS_MAX_TRIALS: Int = get_defined_int["GSMS_CAP", 256]()
+comptime GLOSSY_SMS_STRAIGHT: Float32 = Float32(0.25)   # share of seeds aimed straight at the light point
 comptime _OFF: Float32 = Float32(2e-4)
 # DEBUG (-D GSMS_DEBUG=n): only glossy SMS (1), only BSDF chain paths from glossy vertices with their MIS share (2) or
 # unweighted (3); 1 + 2 must match 3. Everything else contributes nothing.
@@ -136,16 +141,23 @@ def _glossy_sms_try(
     ctx: ShadeContext, x0: Vec3f, bsdf: BSDF, tab: LobeTables, wl: SampledWavelengths,
     y: Vec3f, ldu: Vec3f, ldv: Vec3f, mut pcg: PCG32,
 ) -> Tuple[Bool, Int, SMSChain, Float32, Float32]:
-    """One seed: a lobe direction traced by the chain rule and solved to end at y. A root whose re-trace crosses other
-    surfaces (a reflection solved straight to the light through the glass in between) seeds a solve of the chain that
-    re-trace found, up to twice: the seed rarely meets the glass a light point beyond it needs, a nearby root does.
-    (ok, n, chain, weight, |dx1/dy|)."""
-    var u0 = pcg.next_float(); var u1 = pcg.next_float(); var u2 = pcg.next_float()
-    var s = bsdf.sample[want_rev=False](u0, u1, u2, Float32(0), tab, wl)
-    var tr = sms_trace_chain(ctx, x0, s.wi)
+    """One seed: a direction traced by the chain rule and solved to end at y. The direction is the straight one to y
+    (MNEE's seed, for chains in front of the light) with chance GLOSSY_SMS_STRAIGHT, else a lobe sample. A root whose
+    re-trace crosses other surfaces (a reflection solved straight to the light through the glass in between) seeds a
+    solve of the chain that re-trace found, up to twice: the seed rarely meets the glass a light point beyond it needs,
+    a nearby root does. (ok, n, chain, weight, |dx1/dy|)."""
+    var uc = pcg.next_float(); var u0 = pcg.next_float(); var u1 = pcg.next_float(); var u2 = pcg.next_float()
+    var dir = y - x0
+    dir = dir * (Float32(1) / sqrt(max(dot(dir, dir), Float32(1e-30))))
+    var valid = True
+    if uc >= GLOSSY_SMS_STRAIGHT:
+        var s = bsdf.sample[want_rev=False](u0, u1, u2, Float32(0), tab, wl)
+        dir = s.wi
+        valid = s.valid
+    var tr = sms_trace_chain(ctx, x0, dir)
     var n = tr[0]
     var verts = tr[1].copy()
-    if not s.valid or n < 1:
+    if not valid or n < 1:
         return (False, 0, verts^, Float32(0), Float32(0))
     for _round in range(3):
         var w = sms_walk(x0, y, verts, n, ldu, ldv, ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves,
@@ -173,14 +185,17 @@ def glossy_sms_solve(
     ctx: ShadeContext, x0: Vec3f, bsdf: BSDF, tab: LobeTables, wl: SampledWavelengths,
     y: Vec3f, ldu: Vec3f, ldv: Vec3f, mut pcg: PCG32,
 ) -> Tuple[Bool, Int, SMSChain, Float32, Float32, Float32]:
-    """A root of the chains from x0 to the light point y, found from a random lobe seed, and the reciprocal of the
-    chance a seed finds it, estimated by re-seeding until one does (Zeltner et al. 2020, Sec. 4.3): (ok, n, chain,
+    """A root of the chains from x0 to the light point y, found from a random seed (_glossy_sms_try), and the reciprocal of the
+    chance a seed finds it, estimated by re-seeding until one does (Zeltner et al. 2020, Sec. 4.3); none when the lobe's density toward it is below GLOSSY_SMS_MIN_PDF: (ok, n, chain,
     weight, g = dw0/dA_y, trial count). ldu, ldv: the light's orthonormal tangents."""
     var first = _glossy_sms_try(ctx, x0, bsdf, tab, wl, y, ldu, ldv, pcg)
     var n = first[1]
     var verts = first[2].copy()
     if not first[0]:
         return (False, 0, verts^, Float32(0), Float32(0), Float32(0))
+    var d0 = verts[0].pos - x0
+    if bsdf.f(d0 * (Float32(1) / sqrt(dot(d0, d0))), tab, wl).pdf_fwd < GLOSSY_SMS_MIN_PDF:
+        return (False, 0, verts^, Float32(0), Float32(0), Float32(0))   # no share (glossy_sms_mis): skip the re-solves
     var trials = Float32(0)
     for _t in range(GLOSSY_SMS_MAX_TRIALS):
         trials += Float32(1)
@@ -197,6 +212,8 @@ def glossy_sms_mis(p_dir: Float32, t_chain: Float32, g: Float32, p_area: Float32
     p_area / g, not the seeded one (which only the reciprocal estimate knows): any function of the path that both
     evaluate alike partitions unity, and every root it gives a share has a seed basin. BSDF sampling: the lobe's
     p_dir times the chance of each vertex's event, t_chain."""
+    if p_dir < GLOSSY_SMS_MIN_PDF:
+        return Float32(0)
     if g <= Float32(0) or p_area <= Float32(0):
         return Float32(1)
     var q = _mnee_bsdf_over_light(p_dir, t_chain, g, p_area)

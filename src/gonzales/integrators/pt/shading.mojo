@@ -29,7 +29,7 @@ from gonzales.transport.shade_context import GIPendingX1, LightContext, ShadeCon
 from gonzales.transport.manifold import _emitter_face_normal
 from gonzales.integrators.pt.common import area_light_hit_cos, curve_light_hit, _geom_normal_and_ray, _hit_emission, _clamped, _to_spec_illum
 from gonzales.integrators.pt.nee import _mnee_bsdf_weight, _mnee_live, _glossy_sms_bsdf_weight
-from gonzales.transport.glossy_sms import glossy_sms_live, GSMS_DEBUG
+from gonzales.transport.glossy_sms import glossy_sms_live, GSMS_DEBUG, GLOSSY_SMS_MIN_PDF
 from gonzales.transport.manifold import _mnee_first_probe
 from gonzales.integrators.pt.materials import shade_diffuse_transmission, _shade_sss_exit, shade_coated_diffuse, shade_dielectric, shade_thin_dielectric, shade_conductor, shade_measured, shade_hair, shade_diffuse, shade_interface
 
@@ -415,7 +415,7 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
                    and area_light_hit_cos(inter, ctx.meshes, ctx.instances, seg_dir) > Float32(0.0):
                     if _mnee_first_probe(ctx, path_ptr[].last_ns_p, seg_dir, seg_len)[0]:
                         shared_with = 1
-        elif path_ptr[].gl_pdf > Float32(0.0) and path_ptr[].specularBounce == Int8(1) and path_ptr[].ns_spec >= Int8(1) \
+        elif path_ptr[].gl_pdf >= GLOSSY_SMS_MIN_PDF and path_ptr[].specularBounce == Int8(1) and path_ptr[].ns_spec >= Int8(1) \
              and al.kind == Int8(0) and glossy_sms_live(ctx):
             shared_with = 2
         if shared_with != 0:

@@ -10,7 +10,7 @@ from gonzales.scene.appearance.lights import area_light_pick_triangle
 from gonzales.scene.appearance.lights import area_light_side_pdf
 from gonzales.transport.manifold import _mnee_first_probe, _mnee_chain, _mnee_chain_t_eta, _mnee_bsdf_over_light, _mnee_reproduce, _emitter_face_normal, _mnee_chain_transmittance, _mnee_pass
 from gonzales.transport.shade_context import _shade_context
-from gonzales.transport.glossy_sms import glossy_sms_lobe, glossy_sms_solve, glossy_sms_reproduce, sms_chain_lands
+from gonzales.transport.glossy_sms import GLOSSY_SMS_MIN_PDF, glossy_sms_lobe, glossy_sms_solve, glossy_sms_reproduce, sms_chain_lands
 from gonzales.transport.sms import mnee_orthonormal_basis, sms_chain_eval
 from gonzales.transport.manifold import _mnee_chain_g
 from gonzales.transport.mis_policy import MisPolicy
@@ -366,9 +366,17 @@ def _vcm_mnee_light_dvcm(
     return PI * eta_ch * eta_ch / den if den > Float32(0) else Float32(0)
 
 
+# Off: glossy SMS cuts its share where the lobe toward the chain is thin (GLOSSY_SMS_MIN_PDF). A light vertex reached
+# through a chain only would have to apply that cut wherever its dVCM meets the camera side's direction (its scatter,
+# connections, merges, the splat); _vcm_gsms_light_dvcm does not, so VCM's weights would not sum to one.
+comptime _VCM_GSMS = False
+
+
 @always_inline
 def _vcm_gsms_on(ref sd: SceneView, v: BDPTVertex) -> Bool:
     """May this camera vertex run glossy SMS (and so share chain paths from it)?"""
+    comptime if not _VCM_GSMS:
+        return False
     return (sd.hasGlass & Int32(2)) != Int32(0) and v.is_surface == Int32(1) and glossy_sms_lobe(_vertex_ctx(v))
 
 
@@ -406,6 +414,8 @@ def _vcm_gsms(
     w0 = w0 * (Float32(1) / sqrt(dot(w0, w0)))
     var le = _lobe_eval[want_pdfs=True](v, w0, sd, sd.spectral.coeffs, sd.spectral.res,
         sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wl)
+    if le.pdf_fwd < GLOSSY_SMS_MIN_PDF:
+        return z
     var (t_ch, eta_ch) = _mnee_chain_t_eta(hit_v, verts, n)
     var t_med = _mnee_chain_transmittance(ctx, hit_v, verts, n, y, v.med_idx, wl)
     t_ch *= _mnee_pass(t_med)
@@ -425,7 +435,7 @@ def _vcm_gsms_hit_term(
 ) -> Float32:
     """Glossy SMS's share in the weight of a camera path that left glossy vertex x0 along dir0 and reached light_hit
     through n_glass chain vertices: p_A / (p_lobe T g) when re-tracing it by the chain rule lands there, else 0."""
-    if n_glass <= 0 or pdf_x0 <= Float32(0):
+    if n_glass <= 0 or pdf_x0 < GLOSSY_SMS_MIN_PDF:
         return Float32(0)
     var ctx = _shade_context(sd, Pointer[UInt32, MutUntrackedOrigin].unsafe_dangling())
     var rp = glossy_sms_reproduce(ctx, x0, dir0, n_glass, light_hit, light)
