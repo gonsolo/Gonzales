@@ -106,7 +106,7 @@ def _make_ctx(
         Pointer[MeasuredBRDF, MutUntrackedOrigin].unsafe_dangling(),
         Pointer[GIPendingX1, MutUntrackedOrigin].unsafe_dangling(),
         gi_reservoir_io_null(),
-        Pointer[PathState, MutUntrackedOrigin].unsafe_dangling(), True,
+        Pointer[PathState, MutUntrackedOrigin].unsafe_dangling(), True, True,
         Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
         BVH4.none(),
         Pointer[SuppressTask, MutUntrackedOrigin].unsafe_dangling(),
@@ -132,6 +132,7 @@ def _make_path(org: Vec3f, dir: Vec3f) -> PathState:
         SIMD[DType.uint8, 4](0),   # kind_bounces
         UInt32(0),   # sobol_seed
         Int8(0),   # ns_spec
+        Vec3f(Float32(0.0)), Float32(0.0),   # gl_dir, gl_pdf
         SssWalk.none(),
     )
 
@@ -325,7 +326,7 @@ def test_build_geom_context_full_sphere_prim_returns_exact_analytic_normal() rai
         Pointer[MeasuredBRDF, MutUntrackedOrigin].unsafe_dangling(),
         Pointer[GIPendingX1, MutUntrackedOrigin].unsafe_dangling(),
         gi_reservoir_io_null(),
-        Pointer[PathState, MutUntrackedOrigin].unsafe_dangling(), True,
+        Pointer[PathState, MutUntrackedOrigin].unsafe_dangling(), True, True,
         Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
         BVH4.none(),
         Pointer[SuppressTask, MutUntrackedOrigin].unsafe_dangling(),

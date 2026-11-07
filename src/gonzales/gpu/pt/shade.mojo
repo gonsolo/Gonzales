@@ -10,7 +10,8 @@ from gonzales.transport.restir_di import DIReservoir, ReservoirIO, reservoir_io_
 from gonzales.core.rng import PCG32
 from gonzales.integrators.pt.materials import _shade_sss_exit, shade_coated_diffuse, shade_conductor, shade_dielectric, shade_diffuse, shade_diffuse_transmission, shade_hair, shade_interface, shade_measured, shade_thin_dielectric
 from gonzales.integrators.pt.shading import shade_nee_core
-from gonzales.integrators.pt.nee import _mnee_bsdf_weight
+from gonzales.integrators.pt.nee import _mnee_bsdf_weight, _glossy_sms_bsdf_weight
+from gonzales.transport.glossy_sms import GSMS_DEBUG
 from gonzales.transport.shade_context import ShadeContext, _shade_context
 from max.gpu import block_dim, block_idx, thread_idx
 
@@ -73,7 +74,8 @@ def resolve_suppress_gpu(
     if tid >= Int(live_count[unsafe_offset=0]):
         return
     tid = Int(live_idx[unsafe_offset=tid])
-    if tasks[unsafe_offset=tid].active == Int32(0):
+    var kind = tasks[unsafe_offset=tid].active
+    if kind == Int32(0):
         return
     tasks[unsafe_offset=tid].active = Int32(0)
     var path_ptr = paths.unsafe_offset(tid)
@@ -81,7 +83,12 @@ def resolve_suppress_gpu(
     var ctx = _shade_context(sd, sobol_matrices, tid)
     var hp = Vec3f(path_ptr[].ray.origin.x, path_ptr[].ray.origin.y, path_ptr[].ray.origin.z) \
              + Vec3f(path_ptr[].ray.direction.x, path_ptr[].ray.direction.y, path_ptr[].ray.direction.z) * inter.tHit
-    var w = _mnee_bsdf_weight(ctx, path_ptr, inter, hp)
+    var w = _mnee_bsdf_weight(ctx, path_ptr, inter, hp) if kind == Int32(1) else _glossy_sms_bsdf_weight(ctx, path_ptr, inter, hp)
+    comptime if GSMS_DEBUG != 0:
+        if GSMS_DEBUG == 1 or kind != Int32(2):
+            return
+        if GSMS_DEBUG == 3:
+            w = Float32(1)
     if w > Float32(0.0):
         path_ptr[].estimate += tasks[unsafe_offset=tid].contrib * w
 

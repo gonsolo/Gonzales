@@ -141,6 +141,7 @@ struct ShadeContext:
     var paths_base: Pointer[PathState, MutUntrackedOrigin]
     # False when the scene has no smooth glass: MNEE's per-sample probe toward the light can then never find anything.
     var has_glass: Bool
+    var glossy_sms: Bool   # smooth glass glossy SMS may reach (stays on when MNEE's probes switch has_glass off)
     # GPU only: [MNEE probes, probes that found glass] counted on 1 call in 16, so the host can switch MNEE off when glass is rare; dangling = not counting.
     var mnee_stats: Pointer[Int32, MutUntrackedOrigin]
     # CPU only: 4-wide BVH for the any-hit / closest-hit calls below; BVH4.none() = BVH2 (always on the GPU).
@@ -170,7 +171,7 @@ def _shade_context(
 ) -> ShadeContext:
     """A ShadeContext over a SceneView: the GPU kernels' and VCM's way to reach the shading code."""
     return ShadeContext(
-        paths_base=Pointer[PathState, MutUntrackedOrigin].unsafe_dangling(), has_glass=sd.hasGlass != Int32(0), mnee_stats=Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(), bvh4=BVH4.none(), suppress_tasks=suppress_tasks,
+        paths_base=Pointer[PathState, MutUntrackedOrigin].unsafe_dangling(), has_glass=(sd.hasGlass & Int32(1)) != Int32(0), glossy_sms=(sd.hasGlass & Int32(2)) != Int32(0), mnee_stats=Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(), bvh4=BVH4.none(), suppress_tasks=suppress_tasks,
         n_mediums=Int(sd.mediumCount), mediums=sd.mediums, medium_ifaces=sd.mediumInterfaces, grids=sd.grids, nvdb_grids=sd.nvdbGrids,
         path_idx=path_idx, bvh2Nodes=sd.bvh2Nodes, primIds=sd.primIds, meshes=sd.meshes, curves=sd.curves,
         materials=sd.materials,

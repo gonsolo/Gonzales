@@ -51,6 +51,7 @@ def _dummy_path(estimate: SpectralSample, albedo: RGB) -> PathState:
         SIMD[DType.uint8, 4](0),   # kind_bounces
         UInt32(0),   # sobol_seed
         Int8(0),   # ns_spec
+        Vec3f(Float32(0.0)), Float32(0.0),   # gl_dir, gl_pdf
         SssWalk.none(),
     )
 

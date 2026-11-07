@@ -322,6 +322,7 @@ def gen_primary_rays_wavefront_gpu(
         SIMD[DType.uint8, 4](0),   # kind_bounces
         sobol_seed,
         Int8(0),   # ns_spec
+        Vec3f(Float32(0.0)), Float32(0.0),   # gl_dir, gl_pdf
         SssWalk.none(),
     )
 
@@ -1996,6 +1997,7 @@ def gen_primary_rays_gpu(
         SIMD[DType.uint8, 4](0),   # kind_bounces
         sobol_seed,
         Int8(0),   # ns_spec
+        Vec3f(Float32(0.0)), Float32(0.0),   # gl_dir, gl_pdf
         SssWalk.none(),
     )
 

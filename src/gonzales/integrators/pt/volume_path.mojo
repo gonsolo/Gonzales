@@ -788,6 +788,7 @@ def _sample_medium_core(
         # ...and a specular chain from here starts at this medium vertex,
         # which never delegates to MNEE (PathState.last_ns_n).
         path_ptr[].last_ns_n = Vec3f(Float32(0.0))
+        path_ptr[].gl_pdf = Float32(0.0)
         # Interior random-walk steps of a `Material "subsurface"` object are
         # NOT path bounces and are not charged to maxdepth. Skin1 at
         # sssdragon's scale has a red-channel single-scattering albedo of

@@ -312,7 +312,7 @@ def _gpu_bounce_kernels(
         )
         _bench_stage(handle, 12)
     var suppress_tasks = Pointer[SuppressTask, MutUntrackedOrigin].unsafe_dangling()
-    if handle[].has_glass_material:
+    if handle[].has_chain_glass:
         suppress_tasks = handle[].suppress_buf.unsafe_ptr().unsafe_bitcast[SuppressTask]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
     handle[].ctx.enqueue_function[shade_nee_preamble_gpu](
         handle[].path_buf.unsafe_ptr().unsafe_bitcast[PathState]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
@@ -324,7 +324,7 @@ def _gpu_bounce_kernels(
         grid_dim=grid_dim,
         block_dim=block_size,
     )
-    if handle[].has_glass_material:
+    if handle[].has_chain_glass:
         handle[].ctx.enqueue_function[resolve_suppress_gpu](
             handle[].path_buf.unsafe_ptr().unsafe_bitcast[PathState]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
             handle[].inter_buf.unsafe_ptr().unsafe_bitcast[Intersection]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
