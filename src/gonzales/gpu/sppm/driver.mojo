@@ -62,20 +62,23 @@ def sppm_render_gpu(
             var handle = handlePtr
             comptime block_size = 256
 
-            # Surface-only scenes retrace one visible point per pixel every pass (pbrt's SPPM):
-            # camera samples = passes, and the gather touches 1 VP per pixel instead of 32.
-            var retrace = Int(sd.mediumCount) == 0 and Int(sd.curveCount) == 0
+            # Subsurface random-walk steps are not charged to maxdepth, so they need their own budget.
+            var has_sss_medium = False
+            var has_real_medium = False
+            for mi in range(Int(sd.mediumCount)):
+                if sd.mediums[unsafe_offset=mi].is_sss != Int32(0):
+                    has_sss_medium = True
+                else:
+                    has_real_medium = True
+            # Scenes without participating media or curves retrace one visible point per pixel every pass (pbrt's
+            # SPPM): camera samples = passes, and the gather touches 1 VP per pixel instead of 32. A skin's walk
+            # medium ends its camera path at a surface VP, so it does not count.
+            var retrace = not has_real_medium and Int(sd.curveCount) == 0
             var vp_samples = 1 if retrace else _vp_samples_for(n_pix, True)
             var n_vps = n_pix * vp_samples
             print("SPPM (GPU): " + ("one retraced visible point per pixel per pass" if retrace else String(vp_samples) + " visible points per pixel"))
             # Sized for the worst case, as the CPU driver (_sppm_render_core) does.
             var max_bounces_per_photon = min(Int(psc[unsafe_offset=0].max_depth), _photon_depth_cap(sd))
-            # Subsurface random-walk steps are not charged to maxdepth, so they need their own budget.
-            var has_sss_medium = False
-            for mi in range(Int(sd.mediumCount)):
-                if sd.mediums[unsafe_offset=mi].is_sss != Int32(0):
-                    has_sss_medium = True
-                    break
             if has_sss_medium:
                 max_bounces_per_photon += SSS_WALK_ROUNDS
             var max_photons = n_photons_per_pass * max(max_bounces_per_photon, 1)
