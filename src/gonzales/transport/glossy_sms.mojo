@@ -23,7 +23,7 @@ comptime GLOSSY_SMS_MAX_ALPHA: Float32 = Float32(0.2)
 # sides of MIS test the same density, so the paths it gives up stay with BSDF sampling, unbiased.
 comptime GLOSSY_SMS_MIN_PDF: Float32 = Float32(1.0)
 # Cap on the reciprocal estimate's re-solves. Truncation darkens a root a seed finds with chance q by (1 - q)^cap.
-comptime GLOSSY_SMS_MAX_TRIALS: Int = get_defined_int["GSMS_CAP", 256]()
+comptime GLOSSY_SMS_MAX_TRIALS: Int = get_defined_int["GSMS_CAP", 2048]()
 comptime GLOSSY_SMS_STRAIGHT: Float32 = Float32(0.25)   # share of seeds aimed straight at the light point
 comptime _OFF: Float32 = Float32(2e-4)
 # A re-traced chain lands on its light point when it misses by at most sqrt(_LAND2) of the distance from x0.
@@ -150,7 +150,7 @@ def _glossy_sms_try(
     """One seed: a direction traced by the chain rule and solved to end at y. The direction is the straight one to y
     (MNEE's seed, for chains in front of the light) with chance GLOSSY_SMS_STRAIGHT, else a lobe sample. A root whose
     re-trace crosses other surfaces (a reflection solved straight to the light through the glass in between) seeds a
-    solve of the chain that re-trace found, up to twice: the seed rarely meets the glass a light point beyond it needs,
+    solve of the chain that re-trace found, up to five times: the seed rarely meets the glass a light point beyond it needs,
     a nearby root does. (ok, n, weight, |dx1/dy|), the chain in `verts`."""
     var uc = pcg.next_float(); var u0 = pcg.next_float(); var u1 = pcg.next_float(); var u2 = pcg.next_float()
     var dir = y - x0
@@ -163,7 +163,7 @@ def _glossy_sms_try(
     var n = sms_trace_chain(ctx, x0, dir, verts)[0]
     if not valid or n < 1:
         return (False, 0, Float32(0), Float32(0))
-    for _round in range(3):
+    for _round in range(get_defined_int["GSMS_ROUNDS", 6]()):
         var w = sms_walk(x0, y, verts, n, ldu, ldv, ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves,
                          ctx.blasNodesArr, ctx.blasPrimIdsArr, ctx.instances, ctx.lights.spheres, ctx.lights.sphere_count)
         if not w[0]:
