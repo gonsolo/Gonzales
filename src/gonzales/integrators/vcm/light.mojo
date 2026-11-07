@@ -18,7 +18,7 @@ from gonzales.scene.appearance.lights import area_light_side_pdf
 from gonzales.core.spectrum import SampledWavelengths, SpectralSample, spec_refl, spec_illum
 from gonzales.scene.shapes.geom_normal import _geom_normal
 from gonzales.paths.vcm.vertex import _VCM_SSS_CAMERA_ONLY, _vcm_walk_limit, _BDPT_MAX_VERTS, BDPTVertex, _null_vertex
-from gonzales.paths.vcm.eval import _bdpt_vertex_mis_scoped, _vcm_mnee_light_dvcm
+from gonzales.paths.vcm.eval import _bdpt_vertex_mis_scoped, _vcm_mnee_light_dvcm, _vcm_gsms_on, _vcm_gsms_light_dvcm
 from gonzales.paths.vcm.strategy import VcmStrategies, _VCM_EXIT_MERGE, _vcm_keep, _vcm_eta_scale, _vcm_fibre_scale
 from gonzales.paths.vcm.connect import _bdpt_store_lvc_vertex
 from gonzales.integrators.vcm.camera import (
@@ -455,6 +455,12 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
                                                Int(st.mnee.n_glass), st.mnee.first_glass, st.cur_med_idx, st.wl, pcg)
                 if d_m > Float32(0):
                     st.dvcm = d_m
+            elif st.mnee.side > Float32(0) and st.mnee.n_glass > Int32(0) and v.is_delta == Int32(0) and _vcm_gsms_on(sd, v):
+                # Reached through a chain only: glossy SMS from here samples it too.
+                var d_g = _vcm_gsms_light_dvcm(sd, hit.to_simd(), gn_geo, st.mnee.y, st.mnee.ny, st.mnee.side,
+                                               Int(st.mnee.n_glass), -ray_dir, st.cur_med_idx, st.wl)
+                if d_g > Float32(0):
+                    st.dvcm = d_g
             v.dVCM = st.dvcm; v.dVC = st.dvc; v.dVM = st.dvm
             if v.is_delta != Int32(0):
                 st.n_delta += 1

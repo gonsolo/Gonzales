@@ -36,7 +36,7 @@ from gonzales.paths.vcm.vertex import _VCM_SSS_CAMERA_ONLY, _VOL_PHASE_HIT, _vcm
 from gonzales.paths.vcm.nee import _bdpt_simple_light_count, _bdpt_sample_simple_light, _bdpt_nee_contribute
 from gonzales.paths.vcm.eval import (
     _vcm_sphere_slot, _vcm_infinite_slot, _vcm_nee_surface, _vertex_ctx, _bdpt_vertex_mis_scoped, _vcm_mnee,
-    _vcm_mnee_hit_term,
+    _vcm_mnee_hit_term, _vcm_gsms_on, _vcm_gsms, _vcm_gsms_hit_term,
 )
 from gonzales.paths.vcm.strategy import VcmStrategies, _VCM_EXIT_MERGE, _vcm_keep, _vcm_eta_scale, _vcm_fibre_scale
 from gonzales.paths.vcm.connect import _bdpt_connect_to_cache, _bdpt_connect_to_cache_deferred
@@ -105,11 +105,13 @@ struct VCMMneeTrack(TrivialRegisterPassable):
     var x0: Vec3f        # the last stored surface vertex
     var pdf0: Float32    # its lobe's density for the direction taken; 0: MNEE does not start there
     var n_glass: Int32   # dielectric vertices since
+    var glossy: Int32    # 1: a glossy vertex, whose chains glossy SMS samples
+    var dir: Vec3f       # the direction taken there (glossy SMS re-traces it)
 
 
 @always_inline
 def vcm_mnee_track_none() -> VCMMneeTrack:
-    return VCMMneeTrack(Vec3f(Float32(0)), Float32(0), Int32(0))
+    return VCMMneeTrack(Vec3f(Float32(0)), Float32(0), Int32(0), Int32(0), Vec3f(Float32(0)))
 
 
 @fieldwise_init
@@ -576,7 +578,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                         # EVERY strategy now that sphere lights start light
                         var aw_hit = Float32(4) * PI * sph_hit.radius * sph_hit.radius / light_path_pick_pdf(sd, _vcm_sphere_slot(sd, Int(inter.primId.id1)))
                         var w_cam_sph = pdf_cone * st.dvcm / max(t_hit * t_hit, Float32(1e-12)) + (Float32(0) if long_hit else st.dvc / (PI * aw_hit))
-                        if st.last_bsdf_pdf == PDF_DELTA_FULL and st.mnee.pdf0 > Float32(0):
+                        if st.last_bsdf_pdf == PDF_DELTA_FULL and st.mnee.pdf0 > Float32(0) and st.mnee.glossy == Int32(0):
                             var sn = (hit - sph_hit.center).to_simd() * (Float32(1) / sph_hit.radius)
                             var tng = cross(sn, Vec3f(Float32(1), Float32(0), Float32(0)) if abs(sn[0]) < Float32(0.9) else Vec3f(Float32(0), Float32(1), Float32(0)))
                             w_cam_sph += _vcm_mnee_hit_term(sd, st.mnee.x0, st.mnee.pdf0, Int(st.mnee.n_glass), st.ro.to_simd(), hit.to_simd(),
@@ -618,7 +620,10 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                         var p_a = light_path_pick_pdf(sd, al_slot) / al_area
                         var emission_pdf_w = p_a * cos_l_hit * INV_PI * area_light_side_pdf(sd.areaLights[unsafe_offset=al_slot])
                         var mnee_t = Float32(0)   # MNEE through the glass chain behind this hit, if it reproduces it
-                        if st.last_bsdf_pdf == PDF_DELTA_FULL and st.mnee.pdf0 > Float32(0) and not is_curve:
+                        if st.last_bsdf_pdf == PDF_DELTA_FULL and st.mnee.pdf0 > Float32(0) and st.mnee.glossy != Int32(0) and not is_curve:
+                            mnee_t = _vcm_gsms_hit_term(sd, st.mnee.x0, st.mnee.pdf0, st.mnee.dir, Int(st.mnee.n_glass), hit.to_simd(),
+                                                        inter, p_a, st.cur_med_idx, st.wl)
+                        elif st.last_bsdf_pdf == PDF_DELTA_FULL and st.mnee.pdf0 > Float32(0) and not is_curve:
                             var (lmesh_h, lv0_h, lv1_h, lv2_h, _) = _get_tri_verts(inter, sd.meshes)
                             var lp0_h = mesh_pos(lmesh_h, lv0_h)
                             mnee_t = _vcm_mnee_hit_term(sd, st.mnee.x0, st.mnee.pdf0, Int(st.mnee.n_glass), st.ro.to_simd(), hit.to_simd(),
@@ -694,6 +699,8 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 # MNEE toward a light behind glass, one more strategy in the balance (_vcm_mnee).
                 if VcmStrategies.has_manifold(v):
                     st.total += _vcm_mnee(sd, v, hit.to_simd(), gn, st.beta, pcg, st.wl, eta_x, st.dvcm, st.dvc)
+                elif _vcm_gsms_on(sd, v):   # glossy SMS through chains that may reflect, same balance
+                    st.total += _vcm_gsms(sd, v, hit.to_simd(), gn_geo, st.beta, pcg, st.wl, eta_x, st.dvcm, st.dvc)
 
             # Scatter through THE lobe sampler -- the same BSDF connect,
             # merge and NEE evaluate this vertex with (see _vcm_scatter).
@@ -712,7 +719,9 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             st.last_bsdf_pdf = Float32(-1) if sc.is_delta else sc.pdf_fwd
             if v.is_delta == Int32(0):
                 var receiver = LobeKind.is_diffuse(v.mat_kind)
-                st.mnee = VCMMneeTrack(hit.to_simd(), sc.pdf_fwd if receiver and not sc.is_delta else Float32(0), Int32(0))
+                var gl = not receiver and not sc.is_delta and _vcm_gsms_on(sd, v)
+                st.mnee = VCMMneeTrack(hit.to_simd(), sc.pdf_fwd if (receiver or gl) and not sc.is_delta else Float32(0), Int32(0),
+                                       Int32(1) if gl else Int32(0), sc.wi)
             else:
                 st.mnee.pdf0 = Float32(0)
 
@@ -778,6 +787,6 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             var cos_out_x = _vcm_sss_exit_scatter(sd, ex, ex.eta, mis_vc_weight_factor, exit_eta, pcg,
                                                   st.ro, st.rd, st.beta, st.dvcm, st.dvc, st.dvm)
             st.last_bsdf_pdf = cos_out_x * INV_PI
-            st.mnee = VCMMneeTrack(x_o.to_simd(), cos_out_x * INV_PI, Int32(0))
+            st.mnee = VCMMneeTrack(x_o.to_simd(), cos_out_x * INV_PI, Int32(0), Int32(0), Vec3f(Float32(0)))
 
         return True   # bounce processed normally, path continues

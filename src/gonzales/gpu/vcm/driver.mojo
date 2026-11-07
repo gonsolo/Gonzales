@@ -227,7 +227,7 @@ struct VcmGpu(Movable):
         """Pass `si`'s constants. The merge radius shrinks with si (vcm_merge_radius)."""
         var gsd = self.handle[].scene_descriptor()
         if self.mnee_off:
-            gsd.hasGlass = Int32(0)   # MNEE and its MIS terms on both subpaths, together
+            gsd.hasGlass &= Int32(2)   # MNEE and its MIS terms on both subpaths, together; glossy SMS stays
         elif si == 0:
             gsd.vcmMneeStats = Pointer[Int32, MutUntrackedOrigin](unsafe_from_address=Int(self.mnee_stats.unsafe_ptr()))
         var radius_i = vcm_merge_radius(self.scene_radius, si)
@@ -316,7 +316,7 @@ struct VcmGpu(Movable):
                 self.vcm_lambda = b_sum / s_sum if s_sum > Float32(0) else Float32(0)
             if verbose:
                 print("VCM (GPU): budget lambda " + String(self.vcm_lambda))
-        if p.si == 0 and p.gsd.hasGlass != Int32(0):
+        if p.si == 0 and (p.gsd.hasGlass & Int32(1)) != Int32(0):
             # The path tracer's rule (shading.mojo's _mnee_area_light_contribute), once per render.
             with self.mnee_stats.map_to_host() as st:
                 var probes = Int(st.unsafe_ptr()[unsafe_offset=0])
