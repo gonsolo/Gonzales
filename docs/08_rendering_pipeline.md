@@ -74,6 +74,60 @@ external_call["OIIO_write_image", Int32](
 This writes EXR files with full HDR precision. The albedo AOV is written
 as a separate `albedo.exr` for use with external denoisers.
 
+## Checkpoint and Resume
+
+A long GPU render (a reference, a night run) can survive a crash, a killed
+process or a lost desktop session:
+
+```
+gonzales --gpu [--vcm|--sppm] --checkpoint run.ckpt [--checkpoint-every MIN] scene.pbrt
+gonzales --gpu [--vcm|--sppm] --resume run.ckpt scene.pbrt
+```
+
+Every `--checkpoint-every` minutes (default 10; 0 = after every pass) and
+at the end, the driver writes its accumulated state to `run.ckpt.tmp`,
+syncs it and renames it over `run.ckpt`: a crash while writing leaves the
+last good checkpoint in place. Each periodic checkpoint also writes the
+image so far, not denoised, as `<film>.partial.exr`. `--stop-after N` writes
+a checkpoint after N passes (samples for the path tracer) and exits, to
+render in slices.
+
+The file (`gpu/checkpoint.mojo`) is a magic, a header of `key=value`
+lines, the number of passes done, named sections, and an end marker. The
+header names the integrator, the scene file (resolved path, size and a
+hash of its bytes, the parsed primitive counts and the camera), film size,
+spp or pass count, max depth, seed, sample clamp and every flag that
+changes the estimator (VCM light paths, merge radius, budget, cap, keep
+MIS, footprint, the trace backend; SPPM photons, radius, retracing and
+visible points per pixel; the path tracer's batch). `--resume` refuses on
+any difference and names it. A render without `--seed` takes the clock as
+its seed; a resume without `--seed` takes the checkpoint's.
+
+Passes are seeded by their index in all three drivers, so a resumed render
+draws exactly the samples the uninterrupted one would. What each saves:
+
+- PT: the film sums (colour, albedo, squared luminance, the adaptive
+  sampler's film and mask) and the MNEE switch with the probe counts it
+  waits for. Resumes start at a batch boundary, so the batches are the
+  same.
+- VCM: connect and merge sums, albedo, both merge tables (keep-aware MIS
+  reads the last pass's counts), the budget tables and lambda, and pass
+  0's MNEE and shadow-batching decisions.
+- SPPM: the visible points, which carry the progressive state (radius,
+  photon count, flux, NEE and environment sums) and, without retracing
+  (participating media, curves), their geometry too.
+
+Ptex demand paging, `--guide` and the ReSTIR modes are not checkpointed.
+
+Checked on the B580 by rendering N passes straight through and N/2 passes,
+stop, resume to N: VCM and SPPM (retraced, and with a medium, where the
+visible points are saved) land within what separates two uninterrupted
+renders of the same seed, the order of float atomics (splats, photon
+deposits): at most 2.4e-7, RMS about 1e-9, where a different seed moves
+the image by RMS 0.02 to 0.15. The GPU path tracer is not reproducible run
+to run by itself (4.5% of the Cornell box's pixels differ by about one
+sample); a resumed render differs from a straight one by the same amount.
+
 ## Interactive Viewer
 
 The interactive path (`mojo_render_interactive`) renders one sample per
