@@ -2328,7 +2328,12 @@ def parse_and_render(
             eff_h = Int32(Int(eff_w) * Int(psc[unsafe_offset=0].film_h) / max(Int(psc[unsafe_offset=0].film_w), 1))
         resize_film(psc, eff_w, eff_h)
     mojo_apply_overrides(psc, spp_override, Int32(0), Int32(0), seed_override)
-    checkpoint_adopt_seed(ckpt, psc)
+    try:
+        checkpoint_adopt_seed(ckpt, psc)
+    except e:
+        print("Error:", e)
+        mojo_parsed_free(psc)
+        return Int32(-1)
 
     var fw = psc[unsafe_offset=0].film_w
     var fh = psc[unsafe_offset=0].film_h
@@ -2557,6 +2562,7 @@ def parse_and_render(
             mojo_parsed_free(psc)
             return Int32(-1)
         var spp = Int(psc[unsafe_offset=0].samples_per_pixel)
+        var ret = Int32(0)
         var handle = gpu_upload_scene(psc, sobol_matrices, n_pixels, spectral.coeffs, spectral.res, spectral.cie_x, spectral.cie_y, spectral.cie_z, spectral.d65, gpu_ctx, restir_di=use_restir, restir_vol=use_vol_restir_reuse, instances_external=_instances_in_tlas(psc))
         if not _is_real_ptr(handle):
             mojo_parsed_free(psc)
@@ -2879,16 +2885,22 @@ def parse_and_render(
                 print("Path guiding: adaptive SD-tree on the GPU")
                 train_guided(renderer, Bounds3f(root.min, root.max), spp)
             elif ckpt.active():
-                if renderer.ptex_on:
-                    raise Error("--checkpoint/--resume: not with Ptex demand paging (withheld samples are not saved)")
                 var ck = Checkpoint(ckpt, psc, "pt")
                 ck.add("batch", String(handle[].batch))
-                if not renderer.render_checkpointed(ck, spp):
+                var finished = False
+                try:
+                    if renderer.ptex_on:
+                        raise Error("--checkpoint/--resume: not with Ptex demand paging (withheld samples are not saved)")
+                    finished = renderer.render_checkpointed(ck, spp)
+                except e:
+                    print("Error:", e)
+                    ret = Int32(-1)
+                if not finished:
                     aux_job[unsafe_offset=0].thread.join()
                     _ = aux_job.unsafe_take_pointee()
                     aux_job.unsafe_free()
                     mojo_parsed_free(psc)
-                    return Int32(0)
+                    return ret
             else:
                 renderer.render_samples(0, spp)
             _ = renderer.progress.finish()
