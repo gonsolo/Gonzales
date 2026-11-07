@@ -248,15 +248,38 @@ struct SMSVertex(TrivialRegisterPassable):
     # The media on its two sides, toward the chain's start and toward the light; -2 where the surface binds none.
     var med_in:  Int32
     var med_out: Int32
+    # A reflection off this dielectric (the half-vector is wi + wo); `eta` then only sets its Fresnel reflectance.
+    var refl: Int8
 
 @always_inline
 def sms_curved(v: SMSVertex) -> Bool:
     return v.is_sphere != Int8(0) or v.mesh_idx >= Int32(0)
 
 @always_inline
+def sms_c_eta(v: SMSVertex) -> Float32:
+    """The eta of the generalized half-vector -(wi + eta wo): 1 at a reflection, where it is the plain wi + wo."""
+    return Float32(1.0) if v.refl != Int8(0) else v.eta
+
+@always_inline
+def sms_vertex_sel(v: SMSVertex, cos_ni: Float32) -> Float32:
+    """The chance a Fresnel-sampled path takes this vertex's event: F for a reflection, 1 - F for a refraction."""
+    var F = fr_dielectric(cos_ni, v.eta)
+    return F if v.refl != Int8(0) else Float32(1.0) - F
+
+@always_inline
+def sms_vertex_weight(v: SMSVertex, cos_ni: Float32, cos_hi: Float32, cos_tm: Float32) -> Float32:
+    """A solved vertex's radiance factor: F at a reflection; (1 - F) / eta^2 at a refraction, where the compression
+    takes the emitter-side eta, the reciprocal of the constraint-side `eta` (see sms_chain_eval)."""
+    var geo = cos_hi / max(cos_ni * cos_tm * cos_tm, Float32(1e-6))
+    if v.refl != Int8(0):
+        return sms_vertex_sel(v, cos_ni) * geo
+    var eta_o = Float32(1.0) / v.eta
+    return sms_vertex_sel(v, cos_ni) * geo * eta_o * eta_o
+
+@always_inline
 def sms_vertex_init() -> SMSVertex:
     var z = Vec3f(Float32(0.0))
-    return SMSVertex(z, z, z, z, Float32(1.0), Int8(0), z, Float32(0.0), z, z, normal_slope_map_none(), Float32(1.0), Int32(-1), Int32(-1), Int32(-2), Int32(-2))
+    return SMSVertex(z, z, z, z, Float32(1.0), Int8(0), z, Float32(0.0), z, z, normal_slope_map_none(), Float32(1.0), Int32(-1), Int32(-1), Int32(-2), Int32(-2), Int8(0))
 
 @always_inline
 def sms_vertex_flat(
@@ -271,7 +294,7 @@ def sms_vertex_flat(
     named constructor so call sites don't each spell out the dummy
     sphere_center/sphere_radius padding a flat vertex never uses."""
     var z = Vec3f(Float32(0.0))
-    return SMSVertex(pos, normal, dp_du, dp_dv, eta, Int8(0), z, Float32(0.0), z, z, normal_slope_map_none(), eta, Int32(-1), Int32(-1), Int32(-2), Int32(-2))
+    return SMSVertex(pos, normal, dp_du, dp_dv, eta, Int8(0), z, Float32(0.0), z, z, normal_slope_map_none(), eta, Int32(-1), Int32(-1), Int32(-2), Int32(-2), Int8(0))
 
 @always_inline
 def sms_vertex_sphere(
@@ -290,7 +313,7 @@ def sms_vertex_sphere(
     perturbs the shading normal and its derivatives on top of that (see
     `_sms_apply_sphere_frame`)."""
     var z = Vec3f(Float32(0.0))
-    var vtx = SMSVertex(pos, z, z, z, eta, Int8(1), center, radius, z, z, nmap, eta_raw, Int32(-1), Int32(-1), Int32(-2), Int32(-2))
+    var vtx = SMSVertex(pos, z, z, z, eta, Int8(1), center, radius, z, z, nmap, eta_raw, Int32(-1), Int32(-1), Int32(-2), Int32(-2), Int8(0))
     _sms_apply_sphere_frame(vtx, _sms_reproject_onto_sphere(pos, center, radius))
     return vtx
 
@@ -681,7 +704,7 @@ def sms_vertex_mesh(
     eta: Float32, eta_raw: Float32,
 ) -> Tuple[SMSVertex, Bool]:
     var z = Vec3f(Float32(0.0))
-    var vtx = SMSVertex(z, z, z, z, eta, Int8(0), z, Float32(0.0), z, z, normal_slope_map_none(), eta_raw, Int32(mi), Int32(tri_base), Int32(-2), Int32(-2))
+    var vtx = SMSVertex(z, z, z, z, eta, Int8(0), z, Float32(0.0), z, z, normal_slope_map_none(), eta_raw, Int32(mi), Int32(tri_base), Int32(-2), Int32(-2), Int8(0))
     var f = sms_mesh_frame(meshes, mi, tri_base, bu, bv)
     _sms_apply_mesh_frame(vtx, f)
     return (vtx, f[6])
@@ -923,9 +946,12 @@ def _sms_eval_vertex(
     if wil < Float32(1e-6) or wol < Float32(1e-6):
         return _sms_eval_bad()
     var wi = wiv*(Float32(1)/wil); var wo = wov*(Float32(1)/wol)
-    if dot(verts[i].normal, wi) * dot(verts[i].normal, wo) >= Float32(0):
+    var side = dot(verts[i].normal, wi) * dot(verts[i].normal, wo)
+    var ce = sms_c_eta(verts[i])
+    var wrong_side = side <= Float32(0) if verts[i].refl != Int8(0) else side >= Float32(0)
+    if wrong_side:
         return _sms_eval_bad()
-    var Hv = -(wi + wo*verts[i].eta); var Hl = sqrt(dot(Hv,Hv))
+    var Hv = -(wi + wo*ce); var Hl = sqrt(dot(Hv,Hv))
     if Hl < Float32(1e-10):
         return _sms_eval_bad()
     var H = Hv*(Float32(1)/Hl)
@@ -934,7 +960,7 @@ def _sms_eval_vertex(
     if sl2 < Float32(1e-10):
         return _sms_eval_bad()
     var s = s3*(Float32(1)/sqrt(sl2)); var t = cross(verts[i].normal, s)
-    var ili = Float32(1)/(Hl*wil); var ilo = verts[i].eta/(Hl*wol)
+    var ili = Float32(1)/(Hl*wil); var ilo = ce/(Hl*wol)
     var has_prev = i > 0
     var has_next = i < n-1
     var z3 = Vec3f(Float32(0.0))
@@ -986,6 +1012,58 @@ def _sms_eval_vertex(
             bi[3] - hn * dot(dnv, t))
     return SMSVertexEval(ai, bi, ci, cvi, wi, wo, H, wol, ili, ilo, Int8(1))
 
+def sms_chain_eval(
+    x0: Vec3f, xL: Vec3f, verts: Array[SMSVertex, MAX_SMS_VERTICES], n: Int, ldp_du: Vec3f, ldp_dv: Vec3f,
+) -> Tuple[Bool, Float32, Float32]:
+    """(ok, product of the vertices' radiance factors, |dx1/dxL|) of a chain that already satisfies its constraints:
+    sms_walk's last step, and how a path found by BSDF sampling gets the same numbers without a solve."""
+    var evf = Array[SMSVertexEval, MAX_SMS_VERTICES](fill=_sms_eval_bad())
+    for i in range(n):
+        evf[i] = _sms_eval_vertex(x0, xL, verts, n, i)
+        if evf[i].ok == Int8(0):
+            return (False, Float32(0.0), Float32(0.0))
+    var cprimef = Array[SIMD[DType.float32, 4], MAX_SMS_VERTICES](fill=SIMD[DType.float32, 4](Float32(0.0)))
+    var (Li0f, det0f) = mat22_inv(evf[0].b)
+    if det0f == Float32(0.0):
+        return (False, Float32(0.0), Float32(0.0))
+    cprimef[0] = mat22_mul(Li0f, evf[0].c)
+    var last_Li = Li0f  # overwritten below when n > 1; stays Li0f when n == 1
+    for i in range(1, n):
+        var pivot = evf[i].b - mat22_mul(evf[i].a, cprimef[i-1])
+        var (Lii, deti) = mat22_inv(pivot)
+        if deti == Float32(0.0):
+            return (False, Float32(0.0), Float32(0.0))
+        cprimef[i] = mat22_mul(Lii, evf[i].c)
+        last_Li = Lii
+    # dc_dlight: coupling of the LAST vertex's constraint to the light's own
+    # tangent basis (exactly _mnee_walk's dHdu_l/dHdv_l or _mnee_walk2's
+    # dc_du/dc_dv at x2, generalized to vertex n-1).
+    var last = n - 1
+    var s3_last = verts[last].dp_du - verts[last].normal*dot(verts[last].dp_du, verts[last].normal)
+    var s_last = s3_last * (Float32(1)/sqrt(dot(s3_last,s3_last)))
+    var t_last = cross(verts[last].normal, s_last)
+    var dc_du = (ldp_du - evf[last].wo*dot(evf[last].wo,ldp_du)) * evf[last].ilo
+    var dc_dv = (ldp_dv - evf[last].wo*dot(evf[last].wo,ldp_dv)) * evf[last].ilo
+    dc_du -= evf[last].H*dot(dc_du, evf[last].H); dc_du = -dc_du
+    dc_dv -= evf[last].H*dot(dc_dv, evf[last].H); dc_dv = -dc_dv
+    var dc_dlight = SIMD[DType.float32, 4](dot(dc_du,s_last), dot(dc_dv,s_last), dot(dc_du,t_last), dot(dc_dv,t_last))
+    var Tp = mat22_mul(last_Li, dc_dlight) * Float32(-1.0)
+    for ridx in range(n-1):
+        var i = n-2-ridx
+        Tp = mat22_mul(cprimef[i], Tp) * Float32(-1.0)
+    var dx1_dxlight = abs(Tp[0]*Tp[3] - Tp[1]*Tp[2])
+    # BSDF product across the whole chain.
+    var bsdf_product = Float32(1.0)
+    for i in range(n):
+        var cosNI = abs(dot(verts[i].normal, evf[i].wi))
+        var cosHI = abs(dot(evf[i].H, evf[i].wi))
+        var cosTM = abs(dot(verts[i].normal, evf[i].H))
+        # A refraction's compression takes the emitter-side eta, the reciprocal of the constraint-side `eta` (the
+        # reference orients its raw eta from opposite sides at the two uses, manifold_ss.cpp); squaring the constraint
+        # eta was an eta^4 error that only single-refraction chains showed, as enter+exit pairs cancel it.
+        bsdf_product *= sms_vertex_weight(verts[i], cosNI, cosHI, cosTM)
+    return (True, bsdf_product, dx1_dxlight)
+
 def sms_walk(
     x0: Vec3f, xL: Vec3f,
     verts_init: Array[SMSVertex, MAX_SMS_VERTICES], n: Int,
@@ -1031,7 +1109,7 @@ def sms_walk(
     # vertices are excluded because _sms_step_anglediff only implements the
     # refractive branch -- SMS in gonzales is reached from dielectrics only.
     var use_anglediff = (n == 1 and sms_curved(verts[0])
-                         and verts[0].eta_raw != Float32(1.0))
+                         and verts[0].eta_raw != Float32(1.0) and verts[0].refl == Int8(0))
     var converged = False
     for _iter in range(20):
         # Constraint formulation. A single CURVED vertex uses the reference's
@@ -1242,8 +1320,9 @@ def sms_walk(
     # enough that a path physically entering and leaving on the same side
     # still passes. Cheap, and it is the check that keeps a randomly-seeded
     # walk from reporting the sphere's far side as a solution.
+    # A reflection is the mirror case: both neighbours on the SAME side.
     for i in range(n):
-        if verts[i].eta == Float32(1.0):
+        if verts[i].eta == Float32(1.0) and verts[i].refl == Int8(0):
             continue
         var gn = verts[i].normal
         if verts[i].is_sphere != Int8(0):
@@ -1254,77 +1333,15 @@ def sms_walk(
             gn = gnv * (Float32(1.0) / gnl)
         var wx = (x0 if i == 0 else verts[i-1].pos) - verts[i].pos
         var wy = (xL if i == n-1 else verts[i+1].pos) - verts[i].pos
-        if dot(gn, wx) * dot(gn, wy) >= Float32(0.0):
+        var side = dot(gn, wx) * dot(gn, wy)
+        var wrong_side = side <= Float32(0.0) if verts[i].refl != Int8(0) else side >= Float32(0.0)
+        if wrong_side:
             return (False, zero_positions.copy(), Float32(0.0), Float32(0.0))
-    # ── Final recompute: BSDF product + light-Jacobian chain ────────────────
-    var evf = Array[SMSVertexEval, MAX_SMS_VERTICES](fill=_sms_eval_bad())
-    for i in range(n):
-        evf[i] = _sms_eval_vertex(x0, xL, verts, n, i)
-        if evf[i].ok == Int8(0):
-            return (False, zero_positions.copy(), Float32(0.0), Float32(0.0))
-    var cprimef = Array[SIMD[DType.float32, 4], MAX_SMS_VERTICES](fill=SIMD[DType.float32, 4](Float32(0.0)))
-    var (Li0f, det0f) = mat22_inv(evf[0].b)
-    if det0f == Float32(0.0):
+    var fin = sms_chain_eval(x0, xL, verts, n, ldp_du, ldp_dv)
+    if not fin[0]:
         return (False, zero_positions.copy(), Float32(0.0), Float32(0.0))
-    cprimef[0] = mat22_mul(Li0f, evf[0].c)
-    var last_Li = Li0f  # overwritten below when n > 1; stays Li0f when n == 1
-    for i in range(1, n):
-        var pivot = evf[i].b - mat22_mul(evf[i].a, cprimef[i-1])
-        var (Lii, deti) = mat22_inv(pivot)
-        if deti == Float32(0.0):
-            return (False, zero_positions.copy(), Float32(0.0), Float32(0.0))
-        cprimef[i] = mat22_mul(Lii, evf[i].c)
-        last_Li = Lii
-    # dc_dlight: coupling of the LAST vertex's constraint to the light's own
-    # tangent basis (exactly _mnee_walk's dHdu_l/dHdv_l or _mnee_walk2's
-    # dc_du/dc_dv at x2, generalized to vertex n-1).
-    var last = n - 1
-    var s3_last = verts[last].dp_du - verts[last].normal*dot(verts[last].dp_du, verts[last].normal)
-    var s_last = s3_last * (Float32(1)/sqrt(dot(s3_last,s3_last)))
-    var t_last = cross(verts[last].normal, s_last)
-    var dc_du = (ldp_du - evf[last].wo*dot(evf[last].wo,ldp_du)) * evf[last].ilo
-    var dc_dv = (ldp_dv - evf[last].wo*dot(evf[last].wo,ldp_dv)) * evf[last].ilo
-    dc_du -= evf[last].H*dot(dc_du, evf[last].H); dc_du = -dc_du
-    dc_dv -= evf[last].H*dot(dc_dv, evf[last].H); dc_dv = -dc_dv
-    var dc_dlight = SIMD[DType.float32, 4](dot(dc_du,s_last), dot(dc_dv,s_last), dot(dc_du,t_last), dot(dc_dv,t_last))
-    var Tp = mat22_mul(last_Li, dc_dlight) * Float32(-1.0)
-    for ridx in range(n-1):
-        var i = n-2-ridx
-        Tp = mat22_mul(cprimef[i], Tp) * Float32(-1.0)
-    var dx1_dxlight = abs(Tp[0]*Tp[3] - Tp[1]*Tp[2])
-    # BSDF product across the whole chain.
-    var bsdf_product = Float32(1.0)
-    for i in range(n):
-        var cosNI = abs(dot(verts[i].normal, evf[i].wi))
-        var cosHI = abs(dot(evf[i].H, evf[i].wi))
-        var cosTM = abs(dot(verts[i].normal, evf[i].H))
-        var F = fr_dielectric(cosNI, verts[i].eta)
-        # Solid-angle compression across a delta refraction (reference:
-        # manifold_ss.cpp `specular_reflectance`, delta branch --
-        # `bsdf_val = 1 - F; bsdf_val *= sqr(eta)`).
-        #
-        # The reference stores the RAW material eta on its manifold vertex
-        # and re-orients it separately at each of the two places it is
-        # used, and those two places look at the interface from OPPOSITE
-        # sides: the generalized half-vector constraint tests
-        # `dot(wi, gn)` (the SHADING-POINT side, wi pointing back toward
-        # x0), while this compression factor tests `dot(n, wo)` (the
-        # EMITTER side). `verts[i].eta` here carries the constraint
-        # orientation -- that is how _sms_vertex_from_hit derives it, and
-        # it is what _sms_eval_vertex above consumes -- so this use needs
-        # the other one. _sms_eval_vertex has already rejected every
-        # vertex whose wi and wo do NOT straddle the surface, so for any
-        # vertex that reaches here the emitter-side orientation is exactly
-        # the reciprocal.
-        #
-        # Squaring the constraint eta directly (what this line did before)
-        # is therefore off by eta^4 -- ~5x for glass. It cancels silently
-        # in the common 2-vertex enter+exit chain, where eta_2 = 1/eta_1
-        # makes the product 1 either way, which is why it survived: only a
-        # SINGLE-refraction chain (an analytic sphere caster, modeled as
-        # one idealized bend -- see _sms_probe_and_solve) exposes it.
-        var eta_o = Float32(1.0) / verts[i].eta
-        bsdf_product *= (Float32(1.0)-F)*cosHI/max(cosNI*cosTM*cosTM, Float32(1e-6)) * eta_o*eta_o
+    var bsdf_product = fin[1]
+    var dx1_dxlight = fin[2]
     var out_positions = Array[Vec3f, MAX_SMS_VERTICES](fill=Vec3f(Float32(0.0)))
     for i in range(n):
         out_positions[i] = verts[i].pos
