@@ -100,6 +100,7 @@ def sms_trace_chain(ctx: ShadeContext, org: Vec3f, dir_in: Vec3f, mut verts: SMS
             return (-1, hit, o, d)   # inside skin: the walk's, not a chain's
         if kind == 2 or s2 >= Float32(1):
             v.refl = Int8(1)
+            v.med_out = v.med_in   # a reflection stays on its side: not the skin's walk medium behind it
             d = d + nf * (Float32(2) * ci)
         else:
             d = d * e + nf * (e * ci - sqrt(Float32(1) - s2))
