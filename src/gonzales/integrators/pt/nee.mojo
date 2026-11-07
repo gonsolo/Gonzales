@@ -22,7 +22,8 @@ from gonzales.integrators.pt.restir_sms import SMSReservoir, sms_reservoir_init,
 from gonzales.transport.texturing import _get_tri_verts
 from gonzales.transport.shade_context import ShadeContext
 from gonzales.transport.manifold import _emitter_face_normal, _mnee_chain, _mnee_bsdf_over_light, _mnee_chain_t_eta, _mnee_first_probe, _mnee_reproduce, _sms_solve_from_probe, _mnee_chain_transmittance, _mnee_pass
-from gonzales.transport.glossy_sms import GSMS_DEBUG, glossy_sms_solve, glossy_sms_mis, glossy_sms_reproduce, glossy_sms_t_chain
+from gonzales.core.spectrum import SpectralSample
+from gonzales.transport.glossy_sms import GSMS_DEBUG, glossy_sms_stage, glossy_sms_solve, glossy_sms_mis, glossy_sms_reproduce, glossy_sms_t_chain
 from gonzales.transport.sms import mnee_orthonormal_basis
 from gonzales.integrators.pt.common import _to_spec_illum, _clamped, _to_spec_diffuse_lit, _emitter_invisible, _shadow_inline, _shadow_blocked, _shadow_contribute
 
@@ -535,11 +536,15 @@ def _glossy_sms_nee(
     var (ldu, ldv) = mnee_orthonormal_basis(du, dv)
     var tab = LobeTables(ctx.materials, ctx.curves, ctx.measured_brdfs, ctx.spectral)
     var wl = path_ptr[].wavelengths
-    var r = glossy_sms_solve(ctx, hit_point, bsdf, tab, wl, y, ldu, ldv, pcg)
+    comptime if GSMS_DEBUG == 6:
+        if path_ptr[].specularBounce == Int8(1):   # reached through the camera's glass only
+            path_ptr[].estimate += SpectralSample(Float32(1)) * glossy_sms_stage(ctx, hit_point, bsdf, tab, wl, y, ldu, ldv, pcg)
+        return
+    var verts = Array[SMSVertex, MAX_SMS_VERTICES](fill=sms_vertex_init())
+    var r = glossy_sms_solve(ctx, hit_point, bsdf, tab, wl, y, ldu, ldv, pcg, verts)
     if not r[0]:
         return
     var n = r[1]
-    var verts = r[2].copy()
     if al._pad0 == Int8(0) and dot(ln, verts[n-1].pos - y) <= Float32(0):
         return   # a one-sided lamp turned away from the chain
     var d0 = verts[0].pos - hit_point
@@ -548,8 +553,8 @@ def _glossy_sms_nee(
         return
     var p_area = sel_pdf / al.total_area
     var t_med = _mnee_chain_transmittance(ctx, hit_point, verts, n, y, path_ptr[].current_medium_idx, wl)
-    var w = glossy_sms_mis(ev.pdf_fwd, glossy_sms_t_chain(hit_point, verts, n) * _mnee_pass(t_med), r[4], p_area)
-    var c = path_ptr[].throughput * ev.f_cos * _to_spec_illum(ctx, al.emission, wl) * t_med * (r[3] * r[4] * r[5] * w / p_area)
+    var w = glossy_sms_mis(ev.pdf_fwd, glossy_sms_t_chain(hit_point, verts, n) * _mnee_pass(t_med), r[3], p_area)
+    var c = path_ptr[].throughput * ev.f_cos * _to_spec_illum(ctx, al.emission, wl) * t_med * (r[2] * r[3] * r[4] * w / p_area)
     comptime if GSMS_DEBUG == 1:
         path_ptr[].estimate += c
     path_ptr[].estimate += _clamped(ctx, c, Int(path_ptr[].bounce))
@@ -562,16 +567,18 @@ def _glossy_sms_bsdf_weight(
     """This BSDF path's share against glossy SMS from the glossy vertex it left (PathState.gl_pdf): the rest of MIS
     when re-tracing its first direction by the chain rule lands on this light point, everything otherwise."""
     var x0 = path_ptr[].last_ns_p
-    var rp = glossy_sms_reproduce(ctx, x0, path_ptr[].gl_dir, Int(path_ptr[].ns_spec), light_hit, inter)
+    var n = Int(path_ptr[].ns_spec)
+    var verts = Array[SMSVertex, MAX_SMS_VERTICES](fill=sms_vertex_init())
+    var rp = glossy_sms_reproduce(ctx, x0, path_ptr[].gl_dir, n, light_hit, inter, verts)
     if not rp[0]:
         return Float32(1.0)
     var al_idx = Int(inter.primId.id1)
     var al = ctx.lights.area_lights[unsafe_offset=al_idx]
     var ls = ctx.lights.light_sampler
     var sel = max(ls.cdf[unsafe_offset=al_idx + 1] - ls.cdf[unsafe_offset=al_idx], Float32(1e-6))
-    var t_med = _mnee_chain_transmittance(ctx, x0, rp[2], rp[1], light_hit, path_ptr[].current_medium_idx, path_ptr[].wavelengths)
-    var t_chain = glossy_sms_t_chain(x0, rp[2], rp[1]) * _mnee_pass(t_med)
-    return Float32(1.0) - glossy_sms_mis(path_ptr[].gl_pdf, t_chain, rp[3], sel / max(al.total_area, Float32(1e-30)))
+    var t_med = _mnee_chain_transmittance(ctx, x0, verts, n, light_hit, path_ptr[].current_medium_idx, path_ptr[].wavelengths)
+    var t_chain = glossy_sms_t_chain(x0, verts, n) * _mnee_pass(t_med)
+    return Float32(1.0) - glossy_sms_mis(path_ptr[].gl_pdf, t_chain, rp[1], sel / max(al.total_area, Float32(1e-30)))
 
 
 # ── ReSTIR SMS (Phase 6's remaining first piece: candidate generation) ──────

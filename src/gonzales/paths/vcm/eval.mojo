@@ -11,7 +11,7 @@ from gonzales.scene.appearance.lights import area_light_side_pdf
 from gonzales.transport.manifold import _mnee_first_probe, _mnee_chain, _mnee_chain_t_eta, _mnee_bsdf_over_light, _mnee_reproduce, _emitter_face_normal, _mnee_chain_transmittance, _mnee_pass
 from gonzales.transport.shade_context import _shade_context
 from gonzales.transport.glossy_sms import GLOSSY_SMS_MIN_PDF, glossy_sms_lobe, glossy_sms_solve, glossy_sms_reproduce, sms_chain_lands
-from gonzales.transport.sms import mnee_orthonormal_basis, sms_chain_eval
+from gonzales.transport.sms import mnee_orthonormal_basis, sms_chain_eval, SMSVertex, MAX_SMS_VERTICES, sms_vertex_init
 from gonzales.transport.manifold import _mnee_chain_g
 from gonzales.transport.mis_policy import MisPolicy
 from gonzales.scene.accel.bvh import curve_tangent, fibre_cos, SceneView, _scene_bounding_sphere, LightSample, _sample_infinite_light_nee, light_path_pick, light_path_pick_pdf
@@ -399,11 +399,11 @@ def _vcm_gsms(
     var ctx = _shade_context(sd, Pointer[UInt32, MutUntrackedOrigin].unsafe_dangling())
     var bsdf = _vertex_ctx(v)
     var tab = LobeTables(sd.materials, sd.curves, sd.measuredBrdfs, sd.spectral)
-    var r = glossy_sms_solve(ctx, hit_v, bsdf, tab, wl, y, ldu, ldv, pcg)
+    var verts = Array[SMSVertex, MAX_SMS_VERTICES](fill=sms_vertex_init())
+    var r = glossy_sms_solve(ctx, hit_v, bsdf, tab, wl, y, ldu, ldv, pcg, verts)
     if not r[0]:
         return z
     var n = r[1]
-    var verts = r[2].copy()
     var wy = verts[n-1].pos - y
     var cos_y = dot(ln, wy) / sqrt(max(dot(wy, wy), Float32(1e-30)))
     if side < Float32(1):
@@ -419,13 +419,13 @@ def _vcm_gsms(
     var (t_ch, eta_ch) = _mnee_chain_t_eta(hit_v, verts, n)
     var t_med = _mnee_chain_transmittance(ctx, hit_v, verts, n, y, v.med_idx, wl)
     t_ch *= _mnee_pass(t_med)
-    var g = r[4]
+    var g = r[3]
     var w_light = _mnee_bsdf_over_light(le.pdf_fwd, t_ch, g, p_a)
     var w_camera = side / PI / (eta_ch * eta_ch) * abs(dot(gn, w0)) * g * t_ch * (eta_x + dvcm + dvc * le.pdf_rev)
     var w = Float32(1) / (w_light + Float32(1) + w_camera)
     return (beta * le.f_cos * t_med
         * spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, emission.r, emission.g, emission.b, wl)
-        * (g * r[3] * r[5] / p_a * w))
+        * (g * r[2] * r[4] / p_a * w))
 
 
 @no_inline
@@ -438,11 +438,12 @@ def _vcm_gsms_hit_term(
     if n_glass <= 0 or pdf_x0 < GLOSSY_SMS_MIN_PDF:
         return Float32(0)
     var ctx = _shade_context(sd, Pointer[UInt32, MutUntrackedOrigin].unsafe_dangling())
-    var rp = glossy_sms_reproduce(ctx, x0, dir0, n_glass, light_hit, light)
-    if not rp[0] or rp[3] <= Float32(0):
+    var verts = Array[SMSVertex, MAX_SMS_VERTICES](fill=sms_vertex_init())
+    var rp = glossy_sms_reproduce(ctx, x0, dir0, n_glass, light_hit, light, verts)
+    if not rp[0] or rp[1] <= Float32(0):
         return Float32(0)
-    var t_pass = _mnee_pass(_mnee_chain_transmittance(ctx, x0, rp[2], rp[1], light_hit, cur_med, wl))
-    return Float32(1) / _mnee_bsdf_over_light(pdf_x0, _mnee_chain_t_eta(x0, rp[2], rp[1])[0] * t_pass, rp[3], p_a)
+    var t_pass = _mnee_pass(_mnee_chain_transmittance(ctx, x0, verts, n_glass, light_hit, cur_med, wl))
+    return Float32(1) / _mnee_bsdf_over_light(pdf_x0, _mnee_chain_t_eta(x0, verts, n_glass)[0] * t_pass, rp[1], p_a)
 
 
 @no_inline
@@ -455,10 +456,9 @@ def _vcm_gsms_light_dvcm(
     if n_glass <= 0 or side <= Float32(0):
         return Float32(0)
     var ctx = _shade_context(sd, Pointer[UInt32, MutUntrackedOrigin].unsafe_dangling())
-    var la = sms_chain_lands(ctx, x0, dir_in, n_glass, y)
-    if not la[0]:
+    var verts = Array[SMSVertex, MAX_SMS_VERTICES](fill=sms_vertex_init())
+    if not sms_chain_lands(ctx, x0, dir_in, n_glass, y, verts)[0]:
         return Float32(0)
-    var verts = la[2].copy()
     var a = Vec3f(Float32(1), Float32(0), Float32(0)) if abs(ny[0]) < Float32(0.9) else Vec3f(Float32(0), Float32(1), Float32(0))
     var tu = cross(ny, a)
     tu = tu * (Float32(1) / sqrt(dot(tu, tu)))
