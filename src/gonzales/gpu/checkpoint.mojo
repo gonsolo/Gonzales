@@ -11,6 +11,7 @@ from std.ffi import external_call
 from std.memory.alloc import unsafe_alloc
 from std.sys.info import size_of
 from std.time import perf_counter_ns
+from std.os.path import realpath
 from max.gpu.host import DeviceBuffer, DeviceContext
 from gonzales.scene.description.pbrt_parser import ParsedScene_Mojo
 
@@ -37,14 +38,10 @@ def _fopen(path: String, mode: String) -> Int:
 
 
 def _realpath(path: String) -> String:
-    var p = _cstr(path)
-    var r = external_call["realpath", Int, _P, Int](p, 0)
-    p.unsafe_free()
-    if r == 0:
+    try:
+        return realpath(path)
+    except:
         return path
-    var out = String(unsafe_from_utf8_ptr=_P(unsafe_from_address=r).as_imm())
-    external_call["free", NoneType, Int](r)
-    return out
 
 
 def _fnv(h: UInt64, p: _P, n: Int) -> UInt64:

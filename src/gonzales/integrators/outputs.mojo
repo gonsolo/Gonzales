@@ -260,3 +260,27 @@ def finish_render[Op: Origin[mut=True], Oa: Origin[mut=True]](
     noisy_owned.unsafe_free()
     normals.unsafe_free(); depth.unsafe_free(); out.unsafe_free()
     return ret
+
+
+def write_partial_image(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin], pixels: Pointer[Float32, MutUntrackedOrigin],
+                        extra: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling()) -> Int32:
+    """A render in progress as <film>.partial.exr, not denoised. With `extra` (merging, gathered photons) it is
+    finished as finish_render finishes it; without, `pixels` is already the image (the path tracer's resolve)."""
+    var fw = psc[unsafe_offset=0].film_w
+    var fh = psc[unsafe_offset=0].film_h
+    var n_pix = Int(fw) * Int(fh)
+    var out = unsafe_alloc[Float32](n_pix * 3)
+    var has_extra = _is_real_ptr(extra)
+    for i in range(n_pix):
+        var c = RGB(pixels[unsafe_offset=i*3], pixels[unsafe_offset=i*3+1], pixels[unsafe_offset=i*3+2])
+        if has_extra:
+            c = RGB(c.r + extra[unsafe_offset=i*3], c.g + extra[unsafe_offset=i*3+1], c.b + extra[unsafe_offset=i*3+2])
+            c = c.sensor_clamped(psc[unsafe_offset=0].film_max_comp)
+        out[unsafe_offset=i*3] = c.r; out[unsafe_offset=i*3+1] = c.g; out[unsafe_offset=i*3+2] = c.b
+    if has_extra:
+        apply_film_sensor(out, n_pix, psc[unsafe_offset=0].film_exposuretime, psc[unsafe_offset=0].film_wb)
+    var name = _sidecar_name(psc[unsafe_offset=0].film_filename, ".partial.exr")
+    var ret = write_image_cropwindow(out, fw, fh, psc[unsafe_offset=0].crop_x0, psc[unsafe_offset=0].crop_y0,
+                                     psc[unsafe_offset=0].crop_x1, psc[unsafe_offset=0].crop_y1, name, Int32(32), Int32(32))
+    name.unsafe_free(); out.unsafe_free()
+    return ret
