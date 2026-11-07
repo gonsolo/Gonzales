@@ -18,11 +18,36 @@ from gonzales.integrators.sppm.sppm import SPPMPixel, SPPMPhoton, _vp_samples_fo
 from gonzales.estimators.photon_grid import _HSIZE
 from gonzales.gpu.scene import GpuSceneHandle
 from gonzales.core.progress import Progress
-from gonzales.integrators.outputs import finish_render
+from gonzales.integrators.outputs import finish_render, write_partial_image
+from gonzales.gpu.checkpoint import Checkpoint, CheckpointConfig
+from max.gpu.host import DeviceBuffer
 from gonzales.gpu.sppm.kernels import (
     sppm_reset_i32_gpu, sppm_gen_vp_gpu, sppm_emit_photons_gpu, sppm_grid_reset_gpu, sppm_grid_count_gpu,
     sppm_grid_insert_gpu, sppm_gather_gpu, sppm_nee_gpu, sppm_finalize_gpu, sppm_flush_gpu, sppm_retrace_vp_gpu,
 )
+
+def _sppm_images(handle: Pointer[GpuSceneHandle, MutUntrackedOrigin], vps: Pointer[SPPMPixel, MutUntrackedOrigin], n_pix: Int,
+                 vp_samples: Int, n_done: Int, iso_scale: Float32, out_buf: DeviceBuffer[DType.uint8],
+                 caustic_buf: DeviceBuffer[DType.uint8], albedo_buf: DeviceBuffer[DType.uint8]) raises -> Tuple[
+                 Pointer[Float32, MutUntrackedOrigin], Pointer[Float32, MutUntrackedOrigin], Pointer[Float32, MutUntrackedOrigin]]:
+    """The image after n_done passes: global, caustic and albedo, on the host."""
+    comptime block_size = 256
+    var (coeffs, res, cie_x, cie_y, cie_z, d65) = handle[].spectral.unsafe_ptrs()
+    handle[].ctx.enqueue_function[sppm_finalize_gpu](
+        vps, Int64(n_pix), Int64(vp_samples), Int32(n_done), iso_scale,
+        out_buf.unsafe_ptr().unsafe_bitcast[Float32]().unsafe_origin_cast[MutUntrackedOrigin](),
+        caustic_buf.unsafe_ptr().unsafe_bitcast[Float32]().unsafe_origin_cast[MutUntrackedOrigin](),
+        albedo_buf.unsafe_ptr().unsafe_bitcast[Float32]().unsafe_origin_cast[MutUntrackedOrigin](),
+        coeffs, Int64(res), cie_x, cie_y, cie_z, d65, grid_dim=ceildiv(n_pix, block_size), block_dim=block_size)
+    var o = unsafe_alloc[Float32](n_pix * 3)
+    var c = unsafe_alloc[Float32](n_pix * 3)
+    var a = unsafe_alloc[Float32](n_pix * 3)
+    handle[].ctx.enqueue_copy(o.unsafe_bitcast[UInt8](), out_buf)
+    handle[].ctx.enqueue_copy(c.unsafe_bitcast[UInt8](), caustic_buf)
+    handle[].ctx.enqueue_copy(a.unsafe_bitcast[UInt8](), albedo_buf)
+    handle[].ctx.synchronize()
+    return (o, c, a)
+
 
 def sppm_render_gpu(
     handlePtr: Pointer[GpuSceneHandle, MutUntrackedOrigin],
@@ -33,6 +58,7 @@ def sppm_render_gpu(
     initial_radius: Float32,
     no_denoise: Bool,
     verbose:  Bool,
+    ckpt: CheckpointConfig = CheckpointConfig(),
 ) -> Int32:
     """GPU-accelerated Stochastic Progressive Photon Mapping — same algorithm
     as sppm_render, parallelized: one thread per visible-point sample for the"""
@@ -111,9 +137,6 @@ def sppm_render_gpu(
             var inter_cam_ptr = inter_cam_buf.unsafe_ptr().unsafe_bitcast[Intersection]().unsafe_origin_cast[MutUntrackedOrigin]()
             var inter_ph_ptr  = inter_ph_buf.unsafe_ptr().unsafe_bitcast[Intersection]().unsafe_origin_cast[MutUntrackedOrigin]()
             var counter_ptr = counter_buf.unsafe_ptr().unsafe_bitcast[Int32]().unsafe_origin_cast[MutUntrackedOrigin]()
-            var out_ptr     = out_buf.unsafe_ptr().unsafe_bitcast[Float32]().unsafe_origin_cast[MutUntrackedOrigin]()
-            var caustic_ptr = caustic_buf.unsafe_ptr().unsafe_bitcast[Float32]().unsafe_origin_cast[MutUntrackedOrigin]()
-            var albedo_out_ptr = albedo_out_buf.unsafe_ptr().unsafe_bitcast[Float32]().unsafe_origin_cast[MutUntrackedOrigin]()
             var r2c_ptr = r2c_buf.unsafe_ptr().unsafe_bitcast[Float32]().unsafe_origin_cast[MutUntrackedOrigin]()
             var c2w_ptr = c2w_buf.unsafe_ptr().unsafe_bitcast[Float32]().unsafe_origin_cast[MutUntrackedOrigin]()
 
@@ -123,7 +146,6 @@ def sppm_render_gpu(
                 Int(psc[unsafe_offset=0].film_w), Int(psc[unsafe_offset=0].film_h), _VP_SAMPLES)
             var gsd = handle[].scene_descriptor()
 
-            var grid_pix = ceildiv(n_pix, block_size)
             var grid_vps = ceildiv(n_vps, block_size)
             var grid_hsize = ceildiv(_HSIZE, block_size)
 
@@ -148,8 +170,18 @@ def sppm_render_gpu(
                     block_dim=block_size,
                 )
 
+            # The visible points carry every pass's progressive state (r2, N_acc, tau, gsum, env, ...), and without
+            # retracing their geometry too: they are the whole state.
+            var ck = Checkpoint(ckpt, psc, "sppm")
+            ck.add("passes", String(n_passes)); ck.add("photons", String(n_photons_per_pass))
+            ck.add("radius", String(initial_radius)); ck.add("retrace", String(retrace)); ck.add("vp_samples", String(vp_samples))
+            var start = ck.resume()
+            if ckpt.resume.byte_length() > 0:
+                ck.io("vps", handle[].ctx, vps_buf)
+                ck.end_read()
             var prog = Progress(n_passes, "passes", quiet=verbose)
-            for pass_idx in range(n_passes):
+            prog.update(start)
+            for pass_idx in range(start, n_passes):
                 handle[].ctx.enqueue_function[sppm_reset_i32_gpu](
                     counter_ptr, grid_dim=1, block_dim=1)
 
@@ -233,14 +265,23 @@ def sppm_render_gpu(
                     print("SPPM (GPU): pass " + String(pass_idx + 1) + "/" + String(n_passes)
                           + " stored=" + String(n_stored))
                 prog.update(pass_idx + 1)
+                var done = pass_idx + 1
+                var last = done == n_passes
+                if ck.enabled() and (last or ck.due() or ck.stop_here(done)):
+                    handle[].ctx.synchronize()
+                    ck.begin_write(done)
+                    ck.io("vps", handle[].ctx, vps_buf)
+                    ck.end_write(done)
+                    if not last:
+                        var partial = _sppm_images(handle, vps_ptr, n_pix, vp_samples, done, iso_scale, out_buf, caustic_buf, albedo_out_buf)
+                        _ = write_partial_image(psc, partial[0], partial[1])
+                        partial[0].unsafe_free(); partial[1].unsafe_free(); partial[2].unsafe_free()
+                        if ck.stop_here(done):
+                            print("Stopped after " + String(done) + " of " + String(n_passes) + " passes")
+                            return ret
 
             _ = prog.finish()
-
-            handle[].ctx.enqueue_function[sppm_finalize_gpu](
-                vps_ptr, Int64(n_pix), Int64(vp_samples), Int32(n_passes), iso_scale, out_ptr, caustic_ptr, albedo_out_ptr,
-                spectral_coeffs, Int64(spectral_res), spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
-                grid_dim=grid_pix, block_dim=block_size)
-            handle[].ctx.synchronize()
+            var images = _sppm_images(handle, vps_ptr, n_pix, vp_samples, n_passes, iso_scale, out_buf, caustic_buf, albedo_out_buf)
             # Verbose: count pixels without visible points, photons or light.
             if verbose:
                 var n_novp = 0; var n_nophot = 0; var n_dark = 0; var n_tot = 0; var n_envonly = 0
@@ -284,13 +325,7 @@ def sppm_render_gpu(
             _ = vps_buf^; _ = photons_buf^; _ = heads_buf^
             _ = inter_cam_buf^; _ = inter_ph_buf^; _ = r2c_buf^; _ = c2w_buf^
 
-            var out_pixels = unsafe_alloc[Float32](n_pix * 3)
-            var caustic_pixels = unsafe_alloc[Float32](n_pix * 3)
-            var albedo_pixels = unsafe_alloc[Float32](n_pix * 3)
-            handle[].ctx.enqueue_copy(out_pixels.unsafe_bitcast[UInt8](), out_buf)
-            handle[].ctx.enqueue_copy(caustic_pixels.unsafe_bitcast[UInt8](), caustic_buf)
-            handle[].ctx.enqueue_copy(albedo_pixels.unsafe_bitcast[UInt8](), albedo_out_buf)
-            handle[].ctx.synchronize()
+            var out_pixels = images[0]; var caustic_pixels = images[1]; var albedo_pixels = images[2]
             _ = finish_render(psc, sd, out_pixels, albedo_pixels, no_denoise, caustic_pixels)
             out_pixels.unsafe_free(); caustic_pixels.unsafe_free(); albedo_pixels.unsafe_free()
         except e:
