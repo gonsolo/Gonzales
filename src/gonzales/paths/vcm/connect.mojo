@@ -11,7 +11,7 @@ from gonzales.scene.accel.bvh import SceneView
 from gonzales.core.sampling import power_heuristic, FilmFilter, filter_eval_2d, filter_integral_2d, sample_disk_concentric
 from gonzales.core.rng import PCG32
 from gonzales.core.spectrum import SpectralSample, spec_illum
-from gonzales.paths.vcm.vertex import _BDPT_MAX_VERTS, BDPTVertex
+from gonzales.paths.vcm.vertex import _BDPT_MAX_VERTS, BDPTVertex, vcm_light_dvcm
 from gonzales.scene.appearance.materials import LobeKind
 from gonzales.paths.vcm.nee import _visible_transmittance
 from gonzales.paths.vcm.eval import _vcm_free_flight, _vcm_cos_at, _eval_vertex_spectral, _bdpt_vertex_pdfs, _bdpt_vertex_mis_scoped, _bdpt_connect_pair_weighted
@@ -191,7 +191,7 @@ def _bdpt_connect_to_camera(
     var camera_pdf_a = image_to_surface * _vcm_free_flight(sd, lv, Tr)
     var eta_lv_splat = VcmStrategies.merge_density(sd, lv, mis_vm_weight_factor)
     var mis_weight: Float32
-    var w_light = (camera_pdf_a * inv_n) * (eta_lv_splat + lv.dVCM + lv.dVC * rev_pdf_w)
+    var w_light = (camera_pdf_a * inv_n) * (eta_lv_splat + vcm_light_dvcm(lv, rev_pdf_w) + lv.dVC * rev_pdf_w)
     mis_weight = Float32(1) / (w_light + Float32(1))
     contrib = contrib * mis_weight
 
@@ -407,7 +407,7 @@ def _bdpt_connect_mis_weight(
             w_light = camera_bsdf_dir_pdf_a / max(lv.pdf_fwd, Float32(1e-30))
         else:
             var eta_lv = VcmStrategies.merge_density(sd, lv, mis_vm_weight_factor)
-            w_light = camera_bsdf_dir_pdf_a * (eta_lv + lv.dVCM + lv.dVC * light_bsdf_rev_pdf_w)
+            w_light = camera_bsdf_dir_pdf_a * (eta_lv + vcm_light_dvcm(lv, light_bsdf_rev_pdf_w) + lv.dVC * light_bsdf_rev_pdf_w)
         var w_camera = Float32(0) if long_path else light_bsdf_dir_pdf_a * (eta_cv + cv.dVCM + cv.dVC * camera_bsdf_rev_pdf_w)
         return Float32(1) / (w_light + Float32(1) + w_camera)
     elif cv.is_surface == Int32(0) and lv.is_light == Int32(1) and lv.pdf_fwd > Float32(0):

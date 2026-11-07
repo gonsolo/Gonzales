@@ -14,8 +14,10 @@ What changes against MNEE from a diffuse vertex:
     a random lobe seed with chance q and multiplies by an unbiased estimate of 1/q; any density that every strategy
     evaluates alike gives weights that sum to 1, so the partition stays exact (the check below), only no longer the
     balance heuristic of the true densities.
+  * The cut-off MIN_PDF (the renderer's GLOSSY_SMS_MIN_PDF) removes glossy SMS where x_0's lobe toward the chain is
+    thin; every strategy then drops its term together (gsms_ok), including the light vertex x_0's dVCM.
 Result: the sibling's formulas carry over with p_bsdf the lobe's density, T the chain's product of F (reflection) and
-1 - F (refraction), and the compression only at refractions.
+1 - F (refraction), and the compression only at refractions; with the cut-off the weights still sum to 1.
 """
 import math
 
@@ -30,6 +32,7 @@ N_SPLAT = 1.0
 N_W = 1.33                      # water below z = 0, air above
 CHAIN = "refract"               # or "reflect": lamp, x_0 and the lens above the water, seen in its surface
 K_LOBE = 12.0                   # glossy x_0: a lobe around a tilted mirror direction, deliberately not reciprocal
+MIN_PDF = 0.0                   # glossy SMS's cut-off: no share where x_0's lobe toward the chain is thinner
 
 
 def add(a, b): return (a[0] + b[0], a[1] + b[1], a[2] + b[2])
@@ -152,7 +155,7 @@ def strategy_densities(y0, xs, lens, etas, ch):
         L[k] = L[k - 1] * edge_pdf(xs[k - 1], xs[k], V(ch.v, None) if k == 1 else xs[k - 2])
     wcp = unit(sub(cam_pred(xs, lens, 0).pos, xs[0].pos))
     d = {("s", 0): C[0] * p_dir(xs[0], ch.w0, wcp) * ch.T * ch.J_cam,
-         ("mnee",): P_A * C[0]}
+         ("mnee",): P_A * C[0] if gsms_ok(xs, lens, ch) else 0.0}
     for s in range(2, n + 1):
         d[("s", s)] = L[s - 2] * C[s - 1]
     d[("t1", n - 1)] = N_SPLAT * L[n - 1] * P_CAM_AREA
@@ -173,7 +176,15 @@ def arrive(dvcm, dvc, a, b):
     return dvcm * d * d / cf, dvc / cf
 
 
-def light_carries(y0, xs, etas, upto, ch, mnee):
+def gsms_ok(xs, lens, ch):
+    """The cut-off: x_0's lobe density toward the chain, given the direction to its camera-side neighbour. Every place
+    that meets the light vertex x_0's glossy-SMS dVCM sees exactly this density: the light path's scatter at x_0 as its
+    reverse density, a connection or the splat from x_0 as light_rev, a merge at x_0 as the camera lobe toward the
+    light predecessor, and glossy SMS and the emission hit from the camera side as the lobe's forward density."""
+    return p_dir(xs[0], ch.w0, unit(sub(cam_pred(xs, lens, 0).pos, xs[0].pos))) >= MIN_PDF
+
+
+def light_carries(y0, xs, etas, upto, ch, mnee, lens=None):
     """Arrival carries at xs[upto]. The light origin's carries go through the delta vertex v (SmallVCM: arrive at v,
     dVCM = 0, dVC *= cos_out) to x_0; `mnee` gives x_0 MNEE's term instead of that 0."""
     cos_emit = dot(y0.n, ch.wy)
@@ -186,7 +197,7 @@ def light_carries(y0, xs, etas, upto, ch, mnee):
     dvcm, dvc = 0.0, dvc * cos_v_out * (1.0 / ch.n2 if mnee else 1.0)  # delta at v, air -> water
     dx = norm(sub(xs[0].pos, ch.v))
     dvcm, dvc = dvcm * dx * dx / ch.cos0, dvc / ch.cos0                  # arrive at x_0
-    if mnee:
+    if mnee and gsms_ok(xs, lens, ch):
         dvcm = 1.0 / (p_emit(y0, ch.wy) * ch.T * ch.J_light)
     for i in range(0, upto):
         a, b = xs[i], xs[i + 1]
@@ -218,7 +229,7 @@ def cam_pred(xs, lens, k): return lens if k == len(xs) - 1 else xs[k + 1]
 def w_connect(y0, xs, lens, etas, s, ch, mnee):
     """s >= 2: light vertex xs[s-2], camera vertex xs[s-1]."""
     lv, cv = xs[s - 2], xs[s - 1]
-    lvcm, lvc = light_carries(y0, xs, etas, s - 2, ch, mnee)
+    lvcm, lvc = light_carries(y0, xs, etas, s - 2, ch, mnee, lens)
     ccvcm, ccvc = camera_carries(xs, lens, etas, s - 1)
     dir_lc = unit(sub(cv.pos, lv.pos))
     w_lp = ch.w0 if s == 2 else unit(sub(xs[s - 3].pos, lv.pos))
@@ -236,14 +247,14 @@ def w_connect(y0, xs, lens, etas, s, ch, mnee):
 def w_splat(y0, xs, lens, etas, ch, mnee):
     n = len(xs)
     lv = xs[n - 1]
-    lvcm, lvc = light_carries(y0, xs, etas, n - 1, ch, mnee)
+    lvcm, lvc = light_carries(y0, xs, etas, n - 1, ch, mnee, lens)
     rev = p_dir(lv, ch.w0 if n == 1 else unit(sub(xs[n - 2].pos, lv.pos)), unit(sub(lens.pos, lv.pos)))
     w_light = (P_CAM_AREA * cam_edge_pdf(lens, lv) / N_SPLAT) * (etas[n - 1] + lvcm + lvc * rev)
     return 1.0 / (w_light + 1.0)
 
 
 def w_merge(y0, xs, lens, etas, k, ch, mnee):
-    lvcm, lvc = light_carries(y0, xs, etas, k, ch, mnee)
+    lvcm, lvc = light_carries(y0, xs, etas, k, ch, mnee, lens)
     ccvcm, ccvc = camera_carries(xs, lens, etas, k)
     x = xs[k]
     w_to_lpred = ch.w0 if k == 0 else unit(sub(xs[k - 1].pos, x.pos))
@@ -267,7 +278,7 @@ def w_emission_hit(y0, xs, lens, etas, ch, mnee):
     dy = norm(sub(y0.pos, ch.v))
     dvcm, dvc = dvcm * dy * dy / ch.cosy, dvc / ch.cosy                 # arrive at y0
     inv = 1.0 + P_A * dvcm + P_A * p_emit(y0, ch.wy) * dvc
-    if mnee:
+    if mnee and gsms_ok(xs, lens, ch):
         inv += P_A / (p_dir(x0, ch.w0, wp) * ch.T * ch.J_cam)
     return 1.0 / inv
 
@@ -299,7 +310,7 @@ def run(name, y0, xs, lens, etas):
             w[("s", s)] = w_connect(y0, xs, lens, etas, s, ch, mnee)
         for k in range(n):
             w[("merge", k)] = w_merge(y0, xs, lens, etas, k, ch, mnee)
-        w[("mnee",)] = w_mnee(y0, xs, lens, etas, ch) if mnee else 1.0   # today: MNEE added at full weight
+        w[("mnee",)] = (w_mnee(y0, xs, lens, etas, ch) if gsms_ok(xs, lens, ch) else 0.0) if mnee else 1.0
         weights[mnee] = w
     print(f"\n=== {name} ===   etendue n0^2 cos0 J_cam / (cosy J_light) = {etendue:.6f} (want 1)")
     print(f"  {'strategy':12s} {'truth':>10s} {'today':>10s} {'with MNEE':>10s}")
@@ -327,16 +338,21 @@ def scene_reflect():
 
 if __name__ == "__main__":
     err = 0.0
-    for chain, sc in (("refract", scene), ("reflect", scene_reflect)):
+    cuts = 0
+    for chain, sc, min_pdf in (("refract", scene, 0.0), ("reflect", scene_reflect, 0.0),
+                               ("refract", scene, 0.1), ("reflect", scene_reflect, 0.0065), ("reflect", scene_reflect, 1e9)):
         CHAIN = chain
+        MIN_PDF = min_pdf
         for glossy in (False, True):
             y0, lens, x_a, x_b = sc()
             x_a.glossy = glossy
             for n_light in (2.0e4, 2.0e6):
                 N_LIGHT = n_light
                 ETA_VCM = N_LIGHT * KERNEL
-                tag = f"{chain}, x_0 {'glossy' if glossy else 'diffuse'}, {n_light:.0e} light paths"
+                tag = f"{chain}, x_0 {'glossy' if glossy else 'diffuse'}, cut {min_pdf:g}, {n_light:.0e} light paths"
+                for xs_ in ([x_a], [x_a, x_b]):
+                    cuts += 0 if gsms_ok(xs_, lens, Chain(y0, x_a)) else 1
                 err = max(err, run(f"{tag}: 1 vertex", y0, [x_a], lens, [ETA_VCM]))
                 err = max(err, run(f"{tag}: 2 vertices", y0, [x_a, x_b], lens, [ETA_VCM, ETA_VCM]))
                 err = max(err, run(f"{tag}: 2 vertices, eta(x) varies", y0, [x_a, x_b], lens, [0.1 * ETA_VCM, ETA_VCM]))
-    print(f"\nmax |with glossy SMS - truth| = {err:.2e}")
+    print(f"\nmax |with glossy SMS - truth| = {err:.2e}; cases where the cut removed glossy SMS: {cuts}")

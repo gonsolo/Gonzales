@@ -366,10 +366,8 @@ def _vcm_mnee_light_dvcm(
     return PI * eta_ch * eta_ch / den if den > Float32(0) else Float32(0)
 
 
-# Off: glossy SMS cuts its share where the lobe toward the chain is thin (GLOSSY_SMS_MIN_PDF). A light vertex reached
-# through a chain only would have to apply that cut wherever its dVCM meets the camera side's direction (its scatter,
-# connections, merges, the splat); _vcm_gsms_light_dvcm does not, so VCM's weights would not sum to one.
-comptime _VCM_GSMS = False
+# Glossy SMS's cut-off (GLOSSY_SMS_MIN_PDF) reaches the light side through vcm_light_dvcm and light.mojo's scatter.
+comptime _VCM_GSMS = True
 
 
 @always_inline
