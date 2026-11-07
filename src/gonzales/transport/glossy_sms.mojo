@@ -2,7 +2,7 @@
 reflect as well as refract, seeded by the glossy lobe (Zeltner et al. 2020, with their reciprocal root estimate)."""
 from std.collections import Array
 from std.math import sqrt, abs
-from std.sys import get_defined_int, is_gpu
+from std.sys import get_defined_int
 from gonzales.core.geometry import Point3f, Vec3f, Ray, dot
 from gonzales.core.rng import PCG32
 from gonzales.core.spectrum import SampledWavelengths
@@ -41,16 +41,8 @@ def glossy_sms_lobe(bsdf: BSDF) -> Bool:
     return bsdf.kind == LobeKind.ggx and not bsdf.is_delta and bsdf.param <= GLOSSY_SMS_MAX_ALPHA
 
 
-# Off on the GPU unless -D GSMS_GPU=1: there the solver finds the reflection chains' roots (skin ball + glass block in
-# po/polish.pbrt) far less often than on the CPU, while BSDF sampling, alike on both, still hands them to it, so the
-# highlight came out dark. Walk convergence and the mesh re-projection match the CPU; the loss is later (cause open).
-comptime _GSMS_GPU = get_defined_int["GSMS_GPU", 0]() != 0
-
-
 @always_inline
 def glossy_sms_live(ctx: ShadeContext) -> Bool:
-    comptime if is_gpu() and not _GSMS_GPU:
-        return False
     return ctx.glossy_sms and ctx.cycles[3] == 0 and ctx.lights.area_light_count > 0
 
 
