@@ -1,6 +1,7 @@
 from std.ffi import external_call
 from std.memory.alloc import unsafe_alloc
 from std.sys.info import size_of
+from std.os import remove
 from std.testing import assert_true, assert_equal, TestSuite
 from gonzales.gpu.checkpoint import Checkpoint, CheckpointConfig, checkpoint_adopt_seed
 from gonzales.scene.description.pbrt_parser import ParsedScene_Mojo
@@ -29,6 +30,11 @@ def _cfg(path: String) raises -> CheckpointConfig:
     with open(cfg.scene, "w") as f:
         f.write("WorldBegin\n")
     return cfg^
+
+
+def _rm(path: String) raises:
+    remove(path)
+    remove(path + ".pbrt")
 
 
 def _write(path: String, psc: _Psc) raises:
@@ -68,6 +74,7 @@ def test_round_trip() raises:
     for k in range(5):
         assert_equal(a[unsafe_offset=k], Float32(k) * Float32(0.5))
     a.unsafe_free()
+    _rm(path)
 
 
 def test_header_mismatch_refuses() raises:
@@ -84,6 +91,7 @@ def test_header_mismatch_refuses() raises:
         _ = ck.resume()
     except e:
         msg = String(e)
+    _rm(path)
     assert_true("does not match" in msg and "spp" in msg)
 
 
@@ -95,6 +103,7 @@ def test_seed_adopted_without_cli_seed() raises:
     var cfg = _cfg(path)
     cfg.resume = path
     checkpoint_adopt_seed(cfg, psc)
+    _rm(path)
     assert_equal(psc[unsafe_offset=0].rng_seed, UInt64(1234))
 
 
@@ -116,6 +125,7 @@ def test_truncated_refuses() raises:
         ck.end_read()
     except:
         failed = True
+    _rm(path)
     assert_true(failed)
 
 
