@@ -10,6 +10,7 @@ from gonzales.core.gpu_tuning import (
 )
 from std.math import sqrt, min
 from std.atomic import Atomic
+from std.sys import get_defined_int
 from gonzales.core.geometry import Point3f, Vec3f, RGB
 from gonzales.scene.appearance.materials import MatKind
 from gonzales.scene.shapes.primitives import Intersection
@@ -32,6 +33,20 @@ from gonzales.integrators.vcm.light import (
     VCMLightPathState, _bdpt_light_path_init, _bdpt_light_path_bounce, _bdpt_trace_light_path, _vcm_light_walk_exit,
 )
 from gonzales.transport.render_state import PathState
+from gonzales.transport.sss_walk import sss_walker_advance, sss_walker_walking
+from gonzales.paths.vcm.vertex import _vcm_walk_limit
+
+comptime VCM_WALK_STEPS = get_defined_int["VWF_STEPS", 32]()   # walk steps a bounce launch: a subgroup waits that long at most
+
+
+@always_inline
+def _vcm_wf_active(cont: Bool, walking: Bool, bounces: Int32, ref sd: SceneView, live: Pointer[Int32, MutUntrackedOrigin]) -> Int8:
+    """A wavefront path after its launch: 2 walking, 1 to bounce again (at most _vcm_walk_limit bounces, as the
+    run-to-end loop), 0 done; one still going sets live[0]."""
+    var a = Int8(2) if walking else (Int8(1) if cont and Int(bounces) < _vcm_walk_limit(sd.vcmMaxDepth) else Int8(0))
+    if a != Int8(0):
+        live[unsafe_offset=0] = Int32(1)
+    return a
 
 @always_inline
 def _finite3(a: Float32, b: Float32, c: Float32) -> Bool:
@@ -256,8 +271,8 @@ def _bdpt_light_path_intersect_gpu(
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
     if tid >= count:
         return
-    if states[unsafe_offset=tid].active == Int8(0):
-        return
+    if states[unsafe_offset=tid].active != Int8(1):
+        return   # done or walking
     var ray = Ray(states[unsafe_offset=tid].ro, states[unsafe_offset=tid].rd)
     results[unsafe_offset=tid].hit = Int8(0)
     traverse_dispatch(sd.bvh4, sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, Float32(1e38), results.unsafe_offset(tid),
@@ -280,13 +295,15 @@ def _bdpt_light_path_bounce_gpu(
     px_scale: Float32,
     sd: SceneView,
     walkers: Pointer[PathState, MutUntrackedOrigin],
+    walker_inter: Pointer[Intersection, MutUntrackedOrigin],
     walk_resume: Pointer[VcmWalkResume, MutUntrackedOrigin],
+    live: Pointer[Int32, MutUntrackedOrigin],
 ):
     """One bounce's material dispatch for one light path, reading the
     Intersection _bdpt_light_path_intersect_gpu already computed this
     depth level instead of tracing it inline -- see this section's opening
-    comment. A walk is left in walkers[k] (sss_walk_rounds, then
-    _vcm_light_walk_exit_gpu)."""
+    comment. A walk steps in walkers[k], VCM_WALK_STEPS a launch, and the
+    bounce ends in the launch its walk does."""
     var mediumCount = sd.mediumCount
     var n_light_paths = Int(n_light_paths_dp)
     var k = Int(block_idx.x * block_dim.x + thread_idx.x)
@@ -299,43 +316,27 @@ def _bdpt_light_path_bounce_gpu(
     var pcg = PCG32(UInt64(0), UInt64(0))
     pcg.state = st.pcg_state
     pcg.inc = st.pcg_inc
-    var cont = _bdpt_light_path_bounce[True, defer_walk=True](
-        sd, pcg, has_med, results[unsafe_offset=k], lvc, k, mis_vc_weight_factor, mis_vm_weight_factor,
-        st, walkers, walk_resume,
-    )
+    var walking = st.active == Int8(2)
+    var cont = True
+    if not walking:
+        cont = _bdpt_light_path_bounce[True, defer_walk=True](
+            sd, pcg, has_med, results[unsafe_offset=k], lvc, k, mis_vc_weight_factor, mis_vm_weight_factor,
+            st, walkers, walk_resume,
+        )
+        st.bounces += 1
+        walking = cont and sss_walker_walking(walkers.unsafe_offset(k))
+        if walking:
+            walker_inter[unsafe_offset=k] = walk_resume[unsafe_offset=k].inter
+    if walking:
+        if sss_walker_advance[VCM_WALK_STEPS](sd, walkers, walker_inter, k):
+            var (ex, _r) = _vcm_sss_walk_resume[True, adjoint=True](sd, walkers, walker_inter, walk_resume, k, st.wl,
+                                                                    mis_vc_weight_factor, pcg, st.flux, st.dvcm, st.dvc, st.dvm)
+            cont = _vcm_light_walk_exit(sd, ex, pcg, lvc, k, mis_vc_weight_factor, st)
+            walking = False
     lvc_path_len[unsafe_offset=k] = Int32(st.n_verts)
-    st.active = Int8(1) if cont else Int8(0)
+    st.active = _vcm_wf_active(cont, walking, st.bounces, sd, live)
     st.pcg_state = pcg.state
     st.pcg_inc = pcg.inc
-    states[unsafe_offset=k] = st
-
-@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
-def _vcm_light_walk_exit_gpu(
-    states: Pointer[VCMLightPathState, MutUntrackedOrigin],
-    walkers: Pointer[PathState, MutUntrackedOrigin],
-    walker_inter: Pointer[Intersection, MutUntrackedOrigin],
-    walk_resume: Pointer[VcmWalkResume, MutUntrackedOrigin],
-    idx: Pointer[Int32, MutUntrackedOrigin],
-    count: Pointer[Int32, MutUntrackedOrigin],
-    lvc: Pointer[BDPTVertex, MutUntrackedOrigin],
-    lvc_path_len: Pointer[Int32, MutUntrackedOrigin],
-    mis_vc_weight_factor: Float32,
-    sd: SceneView,
-):
-    """The rest of the bounce of each listed light path whose walk has ended."""
-    var i = Int(block_idx.x * block_dim.x + thread_idx.x)
-    if i >= Int(count[unsafe_offset=0]):
-        return
-    var k = Int(idx[unsafe_offset=i])
-    var st = states[unsafe_offset=k]
-    var pcg = PCG32(UInt64(0), UInt64(0))
-    pcg.inc = st.pcg_inc
-    var (ex, _r) = _vcm_sss_walk_resume[True, adjoint=True](sd, walkers, walker_inter, walk_resume, k, st.wl,
-                                                            mis_vc_weight_factor, pcg, st.flux, st.dvcm, st.dvc, st.dvm)
-    var cont = _vcm_light_walk_exit(sd, ex, pcg, lvc, k, mis_vc_weight_factor, st)
-    lvc_path_len[unsafe_offset=k] = Int32(st.n_verts)
-    st.active = Int8(1) if cont else Int8(0)
-    st.pcg_state = pcg.state
     states[unsafe_offset=k] = st
 
 @__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
@@ -384,8 +385,8 @@ def _bdpt_camera_path_intersect_gpu(
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
     if tid >= count:
         return
-    if states[unsafe_offset=tid].active == Int8(0):
-        return
+    if states[unsafe_offset=tid].active != Int8(1):
+        return   # done or walking
     var ray = Ray(states[unsafe_offset=tid].ro, states[unsafe_offset=tid].rd)
     results[unsafe_offset=tid].hit = Int8(0)
     traverse_dispatch(sd.bvh4, sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, Float32(1e38), results.unsafe_offset(tid),
@@ -420,11 +421,13 @@ def _bdpt_camera_path_bounce_gpu(
     shadow_valid: Pointer[Int8, MutUntrackedOrigin] = Pointer[Int8, MutUntrackedOrigin].unsafe_dangling(),
     shadow_seg_med: Pointer[Int32, MutUntrackedOrigin] = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
     walkers: Pointer[PathState, MutUntrackedOrigin] = Pointer[PathState, MutUntrackedOrigin].unsafe_dangling(),
+    walker_inter: Pointer[Intersection, MutUntrackedOrigin] = Pointer[Intersection, MutUntrackedOrigin].unsafe_dangling(),
     walk_resume: Pointer[VcmWalkResume, MutUntrackedOrigin] = Pointer[VcmWalkResume, MutUntrackedOrigin].unsafe_dangling(),
+    live: Pointer[Int32, MutUntrackedOrigin] = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
 ):
     """One bounce's material dispatch (incl. NEE/connect/merge/MNEE, all
     still on the existing software-BVH `results + pix` scratch slot). A walk
-    is left in walkers[pix] (sss_walk_rounds, then _vcm_camera_walk_exit_gpu)."""
+    steps in walkers[pix] as the light paths' do."""
     var mediumCount = sd.mediumCount
     var n_pix = Int(n_pix_dp)
     var pix = Int(block_idx.x * block_dim.x + thread_idx.x)
@@ -441,58 +444,33 @@ def _bdpt_camera_path_bounce_gpu(
     var visit_footprint = Int32(0)
     var visit_thin = Int32(0)
 
-    var cont = _bdpt_camera_path_bounce[True, defer_walk=True](
-        sd, pcg, has_med, results[unsafe_offset=pix], results.unsafe_offset(pix), lvc, pix, Int(lvc_path_len[unsafe_offset=pix]),
-        merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm,
-        mis_vc_weight_factor, mis_vm_weight_factor,
-        st, visit_naive, visit_footprint, visit_thin,
-        defer_shadow_rays != Int8(0), shadow_rays, shadow_pending, shadow_valid, shadow_seg_med, walkers, walk_resume,
-    )
-    st.active = Int8(1) if cont else Int8(0)
+    var walking = st.active == Int8(2)
+    var cont = True
+    if not walking:
+        cont = _bdpt_camera_path_bounce[True, defer_walk=True](
+            sd, pcg, has_med, results[unsafe_offset=pix], results.unsafe_offset(pix), lvc, pix, Int(lvc_path_len[unsafe_offset=pix]),
+            merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm,
+            mis_vc_weight_factor, mis_vm_weight_factor,
+            st, visit_naive, visit_footprint, visit_thin,
+            defer_shadow_rays != Int8(0), shadow_rays, shadow_pending, shadow_valid, shadow_seg_med, walkers, walk_resume,
+        )
+        st.bounces += 1
+        walking = cont and sss_walker_walking(walkers.unsafe_offset(pix))
+        if walking:
+            walker_inter[unsafe_offset=pix] = walk_resume[unsafe_offset=pix].inter
+    if walking:
+        if sss_walker_advance[VCM_WALK_STEPS](sd, walkers, walker_inter, pix):
+            var (ex, r) = _vcm_sss_walk_resume[True](sd, walkers, walker_inter, walk_resume, pix, st.wl, mis_vc_weight_factor,
+                                                     pcg, st.beta, st.dvcm, st.dvc, st.dvm)
+            # Connections traced here: the entry vertex may hold this bounce's deferred shadow slots.
+            cont = _vcm_camera_walk_exit[True](
+                sd, ex, sd.materials[unsafe_offset=Int(r.mat_idx)], r.inter, pcg, has_med, results.unsafe_offset(pix),
+                lvc, pix, Int(lvc_path_len[unsafe_offset=pix]), merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm,
+                mis_vc_weight_factor, mis_vm_weight_factor, st, visit_naive, visit_footprint, visit_thin)
+            walking = False
+    st.active = _vcm_wf_active(cont, walking, st.bounces, sd, live)
     st.pcg_state = pcg.state
     st.pcg_inc = pcg.inc
-    states[unsafe_offset=pix] = st
-
-@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
-@__llvm_metadata(`nvvm.minctasm`=SIMDLength(MINCTA_VCM_CBOUNCE))
-def _vcm_camera_walk_exit_gpu(
-    states: Pointer[VCMCameraPathState, MutUntrackedOrigin],
-    walkers: Pointer[PathState, MutUntrackedOrigin],
-    walker_inter: Pointer[Intersection, MutUntrackedOrigin],
-    walk_resume: Pointer[VcmWalkResume, MutUntrackedOrigin],
-    idx: Pointer[Int32, MutUntrackedOrigin],
-    count: Pointer[Int32, MutUntrackedOrigin],
-    results: Pointer[Intersection, MutUntrackedOrigin],
-    lvc: Pointer[BDPTVertex, MutUntrackedOrigin],
-    lvc_path_len: Pointer[Int32, MutUntrackedOrigin],
-    merge_next: Pointer[Int32, MutUntrackedOrigin],
-    merge_heads: Pointer[Int32, MutUntrackedOrigin],
-    merge_inv_cell: Float32,
-    merge_r2: Float32,
-    merge_norm: Float32,
-    mis_vc_weight_factor: Float32,
-    mis_vm_weight_factor: Float32,
-    sd: SceneView,
-):
-    """The rest of the bounce of each listed camera path whose walk has ended; its connections are traced here."""
-    var i = Int(block_idx.x * block_dim.x + thread_idx.x)
-    if i >= Int(count[unsafe_offset=0]):
-        return
-    var pix = Int(idx[unsafe_offset=i])
-    var st = states[unsafe_offset=pix]
-    var pcg = PCG32(UInt64(0), UInt64(0))
-    pcg.inc = st.pcg_inc
-    var (ex, r) = _vcm_sss_walk_resume[True](sd, walkers, walker_inter, walk_resume, pix, st.wl, mis_vc_weight_factor, pcg,
-                                             st.beta, st.dvcm, st.dvc, st.dvm)
-    var visit_naive = Int32(0)
-    var visit_footprint = Int32(0)
-    var visit_thin = Int32(0)
-    var cont = _vcm_camera_walk_exit[True](
-        sd, ex, sd.materials[unsafe_offset=Int(r.mat_idx)], r.inter, pcg, sd.mediumCount > Int64(0), results.unsafe_offset(pix),
-        lvc, pix, Int(lvc_path_len[unsafe_offset=pix]), merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm,
-        mis_vc_weight_factor, mis_vm_weight_factor, st, visit_naive, visit_footprint, visit_thin)
-    st.active = Int8(1) if cont else Int8(0)
-    st.pcg_state = pcg.state
     states[unsafe_offset=pix] = st
 
 @__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))

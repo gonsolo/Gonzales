@@ -62,7 +62,8 @@ struct VCMLightPathState(TrivialRegisterPassable):
     var origin_sphere: Int32
     var cur_med_idx: Int32
     var n_verts: Int
-    var active: Int8
+    var active: Int8          # 2: walking (wavefront)
+    var bounces: Int32        # bounces begun: the wavefront's per-path depth limit
     var pcg_state: UInt64
     var pcg_inc: UInt64
     var wl: SampledWavelengths
@@ -81,7 +82,7 @@ def _null_light_path_state() -> VCMLightPathState:
     var z = Float32(0)
     return VCMLightPathState(
         ro=Point3f(z, z, z), rd=Vec3f(z, z, z), flux=SpectralSample(z), dvcm=z, dvc=z, dvm=z, is_finite_origin=False,
-        origin_sphere=Int32(-1), cur_med_idx=Int32(-1), n_verts=0, active=Int8(0), pcg_state=UInt64(0), pcg_inc=UInt64(0),
+        origin_sphere=Int32(-1), cur_med_idx=Int32(-1), n_verts=0, active=Int8(0), bounces=Int32(0), pcg_state=UInt64(0), pcg_inc=UInt64(0),
         wl=SampledWavelengths(z, z, z, z), current_dielectric_ior=Float32(1.0), previous_dielectric_ior=Float32(1.0),
         n_delta=0, mis_null_dist=z, prev_sig_t=Float32(0), mnee=vcm_mnee_light_track_none(),
     )
@@ -264,7 +265,7 @@ def _bdpt_light_path_init[use_gpu: Bool](
 
     return VCMLightPathState(
         ro=ro, rd=rd, flux=flux, dvcm=dvcm_carry, dvc=dvc_carry, dvm=dvm_carry, is_finite_origin=is_finite_origin,
-        origin_sphere=origin_sphere, cur_med_idx=cur_med_idx, n_verts=n_verts, active=Int8(1),
+        origin_sphere=origin_sphere, cur_med_idx=cur_med_idx, n_verts=n_verts, active=Int8(1), bounces=Int32(0),
         pcg_state=pcg.state, pcg_inc=pcg.inc, wl=wavelengths,
         current_dielectric_ior=Float32(1.0), previous_dielectric_ior=Float32(1.0),   # vacuum
         n_delta=0, mis_null_dist=Float32(0), prev_sig_t=Float32(0), mnee=mnee_l,

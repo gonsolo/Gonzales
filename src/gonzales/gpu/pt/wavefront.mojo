@@ -25,7 +25,7 @@ from gonzales.scene.accel.optixcurves import oxc_active, oxc_scratch, oxc_trace_
 from max.gpu import WARP_SIZE, barrier, block_dim, block_idx, lane_id, thread_idx
 from max.gpu.memory import AddressSpace
 from std.memory import stack_allocation
-from max.gpu.primitives.warp import shuffle_idx, vote
+from max.gpu.primitives.warp import vote
 from std.bit import pop_count
 from std.memory.alloc import unsafe_alloc
 from std.ffi import external_call
@@ -35,7 +35,7 @@ from std.atomic import Atomic
 from std.math import ceildiv, sqrt
 from std.sys import has_accelerator
 from gonzales.gpu.scene import GpuSceneHandle
-from gonzales.transport.sss_walk import _sss_walk_step, _sss_walk_trace, sss_walker_walking
+from gonzales.transport.sss_walk import _sss_walk_step
 
 @__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
 @__llvm_metadata(`nvvm.minctasm`=SIMDLength(1))    # NVIDIA keeps its old register budget; AMD ignores this
@@ -378,117 +378,10 @@ def compact_walking_gpu(
     var act = False
     if i < Int(src_count[unsafe_offset=0]):
         p = Int(src_idx[unsafe_offset=i])
-        act = sss_walker_walking(paths.unsafe_offset(p))
+        act = paths[unsafe_offset=p].active != 0 and paths[unsafe_offset=p].sss.mesh >= Int32(0)
     var pos = warp_append(counter, act)
     if act:
         idx[unsafe_offset=pos] = Int32(p)
-
-# The same over paths[0..n).
-@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
-def compact_walkers_gpu(
-    paths: Pointer[PathState, MutUntrackedOrigin],
-    n_dp: Int64,
-    idx: Pointer[Int32, MutUntrackedOrigin],
-    counter: Pointer[Int32, MutUntrackedOrigin],
-):
-    var p = Int(block_idx.x * block_dim.x + thread_idx.x)
-    var act = False
-    if p < Int(n_dp):
-        act = sss_walker_walking(paths.unsafe_offset(p))
-    var pos = warp_append(counter, act)
-    if act:
-        idx[unsafe_offset=pos] = Int32(p)
-
-# Up to `steps` steps of each listed walker, its pending segment traced first; those still under the surface list
-# themselves in next_idx. VWF_PROBE: lane steps and WARP_SIZE x subgroup maxima added to probe[0], probe[1].
-comptime _VWF_PROBE = get_defined_int["VWF_PROBE", 0]()
-comptime SSS_WALK_TAIL = 2048      # fewer walkers finish in one launch
-
-@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
-def sss_walk_steps_gpu[steps: Int](
-    paths: Pointer[PathState, MutUntrackedOrigin],
-    intersections: Pointer[Intersection, MutUntrackedOrigin],
-    sd: SceneView,
-    idx: Pointer[Int32, MutUntrackedOrigin],
-    count: Pointer[Int32, MutUntrackedOrigin],
-    next_idx: Pointer[Int32, MutUntrackedOrigin],
-    next_count: Pointer[Int32, MutUntrackedOrigin],
-    probe: Pointer[Int32, MutUntrackedOrigin],
-):
-    var i = Int(block_idx.x * block_dim.x + thread_idx.x)
-    var p = 0
-    var pending = False
-    var s0 = Int32(0)
-    if i < Int(count[unsafe_offset=0]):
-        p = Int(idx[unsafe_offset=i])
-        s0 = paths[unsafe_offset=p].sss.steps
-        _sss_walk_trace(sd, paths[unsafe_offset=p].sss, paths[unsafe_offset=p].ray, intersections.unsafe_offset(p))
-        _sss_walk_step[steps](paths, intersections, p, sd)
-        pending = sss_walker_walking(paths.unsafe_offset(p))
-    comptime if _VWF_PROBE != 0:
-        var s = paths[unsafe_offset=p].sss.steps - s0 if i < Int(count[unsafe_offset=0]) else Int32(0)
-        var mx = s
-        var sm = Int32(0)
-        for l in range(WARP_SIZE):
-            var o = shuffle_idx(s, UInt32(l))
-            mx = o if o > mx else mx
-            sm += o
-        if lane_id() == 0:
-            _ = Atomic.fetch_add(probe, sm)
-            _ = Atomic.fetch_add(probe.unsafe_offset(1), mx * Int32(WARP_SIZE))
-    var pos = warp_append(next_count, pending)
-    if pending:
-        next_idx[unsafe_offset=pos] = Int32(p)
-
-
-@fieldwise_init
-struct WalkRounds(TrivialRegisterPassable):
-    var walkers: Int
-    var rounds: Int
-    var lane_steps: Int       # VWF_PROBE only
-    var lane_slots: Int
-
-
-def sss_walk_rounds[steps: Int](
-    ctx: DeviceContext,
-    paths: Pointer[PathState, MutUntrackedOrigin],
-    intersections: Pointer[Intersection, MutUntrackedOrigin],
-    sd: SceneView,
-    lists: Pointer[Int32, MutUntrackedOrigin],    # 3 n
-    counts_buf: DeviceBuffer[DType.uint8],        # 8 Int32
-    n: Int,
-) raises -> WalkRounds:
-    """Walks every walker of paths[0..n) to its end, `steps` steps a launch with the survivors compacted between launches,
-    so a subgroup does not wait for its longest walk; a tail under SSS_WALK_TAIL walkers finishes in one launch. The
-    walkers stay listed in lists[0..count 0) for the kernels that resume their paths."""
-    comptime block_size = 256
-    var counts = counts_buf.unsafe_ptr().unsafe_bitcast[Int32]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
-    ctx.enqueue_memset(counts_buf, UInt8(0))
-    ctx.enqueue_function[compact_walkers_gpu](paths, Int64(n), lists, counts, grid_dim=ceildiv(max(n, 1), block_size),
-                                              block_dim=block_size)
-    var res = WalkRounds(read_counter(ctx, counts_buf, 0), 0, 0, 0)
-    var m = res.walkers
-    var src = 0
-    while m > 0:
-        var dst = 1 + res.rounds % 2
-        ctx.enqueue_memset(DeviceBuffer[DType.int32](ctx, counts.unsafe_offset(dst), 1, owning=False), Int32(0))
-        comptime if _VWF_PROBE != 0:
-            ctx.enqueue_memset(DeviceBuffer[DType.int32](ctx, counts.unsafe_offset(4), 2, owning=False), Int32(0))
-        if m < SSS_WALK_TAIL:
-            ctx.enqueue_function[sss_walk_steps_gpu[256]](
-                paths, intersections, sd, lists.unsafe_offset(src * n), counts.unsafe_offset(src), lists.unsafe_offset(dst * n),
-                counts.unsafe_offset(dst), counts.unsafe_offset(4), grid_dim=ceildiv(m, block_size), block_dim=block_size)
-        else:
-            ctx.enqueue_function[sss_walk_steps_gpu[steps]](
-                paths, intersections, sd, lists.unsafe_offset(src * n), counts.unsafe_offset(src), lists.unsafe_offset(dst * n),
-                counts.unsafe_offset(dst), counts.unsafe_offset(4), grid_dim=ceildiv(m, block_size), block_dim=block_size)
-        m = read_counter(ctx, counts_buf, dst)
-        comptime if _VWF_PROBE != 0:
-            res.lane_steps += read_counter(ctx, counts_buf, 4)
-            res.lane_slots += read_counter(ctx, counts_buf, 5)
-        res.rounds += 1
-        src = dst
-    return res
 
 @__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
 def sss_walk_gpu(

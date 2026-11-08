@@ -138,7 +138,8 @@ struct VCMCameraPathState(TrivialRegisterPassable):
     var n_arrivals: Int   # skin hits from outside: a light path stores an arrival there, in a cache slot of its own
     var cur_med_idx: Int32
     var last_bsdf_pdf: Float32
-    var active: Int8
+    var active: Int8          # 2: walking (wavefront)
+    var bounces: Int32        # bounces begun: the wavefront's per-path depth limit
     var pcg_state: UInt64
     var pcg_inc: UInt64
     var wl: SampledWavelengths
@@ -219,7 +220,7 @@ def _bdpt_camera_path_init[use_gpu: Bool](
     return VCMCameraPathState(
         ro=ro, rd=rd, beta=beta, total=total, total_merge=total_merge, first_alb=first_alb,
         dvcm=dvcm_carry, dvc=dvc_carry, dvm=dvm_carry, n_verts=n_verts, n_vol=0, n_arrivals=0, cur_med_idx=cur_med_idx,
-        last_bsdf_pdf=last_bsdf_pdf, active=Int8(1), pcg_state=pcg.state, pcg_inc=pcg.inc, wl=wavelengths,
+        last_bsdf_pdf=last_bsdf_pdf, active=Int8(1), bounces=Int32(0), pcg_state=pcg.state, pcg_inc=pcg.inc, wl=wavelengths,
         mis_null_dist=Float32(0.0), current_dielectric_ior=Float32(1.0), previous_dielectric_ior=Float32(1.0),   # vacuum
         cone_len=Float32(0.0), n_delta=0, prev_sig_t=Float32(0), mnee=vcm_mnee_track_none(),
     )

@@ -37,7 +37,7 @@ def vulkaninterop_pack_light_rays_kernel(
     rays[unsafe_offset=idx + 4] = rd.x
     rays[unsafe_offset=idx + 5] = rd.y
     rays[unsafe_offset=idx + 6] = rd.z
-    rays[unsafe_offset=idx + 7] = Float32(1.0e8) if states[unsafe_offset=tid].active != Int8(0) else Float32(0.0)   # a finished path traces a zero-length ray
+    rays[unsafe_offset=idx + 7] = Float32(1.0e8) if states[unsafe_offset=tid].active == Int8(1) else Float32(0.0)   # a finished or walking path traces a zero-length ray
 
 @__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
 @__llvm_metadata(`nvvm.minctasm`=SIMDLength(1))    # NVIDIA keeps its old register budget; AMD ignores this
@@ -60,7 +60,7 @@ def vulkaninterop_pack_camera_rays_kernel(
     rays[unsafe_offset=idx + 4] = rd.x
     rays[unsafe_offset=idx + 5] = rd.y
     rays[unsafe_offset=idx + 6] = rd.z
-    rays[unsafe_offset=idx + 7] = Float32(1.0e8) if states[unsafe_offset=tid].active != Int8(0) else Float32(0.0)   # a finished path traces a zero-length ray
+    rays[unsafe_offset=idx + 7] = Float32(1.0e8) if states[unsafe_offset=tid].active == Int8(1) else Float32(0.0)   # a finished or walking path traces a zero-length ray
 
 def _vcm_rt_trace_paths[camera: Bool](
     ctx: DeviceContext,

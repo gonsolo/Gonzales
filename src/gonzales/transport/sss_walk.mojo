@@ -97,6 +97,22 @@ def sss_walker_walking(ps: Pointer[PathState, MutUntrackedOrigin]) -> Bool:
 
 
 @always_inline
+def sss_walker_advance[steps: Int](ref sd: SceneView, walkers: Pointer[PathState, MutUntrackedOrigin],
+                                   hits: Pointer[Intersection, MutUntrackedOrigin], i: Int) -> Bool:
+    """Up to `steps` steps of walker i, its pending segment traced first, in private copies (global loads after stores
+    cost each step); True once the walk is over."""
+    var state = Array[PathState, 1](fill=walkers[unsafe_offset=i])
+    var store = Array[Intersection, 1](fill=hits[unsafe_offset=i])
+    var ps = state.unsafe_ptr()
+    var h = store.unsafe_ptr()
+    _sss_walk_trace(sd, ps[].sss, ps[].ray, h.unsafe_origin_cast[MutUntrackedOrigin]())
+    _sss_walk_step[steps](ps.unsafe_origin_cast[MutUntrackedOrigin](), h.unsafe_origin_cast[MutUntrackedOrigin](), 0, sd)
+    walkers[unsafe_offset=i] = ps[]
+    hits[unsafe_offset=i] = h[]
+    return not sss_walker_walking(walkers.unsafe_offset(i))
+
+
+@always_inline
 def sss_walker_exit(ref sd: SceneView, ps: PathState, e: Intersection) -> SssExit:
     """A finished walker's exit, its hit `e`; not ok when the walk ended under the surface."""
     var r = ps.ray
