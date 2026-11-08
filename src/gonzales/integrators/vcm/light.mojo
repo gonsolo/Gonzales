@@ -17,8 +17,9 @@ from gonzales.integrators.sppm.sppm import _cosine_hemisphere_sample, sample_are
 from gonzales.scene.appearance.lights import area_light_side_pdf
 from gonzales.core.spectrum import SampledWavelengths, SpectralSample, spec_refl, spec_illum
 from gonzales.scene.shapes.geom_normal import _geom_normal
-from gonzales.paths.vcm.vertex import _VCM_SSS_CAMERA_ONLY, _vcm_walk_limit, _BDPT_MAX_VERTS, BDPTVertex, _null_vertex
-from gonzales.paths.vcm.eval import _bdpt_vertex_mis_scoped, _vcm_mnee_light_dvcm
+from gonzales.paths.vcm.vertex import _VCM_SSS_CAMERA_ONLY, _vcm_walk_limit, _BDPT_MAX_VERTS, BDPTVertex, _null_vertex, VCM_GSMS_ARRIVAL
+from gonzales.transport.glossy_sms import GLOSSY_SMS_MIN_PDF
+from gonzales.paths.vcm.eval import _bdpt_vertex_mis_scoped, _vcm_mnee_light_dvcm, _vcm_gsms_on, _vcm_gsms_light_dvcm
 from gonzales.paths.vcm.strategy import VcmStrategies, _VCM_EXIT_MERGE, _vcm_keep, _vcm_eta_scale, _vcm_fibre_scale
 from gonzales.paths.vcm.connect import _bdpt_store_lvc_vertex
 from gonzales.integrators.vcm.camera import (
@@ -455,6 +456,13 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
                                                Int(st.mnee.n_glass), st.mnee.first_glass, st.cur_med_idx, st.wl, pcg)
                 if d_m > Float32(0):
                     st.dvcm = d_m
+            elif st.mnee.side > Float32(0) and st.mnee.n_glass > Int32(0) and v.is_delta == Int32(0) and _vcm_gsms_on(sd, v):
+                # Reached through a chain only: glossy SMS from here samples it too.
+                var d_g = _vcm_gsms_light_dvcm(sd, hit.to_simd(), gn_geo, st.mnee.y, st.mnee.ny, st.mnee.side,
+                                               Int(st.mnee.n_glass), -ray_dir, st.cur_med_idx, st.wl)
+                if d_g > Float32(0):
+                    st.dvcm = d_g
+                    v.hair_curve_idx = VCM_GSMS_ARRIVAL
             v.dVCM = st.dvcm; v.dVC = st.dvc; v.dVM = st.dvm
             if v.is_delta != Int32(0):
                 st.n_delta += 1
@@ -462,9 +470,14 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
                 st.n_verts += 1
                 v.n_delta = Int32(st.n_delta)
                 _bdpt_store_lvc_vertex(v, lvc, lp_idx, st.n_verts - 1)
+            var c0 = (st.dvcm, st.dvc, st.dvm)
             var sc = _vcm_scatter(v, True, pcg, sd, st.wl, st.dvcm, st.dvc, st.dvm, mis_vc_weight_factor, eta_x)
             if not sc.valid:
                 return False
+            if v.hair_curve_idx == VCM_GSMS_ARRIVAL and not sc.is_delta and sc.pdf_rev < GLOSSY_SMS_MIN_PDF:
+                # glossy SMS's dVCM counts only where x0's lobe toward the chain reaches GLOSSY_SMS_MIN_PDF
+                (st.dvcm, st.dvc, st.dvm) = vcm_scatter_carries(Float32(0), c0[1], c0[2], sc.cos_out / sc.pdf_fwd,
+                    sc.pdf_fwd, sc.pdf_rev, mis_vc_weight_factor, eta_x)
             walks = sc.transmit and sss_walks_below(mat, inter, med_in)
             if not walks:
                 st.mnee.side = Float32(0)

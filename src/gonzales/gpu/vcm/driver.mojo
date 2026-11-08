@@ -20,7 +20,8 @@ from gonzales.scene.description.pbrt_parser import ParsedScene_Mojo
 from gonzales.estimators.photon_grid import _HSIZE
 from gonzales.gpu.scene import GpuSceneHandle
 from gonzales.core.progress import Progress
-from gonzales.integrators.outputs import finish_render, _sidecar_name, _write_channels
+from gonzales.integrators.outputs import finish_render, write_partial_image, _sidecar_name, _write_channels
+from gonzales.gpu.checkpoint import Checkpoint, CheckpointConfig
 from gonzales.paths.vcm.vertex import _vcm_walk_limit, _BDPT_MAX_VERTS, BDPTVertex
 from gonzales.integrators.vcm.camera import VCMCameraPathState
 from gonzales.integrators.vcm.light import VCMLightPathState
@@ -226,7 +227,7 @@ struct VcmGpu(Movable):
         """Pass `si`'s constants. The merge radius shrinks with si (vcm_merge_radius)."""
         var gsd = self.handle[].scene_descriptor()
         if self.mnee_off:
-            gsd.hasGlass = Int32(0)   # MNEE and its MIS terms on both subpaths, together
+            gsd.hasGlass &= Int32(2)   # MNEE and its MIS terms on both subpaths, together; glossy SMS stays
         elif si == 0:
             gsd.vcmMneeStats = Pointer[Int32, MutUntrackedOrigin](unsafe_from_address=Int(self.mnee_stats.unsafe_ptr()))
         var radius_i = vcm_merge_radius(self.scene_radius, si)
@@ -315,7 +316,7 @@ struct VcmGpu(Movable):
                 self.vcm_lambda = b_sum / s_sum if s_sum > Float32(0) else Float32(0)
             if verbose:
                 print("VCM (GPU): budget lambda " + String(self.vcm_lambda))
-        if p.si == 0 and p.gsd.hasGlass != Int32(0):
+        if p.si == 0 and (p.gsd.hasGlass & Int32(1)) != Int32(0):
             # The path tracer's rule (shading.mojo's _mnee_area_light_contribute), once per render.
             with self.mnee_stats.map_to_host() as st:
                 var probes = Int(st.unsafe_ptr()[unsafe_offset=0])
@@ -452,6 +453,56 @@ struct VcmGpu(Movable):
         self._vt_mark(t0, 5)
         self._end_pass(p, film, verbose)
 
+    def checkpoint_io(mut self, mut ck: Checkpoint) raises:
+        """The state later passes read: the sums, both merge tables (keep-aware MIS reads the last pass's), the budget
+        tables and lambda, and pass 0's MNEE and shadow-batching decisions."""
+        ref ctx = self.handle[].ctx
+        ck.io("accum", ctx, self.accum)
+        ck.io("accum_merge", ctx, self.accum_merge)
+        ck.io("albedo_accum", ctx, self.albedo_accum)
+        ck.io("visit_accum", ctx, self.visit_accum)
+        ck.io("heads_a", ctx, self.heads_a)
+        ck.io("heads_b", ctx, self.heads_b)
+        ck.io("stat_a", ctx, self.stat_a)
+        ck.io("stat_b", ctx, self.stat_b)
+        ck.io("mnee_stats", ctx, self.mnee_stats)
+        ck.scalar("lambda", self.vcm_lambda)
+        ck.flag("mnee_off", self.mnee_off)
+        ck.flag("shadow_batch", self.shadow_batch)
+
+    def resolve(mut self, psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin], n_done: Int, pixels: Pointer[Float32, MutUntrackedOrigin],
+                caustic: Pointer[Float32, MutUntrackedOrigin], albedo: Pointer[Float32, MutUntrackedOrigin]) raises:
+        """The image after n_done passes: connect + splats and merging apart (finish_render denoises only the first)."""
+        with self.accum.map_to_host() as host_buf:
+            with self.accum_merge.map_to_host() as host_buf_m:
+                var src = host_buf.unsafe_ptr().unsafe_bitcast[Float32]()
+                var src_m = host_buf_m.unsafe_ptr().unsafe_bitcast[Float32]()
+                var inv_spp = psc[unsafe_offset=0].film_iso / Float32(100) / Float32(n_done)
+                for i in range(self.n_pix):
+                    var conn = RGB(src[unsafe_offset=i*3], src[unsafe_offset=i*3+1], src[unsafe_offset=i*3+2])
+                    var mrg = RGB(src_m[unsafe_offset=i*3], src_m[unsafe_offset=i*3+1], src_m[unsafe_offset=i*3+2])
+                    var (c, m) = _vcm_finalize_one_pixel(conn, mrg, inv_spp)
+                    pixels[unsafe_offset=i*3] = c.r; pixels[unsafe_offset=i*3+1] = c.g; pixels[unsafe_offset=i*3+2] = c.b
+                    caustic[unsafe_offset=i*3] = m.r; caustic[unsafe_offset=i*3+1] = m.g; caustic[unsafe_offset=i*3+2] = m.b
+        with self.albedo_accum.map_to_host() as host_buf:
+            var src = host_buf.unsafe_ptr().unsafe_bitcast[Float32]()
+            var inv_spp_alb = Float32(1) / Float32(n_done)
+            for i in range(self.n_pix * 3):
+                albedo[unsafe_offset=i] = src[unsafe_offset=i] * inv_spp_alb
+
+    def checkpoint(mut self, mut ck: Checkpoint, psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin], done: Int, partial: Bool) raises:
+        self.handle[].ctx.synchronize()
+        ck.begin_write(done)
+        self.checkpoint_io(ck)
+        ck.end_write(done)
+        if partial:
+            var pixels = unsafe_alloc[Float32](self.n_pix * 3)
+            var caustic = unsafe_alloc[Float32](self.n_pix * 3)
+            var albedo = unsafe_alloc[Float32](self.n_pix * 3)
+            self.resolve(psc, done, pixels, caustic, albedo)
+            _ = write_partial_image(psc, pixels, caustic)
+            pixels.unsafe_free(); caustic.unsafe_free(); albedo.unsafe_free()
+
 
 @fieldwise_init
 struct VcmPass(TrivialRegisterPassable):
@@ -489,6 +540,7 @@ def vcm_render_gpu(
     vcm_radius_scale: Float32 = Float32(1.0),   # the whole merge radius: ceiling, grid cell, MIS density, footprint
     wavefront: Bool = False,
     rt: VcmRt = VcmRt(),
+    ckpt: CheckpointConfig = CheckpointConfig(),
 ) -> Int32:
     """A batch VCM render: n_spp passes of VcmGpu, then the image written as the scene asks. `wavefront` runs the
     staged kernels, tracing through `rt` when it is active."""
@@ -505,8 +557,18 @@ def vcm_render_gpu(
                            vcm_no_footprint, vcm_radius_scale, verbose, wavefront)
             handlePtr[].cam_fp = camera_footprint(psc[unsafe_offset=0].raster_to_camera, psc[unsafe_offset=0].camera_to_world,
                                                   fw, fh, n_spp)
+            var ck = Checkpoint(ckpt, psc, "vcm-wavefront" if wavefront else "vcm")
+            ck.add("passes", String(n_spp)); ck.add("light_paths", String(v.n_light_paths))
+            ck.add("merge_radius", String(v.scene_radius)); ck.add("radius_scale", String(vcm_radius_scale))
+            ck.add("budget", String(vcm_budget)); ck.add("cap", String(vcm_cap)); ck.add("no_keep_mis", String(vcm_no_keep_mis))
+            ck.add("no_footprint", String(vcm_no_footprint)); ck.add("rt", String(rt.active))
+            var start = ck.resume()
+            if ckpt.resume.byte_length() > 0:
+                v.checkpoint_io(ck)
+                ck.end_read()
             var prog = Progress(n_spp, "spp", quiet=verbose)
-            for si in range(n_spp):
+            prog.update(start)
+            for si in range(start, n_spp):
                 if wavefront:
                     v.run_pass_wavefront(psc, si, _f32(v.accum), _f32(v.albedo_accum), rt, sd, verbose)
                 else:
@@ -515,6 +577,12 @@ def vcm_render_gpu(
                     print("VCM (GPU): sample " + String(si + 1) + "/" + String(n_spp))
                 handlePtr[].ctx.synchronize()   # the progress line reports finished work
                 prog.update(si + 1)
+                var last = si + 1 == n_spp
+                if ck.enabled() and (last or ck.due() or ck.stop_here(si + 1)):
+                    v.checkpoint(ck, psc, si + 1, not last)
+                    if not last and ck.stop_here(si + 1):
+                        print("Stopped after " + String(si + 1) + " of " + String(n_spp) + " passes")
+                        return ret
             _ = prog.finish()
             if v.vt_on:
                 var names = List[String]()
@@ -533,26 +601,10 @@ def vcm_render_gpu(
                     _ = _write_channels(visit_sidecar, vsrc, Int32(fw), Int32(fh), Int32(3),
                         "naive.Y,footprint.Y,thinning.Y", Int32(fw), Int32(fh), Int32(0), Int32(0))
                 visit_sidecar.unsafe_free()
-            # Connect + splats and merging stay apart: finish_render denoises the first and adds the second after.
             var pixels = unsafe_alloc[Float32](n_pix * 3)
             var caustic_pixels = unsafe_alloc[Float32](n_pix * 3)
-            with v.accum.map_to_host() as host_buf:
-                with v.accum_merge.map_to_host() as host_buf_m:
-                    var src = host_buf.unsafe_ptr().unsafe_bitcast[Float32]()
-                    var src_m = host_buf_m.unsafe_ptr().unsafe_bitcast[Float32]()
-                    var inv_spp = psc[unsafe_offset=0].film_iso / Float32(100) / Float32(n_spp)
-                    for i in range(n_pix):
-                        var conn = RGB(src[unsafe_offset=i*3], src[unsafe_offset=i*3+1], src[unsafe_offset=i*3+2])
-                        var mrg = RGB(src_m[unsafe_offset=i*3], src_m[unsafe_offset=i*3+1], src_m[unsafe_offset=i*3+2])
-                        var (c, m) = _vcm_finalize_one_pixel(conn, mrg, inv_spp)
-                        pixels[unsafe_offset=i*3] = c.r; pixels[unsafe_offset=i*3+1] = c.g; pixels[unsafe_offset=i*3+2] = c.b
-                        caustic_pixels[unsafe_offset=i*3] = m.r; caustic_pixels[unsafe_offset=i*3+1] = m.g; caustic_pixels[unsafe_offset=i*3+2] = m.b
             var albedo_pixels = unsafe_alloc[Float32](n_pix * 3)
-            with v.albedo_accum.map_to_host() as host_buf:
-                var src = host_buf.unsafe_ptr().unsafe_bitcast[Float32]()
-                var inv_spp_alb = Float32(1) / Float32(n_spp)
-                for i in range(n_pix * 3):
-                    albedo_pixels[unsafe_offset=i] = src[unsafe_offset=i] * inv_spp_alb
+            v.resolve(psc, n_spp, pixels, caustic_pixels, albedo_pixels)
             _ = finish_render(psc, sd, pixels, albedo_pixels, no_denoise, caustic_pixels)
             pixels.unsafe_free(); caustic_pixels.unsafe_free(); albedo_pixels.unsafe_free()
         except e:

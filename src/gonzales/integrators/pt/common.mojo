@@ -21,6 +21,7 @@ from gonzales.transport.guide import GuideGrid, guide_pos_to_cell, guide_record,
 from gonzales.core.spectrum import spec_refl_unbounded, SpectralSample, SampledWavelengths, rgb_to_spectral_sample, rgb_illuminant_to_spectral_sample
 from gonzales.transport.texturing import _apply_surface_maps, _decode_tangent_normal, _get_tri_verts, _ptex_ask, _ptex_need, _ptex_tri, _tex_lookup, sample_texture
 from gonzales.transport.shade_context import GIPendingX1, ShadeContext
+from gonzales.transport.glossy_sms import GSMS_DEBUG
 from gonzales.transport.manifold import _emitter_face_normal, _interp_vertex_normal
 
 
@@ -361,6 +362,8 @@ def _clamped(ctx: ShadeContext, c: SpectralSample, bounce: Int) -> SpectralSampl
     """Cycles' sample clamp (film_clamp_light): a light contribution whose channels sum past the limit is scaled down to
     it. `bounce` is Cycles' index: 0 for light reaching the camera through the first scattering vertex (direct),
     above for indirect; emission found by a path counts one less than the path's bounces. A limit of 0 is none."""
+    comptime if GSMS_DEBUG != 0:
+        return SpectralSample(Float32(0))
     var limit = ctx.clamp[1] if bounce > 0 else ctx.clamp[0]
     if limit <= Float32(0):
         return c

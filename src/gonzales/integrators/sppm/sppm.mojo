@@ -6,7 +6,7 @@
 from std.collections import Array
 from std.sys.info import size_of
 from max.algorithm import parallelize
-from std.math import sqrt, cos, sin, floor, max, min
+from std.math import sqrt, cos, sin, floor, max, min, abs
 from std.memory.alloc import unsafe_alloc
 from std.atomic import Atomic
 from std.memory import bitcast
@@ -26,7 +26,13 @@ from gonzales.scene.appearance.media import Medium, Grid, NvdbGrid, SSS_WALK_ROU
 from gonzales.scene.appearance.lights import area_light_pick_triangle, area_light_side_pdf, AreaLight
 from gonzales.scene.shapes.curves import Curve, curve_at, curve_piece_endpoints, _curve_perp_axis
 from gonzales.scene.accel.bvh import traverse_dispatch, any_hit_dispatch
-from gonzales.scene.accel.bvh import SceneView, curve_radius, _hair_sample_dir_u, _scene_bounding_sphere, _sample_disk_perpendicular, _sample_infinite_light_dir, _eval_infinite_light_and_pdf, _hair_precompute, LightSample, _sample_distant_light_nee, _sample_point_light_nee, _sample_sphere_light_nee, _sample_infinite_light_nee, light_path_pick
+from gonzales.scene.accel.bvh import SceneView, curve_radius, _hair_sample_dir_u, _scene_bounding_sphere, _sample_disk_perpendicular, _sample_infinite_light_dir, _eval_infinite_light_and_pdf, _hair_precompute, LightSample, _sample_distant_light_nee, _sample_point_light_nee, _sample_sphere_light_nee, _sample_infinite_light_nee, light_path_pick, light_path_pick_pdf
+from gonzales.transport.glossy_sms import (SMSChain, GLOSSY_SMS_MIN_PDF, GSMS_DEBUG, glossy_sms_lobe, glossy_sms_solve, glossy_sms_mis,
+    glossy_sms_reproduce, glossy_sms_t_chain)
+from gonzales.transport.sms import mnee_orthonormal_basis, sms_vertex_init
+from gonzales.transport.manifold import _mnee_chain_transmittance, _mnee_pass
+from gonzales.transport.shade_context import _shade_context
+from gonzales.paths.vcm.eval import _vcm_mnee_light_point
 from gonzales.transport.mis_policy import mis_policy_power, mis_policy_sole
 from gonzales.core.sampling import power_heuristic
 from gonzales.transport.bxdf import ggx_lambda, dielectric_interface, bxdf_sample_dielectric, bxdf_sample_thin_dielectric, BxDFFlags, GeomContext, bxdf_sample_conductor, BSDF, LobeTables
@@ -533,6 +539,66 @@ def _after_glossy_weight(glossy_pdf: Float32, light_pdf: Float32) -> Float32:
 
 
 @always_inline
+def _sppm_gsms_on(ref sd: SceneView, bsdf: BSDF) -> Bool:
+    return (sd.hasGlass & Int32(2)) != Int32(0) and Int(sd.areaLightCount) > 0 and glossy_sms_lobe(bsdf)
+
+
+@no_inline   # one copy of the solver in the visible-point trace
+def _sppm_gsms(
+    ref sd: SceneView, bsdf: BSDF, x0: Vec3f, med: Int32, wl: SampledWavelengths, mut pcg: PCG32,
+) -> SpectralSample:
+    """Glossy SMS from a glossy camera vertex, power-weighted against its lobe sampling the same chain (as the path
+    tracer's _glossy_sms_nee). Photons never reach these paths: no visible point sits on the glossy vertex."""
+    var z = SpectralSample(Float32(0))
+    var (slot, p_pick) = light_path_pick(sd, pcg.next_float())
+    if p_pick <= Float32(0) or slot < 0 or slot >= Int(sd.areaLightCount):   # mesh lights only
+        return z
+    var (ok, y, l_du, l_dv, ln, area, side, emission) = _vcm_mnee_light_point(sd, slot, pcg)
+    if not ok:
+        return z
+    var p_a = p_pick / area
+    var (ldu, ldv) = mnee_orthonormal_basis(l_du, l_dv)
+    var ctx = _shade_context(sd, Pointer[UInt32, MutUntrackedOrigin].unsafe_dangling())
+    var tab = LobeTables(sd.materials, sd.curves, sd.measuredBrdfs, sd.spectral)
+    var verts = SMSChain(fill=sms_vertex_init())
+    var r = glossy_sms_solve(ctx, x0, bsdf, tab, wl, y, ldu, ldv, pcg, verts)
+    if not r[0]:
+        return z
+    var n = r[1]
+    var cos_y = dot(ln, verts[n-1].pos - y)
+    if side < Float32(1):
+        cos_y = abs(cos_y)
+    if cos_y <= Float32(0):
+        return z
+    var d0 = verts[0].pos - x0
+    var ev = bsdf.f(d0 * (Float32(1) / sqrt(dot(d0, d0))), tab, wl)
+    if ev.f_cos.is_black():
+        return z
+    var t_med = _mnee_chain_transmittance(ctx, x0, verts, n, y, med, wl)
+    var w = glossy_sms_mis(ev.pdf_fwd, glossy_sms_t_chain(x0, verts, n) * _mnee_pass(t_med), r[3], p_a)
+    return ev.f_cos * t_med * spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y,
+        sd.spectral.cie_z, sd.spectral.d65, emission.r, emission.g, emission.b, wl) * (r[2] * r[3] * r[4] * w / p_a)
+
+
+@no_inline
+def _sppm_gsms_bsdf_weight(
+    ref sd: SceneView, x0: Vec3f, pdf0: Float32, dir0: Vec3f, n: Int, light_hit: Vec3f, light: Intersection, med: Int32,
+    wl: SampledWavelengths,
+) -> Float32:
+    """The share of a camera path that left glossy vertex x0 along dir0 and reached light_hit through n chain vertices:
+    the rest of _sppm_gsms' weight when re-tracing it by the chain rule lands there, everything otherwise."""
+    var ctx = _shade_context(sd, Pointer[UInt32, MutUntrackedOrigin].unsafe_dangling())
+    var verts = SMSChain(fill=sms_vertex_init())
+    var rp = glossy_sms_reproduce(ctx, x0, dir0, n, light_hit, light, verts)
+    if not rp[0]:
+        return Float32(1)
+    var al_idx = Int(light.primId.id1)
+    var p_a = light_path_pick_pdf(sd, al_idx) / max(sd.areaLights[unsafe_offset=al_idx].total_area, Float32(1e-30))
+    var t_med = _mnee_chain_transmittance(ctx, x0, verts, n, light_hit, med, wl)
+    return Float32(1) - glossy_sms_mis(pdf0, glossy_sms_t_chain(x0, verts, n) * _mnee_pass(t_med), rp[1], p_a)
+
+
+@always_inline
 def _photon_walk[tex_gpu: Bool](ref sd: SceneView, mat: Material, inter: Intersection, hit: Point3f, refracted: Vec3f,
                                 wl: SampledWavelengths, mut pcg: PCG32, mut flux: SpectralSample,
                                 outside_ior: Float32) -> Tuple[Vec3f, Point3f, Bool]:
@@ -705,6 +771,13 @@ def _sppm_trace_visible_point[use_gpu: Bool](
     # After a glossy vertex that lit itself: > 0 its density, emission found next shares with its NEE; 0 emission is NEE's
     # alone (pbrt's SPPM); < 0 no such vertex, or a delta vertex since, which NEE could not see through.
     var glossy_pdf = Float32(-1)
+    # The last glossy SMS vertex: its lobe density (0: none), position, sampled direction, medium; chain vertices since.
+    var gs_pdf = Float32(0)
+    var gs_x0 = Vec3f(Float32(0))
+    var gs_dir = Vec3f(Float32(0))
+    var gs_med = Int32(-1)
+    var gs_n = 0
+    var dbg = RGB(Float32(0))   # GSMS_DEBUG's only radiance
     while bounce < max_charged + TERMINAL_SEGMENT_GRACE_ROUNDS and n_events < max_charged + SSS_WALK_ROUNDS + TERMINAL_SEGMENT_GRACE_ROUNDS:
         n_events += 1
         # Charged up front, and the two subsurface-exempt branches below undo
@@ -818,7 +891,15 @@ def _sppm_trace_visible_point[use_gpu: Bool](
                     var al_h = sd.areaLights[unsafe_offset=Int(inter.primId.id1)]
                     # as _sppm_nee_at's: uniform over the lights, then over the light's area
                     var pdf_l = t_hit * t_hit / (cos_l * Float32(sd.areaLightCount) * al_h.total_area)
-                    vp.env += vp.beta * _film_rgb(al_h.emission, vp.wavelengths, sd) * _after_glossy_weight(glossy_pdf, pdf_l)
+                    var w_gs = Float32(1)   # share against glossy SMS from the last glossy vertex
+                    var gs_shared = gs_pdf >= GLOSSY_SMS_MIN_PDF and gs_n >= 1 and al_h.kind == Int8(0)
+                    if gs_shared:
+                        w_gs = _sppm_gsms_bsdf_weight(sd, gs_x0, gs_pdf, gs_dir, gs_n, hit.to_simd(), inter, gs_med, vp.wavelengths)
+                    var le_h = vp.beta * _film_rgb(al_h.emission, vp.wavelengths, sd)
+                    comptime if GSMS_DEBUG >= 2:
+                        if gs_shared:
+                            dbg += le_h * (w_gs if GSMS_DEBUG == 2 else Float32(1))
+                    vp.env += le_h * (_after_glossy_weight(glossy_pdf, pdf_l) * w_gs)
             break
 
         # See geometry.mojo's TERMINAL_SEGMENT_GRACE_ROUNDS: the loop bound
@@ -840,9 +921,11 @@ def _sppm_trace_visible_point[use_gpu: Bool](
             var gn_geo = sh.gn_geo   # before any bump/normal map -- see SPPMPixel.geo_normal
             var eff_alb = sh.alb
             var rough_skin = mat.is_rough_dielectric() and sss_walks_below(mat, inter, cur_med_idx)
-            if (mat.type == MatKind.hair or rough_skin) and bounce < max_charged:
-                # pbrt's SPPM: hair and rough skin are glossy, so no visible point on them before the last bounce. Light
-                # it here, radiance into env, and scatter on with the sampler's own f/pdf.
+            var glossy_metal = mat.type == MatKind.conductor and max(mat.roughU, mat.roughV) > Float32(0.02)
+            var sampled_glossy = rough_skin or glossy_metal
+            if (mat.type == MatKind.hair or sampled_glossy) and bounce < max_charged:
+                # pbrt's SPPM: hair, rough skin and glossy metal are glossy, so no visible point on them before the last
+                # bounce. Light it here, radiance into env, and scatter on with the sampler's own f/pdf.
                 var hv = vp
                 hv.pos = hit
                 hv.normal = vec3f(gn)
@@ -851,7 +934,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
                 hv.mat_kind = mat.lobe()
                 hv.mat_idx = Int32(mat_idx)
                 hv.wo = vec3f((-rd).to_simd())
-                hv.alpha = mat.lobe_param() if rough_skin else Float32(0)
+                hv.alpha = mat.lobe_param() if sampled_glossy else Float32(0)
                 hv.hair_curve_idx = sh.curve_idx
                 hv.hair_h = sh.curve_h
                 hv.hair_v = sh.curve_v
@@ -859,18 +942,32 @@ def _sppm_trace_visible_point[use_gpu: Bool](
                 hv.med_idx = cur_med_idx
                 hv.valid = Int32(1)
                 var (lr, lg, lb) = spectral_sample_to_rgb(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x,
-                    sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, _sppm_nee_at(hv, sd, pcg, rough_skin), vp.wavelengths)
+                    sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, _sppm_nee_at(hv, sd, pcg, sampled_glossy), vp.wavelengths)
                 vp.env += vp.beta * RGB(lr, lg, lb)
-                if rough_skin:
-                    var s_v = sh.bsdf(mat, mat_idx).sample(pcg.next_float(), pcg.next_float(), pcg.next_float(), pcg.next_float(),
+                if sampled_glossy:
+                    var bsdf_g = sh.bsdf(mat, mat_idx)
+                    var gsms = glossy_metal and _sppm_gsms_on(sd, bsdf_g)
+                    if gsms:
+                        var (gr, gg, gb) = spectral_sample_to_rgb(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x,
+                            sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65,
+                            _sppm_gsms(sd, bsdf_g, hit.to_simd(), cur_med_idx, vp.wavelengths, pcg), vp.wavelengths)
+                        vp.env += vp.beta * RGB(gr, gg, gb)
+                        comptime if GSMS_DEBUG == 1:
+                            dbg += vp.beta * RGB(gr, gg, gb)
+                    var s_v = bsdf_g.sample(pcg.next_float(), pcg.next_float(), pcg.next_float(), pcg.next_float(),
                         LobeTables(sd.materials, sd.curves, sd.measuredBrdfs, sd.spectral), vp.wavelengths)
+                    gs_pdf = s_v.pdf_fwd if gsms and s_v.valid and not s_v.is_delta else Float32(0)
+                    gs_x0 = hit.to_simd()
+                    gs_dir = s_v.wi
+                    gs_med = cur_med_idx
+                    gs_n = 0
                     if not s_v.valid:
                         break
-                    if s_v.transmit and dipole:
+                    if rough_skin and s_v.transmit and dipole:
                         vp.beta = vp.beta * _spectral_gain_rgb(sd, s_v.weight * SpectralSample(mat.albedo.r * mat.albedo.r), vp.wavelengths)
                         _vp_at_dipole(vp, hit, vec3f(face_toward(gn_geo, (-rd).to_simd())), mat, mat_idx)
                         break
-                    if s_v.transmit:   # a walk leaves into the medium it came from, so no compression
+                    if rough_skin and s_v.transmit:   # a walk leaves into the medium it came from, so no compression
                         var ex_r = sss_hop[use_gpu](sd, mat, inter, hit.to_simd(), _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd()),
                                                     s_v.wi, vp.wavelengths, pcg, current_dielectric_ior)
                         if ex_r.ok:
@@ -890,6 +987,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
                 rd = vec3f(hs[0])
                 ro = sh.spawn(hs[0])
                 glossy_pdf = Float32(0)
+                gs_pdf = Float32(0)
                 continue
             # A smooth conductor is the one kind here that is genuinely
             # delta: it scatters but stores no visible point, exactly like
@@ -925,6 +1023,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
                         ro = hit + rd * Float32(0.0002)
                         vp.beta *= g_refl
                         glossy_pdf = Float32(-1)
+                        gs_pdf = Float32(0)
                         continue
                     vp.beta *= Float32(1.0) / (Float32(1.0) - f_coat)
                     vp.coat_keep = Float32(1.0) - f_coat
@@ -963,6 +1062,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
                 break
             vp.beta *= bs_c.f
             glossy_pdf = Float32(-1)
+            gs_pdf = Float32(0)
             rd = vec3f(bs_c.wi)
             ro = hit + rd * Float32(0.0002)
 
@@ -1003,6 +1103,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
             current_dielectric_ior = new_cur_ior
             previous_dielectric_ior = new_prev_ior
             glossy_pdf = Float32(-1)
+            gs_n += 1
             vp.beta *= radiance_scale  # camera-path (Radiance mode): apply non-symmetric-scattering correction
             rd = vec3f(new_dir)
             ro = point3f(new_org)
@@ -1018,6 +1119,9 @@ def _sppm_trace_visible_point[use_gpu: Bool](
         else:
             break  # area_light, etc.
 
+    comptime if GSMS_DEBUG != 0:
+        vp.env = dbg
+        vp.valid = Int32(0)
     return vp
 
 

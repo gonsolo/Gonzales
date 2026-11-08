@@ -6,6 +6,7 @@ from gonzales.core.geometry import RGB, Point3f, Vec3f
 from gonzales.transport.render_state import PDF_VOL_PHASE_HIT
 from gonzales.scene.appearance.materials import LobeKind
 from gonzales.core.spectrum import SampledWavelengths, SpectralSample
+from gonzales.transport.glossy_sms import GLOSSY_SMS_MIN_PDF
 
 # last_bsdf_pdf sentinel: the previous camera-path event was a VOLUME scatter.
 # Distinct from -1 (delta bounce, no competing strategy anywhere) because a
@@ -82,3 +83,17 @@ def _null_vertex() -> BDPTVertex:
         mat_idx=Int32(-1), hair_curve_idx=Int32(-1), hair_h=Float32(0), hair_v=Float32(0),
         wavelengths=SampledWavelengths(Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0)),
     )
+
+
+# A light vertex reached through a chain only, whose dVCM is glossy SMS's term (light.mojo). It lives in hair_curve_idx,
+# which only a fibre vertex uses. That term counts only where x0's lobe toward the chain, seen from the camera side's
+# direction, is at least GLOSSY_SMS_MIN_PDF (Scenes/vcm_glossy_sms_mis_derivation.py, gsms_ok).
+comptime VCM_GSMS_ARRIVAL = Int32(-2)
+
+
+@always_inline
+def vcm_light_dvcm(lv: BDPTVertex, rev_pdf_w: Float32) -> Float32:
+    """lv.dVCM where it meets a camera-side direction whose lobe density back toward the chain is rev_pdf_w."""
+    if lv.hair_curve_idx == VCM_GSMS_ARRIVAL and rev_pdf_w < GLOSSY_SMS_MIN_PDF:
+        return Float32(0)
+    return lv.dVCM

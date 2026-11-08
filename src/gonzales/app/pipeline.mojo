@@ -11,7 +11,7 @@ from gonzales.scene.description.scene_loader import mojo_parse_scene_any
 from gonzales.cpu.pt import render_all_tiles
 from gonzales.integrators.film import normalize_film, apply_film_sensor
 from gonzales.core.progress import Progress, fmt_time
-from gonzales.integrators.outputs import write_render_outputs
+from gonzales.integrators.outputs import write_partial_image, write_render_outputs
 from std.time import perf_counter_ns
 from gonzales.core.geometry import RGB, Point3f, Vec3f, Bounds3f, _is_real_ptr
 from gonzales.transport.render_state import TileResult, FilmDims
@@ -25,6 +25,7 @@ from gonzales.core.rng import mix_bits_u64
 from gonzales.scene.accel.bvh import SceneView, render_aux_buffers, _scene_bounding_sphere
 from gonzales.cpu.sppm import sppm_render
 from gonzales.gpu.sppm.driver import sppm_render_gpu
+from gonzales.gpu.checkpoint import Checkpoint, CheckpointConfig, checkpoint_adopt_seed
 from gonzales.cpu.vcm import vcm_render
 from gonzales.gpu.vcm.driver import vcm_render_gpu, VcmGpu
 from gonzales.gpu.vcm.rt import VcmRt
@@ -2142,6 +2143,46 @@ struct GpuGuidedRenderer(GuidedRenderer):
             ptex_mode=ptex_mode,
         )
 
+    def checkpoint_io(mut self, mut ck: Checkpoint) raises:
+        """The film sums, the adaptive mask and the MNEE decision with the probe counts it waits for."""
+        ck.io("film", self.handle[].ctx, self.handle[].film_buf)
+        ck.io("albedo_film", self.handle[].ctx, self.handle[].albedo_film_buf)
+        ck.io("film_sq", self.handle[].ctx, self.handle[].film_sq_buf)
+        ck.io("aux_film", self.handle[].ctx, self.handle[].aux_film_buf)
+        ck.io("px_active", self.handle[].ctx, self.handle[].px_active_buf)
+        ck.io("mnee_stats", self.handle[].ctx, self.handle[].mnee_stats_buf)
+        ck.flag("glass", self.handle[].has_glass_material)
+        ck.flag("mnee_adapt_done", self.handle[].mnee_adapt_done)
+
+    def _checkpoint(mut self, mut ck: Checkpoint, done: Int, partial: Bool) raises:
+        ck.begin_write(done)
+        self.checkpoint_io(ck)
+        ck.end_write(done)
+        if partial:
+            var rgb = unsafe_alloc[Float32](self.n_pixels * 3)
+            _gpu_resolve(self.handle, self.psc, rgb, self.n_pixels, done, False)
+            _ = write_partial_image(self.psc, rgb)
+            rgb.unsafe_free()
+
+    def render_checkpointed(mut self, mut ck: Checkpoint, spp: Int) raises -> Bool:
+        """render_samples(0, spp) a batch at a time, from --resume's sample on, checkpointing when due; False when
+        --stop-after stopped it."""
+        var si = ck.resume()
+        if ck.cfg.resume.byte_length() > 0:
+            self.checkpoint_io(ck)
+            ck.end_read()
+            self.progress.update(si)
+        while si < spp:
+            var nxt = min(si + self.handle[].batch, spp)
+            self.render_samples(si, nxt)
+            si = nxt
+            if ck.enabled() and (si == spp or ck.due() or ck.stop_here(si)):
+                self._checkpoint(ck, si, si < spp)
+                if si < spp and ck.stop_here(si):
+                    print("Stopped after " + String(si) + " of " + String(spp) + " samples")
+                    return False
+        return True
+
     def render_iteration(mut self, read_tree: GuideGrid, shard: GuideGrid, begin: Int, end: Int) raises:
         gpu_guide_begin(self.handle, read_tree, shard)
         self.render_samples(begin, end)
@@ -2267,6 +2308,7 @@ def parse_and_render(
     # CPU or GPU, only ever happens in render_interactive (below), the
     # only place a stable per-frame identity exists to key a reservoir on.
     use_vol_restir_reuse: Bool = False,
+    ckpt: CheckpointConfig = CheckpointConfig(),
 ) raises -> Int32:
     if use_gpu and not gpu_available():
         print("No GPU available — compile with --target-accelerator sm_86 or similar")
@@ -2289,6 +2331,12 @@ def parse_and_render(
             eff_h = Int32(Int(eff_w) * Int(psc[unsafe_offset=0].film_h) / max(Int(psc[unsafe_offset=0].film_w), 1))
         resize_film(psc, eff_w, eff_h)
     mojo_apply_overrides(psc, spp_override, Int32(0), Int32(0), seed_override)
+    try:
+        checkpoint_adopt_seed(ckpt, psc)
+    except e:
+        print("Error:", e)
+        mojo_parsed_free(psc)
+        return Int32(-1)
 
     var fw = psc[unsafe_offset=0].film_w
     var fh = psc[unsafe_offset=0].film_h
@@ -2482,14 +2530,14 @@ def parse_and_render(
             rt_vcm.instance_base_mesh = instance_base_mesh_buf_vcm^
             ret = vcm_render_gpu(handle, psc, sd[unsafe_offset=0], resolved_vcm_spp, n_photons, no_denoise, verbose, vcm_budget,
                                  vcm_cap, vcm_no_keep_mis, vcm_radius_from_camera, vcm_radius_cam_percentile,
-                                 vcm_radius_cam_fraction_mult, vcm_no_footprint, vcm_radius_scale, wavefront=True, rt=rt_vcm)
+                                 vcm_radius_cam_fraction_mult, vcm_no_footprint, vcm_radius_scale, wavefront=True, rt=rt_vcm, ckpt=ckpt)
             if use_vk_vcm:
                 var rt_hw_end_v = rtcore_active()
                 if Int(rt_hw_end_v) != 0:
                     rtcore_destroy(rt_hw_end_v)
                 vulkaninterop_rt_destroy_scene(interop_scene_vcm)
         else:
-            ret = vcm_render_gpu(handle, psc, sd[unsafe_offset=0], resolved_vcm_spp, n_photons, no_denoise, verbose, vcm_budget, vcm_cap, vcm_no_keep_mis, vcm_radius_from_camera, vcm_radius_cam_percentile, vcm_radius_cam_fraction_mult, vcm_no_footprint, vcm_radius_scale)
+            ret = vcm_render_gpu(handle, psc, sd[unsafe_offset=0], resolved_vcm_spp, n_photons, no_denoise, verbose, vcm_budget, vcm_cap, vcm_no_keep_mis, vcm_radius_from_camera, vcm_radius_cam_percentile, vcm_radius_cam_fraction_mult, vcm_no_footprint, vcm_radius_scale, ckpt=ckpt)
         gpu_free_scene(handle)
         sd.unsafe_free()
         mojo_parsed_free(psc)
@@ -2505,14 +2553,19 @@ def parse_and_render(
         var ret = sppm_render_gpu(
             handle, psc, sd[unsafe_offset=0],
             Int(sppm_passes), Int(resolved[0]), resolved[1],
-            no_denoise, verbose, use_jb, jb_spacing, jb_near,
+            no_denoise, verbose, use_jb, jb_spacing, jb_near, ckpt,
         )
         gpu_free_scene(handle)
         sd.unsafe_free()
         mojo_parsed_free(psc)
         return ret
     elif use_gpu:
+        if ckpt.active() and (use_guide or use_restir or use_vol_restir_reuse):
+            print("--checkpoint/--resume: the path tracer saves its plain wavefront render only (not --guide, --restir or --vol-restir-reuse)")
+            mojo_parsed_free(psc)
+            return Int32(-1)
         var spp = Int(psc[unsafe_offset=0].samples_per_pixel)
+        var ret = Int32(0)
         var handle = gpu_upload_scene(psc, sobol_matrices, n_pixels, spectral.coeffs, spectral.res, spectral.cie_x, spectral.cie_y, spectral.cie_z, spectral.d65, gpu_ctx, restir_di=use_restir, restir_vol=use_vol_restir_reuse, instances_external=_instances_in_tlas(psc))
         if not _is_real_ptr(handle):
             mojo_parsed_free(psc)
@@ -2834,6 +2887,23 @@ def parse_and_render(
                 var root = psc[unsafe_offset=0].bvh_nodes[unsafe_offset=0]
                 print("Path guiding: adaptive SD-tree on the GPU")
                 train_guided(renderer, Bounds3f(root.min, root.max), spp)
+            elif ckpt.active():
+                var ck = Checkpoint(ckpt, psc, "pt")
+                ck.add("batch", String(handle[].batch))
+                var finished = False
+                try:
+                    if renderer.ptex_on:
+                        raise Error("--checkpoint/--resume: not with Ptex demand paging (withheld samples are not saved)")
+                    finished = renderer.render_checkpointed(ck, spp)
+                except e:
+                    print("Error:", e)
+                    ret = Int32(-1)
+                if not finished:
+                    aux_job[unsafe_offset=0].thread.join()
+                    _ = aux_job.unsafe_take_pointee()
+                    aux_job.unsafe_free()
+                    mojo_parsed_free(psc)
+                    return ret
             else:
                 renderer.render_samples(0, spp)
             _ = renderer.progress.finish()

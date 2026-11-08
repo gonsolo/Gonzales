@@ -1,0 +1,23 @@
+# A lossless glossy conductor (alpha 0.05) under a dielectric plane, closed in by walls that emit 1: equilibrium, so
+# the conductor reads 1 through the plane. Glossy SMS solves the one-refraction chains from it to the walls above the
+# plane and shares each such path with sampling the lobe (_glossy_sms_bsdf_weight).
+Film "rgb" "string filename" "glossy-near-glass.exr" "integer xresolution" [ 64 ] "integer yresolution" [ 64 ]
+LookAt 0 1.2 0.2  0 0 0  0 0 1
+Camera "perspective" "float fov" [ 30 ]
+Integrator "volpath" "integer maxdepth" [ 24 ]
+Sampler "independent" "integer pixelsamples" [ 256 ]
+WorldBegin
+AttributeBegin
+  AreaLightSource "diffuse" "rgb L" [ 1 1 1 ] "bool twosided" [ true ]
+  Shape "trianglemesh" "point3 P" [ -1 -0.05 -1  1 -0.05 -1  1 -0.05 1  -1 -0.05 1  -1 2 -1  1 2 -1  1 2 1  -1 2 1 ]
+    "integer indices" [ 4 5 6 4 6 7  0 1 5 0 5 4  1 2 6 1 6 5  2 3 7 2 7 6  3 0 4 3 4 7 ]
+AttributeEnd
+AttributeBegin
+  Material "conductor" "rgb reflectance" [ 1 1 1 ] "float roughness" [ 0.05 ] "bool remaproughness" false
+  Shape "trianglemesh" "point3 P" [ -1 -0.05 -1  1 -0.05 -1  1 -0.05 1  -1 -0.05 1 ] "integer indices" [ 0 2 1 0 3 2 ]
+    "normal N" [ 0 1 0  0 1 0  0 1 0  0 1 0 ]
+AttributeEnd
+AttributeBegin
+  Material "dielectric" "float eta" [ 1.33 ]
+  Shape "trianglemesh" "point3 P" [ -1 0.005 -1  1 0.005 -1  1 0.005 1  -1 0.005 1 ] "integer indices" [ 0 2 1 0 3 2 ]
+AttributeEnd

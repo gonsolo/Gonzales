@@ -10,7 +10,7 @@ from gonzales.scene.shapes.primitives import mesh_pos
 from gonzales.core.rng import PCG32
 from gonzales.scene.accel.bvh import any_hit_dispatch, traverse_dispatch
 from gonzales.core.transform import transform_normal, Mat4
-from gonzales.transport.sms import MAX_SMS_VERTICES, SMSVertex, sms_vertex_init, sms_vertex_flat, sms_vertex_sphere, sms_vertex_mats, mat22_mul, mat22_mul_v, mat22_inv, sms_walk, SMS_SOLVER_THRESHOLD, mnee_orthonormal_basis, sms_refresh_solved_frames, sms_refresh_mesh_frames, sms_vertex_mesh, sms_curved, tri_barycentrics
+from gonzales.transport.sms import MAX_SMS_VERTICES, SMSVertex, sms_vertex_init, sms_vertex_flat, sms_vertex_sphere, sms_vertex_mats, mat22_mul, mat22_mul_v, mat22_inv, sms_walk, SMS_SOLVER_THRESHOLD, mnee_orthonormal_basis, sms_refresh_solved_frames, sms_refresh_mesh_frames, sms_vertex_mesh, sms_curved, tri_barycentrics, sms_vertex_sel, sms_chain_eval, sms_c_eta
 from gonzales.transport.texturing import _get_tri_verts
 from gonzales.transport.shade_context import ShadeContext
 from gonzales.transport.shadow_media import segment_transmittance
@@ -121,7 +121,11 @@ def _mnee_walk2(
     x2_init: Vec3f, n2: Vec3f,
     dp_du2: Vec3f, dp_dv2: Vec3f, eta2: Float32,
     ldp_du: Vec3f, ldp_dv: Vec3f,
+    refl1: Bool = False, refl2: Bool = False,
 ) -> Tuple[Bool, Vec3f, Vec3f, Float32, Float32]:
+    # A reflecting vertex: half-vector wi + wo (constraint eta 1), both neighbours on one side, weight F.
+    var ce1 = Float32(1) if refl1 else eta1
+    var ce2 = Float32(1) if refl2 else eta2
     var x1 = x1_init
     var x2 = x2_init
     var converged = False
@@ -131,14 +135,14 @@ def _mnee_walk2(
         var wo1v = x2 - x1; var wo1l = sqrt(dot(wo1v,wo1v))
         if wi1l < Float32(1e-6) or wo1l < Float32(1e-6): break
         var wi1 = wi1v*(Float32(1)/wi1l); var wo1 = wo1v*(Float32(1)/wo1l)
-        if dot(n1,wi1)*dot(n1,wo1) >= Float32(0): break
-        var H1v = -(wi1 + wo1*eta1); var H1l = sqrt(dot(H1v,H1v))
+        if (dot(n1,wi1)*dot(n1,wo1) <= Float32(0)) if refl1 else (dot(n1,wi1)*dot(n1,wo1) >= Float32(0)): break
+        var H1v = -(wi1 + wo1*ce1); var H1l = sqrt(dot(H1v,H1v))
         if H1l < Float32(1e-10): break
         var H1 = H1v*(Float32(1)/H1l)
         var s1 = dp_du1 - n1*dot(dp_du1,n1); var s1l = sqrt(dot(s1,s1))
         if s1l < Float32(1e-10): break
         s1 = s1*(Float32(1)/s1l); var t1 = cross(n1,s1)
-        var ili1 = Float32(1)/(H1l*wi1l); var ilo1 = eta1/(H1l*wo1l)
+        var ili1 = Float32(1)/(H1l*wi1l); var ilo1 = ce1/(H1l*wo1l)
         var (a0,b0,c0,cv0) = sms_vertex_mats(wi1,wo1,H1,s1,t1,dp_du1,dp_dv1,ili1,ilo1,
             Vec3f(0),Vec3f(0),dp_du2,dp_dv2,False,True)
         # ── Vertex 1 (x2): wi from x1, wo to x3 ────────────────────────────
@@ -146,14 +150,14 @@ def _mnee_walk2(
         var wo2v = x3 - x2; var wo2l = sqrt(dot(wo2v,wo2v))
         if wi2l < Float32(1e-6) or wo2l < Float32(1e-6): break
         var wi2 = wi2v*(Float32(1)/wi2l); var wo2 = wo2v*(Float32(1)/wo2l)
-        if dot(n2,wi2)*dot(n2,wo2) >= Float32(0): break
-        var H2v = -(wi2 + wo2*eta2); var H2l = sqrt(dot(H2v,H2v))
+        if (dot(n2,wi2)*dot(n2,wo2) <= Float32(0)) if refl2 else (dot(n2,wi2)*dot(n2,wo2) >= Float32(0)): break
+        var H2v = -(wi2 + wo2*ce2); var H2l = sqrt(dot(H2v,H2v))
         if H2l < Float32(1e-10): break
         var H2 = H2v*(Float32(1)/H2l)
         var s2 = dp_du2 - n2*dot(dp_du2,n2); var s2l = sqrt(dot(s2,s2))
         if s2l < Float32(1e-10): break
         s2 = s2*(Float32(1)/s2l); var t2 = cross(n2,s2)
-        var ili2 = Float32(1)/(H2l*wi2l); var ilo2 = eta2/(H2l*wo2l)
+        var ili2 = Float32(1)/(H2l*wi2l); var ilo2 = ce2/(H2l*wo2l)
         var (a1,b1,c1,cv1) = sms_vertex_mats(wi2,wo2,H2,s2,t2,dp_du2,dp_dv2,ili2,ilo2,
             dp_du1,dp_dv1,Vec3f(0),Vec3f(0),True,False)
         _ = a0; _ = c1
@@ -189,15 +193,15 @@ def _mnee_walk2(
         return (False, x1_init, x2_init, Float32(0), Float32(0))
     var wi1 = wi1v*(Float32(1)/wi1l); var wo1 = wo1v*(Float32(1)/wo1l)
     var wi2 = wi2v*(Float32(1)/wi2l); var wo2 = wo2v*(Float32(1)/wo2l)
-    var H1v = -(wi1+wo1*eta1); var H1l = sqrt(dot(H1v,H1v))
-    var H2v = -(wi2+wo2*eta2); var H2l = sqrt(dot(H2v,H2v))
+    var H1v = -(wi1+wo1*ce1); var H1l = sqrt(dot(H1v,H1v))
+    var H2v = -(wi2+wo2*ce2); var H2l = sqrt(dot(H2v,H2v))
     if H1l < Float32(1e-10) or H2l < Float32(1e-10):
         return (False, x1_init, x2_init, Float32(0), Float32(0))
     var H1 = H1v*(Float32(1)/H1l); var H2 = H2v*(Float32(1)/H2l)
     var s1 = dp_du1-n1*dot(dp_du1,n1); s1 = s1*(Float32(1)/sqrt(dot(s1,s1))); var t1 = cross(n1,s1)
     var s2 = dp_du2-n2*dot(dp_du2,n2); s2 = s2*(Float32(1)/sqrt(dot(s2,s2))); var t2 = cross(n2,s2)
-    var ili1 = Float32(1)/(H1l*wi1l); var ilo1 = eta1/(H1l*wo1l)
-    var ili2 = Float32(1)/(H2l*wi2l); var ilo2 = eta2/(H2l*wo2l)
+    var ili1 = Float32(1)/(H1l*wi1l); var ilo1 = ce1/(H1l*wo1l)
+    var ili2 = Float32(1)/(H2l*wi2l); var ilo2 = ce2/(H2l*wo2l)
     var (a0f,b0f,c0f,cv0f) = sms_vertex_mats(wi1,wo1,H1,s1,t1,dp_du1,dp_dv1,ili1,ilo1,
         Vec3f(0),Vec3f(0),dp_du2,dp_dv2,False,True)
     var (a1f,b1f,c1f,cv1f) = sms_vertex_mats(wi2,wo2,H2,s2,t2,dp_du2,dp_dv2,ili2,ilo2,
@@ -240,8 +244,10 @@ def _mnee_walk2(
     var eta1_o = Float32(1)/eta1; var eta2_o = Float32(1)/eta2
     var cosNI1 = abs(dot(n1,wi1)); var cosHI1 = abs(dot(H1,wi1)); var cosTM1 = abs(dot(n1,H1))
     var F1 = fr_dielectric(cosNI1, eta1); var bsdf1 = (Float32(1)-F1)*cosHI1/max(cosNI1*cosTM1*cosTM1,Float32(1e-6)) * eta1_o*eta1_o
+    if refl1: bsdf1 = F1*cosHI1/max(cosNI1*cosTM1*cosTM1,Float32(1e-6))
     var cosNI2 = abs(dot(n2,wi2)); var cosHI2 = abs(dot(H2,wi2)); var cosTM2 = abs(dot(n2,H2))
     var F2 = fr_dielectric(cosNI2, eta2); var bsdf2 = (Float32(1)-F2)*cosHI2/max(cosNI2*cosTM2*cosTM2,Float32(1e-6)) * eta2_o*eta2_o
+    if refl2: bsdf2 = F2*cosHI2/max(cosNI2*cosTM2*cosTM2,Float32(1e-6))
     return (True, x1, x2, bsdf1*bsdf2, dx1_dxlight)
 
 
@@ -259,6 +265,7 @@ def _mnee_walk(
     dp_du: Vec3f,
     dp_dv: Vec3f,
     eta_in: Float32,
+    refl: Bool = False,
 ) -> Tuple[Bool, Vec3f, Float32, Float32]:
     var x1 = x1_init
     var n = n_in
@@ -276,7 +283,7 @@ def _mnee_walk(
         var wo_len = sqrt(wo_len2)
         var wo = wo3 * (Float32(1.0) / wo_len)
         # eta: pre-computed by caller from dot(pgeo_n_raw, shadow_dir)
-        var eta = eta_in
+        var eta = Float32(1.0) if refl else eta_in   # a reflection's half-vector is wi + wo
         # Generalized half-vector H = -(wi + eta*wo), Cycles mnee.h convention
         var H3 = -(wi + wo * eta)
         var H_len2 = dot(H3, H3)
@@ -292,8 +299,9 @@ def _mnee_walk(
             return (False, x1_init, Float32(0), eta)
         var s = s3 * (Float32(1.0) / sqrt(s_len2))
         var tv = cross(n, s)
-        # Transmissive check: wi and wo must be on opposite sides of surface
-        if dot(n, wi) * dot(n, wo) >= Float32(0.0):
+        # Transmissive: wi and wo on opposite sides of the surface; reflective: on the same side
+        var side = dot(n, wi) * dot(n, wo)
+        if (side <= Float32(0.0)) if refl else (side >= Float32(0.0)):
             return (False, x1_init, Float32(0), eta)
         # Constraint: tangential component of H (should be zero at valid refraction)
         var cs = dot(H, s)
@@ -312,7 +320,7 @@ def _mnee_walk(
         var det_b = b00 * b11 - b01 * b10
         # Convergence check
         if max(abs(cs), abs(ct)) < SMS_SOLVER_THRESHOLD:
-            return (True, x1, det_b, eta)
+            return (True, x1, det_b, eta_in)
         # Newton step: solve b * [du, dv] = [cs, ct]
         if abs(det_b) < Float32(1e-5):
             return (False, x1_init, Float32(0), eta)
@@ -764,16 +772,17 @@ def _mnee_chain_g(x0: Vec3f, verts: Array[SMSVertex, MAX_SMS_VERTICES], dx1_dxli
 
 @always_inline
 def _mnee_chain_t_eta(x0: Vec3f, verts: Array[SMSVertex, MAX_SMS_VERTICES], n: Int) -> Tuple[Float32, Float32]:
-    """(probability of refracting at every vertex, the product of 1 - F; the product of the vertices' eta, which is
-    n_light / n_x0 for the media at the chain's two ends)."""
+    """(probability Fresnel sampling takes every vertex's event, the product of F at reflections and 1 - F at
+    refractions; the product of the refractions' eta, which is n_light / n_x0 for the media at the chain's two ends)."""
     var t = Float32(1.0)
     var eta = Float32(1.0)
     for i in range(n):
         var prev = x0 if i == 0 else verts[i-1].pos
         var wi = prev - verts[i].pos
         var cos_i = abs(dot(verts[i].normal, wi)) / sqrt(max(dot(wi, wi), Float32(1e-30)))
-        t *= Float32(1.0) - fr_dielectric(cos_i, verts[i].eta)
-        eta *= verts[i].eta
+        t *= sms_vertex_sel(verts[i], cos_i)
+        if verts[i].refl == Int8(0):
+            eta *= verts[i].eta
     return (t, eta)
 
 

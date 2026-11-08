@@ -13,6 +13,7 @@ from gonzales.scene.description.scene_loader import mojo_parse_scene_any
 from gonzales.gpu.scene import gpu_available
 from max.gpu.host import DeviceContext
 from gonzales.core.sensors import scan_film_sensor_params
+from gonzales.gpu.checkpoint import CheckpointConfig
 
 def _parse_int32(s: String, start: Int) -> Int32:
     var v = Int32(0)
@@ -188,6 +189,7 @@ def main() raises:
                              # --gpu, which switches dispatch mode the same way
                              # --restir already does). INDEPENDENT of --restir --
                              # this is the medium sampler's own NEE, not DI's.
+    var ckpt = CheckpointConfig()
     var headless_frames = Int32(0)  # --interactive-frames: run render_interactive's
                              # per-frame loop N times with no window/camera polling,
                              # then write the result like a normal batch render --
@@ -198,7 +200,7 @@ def main() raises:
     while i < len(args):
         var arg = String(args[i])
         if arg == "--help" or arg == "-h":
-            print("Usage: gonzales [--interactive] [--gpu] [--fullscreen] [--no-denoise] [--verbose] [--spp N] [--seed N] [--resolution WxH] [--width W] [--height H] [--pixel X Y] [--vulkan-rt] scene.pbrt")
+            print("Usage: gonzales [--interactive] [--gpu] [--fullscreen] [--no-denoise] [--verbose] [--spp N] [--seed N] [--resolution WxH] [--width W] [--height H] [--pixel X Y] [--vulkan-rt] [--checkpoint FILE] [--checkpoint-every MIN] [--resume FILE] [--stop-after N] scene.pbrt")
             return
         elif arg == "--interactive":
             interactive = True
@@ -298,6 +300,18 @@ def main() raises:
         elif arg == "--vcm-cap" and i + 1 < len(args):
             i += 1
             vcm_cap = _parse_int32(String(args[i]), 0)
+        elif arg == "--checkpoint" and i + 1 < len(args):
+            i += 1
+            ckpt.path = String(args[i])
+        elif arg == "--checkpoint-every" and i + 1 < len(args):
+            i += 1
+            ckpt.every_s = Float64(_parse_float32(String(args[i]))) * 60.0
+        elif arg == "--resume" and i + 1 < len(args):
+            i += 1
+            ckpt.resume = String(args[i])
+        elif arg == "--stop-after" and i + 1 < len(args):
+            i += 1
+            ckpt.stop_after = Int(_parse_int32(String(args[i]), 0))
         elif arg == "--sppm":
             use_sppm = True
         elif arg == "--jb":
@@ -349,6 +363,14 @@ def main() raises:
         print("Error: expected a .pbrt or .xml (Mitsuba) scene file, got:", scene_path)
         return
 
+    if ckpt.active():
+        if not use_gpu or interactive:
+            print("--checkpoint/--resume: GPU batch renders only")
+            return
+        if ckpt.path.byte_length() == 0:
+            ckpt.path = ckpt.resume     # a resumed render keeps its checkpoint going
+        ckpt.scene = scene_path
+        ckpt.seed_given = seed_override >= 0
     var data_dir = getenv("GONZALES_DATA_DIR", "src/gonzales/data")
 
     var path_len = scene_path.byte_length()
@@ -447,7 +469,7 @@ def main() raises:
     elif interactive:
         render_interactive(path_cstr, sobol, use_gpu, spectral=spectral, fullscreen=fullscreen, override_w=override_w, override_h=override_h, spp_override=spp_override, seed_override=seed_override, verbose=verbose, use_restir=use_restir, use_restir_gi=use_restir_gi, use_sms_restir=use_sms_restir, use_vol_restir_reuse=use_vol_restir_reuse, headless_frames=headless_frames)
     else:
-        var rc = parse_and_render(path_cstr, sobol, use_gpu, spectral=spectral, preparsed=preparsed, gpu_ctx=gpu_ctx, override_w=override_w, override_h=override_h, no_denoise=no_denoise, spp_override=spp_override, seed_override=seed_override, verbose=verbose, use_sppm=use_sppm, sppm_passes=sppm_passes, sppm_photons=sppm_photons, sppm_radius=sppm_radius, use_jb=use_jb, jb_spacing=jb_spacing, jb_near=jb_near, use_guide=use_guide, use_vcm=use_vcm, vcm_spp=vcm_spp, vcm_photons=vcm_photons, vcm_budget=vcm_budget, vcm_cap=vcm_cap, vcm_no_keep_mis=vcm_no_keep_mis, vcm_radius_from_camera=vcm_radius_from_camera, vcm_radius_cam_percentile=vcm_radius_cam_percentile, vcm_radius_cam_fraction_mult=vcm_radius_cam_fraction_mult, vcm_no_footprint=vcm_no_footprint, vcm_radius_scale=vcm_radius_scale, use_vulkan_rt_shade=use_vulkan_rt_shade, use_vcm_wavefront=use_vcm_wavefront, use_restir=use_restir, use_restir_gi=use_restir_gi, use_sms_restir=use_sms_restir, use_vol_restir_reuse=use_vol_restir_reuse)
+        var rc = parse_and_render(path_cstr, sobol, use_gpu, spectral=spectral, preparsed=preparsed, gpu_ctx=gpu_ctx, override_w=override_w, override_h=override_h, no_denoise=no_denoise, spp_override=spp_override, seed_override=seed_override, verbose=verbose, use_sppm=use_sppm, sppm_passes=sppm_passes, sppm_photons=sppm_photons, sppm_radius=sppm_radius, use_jb=use_jb, jb_spacing=jb_spacing, jb_near=jb_near, use_guide=use_guide, use_vcm=use_vcm, vcm_spp=vcm_spp, vcm_photons=vcm_photons, vcm_budget=vcm_budget, vcm_cap=vcm_cap, vcm_no_keep_mis=vcm_no_keep_mis, vcm_radius_from_camera=vcm_radius_from_camera, vcm_radius_cam_percentile=vcm_radius_cam_percentile, vcm_radius_cam_fraction_mult=vcm_radius_cam_fraction_mult, vcm_no_footprint=vcm_no_footprint, vcm_radius_scale=vcm_radius_scale, use_vulkan_rt_shade=use_vulkan_rt_shade, use_vcm_wavefront=use_vcm_wavefront, use_restir=use_restir, use_restir_gi=use_restir_gi, use_sms_restir=use_sms_restir, use_vol_restir_reuse=use_vol_restir_reuse, ckpt=ckpt)
         var elapsed_s = Float64(perf_counter_ns() - t0) / 1_000_000_000.0
         print("Gonzales Total Execution Time:", elapsed_s, "s")
         if rc != Int32(0):

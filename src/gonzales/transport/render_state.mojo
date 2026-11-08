@@ -248,6 +248,10 @@ struct PathState(TrivialRegisterPassable):
     var kind_bounces: SIMD[DType.uint8, 4]   # diffuse, glossy and transmission bounces so far, for Cycles' limits
     var sobol_seed: UInt32   # the render's Sobol scramble (sampling.sobol_dim_seed)
     var ns_spec: Int8   # specular vertices since last_ns_p: MNEE owns a BSDF path only if its probe saw as many
+    # A glossy vertex whose specular chains glossy SMS also samples (gl_pdf > 0): its sampled direction and density,
+    # the vertex itself in last_ns_p. An emitter reached through such a chain shares the path with SMS by MIS.
+    var gl_dir: Vec3f
+    var gl_pdf: Float32
     var sss: SssWalk
 # <</listing>>
 # PathState layout: 24+12+12+12+4+8+8+1+1+1+1+4+4+4+4+4+4+4+8+20+4+4+4 = 148 bytes (was 144 -- +4 for cone_len);

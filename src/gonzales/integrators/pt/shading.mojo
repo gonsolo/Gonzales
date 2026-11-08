@@ -28,7 +28,8 @@ from gonzales.transport.texturing import _get_tri_verts
 from gonzales.transport.shade_context import GIPendingX1, LightContext, ShadeContext
 from gonzales.transport.manifold import _emitter_face_normal
 from gonzales.integrators.pt.common import area_light_hit_cos, curve_light_hit, _geom_normal_and_ray, _hit_emission, _clamped, _to_spec_illum
-from gonzales.integrators.pt.nee import _mnee_bsdf_weight, _mnee_live
+from gonzales.integrators.pt.nee import _mnee_bsdf_weight, _mnee_live, _glossy_sms_bsdf_weight
+from gonzales.transport.glossy_sms import glossy_sms_live, GSMS_DEBUG, GLOSSY_SMS_MIN_PDF
 from gonzales.transport.manifold import _mnee_first_probe
 from gonzales.integrators.pt.materials import shade_diffuse_transmission, _shade_sss_exit, shade_coated_diffuse, shade_dielectric, shade_thin_dielectric, shade_conductor, shade_measured, shade_hair, shade_diffuse, shade_interface
 
@@ -54,7 +55,7 @@ def shade_core(
     var mat_idx = Int(inter.primId.materialIndex)
     var mat = materials[unsafe_offset=mat_idx]
 
-    if mat.type == MatKind.area_light:
+    if mat.type == MatKind.area_light and GSMS_DEBUG == 0:
         path_ptr[].estimate += path_ptr[].throughput * rgb_illuminant_to_spectral_sample(
             spectral.coeffs, spectral.res, spectral.cie_x, spectral.cie_y,
             spectral.cie_z, spectral.d65,
@@ -392,6 +393,9 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
         var emission = al.emission
         var ns_n = path_ptr[].last_ns_n
         var mnee_w_b = Float32(1.0)   # this path's share against MNEE through the same glass chain
+        var hp = Vec3f(path_ptr[].ray.origin.x, path_ptr[].ray.origin.y, path_ptr[].ray.origin.z) \
+                 + Vec3f(path_ptr[].ray.direction.x, path_ptr[].ray.direction.y, path_ptr[].ray.direction.z) * inter.tHit
+        var shared_with = 0   # 1: MNEE from a diffuse vertex may sample this path, 2: glossy SMS may
         if _mnee_live(ctx) and path_ptr[].specularBounce == Int8(1) and dot(ns_n, ns_n) > Float32(0.0) and al.kind == Int8(0):
             # This arrived through a specular chain from a vertex that
             # delegates such paths to MNEE/SMS. Drop it exactly when MNEE
@@ -403,8 +407,6 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
             # only off to the side -- MNEE never samples, and BSDF sampling
             # is the only strategy that does, so it is kept. Curve lights
             # (kind 1) never take the MNEE branch at all.
-            var hp = Vec3f(path_ptr[].ray.origin.x, path_ptr[].ray.origin.y, path_ptr[].ray.origin.z) \
-                     + Vec3f(path_ptr[].ray.direction.x, path_ptr[].ray.direction.y, path_ptr[].ray.direction.z) * inter.tHit
             var seg = hp - path_ptr[].last_ns_p
             var seg_len = sqrt(dot(seg, seg))
             if seg_len > Float32(0.0001):
@@ -412,26 +414,29 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
                 if dot(ns_n, seg_dir) > Float32(0.0) \
                    and area_light_hit_cos(inter, ctx.meshes, ctx.instances, seg_dir) > Float32(0.0):
                     if _mnee_first_probe(ctx, path_ptr[].last_ns_p, seg_dir, seg_len)[0]:
-                        comptime if use_gpu:
-                            # The solve is far too big for this kernel: park the hit for resolve_suppress_gpu.
-                            if _is_real_ptr(ctx.suppress_tasks):
-                                var edir_d = Vec3f(path_ptr[].ray.direction.x, path_ptr[].ray.direction.y, path_ptr[].ray.direction.z)
-                                var park = SpectralSample(Float32(0.0))
-                                if area_light_hit_cos(inter, ctx.meshes, ctx.instances, edir_d) > Float32(0.0):
-                                    park = path_ptr[].throughput * _to_spec_illum(ctx, emission, path_ptr[].wavelengths)
-                                ctx.suppress_tasks[unsafe_offset=ctx.path_idx] = SuppressTask(park, Int32(1), Int32(0), Int32(0), Int32(0))
-                                if mat.type == MatKind.lamp:   # the ray goes on (Cycles' shade_light.h)
-                                    shade_interface(path_ptr, inter)
-                                    return
-                                path_ptr[].active = 0
-                                return
-                            if mat.type == MatKind.lamp:   # the ray goes on (Cycles' shade_light.h)
-                                shade_interface(path_ptr, inter)
-                                return
-                            path_ptr[].active = 0
-                            return
-                        else:
-                            mnee_w_b = _mnee_bsdf_weight(ctx, path_ptr, inter, hp)
+                        shared_with = 1
+        elif path_ptr[].gl_pdf >= GLOSSY_SMS_MIN_PDF and path_ptr[].specularBounce == Int8(1) and path_ptr[].ns_spec >= Int8(1) \
+             and al.kind == Int8(0) and glossy_sms_live(ctx):
+            shared_with = 2
+        if shared_with != 0:
+            comptime if use_gpu:
+                # The solve is far too big for this kernel: park the hit for resolve_suppress_gpu.
+                if _is_real_ptr(ctx.suppress_tasks):
+                    var edir_d = Vec3f(path_ptr[].ray.direction.x, path_ptr[].ray.direction.y, path_ptr[].ray.direction.z)
+                    var park = SpectralSample(Float32(0.0))
+                    if area_light_hit_cos(inter, ctx.meshes, ctx.instances, edir_d) > Float32(0.0):
+                        park = path_ptr[].throughput * _to_spec_illum(ctx, emission, path_ptr[].wavelengths)
+                    ctx.suppress_tasks[unsafe_offset=ctx.path_idx] = SuppressTask(park, Int32(shared_with), Int32(0), Int32(0), Int32(0))
+                if mat.type == MatKind.lamp:   # the ray goes on (Cycles' shade_light.h)
+                    shade_interface(path_ptr, inter)
+                    return
+                path_ptr[].active = 0
+                return
+            else:
+                if shared_with == 1:
+                    mnee_w_b = _mnee_bsdf_weight(ctx, path_ptr, inter, hp)
+                else:
+                    mnee_w_b = _glossy_sms_bsdf_weight(ctx, path_ptr, inter, hp)
         # A pbrt area light emits from its FRONT face only
         # (DiffuseAreaLight::L: `if (!twoSided && Dot(n, w) < 0) return 0`).
         # The MIS branch below has always enforced that via its own
@@ -448,6 +453,9 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
             var edir = Vec3f(path_ptr[].ray.direction.x, path_ptr[].ray.direction.y, path_ptr[].ray.direction.z)
             e_front = area_light_hit_cos(inter, ctx.meshes, ctx.instances, edir) > Float32(0.0)
         if path_ptr[].bounce == 0 or path_ptr[].specularBounce == Int8(1):
+            comptime if GSMS_DEBUG >= 2:
+                if e_front and shared_with == 2:
+                    path_ptr[].estimate += path_ptr[].throughput * _to_spec_illum(ctx, emission, path_ptr[].wavelengths) * (mnee_w_b if GSMS_DEBUG == 2 else Float32(1))
             if e_front and mnee_w_b > Float32(0.0):
                 path_ptr[].estimate += _clamped(ctx, path_ptr[].throughput * _to_spec_illum(ctx, emission, path_ptr[].wavelengths) * mnee_w_b, Int(path_ptr[].bounce) - 1)
         else:
@@ -579,6 +587,8 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
         # diffuse family's _nee_area_lights does). Glass continues a chain.
         if not mat.is_specular_glass():
             path_ptr[].last_ns_n = Vec3f(Float32(0.0))
+            if not mat.sss_walk_interior():   # glossy SMS chains also reflect off skin
+                path_ptr[].gl_pdf = Float32(0.0)
 
     if path_ptr[].sss.exiting != Int32(0):
         comptime if use_gpu:
@@ -635,7 +645,7 @@ def cpu_shade_context(
 ) -> ShadeContext:
     """The per-render-invariant ShadeContext of the CPU wavefront; build once, set path_idx per path."""
     return ShadeContext(
-        paths_base=Pointer[PathState, MutUntrackedOrigin].unsafe_dangling(), has_glass=has_glass, mnee_stats=mnee_stats, bvh4=bvh4, suppress_tasks=Pointer[SuppressTask, MutUntrackedOrigin].unsafe_dangling(),
+        paths_base=Pointer[PathState, MutUntrackedOrigin].unsafe_dangling(), has_glass=has_glass, glossy_sms=has_glass, mnee_stats=mnee_stats, bvh4=bvh4, suppress_tasks=Pointer[SuppressTask, MutUntrackedOrigin].unsafe_dangling(),
         n_mediums=0, mediums=Pointer[Medium, MutUntrackedOrigin].unsafe_dangling(), medium_ifaces=Pointer[MediumInterface, MutUntrackedOrigin].unsafe_dangling(),
         grids=Pointer[Grid, MutUntrackedOrigin].unsafe_dangling(), nvdb_grids=Pointer[NvdbGrid, MutUntrackedOrigin].unsafe_dangling(),
                 path_idx=0, bvh2Nodes=bvh2Nodes, primIds=primIds, meshes=meshes, curves=curves, materials=materials,

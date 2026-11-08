@@ -853,6 +853,7 @@ struct GpuSceneHandle(Movable):
     var materials_buf: DeviceBuffer[DType.uint8]
     var material_count: Int
     var has_glass_material: Bool
+    var has_chain_glass: Bool   # glass at upload; glossy SMS stays on when the MNEE probes switch has_glass_material off
     # MNEE auto-off: [probes, probes that found glass] written by the diffuse kernel; gpu_mnee_adapt reads it after a batch.
     var mnee_stats_buf: DeviceBuffer[DType.int32]
     var mnee_adapt_done: Bool
@@ -1006,7 +1007,7 @@ struct GpuSceneHandle(Movable):
             vcmLambda=Float32(0),
             vcmShrink=Float32(1),
             vcmBucketCap=Int32(0),
-            hasGlass=Int32(1) if self.has_glass_material else Int32(0),
+            hasGlass=(Int32(1) if self.has_glass_material else Int32(0)) | (Int32(2) if self.has_chain_glass else Int32(0)),
             lens=self.lens,
             filterGlossy=self.filter_glossy,
             clamp=self.clamp,
@@ -1572,6 +1573,7 @@ def gpu_upload_scene(
                 materials_buf=mat_buf^,
                 material_count=Int(s.material_count),
                 has_glass_material=has_glass_mat,
+                has_chain_glass=has_glass_mat,
                 mnee_stats_buf=r_mnee_stats^,
                 mnee_adapt_done=False,
                 bench=_bench_counters(),
@@ -1671,7 +1673,7 @@ def gpu_alloc_pixel_buffers(handle: Pointer[GpuSceneHandle, MutUntrackedOrigin],
     ref h = handle[]
     var n_pix = max(n_pixels, 1)
     var n_paths = n_pix * batch
-    h.suppress_buf = ctx.enqueue_create_buffer[DType.uint8](n_paths * 32 if h.has_glass_material else 32)
+    h.suppress_buf = ctx.enqueue_create_buffer[DType.uint8](n_paths * 32 if h.has_chain_glass else 32)
     ctx.enqueue_memset(h.suppress_buf, UInt8(0))
     h.path_buf = ctx.enqueue_create_buffer[DType.uint8](n_paths * size_of[PathState]())
     h.inter_buf = ctx.enqueue_create_buffer[DType.uint8](n_paths * size_of[Intersection]())

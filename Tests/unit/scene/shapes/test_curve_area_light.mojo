@@ -37,6 +37,7 @@ def _dummy_path(ray: Ray, throughput: SpectralSample) -> PathState:
         SIMD[DType.uint8, 4](0),   # kind_bounces
         UInt32(0),   # sobol_seed
         Int8(0),   # ns_spec
+        Vec3f(Float32(0.0)), Float32(0.0),   # gl_dir, gl_pdf
         SssWalk.none(),
     )
 
@@ -188,6 +189,7 @@ def test_emissive_curve_bounce_hit_mis_weights_against_its_own_light_pdf() raise
         SIMD[DType.uint8, 4](0),   # kind_bounces
         UInt32(0),   # sobol_seed
         Int8(0),   # ns_spec
+        Vec3f(Float32(0.0)), Float32(0.0),   # gl_dir, gl_pdf
         SssWalk.none(),
     )
     intersections[unsafe_offset=0] = inter

@@ -24,7 +24,8 @@ from gonzales.transport.texturing import _apply_surface_maps, _tex_lookup, sampl
 from gonzales.transport.shade_context import GIPendingX1, ShadeContext
 from gonzales.transport.manifold import _interp_vertex_normal
 from gonzales.integrators.pt.common import _shading_normal, _curve_extra_offset, _hit_geom, _to_spec_refl, _clamped, _to_spec_illum, _shadow_inline, _shadow_blocked, _shadow_contribute, RR_THROUGHPUT_CLAMP, BOUNCE_DIFFUSE, BOUNCE_GLOSSY, BOUNCE_TRANSMIT, _count_bounce, _apply_russian_roulette, spawn_origin, _finish_delta_bounce, _apply_normal_map_sphere, _pt_hit_footprint, _build_geom_context_full, _draw_sobol_8
-from gonzales.integrators.pt.nee import _nee_simple_light_count, _nee_sample_simple_light, _nee_loop_simple, _lobe_nee, _lobe_nee_with, _nee_infinite_light, _sample_area_light_nee_u, _mnee_at_walk_exit, _nee_area_lights
+from gonzales.transport.glossy_sms import glossy_sms_lobe, glossy_sms_live
+from gonzales.integrators.pt.nee import _glossy_sms_nee, _nee_simple_light_count, _nee_sample_simple_light, _nee_loop_simple, _lobe_nee, _lobe_nee_with, _nee_infinite_light, _sample_area_light_nee_u, _mnee_at_walk_exit, _nee_area_lights
 from gonzales.integrators.pt.restir import _gi_generate_recon_candidate, gi_resolve, di_temporal_step
 
 
@@ -321,6 +322,7 @@ def _sss_walk_enter_interior(
                                      path_ptr[].current_dielectric_ior)
     path_ptr[].ray = ray
     path_ptr[].sss = walk
+    path_ptr[].gl_pdf = Float32(0)   # a walk ends any glossy SMS chain
     if path_ptr[].bounce == 0 or path_ptr[].specularBounce == Int8(1):
         var mr = mat.sss_mean_refl
         path_ptr[].albedo = mr if mr.r + mr.g + mr.b > Float32(0) else RGB(Float32(1))
@@ -749,11 +751,19 @@ def shade_conductor[use_gpu: Bool, enqueue_shadow: Bool](
                     mat_eff.albedo, Int32(inter.primId.materialIndex) if coated else Int32(-1), Float32(0) if coated else alpha,
                     Float32(0), Int32(-1), Float32(0), Float32(0), True, False)
     var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
+    var gsms = not coated and glossy_sms_lobe(bsdf) and glossy_sms_live(ctx)
     if not bsdf.is_delta:
         _lobe_nee[enqueue_shadow](path_ptr, ctx, bsdf, hit_point, pcg)
+        if gsms:
+            _glossy_sms_nee(path_ptr, ctx, bsdf, hit_point, pcg)
     var s = bsdf.sample(pcg.next_float(), pcg.next_float(), pcg.next_float(), Float32(0),
                         LobeTables(ctx.materials, ctx.curves, ctx.measured_brdfs, ctx.spectral), path_ptr[].wavelengths)
     _lobe_bounce[False](path_ptr, ctx, s, hit_point, geo_normal, mat_eff.albedo, pcg)
+    if gsms and s.valid:   # a chain this direction starts is glossy SMS's too (_glossy_sms_bsdf_weight)
+        path_ptr[].gl_pdf = s.pdf_fwd
+        path_ptr[].gl_dir = s.wi
+        path_ptr[].last_ns_p = hit_point
+        path_ptr[].ns_spec = Int8(0)
 
 
 @always_inline
