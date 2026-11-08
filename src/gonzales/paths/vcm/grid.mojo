@@ -11,7 +11,7 @@ from gonzales.scene.accel.bvh import SceneView, test_spheres
 from gonzales.estimators.photon_grid import _HSIZE, _hash_cell, grid_reset_cell, grid_count, grid_keep, grid_coin_bits, grid_push
 from gonzales.paths.vcm.vertex import _BDPT_MAX_VERTS, BDPTVertex
 from gonzales.paths.vcm.eval import _bdpt_vertex_mis_scoped
-from gonzales.paths.vcm.strategy import _VCM_RADIUS_VOLUME_SCALE, _vcm_budget_active, _vcm_cap, _vcm_keep
+from gonzales.paths.vcm.strategy import _vcm_budget_active, _vcm_cap, _vcm_keep
 
 
 comptime _VCM_FINE_LEVELS = 4
@@ -23,11 +23,16 @@ comptime _VCM_MN_STRIDE = 1 + _VCM_FINE_LEVELS
 comptime _VCM_HEADS_SIZE = (2 + _VCM_FINE_LEVELS) * _HSIZE
 
 
+# The coarse cell in a scene with media: the power of two at or above the volume radius scale, so that a fine level is
+# r_pass itself (with 6.667 a surface query searched cells of 1.67 r).
+comptime _VCM_GRID_VOLUME_SCALE = Float32(8.0)
+
+
 @always_inline
 def _vcm_grid_inv_cell(ref sd: SceneView, radius_i: Float32) -> Float32:
-    """Coarse merge-grid cell: r_pass, or the volume radius in a scene with media
-    (the 3x3x3 search must cover it; the fine levels keep surface lookups cheap)."""
-    var scale = _VCM_RADIUS_VOLUME_SCALE if Int(sd.mediumCount) > 0 else Float32(1.0)
+    """Coarse merge-grid cell: r_pass, or 8 r_pass in a scene with media (the 3x3x3 search must cover the volume
+    radius; the fine levels keep surface lookups cheap)."""
+    var scale = _VCM_GRID_VOLUME_SCALE if Int(sd.mediumCount) > 0 else Float32(1.0)
     return Float32(1.0) / max(radius_i * scale, Float32(1e-6))
 
 
