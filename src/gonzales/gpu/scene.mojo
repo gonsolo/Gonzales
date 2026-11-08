@@ -1526,7 +1526,7 @@ def gpu_upload_scene(
             var nee_candidates = (1 if s.area_light_count > 0 else 0) + Int(s.distant_count) + Int(s.point_count) + Int(s.sphere_count) + Int(s.infinite_count)
             var sw_defer = Int(s.medium_count) == 0 and nee_candidates <= SHADOW_SLOTS and getenv("GONZALES_NO_SW_SHADOW") == ""
             var r_shadow_slots = SHADOW_SLOTS if getenv("GONZALES_RTCORE") != "" or sw_defer else 1
-            var r_mnee_stats = ctx.enqueue_create_buffer[DType.int32](2)
+            var r_mnee_stats = ctx.enqueue_create_buffer[DType.int32](4)   # as the CPU's: probes, found, off flag
             ctx.enqueue_memset(r_mnee_stats, Int32(0))
             var r_prev_c2w_buf = ctx.enqueue_create_buffer[DType.uint8](64)
             ctx.enqueue_memset(r_prev_c2w_buf, UInt8(0))
