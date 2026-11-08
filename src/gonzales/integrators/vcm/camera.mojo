@@ -2,7 +2,7 @@
 # Part of the BDPT/VCM machinery that used to be one file (bdpt_*.mojo).
 
 from std.collections import Array
-from std.math import sqrt, cos, sin, log, exp, max, abs
+from std.math import sqrt, cos, sin, log, exp, max, min, abs
 from gonzales.transport.medium import MediumView
 from gonzales.core.geometry import face_toward
 from gonzales.transport.sss_walk import (
@@ -501,6 +501,11 @@ def _bdpt_camera_path_bounce[use_gpu: Bool, defer_walk: Bool = False](
 ) -> Bool:
     """One bounce of a camera subpath, shared by the per-path loop and the wavefront kernels; False ends the path.
     `defer_walk`: a subsurface walk is left in walkers[lp_idx] for the walk kernels, _vcm_camera_walk_exit ends the bounce."""
+        if VcmStrategies.beyond_cache(st.cam_nd()):   # only camera strategies from here on, so roulette leaves the weights alone
+            var p_rr = min(st.beta.average(), Float32(0.95))
+            if not (p_rr > Float32(0)) or pcg.next_float() >= p_rr:
+                return False
+            st.beta *= Float32(1) / p_rr
         # Zero carries do not mean no competitor: a walk's exit behind glass has none, and MNEE still samples this path.
         var mnee_rival = st.last_bsdf_pdf == PDF_DELTA_FULL and st.mnee.pdf0 > Float32(0)
         # Past the cache only camera strategies exist: see VcmStrategies.past_cache.
