@@ -268,7 +268,7 @@ struct VcmGpu(Movable):
             var radius_prev = vcm_merge_radius(self.scene_radius, si - 1)
             var prev_tab = heads_b if si % 2 == 0 else heads_a
             keep = Pointer[Int32, MutUntrackedOrigin](unsafe_from_address=Int(prev_tab) + _HSIZE * size_of[Int32]())
-            keep_inv_cell = Float32(1.0) / max(radius_prev, Float32(1e-6))
+            keep_inv_cell = _vcm_grid_inv_cell(gsd, radius_prev)   # the cells that table counted
             keep_scale = (radius_i / radius_prev) * (radius_i / radius_prev)
         var merge_r2 = radius_i * radius_i
         var eta_vcm = PI * max(merge_r2, Float32(1e-12)) * Float32(self.n_light_paths)
