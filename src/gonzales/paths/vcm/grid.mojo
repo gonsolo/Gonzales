@@ -1,5 +1,6 @@
 """VCM's merge grid over the light vertex cache, and the pass radius."""
 from max.algorithm import parallelize
+from std.atomic import Atomic
 from std.math import sqrt, floor, max, pow
 from std.memory.alloc import unsafe_alloc
 from gonzales.core.geometry import Point3f, Vec3f
@@ -23,7 +24,14 @@ comptime _VCM_MN_LINK = 3
 comptime _VCM_MN_STRIDE = _VCM_MN_LINK + 1 + _VCM_FINE_LEVELS
 
 
-comptime _VCM_HEADS_SIZE = (2 + _VCM_FINE_LEVELS) * _HSIZE
+# After the lists, each level's buckets are copied into contiguous ranges of records (pos, slot) for the gather. heads
+# holds, past the lists' heads and counts, the LVC capacity, each level's fill cursor, then (start, count) per level and
+# bucket; merge_next holds, past the link records, each level's sorted records.
+comptime _VCM_RANGES = (2 + _VCM_FINE_LEVELS) * _HSIZE
+comptime _VCM_RANGE_HDR = 8
+comptime _VCM_HEADS_SIZE = _VCM_RANGES + _VCM_RANGE_HDR + 2 * (1 + _VCM_FINE_LEVELS) * _HSIZE
+comptime _VCM_SORTED = 4
+comptime _VCM_MN_SIZE = _VCM_MN_STRIDE + (1 + _VCM_FINE_LEVELS) * _VCM_SORTED   # merge_next int32s per LVC slot
 
 
 # The coarse cell in a scene with media: the power of two at or above the volume radius scale, so that a fine level is
@@ -118,10 +126,47 @@ def _bdpt_insert_merge_vertex[use_gpu: Bool](
 
 @always_inline
 def _vcm_reset_cell(heads: Pointer[Int32, MutUntrackedOrigin], h: Int):
-    """Reset bucket h of the coarse grid and of every fine level."""
+    """Reset bucket h of the coarse grid and of every fine level, and its sorted ranges."""
     grid_reset_cell(heads, h)
     comptime for l in range(1, _VCM_FINE_LEVELS + 1):
         heads[unsafe_offset=(1 + l) * _HSIZE + h] = Int32(-1)
+    comptime for l in range(1 + _VCM_FINE_LEVELS):
+        heads[unsafe_offset=_VCM_RANGES + _VCM_RANGE_HDR + 2 * (l * _HSIZE + h) + 1] = Int32(0)
+    if h == 0:
+        for i in range(_VCM_RANGE_HDR):
+            heads[unsafe_offset=_VCM_RANGES + i] = Int32(0)
+
+
+@always_inline
+def _vcm_sort_bucket(t: Int, merge_next: Pointer[Int32, MutUntrackedOrigin], heads: Pointer[Int32, MutUntrackedOrigin],
+                     cap: Int):
+    """Bucket t % _HSIZE of level t // _HSIZE: its list copied, in list order, into one range of the level's records."""
+    var l = t // _HSIZE
+    var h = t % _HSIZE
+    if t == 0:
+        heads[unsafe_offset=_VCM_RANGES] = Int32(cap)
+    var head = Int(heads[unsafe_offset=h if l == 0 else (1 + l) * _HSIZE + h])
+    var n = 0
+    var k = head
+    while k != -1:
+        n += 1
+        k = Int(merge_next[unsafe_offset=k * _VCM_MN_STRIDE + _VCM_MN_LINK + l])
+    if n == 0:
+        return
+    var start = Int(Atomic.fetch_add(heads.unsafe_offset(_VCM_RANGES + 1 + l), Int32(n)))
+    heads[unsafe_offset=_VCM_RANGES + _VCM_RANGE_HDR + 2 * t] = Int32(start)
+    heads[unsafe_offset=_VCM_RANGES + _VCM_RANGE_HDR + 2 * t + 1] = Int32(n)
+    var out = merge_next.unsafe_offset(cap * _VCM_MN_STRIDE + (l * cap + start) * _VCM_SORTED)
+    k = head
+    var i = 0
+    while k != -1:
+        var rec = merge_next.unsafe_offset(k * _VCM_MN_STRIDE)
+        out[unsafe_offset=i * _VCM_SORTED] = rec[unsafe_offset=0]
+        out[unsafe_offset=i * _VCM_SORTED + 1] = rec[unsafe_offset=1]
+        out[unsafe_offset=i * _VCM_SORTED + 2] = rec[unsafe_offset=2]
+        out[unsafe_offset=i * _VCM_SORTED + 3] = Int32(k)
+        k = Int(rec[unsafe_offset=_VCM_MN_LINK + l])
+        i += 1
 
 
 def _bdpt_build_merge_grid(
@@ -146,6 +191,10 @@ def _bdpt_build_merge_grid(
     def insert_one(k: Int) {imm}:
         _bdpt_insert_merge_vertex[True](k, lvc, lvc_path_len, merge_next, heads, inv_cell, sd)
     parallelize(insert_one, n_light_paths * _BDPT_MAX_VERTS)
+
+    def sort_one(t: Int) {imm}:
+        _vcm_sort_bucket(t, merge_next, heads, n_light_paths * _BDPT_MAX_VERTS)
+    parallelize(sort_one, (1 + _VCM_FINE_LEVELS) * _HSIZE)
 
 
 # Initial merge radius as a fraction of the scene bounding sphere: SmallVCM's

@@ -15,7 +15,7 @@ from gonzales.core.progress import Progress
 from gonzales.integrators.outputs import finish_render
 from gonzales.core.spectrum import SpectralSample, pass_wavelengths, spectral_sample_to_rgb
 from gonzales.paths.vcm.vertex import _BDPT_MAX_VERTS, BDPTVertex
-from gonzales.paths.vcm.grid import _VCM_MN_STRIDE, _VCM_HEADS_SIZE, _vcm_grid_inv_cell, _bdpt_build_merge_grid, vcm_merge_radius
+from gonzales.paths.vcm.grid import _VCM_MN_SIZE, _VCM_HEADS_SIZE, _vcm_grid_inv_cell, _bdpt_build_merge_grid, vcm_merge_radius
 from gonzales.paths.vcm.connect import _bdpt_splat_filtered, _bdpt_connect_to_camera
 from gonzales.integrators.vcm.camera import _bdpt_trace_camera_and_connect
 from gonzales.integrators.vcm.light import _bdpt_trace_light_path
@@ -96,7 +96,7 @@ def _bdpt_render_core(
     # spp sample (mirrors the LVC itself). Stage 2c: the radius itself is
     var (_scene_center, scene_radius) = _scene_bounding_sphere(sd)
     var merge_heads = unsafe_alloc[Int32](_VCM_HEADS_SIZE)   # heads | counts | fine levels, see _VCM_FINE_LEVELS
-    var merge_next = unsafe_alloc[Int32](max(lvc_cap, 1) * _VCM_MN_STRIDE)
+    var merge_next = unsafe_alloc[Int32](max(lvc_cap, 1) * _VCM_MN_SIZE)
     # t=1 splat records: one slot per potential light vertex.
     # Continuous raster position per splat record (x < 0 marks an empty slot)
     var splat_fx = unsafe_alloc[Float32](max(n_light_paths_merge * _BDPT_MAX_VERTS, 1))

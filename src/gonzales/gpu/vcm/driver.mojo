@@ -30,12 +30,12 @@ from gonzales.integrators.vcm.camera import VCMCameraPathState
 from gonzales.integrators.vcm.light import VCMLightPathState
 from gonzales.core.spectrum import SpectralSample
 from gonzales.gpu.vcm.rt import VcmRt
-from gonzales.paths.vcm.grid import _VCM_MN_STRIDE, _VCM_HEADS_SIZE, _vcm_grid_inv_cell, _camera_typical_distance, vcm_merge_radius
+from gonzales.paths.vcm.grid import _VCM_MN_SIZE, _VCM_FINE_LEVELS, _VCM_HEADS_SIZE, _vcm_grid_inv_cell, _camera_typical_distance, vcm_merge_radius
 from gonzales.paths.vcm.strategy import _VCM_VISIT_INSTRUMENT, _VCM_FOOTPRINT_PIXELS
 from gonzales.integrators.film import _vcm_finalize_one_pixel
 from gonzales.gpu.vcm.kernels import (
     _bdpt_emit_light_paths_gpu, _bdpt_splat_light_paths_gpu, _bdpt_camera_connect_gpu,
-    bdpt_merge_grid_reset_gpu, bdpt_merge_grid_count_gpu, bdpt_merge_grid_insert_gpu,
+    bdpt_merge_grid_reset_gpu, bdpt_merge_grid_count_gpu, bdpt_merge_grid_insert_gpu, bdpt_merge_grid_sort_gpu,
     _VCM_BUDGET_REDUCE_THREADS, vcm_budget_reduce_gpu, _bdpt_light_path_init_gpu, _bdpt_light_path_intersect_gpu,
     _bdpt_light_path_bounce_gpu, _bdpt_camera_path_init_gpu, _bdpt_camera_path_intersect_gpu,
     _bdpt_camera_path_bounce_gpu, _bdpt_camera_path_accumulate_gpu, reset_shadow_valid_gpu,
@@ -170,7 +170,7 @@ struct VcmGpu(Movable):
         self.stat_a = ctx.enqueue_create_buffer[DType.float32](stat_n)
         self.stat_b = ctx.enqueue_create_buffer[DType.float32](stat_n)
         self.budget_red = ctx.enqueue_create_buffer[DType.float32](2)
-        self.merge_next = ctx.enqueue_create_buffer[DType.uint8](max(self.lvc_cap, 1) * _VCM_MN_STRIDE * size_of[Int32]())
+        self.merge_next = ctx.enqueue_create_buffer[DType.uint8](max(self.lvc_cap, 1) * _VCM_MN_SIZE * size_of[Int32]())
         self.inter_light = ctx.enqueue_create_buffer[DType.uint8](max(self.n_light_paths, 1) * size_of[Intersection]())
         self.inter_cam = ctx.enqueue_create_buffer[DType.uint8](self.n_pix * size_of[Intersection]())
         self.accum = ctx.enqueue_create_buffer[DType.uint8](self.n_pix * 3 * size_of[Float32]())
@@ -314,6 +314,9 @@ struct VcmGpu(Movable):
         ctx.enqueue_function[bdpt_merge_grid_insert_gpu](
             lvc, path_len, Int64(self.lvc_cap), p.merge_next, p.merge_heads, p.merge_inv_cell, p.vsd,
             grid_dim=grid_merge_ins, block_dim=block_size)
+        ctx.enqueue_function[bdpt_merge_grid_sort_gpu](
+            p.merge_next, p.merge_heads, Int64(self.lvc_cap),
+            grid_dim=ceildiv((1 + _VCM_FINE_LEVELS) * _HSIZE, block_size), block_dim=block_size)
 
     def _end_pass(mut self, p: VcmPass, film: Pointer[Float32, MutUntrackedOrigin], verbose: Bool) raises:
         """t=1 light tracing after the camera paths, then --vcm-budget's lambda for the next pass."""

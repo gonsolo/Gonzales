@@ -23,7 +23,7 @@ from gonzales.estimators.photon_grid import _HSIZE, _PHOTON_BUCKET_CAP
 from gonzales.core.spectrum import SpectralSample, pass_wavelengths, spectral_sample_to_rgb
 from gonzales.paths.vcm.vertex import _BDPT_MAX_VERTS, BDPTVertex
 from gonzales.paths.vcm.nee import _visible_transmittance
-from gonzales.paths.vcm.grid import _bdpt_count_merge_vertex, _bdpt_insert_merge_vertex, _vcm_reset_cell
+from gonzales.paths.vcm.grid import _bdpt_count_merge_vertex, _bdpt_insert_merge_vertex, _vcm_reset_cell, _vcm_sort_bucket, _VCM_FINE_LEVELS
 from gonzales.paths.vcm.connect import _bdpt_splat_filtered, _bdpt_connect_to_camera
 from gonzales.integrators.vcm.camera import (
     _bdpt_trace_camera_and_connect, VCMCameraPathState, _bdpt_camera_path_init, _bdpt_camera_path_bounce,
@@ -549,6 +549,15 @@ def bdpt_merge_grid_insert_gpu(
     if k >= lvc_cap:
         return
     _bdpt_insert_merge_vertex[True](k, lvc, lvc_path_len, merge_next, heads, inv_cell, sd)
+
+
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+def bdpt_merge_grid_sort_gpu(merge_next: Pointer[Int32, MutUntrackedOrigin], heads: Pointer[Int32, MutUntrackedOrigin],
+                             cap_dp: Int64):
+    var t = Int(block_idx.x * block_dim.x + thread_idx.x)
+    if t >= (1 + _VCM_FINE_LEVELS) * _HSIZE:
+        return
+    _vcm_sort_bucket(t, merge_next, heads, Int(cap_dp))
 
 
 comptime _VCM_BUDGET_REDUCE_THREADS = 4096
