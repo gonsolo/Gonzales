@@ -116,6 +116,7 @@ struct VcmGpu(Movable):
     var mnee_stats: DeviceBuffer[DType.int32]    # pass 0's MNEE probes and glass hits
     var mnee_off: Bool                           # glass on under 5% of them: MNEE costs more than it adds
     var vt_on: Bool                              # GZ_VCM_TIMING: per-phase GPU time of the wavefront pass
+    var vt_trace: Bool                           # GZ_VCM_TIMING=2: each phase's time printed (slot, us)
     var vt: SIMD[DType.int64, 8]
     var walkers: DeviceBuffer[DType.uint8]       # wavefront: one subsurface walker per path, light or camera pass
     var walker_inter: DeviceBuffer[DType.uint8]
@@ -186,6 +187,7 @@ struct VcmGpu(Movable):
         self.mnee_stats.enqueue_fill(Int32(0))
         self.mnee_off = False
         self.vt_on = getenv("GZ_VCM_TIMING") != ""
+        self.vt_trace = getenv("GZ_VCM_TIMING") == "2"
         self.vt = SIMD[DType.int64, 8](0)
         self.iters = SIMD[DType.int64, 2](0)
         var n_l = self.n_light_paths if wavefront else 0
@@ -383,6 +385,8 @@ struct VcmGpu(Movable):
         self.handle[].ctx.synchronize()
         var t = perf_counter_ns()
         self.vt[slot] += Int64(t - t0)
+        if self.vt_trace:
+            print("VT " + String(slot) + " " + String((t - t0) // 1000))
         t0 = t
 
     def run_pass_wavefront(mut self, psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin], si: Int,
