@@ -13,7 +13,7 @@ from gonzales.scene.appearance.media import hg_phase
 from gonzales.core.spectrum import SpectralSample
 from gonzales.paths.vcm.vertex import _BDPT_MAX_VERTS, BDPTVertex
 from gonzales.paths.vcm.eval import _lobe_eval, _bdpt_vertex_mis_scoped
-from gonzales.paths.vcm.grid import _VCM_FINE_LEVELS, _VCM_MN_STRIDE
+from gonzales.paths.vcm.grid import _VCM_FINE_LEVELS, _VCM_MN_STRIDE, _VCM_MN_LINK
 from gonzales.paths.vcm.strategy import VcmStrategies, _vcm_keep, _vcm_cap, _MERGE_COVERAGE, _VCM_VISIT_INSTRUMENT, _vcm_budget_active, _vcm_merge_radius_at, _VCM_RADIUS_VOLUME_SCALE, _vcm_volume_radius_at, _vcm_on_fibre
 from gonzales.paths.vcm.merge_weight import _bdpt_merge_mis_weight
 
@@ -129,14 +129,19 @@ def _bdpt_merge_from_cache(
         var k = Int(lheads[unsafe_offset=hl])
         while k != -1:
             # Every acceptance needs dist2 <= r2: test it on the position alone before reading the rest of the vertex.
+            var rec = merge_next.unsafe_offset(k * _VCM_MN_STRIDE)
             comptime if not _VCM_VISIT_INSTRUMENT:
-                if (lvc[unsafe_offset=k].pos - cv.pos).length_sq() > r2:
-                    k = Int(merge_next[unsafe_offset=k * _VCM_MN_STRIDE + lvl])
+                var rp = rec.unsafe_bitcast[Float32]()
+                var dx = rp[unsafe_offset=0] - cv.pos.x
+                var dy = rp[unsafe_offset=1] - cv.pos.y
+                var dz = rp[unsafe_offset=2] - cv.pos.z
+                if dx * dx + dy * dy + dz * dz > r2:
+                    k = Int(rec[unsafe_offset=_VCM_MN_LINK + lvl])
                     continue
             # The merged path shares cv and the photon, so its interior
             # length is light count + camera count - 1 (see VcmStrategies.depth).
             if VcmStrategies.too_long(sd, lvc, k // _BDPT_MAX_VERTS, k % _BDPT_MAX_VERTS, cam_count - 1, cam_nd - 1):
-                k = Int(merge_next[unsafe_offset=k * _VCM_MN_STRIDE + lvl])
+                k = Int(rec[unsafe_offset=_VCM_MN_LINK + lvl])
                 continue
             var lv = lvc[unsafe_offset=k]
             # is_light==1 vertices are the light SOURCE's own point
@@ -176,7 +181,7 @@ def _bdpt_merge_from_cache(
                     if budget:
                         keep_w = Float32(1) / _vcm_keep(sd, lv.pos)
                     total += f_cv * lv.beta * (w * keep_w)
-            k = Int(merge_next[unsafe_offset=k * _VCM_MN_STRIDE + lvl])
+            k = Int(rec[unsafe_offset=_VCM_MN_LINK + lvl])
     var result = total * cv.beta * kernel.norm
     if vol_cv:
         result *= MediumView.at(sd, cv.med_idx).photon_scale(cv.alb, cv.pos.to_simd(), cv.wavelengths)

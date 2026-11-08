@@ -17,7 +17,10 @@ from gonzales.paths.vcm.strategy import _vcm_budget_active, _vcm_cap, _vcm_keep
 comptime _VCM_FINE_LEVELS = 4
 
 
-comptime _VCM_MN_STRIDE = 1 + _VCM_FINE_LEVELS
+# A photon's merge record: its position (3 float32), then its link on each level; 32 bytes, so a gather step reads one
+# record and the vertex only for photons within reach.
+comptime _VCM_MN_LINK = 3
+comptime _VCM_MN_STRIDE = _VCM_MN_LINK + 1 + _VCM_FINE_LEVELS
 
 
 comptime _VCM_HEADS_SIZE = (2 + _VCM_FINE_LEVELS) * _HSIZE
@@ -101,11 +104,16 @@ def _bdpt_insert_merge_vertex[use_gpu: Bool](
             return
     elif not grid_keep(heads, h, k, pos, _vcm_cap(sd)):
         return
-    merge_next[unsafe_offset=k * _VCM_MN_STRIDE] = grid_push[use_gpu](heads, h, k)
+    var rec = merge_next.unsafe_offset(k * _VCM_MN_STRIDE)
+    var rp = rec.unsafe_bitcast[Float32]()
+    rp[unsafe_offset=0] = pos.x
+    rp[unsafe_offset=1] = pos.y
+    rp[unsafe_offset=2] = pos.z
+    rec[unsafe_offset=_VCM_MN_LINK] = grid_push[use_gpu](heads, h, k)
     comptime for l in range(1, _VCM_FINE_LEVELS + 1):
         var ic = inv_cell * Float32(1 << l)
         var hl = _hash_cell(Int(floor(pos.x * ic)), Int(floor(pos.y * ic)), Int(floor(pos.z * ic)))
-        merge_next[unsafe_offset=k * _VCM_MN_STRIDE + l] = grid_push[use_gpu](heads.unsafe_offset((1 + l) * _HSIZE), hl, k)
+        rec[unsafe_offset=_VCM_MN_LINK + l] = grid_push[use_gpu](heads.unsafe_offset((1 + l) * _HSIZE), hl, k)
 
 
 @always_inline
