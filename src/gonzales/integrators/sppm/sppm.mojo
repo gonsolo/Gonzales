@@ -327,7 +327,6 @@ def _dielectric_bounce(
     is_thin: Bool = False,                  # `thindielectric`: both interfaces at once
     radiance_mode: Bool = True,             # camera path; False for a photon/light path
     balance_branches: Bool = False,         # reflect with p=clamp(F,.25,.75), reweighted: a 5% reflection of a bright sky is not a coin flip
-    u_strat: Float32 = Float32(-1.0),       # >=0: stratified lobe-selection sample across a pixel's VP samples
 ) -> Tuple[Vec3f, Vec3f, Float32, Float32, Float32]:
     """SPPM/VCM's dielectric bounce: a RAY-LEVEL adapter over the path
     tracer's BxDFs, holding no scattering physics of its own.
@@ -356,8 +355,6 @@ def _dielectric_bounce(
     origin off the surface it just left (+n on reflect, -n on transmit).
     `radiance_mode` is pbrt's TransportMode, passed through."""
     var u = pcg.next_float()
-    if u_strat >= Float32(0):
-        u = u_strat
     if is_thin:
         # A thin slab's two interfaces coincide: no bend, no medium entry and
         # no radiance compression, so the ior stack is untouched and the mode
@@ -1088,7 +1085,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
                 sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
             var (new_dir, new_org, radiance_scale, new_cur_ior, new_prev_ior) = _dielectric_bounce(
                 ray_dir, hit.to_simd(), gn, ior, False, pcg, current_dielectric_ior, previous_dielectric_ior, mat.type == MatKind.thin_dielectric,
-                not sss_walks_below(mat, inter, cur_med_idx), True, _vp_strat_u(vdc, pidx, n_events))
+                not sss_walks_below(mat, inter, cur_med_idx), True)
             if sss_entered(mat, inter, ray_dir, new_dir, cur_med_idx, sd, hit.to_simd()):
                 var g_w = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
                 if dipole:
