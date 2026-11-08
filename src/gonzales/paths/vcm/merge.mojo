@@ -128,6 +128,11 @@ def _bdpt_merge_from_cache(
             break
         var k = Int(lheads[unsafe_offset=hl])
         while k != -1:
+            # Every acceptance needs dist2 <= r2: test it on the position alone before reading the rest of the vertex.
+            comptime if not _VCM_VISIT_INSTRUMENT:
+                if (lvc[unsafe_offset=k].pos - cv.pos).length_sq() > r2:
+                    k = Int(merge_next[unsafe_offset=k * _VCM_MN_STRIDE + lvl])
+                    continue
             # The merged path shares cv and the photon, so its interior
             # length is light count + camera count - 1 (see VcmStrategies.depth).
             if VcmStrategies.too_long(sd, lvc, k // _BDPT_MAX_VERTS, k % _BDPT_MAX_VERTS, cam_count - 1, cam_nd - 1):
