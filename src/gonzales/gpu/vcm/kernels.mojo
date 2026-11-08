@@ -26,8 +26,12 @@ from gonzales.paths.vcm.grid import _bdpt_count_merge_vertex, _bdpt_insert_merge
 from gonzales.paths.vcm.connect import _bdpt_splat_filtered, _bdpt_connect_to_camera
 from gonzales.integrators.vcm.camera import (
     _bdpt_trace_camera_and_connect, VCMCameraPathState, _bdpt_camera_path_init, _bdpt_camera_path_bounce,
+    VcmWalkResume, _vcm_sss_walk_resume, _vcm_camera_walk_exit,
 )
-from gonzales.integrators.vcm.light import VCMLightPathState, _bdpt_light_path_init, _bdpt_light_path_bounce, _bdpt_trace_light_path
+from gonzales.integrators.vcm.light import (
+    VCMLightPathState, _bdpt_light_path_init, _bdpt_light_path_bounce, _bdpt_trace_light_path, _vcm_light_walk_exit,
+)
+from gonzales.transport.render_state import PathState
 
 @always_inline
 def _finite3(a: Float32, b: Float32, c: Float32) -> Bool:
@@ -275,11 +279,14 @@ def _bdpt_light_path_bounce_gpu(
     c2w: Pointer[Float32, MutUntrackedOrigin],
     px_scale: Float32,
     sd: SceneView,
+    walkers: Pointer[PathState, MutUntrackedOrigin],
+    walk_resume: Pointer[VcmWalkResume, MutUntrackedOrigin],
 ):
     """One bounce's material dispatch for one light path, reading the
     Intersection _bdpt_light_path_intersect_gpu already computed this
     depth level instead of tracing it inline -- see this section's opening
-    comment."""
+    comment. A walk is left in walkers[k] (sss_walk_rounds, then
+    _vcm_light_walk_exit_gpu)."""
     var mediumCount = sd.mediumCount
     var n_light_paths = Int(n_light_paths_dp)
     var k = Int(block_idx.x * block_dim.x + thread_idx.x)
@@ -292,14 +299,43 @@ def _bdpt_light_path_bounce_gpu(
     var pcg = PCG32(UInt64(0), UInt64(0))
     pcg.state = st.pcg_state
     pcg.inc = st.pcg_inc
-    var cont = _bdpt_light_path_bounce[True](
+    var cont = _bdpt_light_path_bounce[True, defer_walk=True](
         sd, pcg, has_med, results[unsafe_offset=k], lvc, k, mis_vc_weight_factor, mis_vm_weight_factor,
-        st,
+        st, walkers, walk_resume,
     )
     lvc_path_len[unsafe_offset=k] = Int32(st.n_verts)
     st.active = Int8(1) if cont else Int8(0)
     st.pcg_state = pcg.state
     st.pcg_inc = pcg.inc
+    states[unsafe_offset=k] = st
+
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+def _vcm_light_walk_exit_gpu(
+    states: Pointer[VCMLightPathState, MutUntrackedOrigin],
+    walkers: Pointer[PathState, MutUntrackedOrigin],
+    walker_inter: Pointer[Intersection, MutUntrackedOrigin],
+    walk_resume: Pointer[VcmWalkResume, MutUntrackedOrigin],
+    idx: Pointer[Int32, MutUntrackedOrigin],
+    count: Pointer[Int32, MutUntrackedOrigin],
+    lvc: Pointer[BDPTVertex, MutUntrackedOrigin],
+    lvc_path_len: Pointer[Int32, MutUntrackedOrigin],
+    mis_vc_weight_factor: Float32,
+    sd: SceneView,
+):
+    """The rest of the bounce of each listed light path whose walk has ended."""
+    var i = Int(block_idx.x * block_dim.x + thread_idx.x)
+    if i >= Int(count[unsafe_offset=0]):
+        return
+    var k = Int(idx[unsafe_offset=i])
+    var st = states[unsafe_offset=k]
+    var pcg = PCG32(UInt64(0), UInt64(0))
+    pcg.inc = st.pcg_inc
+    var (ex, _r) = _vcm_sss_walk_resume[True, adjoint=True](sd, walkers, walker_inter, walk_resume, k, st.wl,
+                                                            mis_vc_weight_factor, pcg, st.flux, st.dvcm, st.dvc, st.dvm)
+    var cont = _vcm_light_walk_exit(sd, ex, pcg, lvc, k, mis_vc_weight_factor, st)
+    lvc_path_len[unsafe_offset=k] = Int32(st.n_verts)
+    st.active = Int8(1) if cont else Int8(0)
+    st.pcg_state = pcg.state
     states[unsafe_offset=k] = st
 
 @__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
@@ -383,9 +419,12 @@ def _bdpt_camera_path_bounce_gpu(
     shadow_pending: Pointer[SpectralSample, MutUntrackedOrigin] = Pointer[SpectralSample, MutUntrackedOrigin].unsafe_dangling(),
     shadow_valid: Pointer[Int8, MutUntrackedOrigin] = Pointer[Int8, MutUntrackedOrigin].unsafe_dangling(),
     shadow_seg_med: Pointer[Int32, MutUntrackedOrigin] = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
+    walkers: Pointer[PathState, MutUntrackedOrigin] = Pointer[PathState, MutUntrackedOrigin].unsafe_dangling(),
+    walk_resume: Pointer[VcmWalkResume, MutUntrackedOrigin] = Pointer[VcmWalkResume, MutUntrackedOrigin].unsafe_dangling(),
 ):
     """One bounce's material dispatch (incl. NEE/connect/merge/MNEE, all
-    still on the existing software-BVH `results + pix` scratch slot -- see"""
+    still on the existing software-BVH `results + pix` scratch slot). A walk
+    is left in walkers[pix] (sss_walk_rounds, then _vcm_camera_walk_exit_gpu)."""
     var mediumCount = sd.mediumCount
     var n_pix = Int(n_pix_dp)
     var pix = Int(block_idx.x * block_dim.x + thread_idx.x)
@@ -402,16 +441,58 @@ def _bdpt_camera_path_bounce_gpu(
     var visit_footprint = Int32(0)
     var visit_thin = Int32(0)
 
-    var cont = _bdpt_camera_path_bounce[True](
+    var cont = _bdpt_camera_path_bounce[True, defer_walk=True](
         sd, pcg, has_med, results[unsafe_offset=pix], results.unsafe_offset(pix), lvc, pix, Int(lvc_path_len[unsafe_offset=pix]),
         merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm,
         mis_vc_weight_factor, mis_vm_weight_factor,
         st, visit_naive, visit_footprint, visit_thin,
-        defer_shadow_rays != Int8(0), shadow_rays, shadow_pending, shadow_valid, shadow_seg_med,
+        defer_shadow_rays != Int8(0), shadow_rays, shadow_pending, shadow_valid, shadow_seg_med, walkers, walk_resume,
     )
     st.active = Int8(1) if cont else Int8(0)
     st.pcg_state = pcg.state
     st.pcg_inc = pcg.inc
+    states[unsafe_offset=pix] = st
+
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+@__llvm_metadata(`nvvm.minctasm`=SIMDLength(MINCTA_VCM_CBOUNCE))
+def _vcm_camera_walk_exit_gpu(
+    states: Pointer[VCMCameraPathState, MutUntrackedOrigin],
+    walkers: Pointer[PathState, MutUntrackedOrigin],
+    walker_inter: Pointer[Intersection, MutUntrackedOrigin],
+    walk_resume: Pointer[VcmWalkResume, MutUntrackedOrigin],
+    idx: Pointer[Int32, MutUntrackedOrigin],
+    count: Pointer[Int32, MutUntrackedOrigin],
+    results: Pointer[Intersection, MutUntrackedOrigin],
+    lvc: Pointer[BDPTVertex, MutUntrackedOrigin],
+    lvc_path_len: Pointer[Int32, MutUntrackedOrigin],
+    merge_next: Pointer[Int32, MutUntrackedOrigin],
+    merge_heads: Pointer[Int32, MutUntrackedOrigin],
+    merge_inv_cell: Float32,
+    merge_r2: Float32,
+    merge_norm: Float32,
+    mis_vc_weight_factor: Float32,
+    mis_vm_weight_factor: Float32,
+    sd: SceneView,
+):
+    """The rest of the bounce of each listed camera path whose walk has ended; its connections are traced here."""
+    var i = Int(block_idx.x * block_dim.x + thread_idx.x)
+    if i >= Int(count[unsafe_offset=0]):
+        return
+    var pix = Int(idx[unsafe_offset=i])
+    var st = states[unsafe_offset=pix]
+    var pcg = PCG32(UInt64(0), UInt64(0))
+    pcg.inc = st.pcg_inc
+    var (ex, r) = _vcm_sss_walk_resume[True](sd, walkers, walker_inter, walk_resume, pix, st.wl, mis_vc_weight_factor, pcg,
+                                             st.beta, st.dvcm, st.dvc, st.dvm)
+    var visit_naive = Int32(0)
+    var visit_footprint = Int32(0)
+    var visit_thin = Int32(0)
+    var cont = _vcm_camera_walk_exit[True](
+        sd, ex, sd.materials[unsafe_offset=Int(r.mat_idx)], r.inter, pcg, sd.mediumCount > Int64(0), results.unsafe_offset(pix),
+        lvc, pix, Int(lvc_path_len[unsafe_offset=pix]), merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm,
+        mis_vc_weight_factor, mis_vm_weight_factor, st, visit_naive, visit_footprint, visit_thin)
+    st.active = Int8(1) if cont else Int8(0)
+    st.pcg_state = pcg.state
     states[unsafe_offset=pix] = st
 
 @__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))

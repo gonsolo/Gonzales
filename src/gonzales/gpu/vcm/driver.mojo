@@ -1,8 +1,11 @@
 # The GPU VCM driver: one kernel per subpath, or staged kernels per depth (wavefront).
 # Part of the BDPT/VCM machinery that used to be one file (bdpt_*.mojo).
 
-from std.sys import has_accelerator
+from std.sys import has_accelerator, get_defined_int
 from std.os import getenv
+from gonzales.transport.render_state import PathState
+from gonzales.gpu.pt.wavefront import sss_walk_rounds
+from gonzales.integrators.vcm.camera import VcmWalkResume
 from std.time import perf_counter_ns
 from std.sys.info import size_of
 from max.gpu import block_dim
@@ -36,7 +39,7 @@ from gonzales.gpu.vcm.kernels import (
     _VCM_BUDGET_REDUCE_THREADS, vcm_budget_reduce_gpu, _bdpt_light_path_init_gpu, _bdpt_light_path_intersect_gpu,
     _bdpt_light_path_bounce_gpu, _bdpt_camera_path_init_gpu, _bdpt_camera_path_intersect_gpu,
     _bdpt_camera_path_bounce_gpu, _bdpt_camera_path_accumulate_gpu, reset_shadow_valid_gpu,
-    resolve_shadow_connect_gpu, sum_shadow_connect_gpu,
+    resolve_shadow_connect_gpu, sum_shadow_connect_gpu, _vcm_light_walk_exit_gpu, _vcm_camera_walk_exit_gpu,
 )
 
 @always_inline
@@ -47,6 +50,14 @@ def _f32(buf: DeviceBuffer[DType.uint8]) -> Pointer[Float32, MutUntrackedOrigin]
 @always_inline
 def _i32(buf: DeviceBuffer[DType.uint8]) -> Pointer[Int32, MutUntrackedOrigin]:
     return Pointer[Int32, MutUntrackedOrigin](unsafe_from_address=Int(buf.unsafe_ptr()))
+
+
+@always_inline
+def _ptr[T: AnyType](buf: DeviceBuffer[DType.uint8]) -> Pointer[T, MutUntrackedOrigin]:
+    return Pointer[T, MutUntrackedOrigin](unsafe_from_address=Int(buf.unsafe_ptr()))
+
+
+comptime _VCM_WALK_STEPS = get_defined_int["VWF_STEPS", 8]()   # walk steps a launch: a subgroup waits for its longest walk only that long
 
 
 def _vcm_write(buf: DeviceBuffer[DType.uint8], src: Pointer[Float32, MutUntrackedOrigin], n: Int) raises:
@@ -108,7 +119,13 @@ struct VcmGpu(Movable):
     var mnee_stats: DeviceBuffer[DType.int32]    # pass 0's MNEE probes and glass hits
     var mnee_off: Bool                           # glass on under 5% of them: MNEE costs more than it adds
     var vt_on: Bool                              # GZ_VCM_TIMING: per-phase GPU time of the wavefront pass
-    var vt: SIMD[DType.int64, 8]
+    var vt: SIMD[DType.int64, 16]
+    var walkers: DeviceBuffer[DType.uint8]       # wavefront: one subsurface walker per path, light or camera pass
+    var walker_inter: DeviceBuffer[DType.uint8]
+    var walk_resume: DeviceBuffer[DType.uint8]
+    var walk_lists: DeviceBuffer[DType.uint8]
+    var walk_counts: DeviceBuffer[DType.uint8]
+    var walk_stats: SIMD[DType.int64, 8]         # light | camera: walkers, rounds, lane steps, lane slots
 
     def __init__(
         out self, handle: Pointer[GpuSceneHandle, MutUntrackedOrigin], psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin],
@@ -173,10 +190,18 @@ struct VcmGpu(Movable):
         self.mnee_stats.enqueue_fill(Int32(0))
         self.mnee_off = False
         self.vt_on = getenv("GZ_VCM_TIMING") != ""
-        self.vt = SIMD[DType.int64, 8](0)
+        self.vt = SIMD[DType.int64, 16](0)
+        self.walk_stats = SIMD[DType.int64, 8](0)
         var n_l = self.n_light_paths if wavefront else 0
         var n_c = self.n_pix if wavefront else 0
         var n_s = self.n_pix * _BDPT_MAX_VERTS if wavefront else 0
+        var n_w = max(n_l, n_c)
+        self.walkers = ctx.enqueue_create_buffer[DType.uint8](max(n_w * size_of[PathState](), 1))
+        self.walkers.enqueue_fill(UInt8(0))   # none walking
+        self.walker_inter = ctx.enqueue_create_buffer[DType.uint8](max(n_w * size_of[Intersection](), 1))
+        self.walk_resume = ctx.enqueue_create_buffer[DType.uint8](max(n_w * size_of[VcmWalkResume](), 1))
+        self.walk_lists = ctx.enqueue_create_buffer[DType.uint8](max(3 * n_w * size_of[Int32](), 1))
+        self.walk_counts = ctx.enqueue_create_buffer[DType.uint8](8 * size_of[Int32]())
         self.light_states = ctx.enqueue_create_buffer[DType.uint8](max(n_l * size_of[VCMLightPathState](), 1))
         self.cam_states = ctx.enqueue_create_buffer[DType.uint8](max(n_c * size_of[VCMCameraPathState](), 1))
         self.shadow_rays = ctx.enqueue_create_buffer[DType.uint8](max(n_s * 8 * size_of[Float32](), 1))
@@ -349,6 +374,36 @@ struct VcmGpu(Movable):
             grid_dim=ceildiv(self.n_pix, block_size), block_dim=block_size)
         self._end_pass(p, film, verbose)
 
+    def _walks[camera: Bool](mut self, p: VcmPass) raises:
+        """The walks this depth's bounce started, stepped across launches (sss_walk_rounds), then the rest of their
+        paths' bounces."""
+        comptime block_size = 256
+        ref ctx = self.handle[].ctx
+        var walkers = _ptr[PathState](self.walkers)
+        var winter = _ptr[Intersection](self.walker_inter)
+        var resume = _ptr[VcmWalkResume](self.walk_resume)
+        var lists = _i32(self.walk_lists)
+        var n = self.n_pix if camera else self.n_light_paths
+        var r = sss_walk_rounds[_VCM_WALK_STEPS](ctx, walkers, winter, p.gsd, lists, self.walk_counts, n)
+        var o = 4 if camera else 0
+        self.walk_stats[o] += Int64(r.walkers)
+        self.walk_stats[o + 1] += Int64(r.rounds)
+        self.walk_stats[o + 2] += Int64(r.lane_steps)
+        self.walk_stats[o + 3] += Int64(r.lane_slots)
+        if r.walkers == 0:
+            return
+        var lvc = _ptr[BDPTVertex](self.lvc)
+        var path_len = _i32(self.path_len)
+        comptime if camera:
+            ctx.enqueue_function[_vcm_camera_walk_exit_gpu](
+                _ptr[VCMCameraPathState](self.cam_states), walkers, winter, resume, lists, _i32(self.walk_counts),
+                _ptr[Intersection](self.inter_cam), lvc, path_len, p.merge_next, p.merge_heads, p.merge_inv_cell, p.merge_r2,
+                p.merge_norm, p.mis_vc, p.mis_vm, p.vsd, grid_dim=ceildiv(r.walkers, block_size), block_dim=block_size)
+        else:
+            ctx.enqueue_function[_vcm_light_walk_exit_gpu](
+                _ptr[VCMLightPathState](self.light_states), walkers, winter, resume, lists, _i32(self.walk_counts), lvc,
+                path_len, p.mis_vc, p.vsd, grid_dim=ceildiv(r.walkers, block_size), block_dim=block_size)
+
     def _vt_mark(mut self, mut t0: Int, slot: Int) raises:
         """GZ_VCM_TIMING: wait for the queue and charge the time since t0 to `slot`."""
         if not self.vt_on:
@@ -375,7 +430,9 @@ struct VcmGpu(Movable):
         var grid_light = ceildiv(max(self.n_light_paths, 1), block_size)
         var grid_pix = ceildiv(self.n_pix, block_size)
         var t0 = perf_counter_ns()
-        self._vt_mark(t0, 7)
+        self._vt_mark(t0, 15)
+        var walkers = _ptr[PathState](self.walkers)
+        var walk_resume = _ptr[VcmWalkResume](self.walk_resume)
         ctx.enqueue_function[_bdpt_light_path_init_gpu](
             light_states, lvc, path_len, p.mis_vc, Int64(self.n_light_paths), self.default_emit_med, p.pass_seed,
             Int64(si), p.gsd, grid_dim=grid_light, block_dim=block_size)
@@ -387,8 +444,10 @@ struct VcmGpu(Movable):
                     p.gsd, light_states, inter_light, Int64(self.n_light_paths), grid_dim=grid_light, block_dim=block_size)
             ctx.enqueue_function[_bdpt_light_path_bounce_gpu](
                 light_states, inter_light, lvc, path_len, p.mis_vc, p.mis_vm, Int64(self.n_light_paths), _f32(self.c2w),
-                self.px_scale, p.vsd, grid_dim=grid_light, block_dim=block_size)
-        self._vt_mark(t0, 0)
+                self.px_scale, p.vsd, walkers, walk_resume, grid_dim=grid_light, block_dim=block_size)
+            self._vt_mark(t0, 0)
+            self._walks[False](p)
+            self._vt_mark(t0, 6)
         self._build_grid(p)
         self._vt_mark(t0, 1)
         if si == 0:
@@ -429,8 +488,10 @@ struct VcmGpu(Movable):
                 cam_states, inter_cam, lvc, path_len, p.merge_next, p.merge_heads, p.merge_inv_cell, p.merge_r2,
                 p.merge_norm, p.mis_vc, p.mis_vm, Int64(self.n_pix), _f32(self.c2w), self.px_scale, p.vsd,
                 Int8(1) if self.shadow_batch else Int8(0), shadow_rays, shadow_pending, shadow_valid, shadow_seg_med,
-                grid_dim=grid_pix, block_dim=block_size)
+                walkers, walk_resume, grid_dim=grid_pix, block_dim=block_size)
             self._vt_mark(t0, 3)
+            self._walks[True](p)
+            self._vt_mark(t0, 7)
             if self.shadow_batch:
                 # This bounce's connect shadow rays, traced together, then summed into the path states.
                 var instance_base = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling()
@@ -586,14 +647,20 @@ def vcm_render_gpu(
             _ = prog.finish()
             if v.vt_on:
                 var names = List[String]()
-                for nm in ["light walk", "grid", "cam intersect", "cam bounce", "shadow rays", "accumulate"]:
+                for nm in ["light pass", "grid", "cam intersect", "cam bounce", "shadow rays", "accumulate", "light walks",
+                           "cam walks"]:
                     names.append(String(nm))
                 var tot = Int64(0)
-                for k in range(6):
+                for k in range(8):
                     tot += v.vt[k]
-                for k in range(6):
+                for k in range(8):
                     print("VCM timing " + names[k] + ": " + String(Float64(v.vt[k]) * 1e-9) + " s ("
                           + String(Float64(v.vt[k]) * 100.0 / Float64(max(tot, Int64(1)))) + "%)")
+                for o in range(0, 8, 4):
+                    var ws = v.walk_stats
+                    print("VCM walks " + ("camera" if o == 4 else "light") + ": walkers " + String(ws[o]) + " rounds "
+                          + String(ws[o + 1]) + " lane utilisation "
+                          + String(Float64(ws[o + 2]) / Float64(max(ws[o + 3], Int64(1)))))
             comptime if _VCM_VISIT_INSTRUMENT:   # benchmark only: the kernels count merge visits only then
                 var visit_sidecar = _sidecar_name(psc[unsafe_offset=0].film_filename, ".mergevisits.exr")
                 with v.visit_accum.map_to_host() as vhost:
