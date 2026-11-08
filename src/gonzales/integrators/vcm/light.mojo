@@ -24,8 +24,10 @@ from gonzales.paths.vcm.strategy import VcmStrategies, _VCM_EXIT_MERGE, _vcm_kee
 from gonzales.paths.vcm.connect import _bdpt_store_lvc_vertex
 from gonzales.integrators.vcm.camera import (
     _vcm_scatter, _vcm_lobe_vertex, _vcm_sss_walk, _vcm_sss_exit_vertex,
-    _vcm_sss_exit_scatter, _vcm_dielectric_cross,
+    _vcm_sss_exit_scatter, _vcm_dielectric_cross, VcmWalkResume, _vcm_sss_walk_suspend,
 )
+from gonzales.transport.render_state import PathState
+from gonzales.transport.sss_walk import SssExit
 
 @fieldwise_init
 struct VCMMneeLightTrack(TrivialRegisterPassable):
@@ -311,7 +313,7 @@ def _vcm_skin_arrival(
     return VcmStrategies.walk_merge_density(sd, hit, mis_vm)
 
 
-def _bdpt_light_path_bounce[use_gpu: Bool](
+def _bdpt_light_path_bounce[use_gpu: Bool, defer_walk: Bool = False](
     ref sd:      SceneView,
     mut pcg: PCG32,
     has_med: Bool,
@@ -321,8 +323,11 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
     mis_vc_weight_factor: Float32,
     mis_vm_weight_factor: Float32,
     mut st: VCMLightPathState,
+    walkers: Pointer[PathState, MutUntrackedOrigin] = Pointer[PathState, MutUntrackedOrigin].unsafe_dangling(),
+    walk_resume: Pointer[VcmWalkResume, MutUntrackedOrigin] = Pointer[VcmWalkResume, MutUntrackedOrigin].unsafe_dangling(),
 ) -> Bool:
-    """One bounce of a light subpath, shared by the per-path loop and the wavefront kernels; False ends the path."""
+    """One bounce of a light subpath, shared by the per-path loop and the wavefront kernels; False ends the path.
+    `defer_walk`: as _bdpt_camera_path_bounce's, _vcm_light_walk_exit ends the bounce."""
         if st.n_verts >= _BDPT_MAX_VERTS:
             return False   # mirrors the original loop's top-of-iteration guard
         # The next vertex stored would be interior vertex n_verts (after an area
@@ -518,19 +523,30 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
         if walks:
             comptime if _VCM_SSS_CAMERA_ONLY:
                 return False
+            comptime if defer_walk:
+                _vcm_sss_walk_suspend(sd, inter, mat, mat_idx, hit, ray_dir, st.rd, st.wl, pcg, st.current_dielectric_ior,
+                                      dvcm_in, dvc_in, dvm_in, entry_eta, walkers, walk_resume, lp_idx)
+                return True
             var ex = _vcm_sss_walk[use_gpu, adjoint=True](sd, inter, mat, hit, ray_dir, st.rd, st.wl, mis_vc_weight_factor, pcg, st.flux,
                                             st.dvcm, st.dvc, st.dvm, dvcm_in, dvc_in, dvm_in, st.current_dielectric_ior, entry_eta)
-            if not ex.ok or st.n_verts >= _BDPT_MAX_VERTS:   # rough skin's entry may have taken the last slot
-                return False
-            var v = _vcm_sss_exit_vertex(ex, ex.eta, st.flux, st.cur_med_idx, st.wl, st.dvcm, st.dvc, st.dvm)
-            st.n_verts += 1
-            v.n_delta = Int32(st.n_delta)
-            _bdpt_store_lvc_vertex(v, lvc, lp_idx, st.n_verts - 1)
-            _ = _vcm_sss_exit_scatter(sd, ex, ex.eta, mis_vc_weight_factor, Float32(0), pcg,   # a light exit does not merge
-                                      st.ro, st.rd, st.flux, st.dvcm, st.dvc, st.dvm)
-            st.mnee.side = Float32(0)
+            return _vcm_light_walk_exit(sd, ex, pcg, lvc, lp_idx, mis_vc_weight_factor, st)
 
         return True   # bounce processed normally, path continues
+
+
+def _vcm_light_walk_exit(ref sd: SceneView, ex: SssExit, mut pcg: PCG32, lvc: Pointer[BDPTVertex, MutUntrackedOrigin],
+                         lp_idx: Int, mis_vc_weight_factor: Float32, mut st: VCMLightPathState) -> Bool:
+    """The light bounce after a walk: its exit vertex stored and the scatter out; False ends the path."""
+    if not ex.ok or st.n_verts >= _BDPT_MAX_VERTS:   # rough skin's entry may have taken the last slot
+        return False
+    var v = _vcm_sss_exit_vertex(ex, ex.eta, st.flux, st.cur_med_idx, st.wl, st.dvcm, st.dvc, st.dvm)
+    st.n_verts += 1
+    v.n_delta = Int32(st.n_delta)
+    _bdpt_store_lvc_vertex(v, lvc, lp_idx, st.n_verts - 1)
+    _ = _vcm_sss_exit_scatter(sd, ex, ex.eta, mis_vc_weight_factor, Float32(0), pcg,   # a light exit does not merge
+                              st.ro, st.rd, st.flux, st.dvcm, st.dvc, st.dvm)
+    st.mnee.side = Float32(0)
+    return True
 
 def _bdpt_trace_light_path[use_gpu: Bool](
     ref sd:      SceneView,

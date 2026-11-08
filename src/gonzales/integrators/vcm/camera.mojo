@@ -5,7 +5,11 @@ from std.collections import Array
 from std.math import sqrt, cos, sin, log, exp, max, abs
 from gonzales.transport.medium import MediumView
 from gonzales.core.geometry import face_toward
-from gonzales.transport.sss_walk import SssExit, sss_entered, sss_walks_below, sss_hop, sss_leave, sss_relative_eta
+from gonzales.transport.sss_walk import (
+    SssExit, sss_entered, sss_walks_below, sss_hop, sss_leave, sss_relative_eta, sss_hop_start, sss_hop_tint,
+    sss_walker_begin, sss_walker_exit,
+)
+from gonzales.transport.render_state import PathState
 from gonzales.transport.medium_interface import medium_after
 from gonzales.scene.appearance.materials import fr_dielectric, sss_boundary_lobe
 from gonzales.core.geometry import offset_eps, RGB, Point3f, Point2f, Vec3f, vec3f, point3f, dot, cross, PI, INV_FOUR_PI, INV_PI
@@ -280,9 +284,60 @@ def _vcm_sss_walk[use_gpu: Bool, adjoint: Bool = False](
     light walk, see sss_hop."""
     var gn = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
     var ex = sss_hop[use_gpu, adjoint](sd, mat, inter, hit.to_simd(), gn, rd, wl, pcg, outside_ior)
+    _vcm_sss_walk_carries(ex, abs(dot(-ray_dir, gn)), mis_vc, beta, dvcm, dvc, dvm, dvcm_in, dvc_in, dvm_in, entry_eta)
+    return ex
+
+
+@fieldwise_init
+struct VcmWalkResume(TrivialRegisterPassable):
+    """A subpath suspended on a walk that steps across wavefront rounds: what its exit needs from the entry."""
+    var inter: Intersection     # the entry hit
+    var mat_idx: Int32          # its material, a mix resolved
+    var cos_e: Float32
+    var dvcm: Float32           # the carries before the entry
+    var dvc: Float32
+    var dvm: Float32
+    var entry_eta: Float32
+
+
+@always_inline
+def _vcm_sss_walk_suspend(
+    ref sd: SceneView, inter: Intersection, mat: Material, mat_idx: Int, hit: Point3f, ray_dir: Vec3f, rd: Vec3f,
+    wl: SampledWavelengths, mut pcg: PCG32, outside_ior: Float32, dvcm_in: Float32, dvc_in: Float32, dvm_in: Float32,
+    entry_eta: Float32, walkers: Pointer[PathState, MutUntrackedOrigin], resume: Pointer[VcmWalkResume, MutUntrackedOrigin],
+    slot: Int,
+):
+    """_vcm_sss_walk up to the walk: the walker starts in `walkers[slot]`, _vcm_sss_walk_resume ends it."""
+    var gn = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
+    var (ray, walk) = sss_hop_start(sd, mat, inter, hit.to_simd(), gn, rd, wl, pcg, outside_ior)
+    sss_walker_begin(walkers.unsafe_offset(slot), ray, walk, wl, pcg)
+    resume[unsafe_offset=slot] = VcmWalkResume(inter, Int32(mat_idx), abs(dot(-ray_dir, gn)), dvcm_in, dvc_in, dvm_in, entry_eta)
+
+
+@always_inline
+def _vcm_sss_walk_resume[use_gpu: Bool, adjoint: Bool = False](
+    ref sd: SceneView, walkers: Pointer[PathState, MutUntrackedOrigin], walker_inter: Pointer[Intersection, MutUntrackedOrigin],
+    resume: Pointer[VcmWalkResume, MutUntrackedOrigin], slot: Int, wl: SampledWavelengths, mis_vc: Float32, mut pcg: PCG32,
+    mut beta: SpectralSample, mut dvcm: Float32, mut dvc: Float32, mut dvm: Float32,
+) -> Tuple[SssExit, VcmWalkResume]:
+    """The rest of _vcm_sss_walk once the walker in `walkers[slot]` has finished."""
+    var ps = walkers[unsafe_offset=slot]
+    pcg.state = ps.pcgState
+    var r = resume[unsafe_offset=slot]
+    var ex = sss_walker_exit(sd, ps, walker_inter[unsafe_offset=slot])
+    sss_hop_tint[use_gpu, adjoint](sd, sd.materials[unsafe_offset=Int(r.mat_idx)], r.inter, ex, wl)
+    _vcm_sss_walk_carries(ex, r.cos_e, mis_vc, beta, dvcm, dvc, dvm, r.dvcm, r.dvc, r.dvm, r.entry_eta)
+    return (ex, r)
+
+
+@always_inline
+def _vcm_sss_walk_carries(
+    ex: SssExit, cos_e: Float32, mis_vc: Float32, mut beta: SpectralSample, mut dvcm: Float32, mut dvc: Float32,
+    mut dvm: Float32, dvcm_in: Float32, dvc_in: Float32, dvm_in: Float32, entry_eta: Float32,
+):
+    """A finished walk's weight and MIS carries, see _vcm_sss_walk."""
     if ex.ok:
         beta *= ex.weight
-        var cos_e = abs(dot(-ray_dir, gn))
         var (a_vcm, a_vc, a_vm) = vcm_arrival_carries(dvcm_in, dvc_in, dvm_in, cos_e)
         var inv_t = Float32(1) / max(Float32(1) - fr_dielectric(cos_e, ex.eta), Float32(1e-6))
         var pdf_rev = cos_e * INV_PI
@@ -290,10 +345,9 @@ def _vcm_sss_walk[use_gpu: Bool, adjoint: Bool = False](
         comptime if _VCM_SSS_CAMERA_ONLY:
             dvc = Float32(0)
             dvm = Float32(0)
-            return ex
+            return
         dvc = inv_t * (a_vc * pdf_rev + a_vcm + entry_eta)
         dvm = inv_t * (a_vm * pdf_rev + a_vcm * mis_vc)
-    return ex
 
 
 @always_inline
@@ -413,7 +467,7 @@ def _vcm_lobe_vertex[use_gpu: Bool](
     return VcmLobeHit(v, h.gn, h.gn_geo, h.cos_in, h.spawn_eps, h.on_curve, h.alb)
 
 
-def _bdpt_camera_path_bounce[use_gpu: Bool](
+def _bdpt_camera_path_bounce[use_gpu: Bool, defer_walk: Bool = False](
     ref sd:      SceneView,
     mut pcg: PCG32,
     has_med: Bool,
@@ -441,8 +495,11 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
     shadow_pending: Pointer[SpectralSample, MutUntrackedOrigin] = Pointer[SpectralSample, MutUntrackedOrigin].unsafe_dangling(),
     shadow_valid: Pointer[Int8, MutUntrackedOrigin] = Pointer[Int8, MutUntrackedOrigin].unsafe_dangling(),
     shadow_seg_med: Pointer[Int32, MutUntrackedOrigin] = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
+    walkers: Pointer[PathState, MutUntrackedOrigin] = Pointer[PathState, MutUntrackedOrigin].unsafe_dangling(),
+    walk_resume: Pointer[VcmWalkResume, MutUntrackedOrigin] = Pointer[VcmWalkResume, MutUntrackedOrigin].unsafe_dangling(),
 ) -> Bool:
-    """One bounce of a camera subpath, shared by the per-path loop and the wavefront kernels; False ends the path."""
+    """One bounce of a camera subpath, shared by the per-path loop and the wavefront kernels; False ends the path.
+    `defer_walk`: a subsurface walk is left in walkers[lp_idx] for the walk kernels, _vcm_camera_walk_exit ends the bounce."""
         if st.n_verts >= _BDPT_MAX_VERTS:
             return False   # mirrors the original loop's top-of-iteration guard
         # Zero carries do not mean no competitor: a walk's exit behind glass has none, and MNEE still samples this path.
@@ -756,37 +813,62 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             return False   # unhandled material type
 
         if walks:
+            comptime if defer_walk:
+                _vcm_sss_walk_suspend(sd, inter, mat, mat_idx, hit, ray_dir, st.rd, st.wl, pcg, st.current_dielectric_ior,
+                                      dvcm_in, dvc_in, dvm_in, Float32(0), walkers, walk_resume, lp_idx)
+                return True
             var ex = _vcm_sss_walk[use_gpu](sd, inter, mat, hit, ray_dir, st.rd, st.wl, mis_vc_weight_factor, pcg, st.beta,
                                             st.dvcm, st.dvc, st.dvm, dvcm_in, dvc_in, dvm_in, st.current_dielectric_ior)
-            if not ex.ok:
-                return False
-            var x_o = ex.x_o
-            var n_o = ex.n_o
-            # The exit merges with photons that arrived there before walking: one walk, not two.
-            var v = _vcm_sss_exit_vertex(ex, ex.eta, st.beta, st.cur_med_idx, st.wl, st.dvcm, st.dvc, st.dvm,
-                                         Int32(inter.primId.materialIndex))
-            var exit_eta = VcmStrategies.merge_density(sd, v, mis_vm_weight_factor)
-            if st.n_verts == 0: st.first_alb = mat.sss_mean_refl
-            if VcmStrategies.ends_at_vertex(sd, st.cam_count(), st.n_verts):
-                return False   # a vertex past d starts no strategy (see VcmStrategies.depth)
-            st.n_verts += 1
-            st.total_merge += _bdpt_merge_from_cache(v, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2,
-                merge_norm, mis_vc_weight_factor, st.cam_count(), st.cam_nd(), visit_naive=visit_naive,
-                visit_footprint=visit_footprint, visit_thin=visit_thin)
-            if path_len > 0:
-                if defer_shadow_rays:
-                    _bdpt_connect_to_cache_deferred(v, sd, lvc, lp_idx, path_len, mis_vm_weight_factor, shadow_rays, shadow_pending, shadow_valid, shadow_seg_med, st.cam_count(), st.cam_nd())
-                else:
-                    st.total += _bdpt_connect_to_cache(v, sd, has_med, scratch, lvc, lp_idx, path_len, mis_vm_weight_factor, st.cam_count(), st.cam_nd())
-            var ctx_x = BSDF(LobeKind.sss_exit, True, False, n_o, n_o, RGB(Float32(1)), Int32(-1), ex.eta,
-                                Float32(0), Int32(-1), Float32(0), Float32(0), True, False)
-            st.total += _vcm_nee_surface(sd, v, ctx_x, x_o, n_o, st.beta, exit_eta,
-                                      v.dVCM, v.dVC, st.cur_med_idx, scratch, st.wl, pcg,
-                                      offset_eps(x_o.x, x_o.y, x_o.z), False)
-            st.total += _vcm_mnee(sd, v, x_o.to_simd(), n_o, st.beta, pcg, st.wl, exit_eta, v.dVCM, v.dVC)
-            var cos_out_x = _vcm_sss_exit_scatter(sd, ex, ex.eta, mis_vc_weight_factor, exit_eta, pcg,
-                                                  st.ro, st.rd, st.beta, st.dvcm, st.dvc, st.dvm)
-            st.last_bsdf_pdf = cos_out_x * INV_PI
-            st.mnee = VCMMneeTrack(x_o.to_simd(), cos_out_x * INV_PI, Int32(0), Int32(0), Vec3f(Float32(0)))
+            return _vcm_camera_walk_exit[use_gpu](
+                sd, ex, mat, inter, pcg, has_med, scratch, lvc, lp_idx, path_len, merge_next, merge_heads, merge_inv_cell,
+                merge_r2, merge_norm, mis_vc_weight_factor, mis_vm_weight_factor, st, visit_naive, visit_footprint, visit_thin,
+                defer_shadow_rays, shadow_rays, shadow_pending, shadow_valid, shadow_seg_med)
 
         return True   # bounce processed normally, path continues
+
+
+def _vcm_camera_walk_exit[use_gpu: Bool](
+    ref sd: SceneView, ex: SssExit, mat: Material, inter: Intersection, mut pcg: PCG32, has_med: Bool,
+    scratch: Pointer[Intersection, MutUntrackedOrigin], lvc: Pointer[BDPTVertex, MutUntrackedOrigin], lp_idx: Int,
+    path_len: Int, merge_next: Pointer[Int32, MutUntrackedOrigin], merge_heads: Pointer[Int32, MutUntrackedOrigin],
+    merge_inv_cell: Float32, merge_r2: Float32, merge_norm: Float32, mis_vc_weight_factor: Float32,
+    mis_vm_weight_factor: Float32, mut st: VCMCameraPathState, mut visit_naive: Int32, mut visit_footprint: Int32,
+    mut visit_thin: Int32, defer_shadow_rays: Bool = False,
+    shadow_rays: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+    shadow_pending: Pointer[SpectralSample, MutUntrackedOrigin] = Pointer[SpectralSample, MutUntrackedOrigin].unsafe_dangling(),
+    shadow_valid: Pointer[Int8, MutUntrackedOrigin] = Pointer[Int8, MutUntrackedOrigin].unsafe_dangling(),
+    shadow_seg_med: Pointer[Int32, MutUntrackedOrigin] = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
+) -> Bool:
+    """The camera bounce after a walk entered at `inter` (material `mat`): its exit vertex, merge, connect, NEE and MNEE,
+    and the scatter out; False ends the path."""
+    if not ex.ok:
+        return False
+    var x_o = ex.x_o
+    var n_o = ex.n_o
+    # The exit merges with photons that arrived there before walking: one walk, not two.
+    var v = _vcm_sss_exit_vertex(ex, ex.eta, st.beta, st.cur_med_idx, st.wl, st.dvcm, st.dvc, st.dvm,
+                                 Int32(inter.primId.materialIndex))
+    var exit_eta = VcmStrategies.merge_density(sd, v, mis_vm_weight_factor)
+    if st.n_verts == 0: st.first_alb = mat.sss_mean_refl
+    if VcmStrategies.ends_at_vertex(sd, st.cam_count(), st.n_verts):
+        return False   # a vertex past d starts no strategy (see VcmStrategies.depth)
+    st.n_verts += 1
+    st.total_merge += _bdpt_merge_from_cache(v, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2,
+        merge_norm, mis_vc_weight_factor, st.cam_count(), st.cam_nd(), visit_naive=visit_naive,
+        visit_footprint=visit_footprint, visit_thin=visit_thin)
+    if path_len > 0:
+        if defer_shadow_rays:
+            _bdpt_connect_to_cache_deferred(v, sd, lvc, lp_idx, path_len, mis_vm_weight_factor, shadow_rays, shadow_pending, shadow_valid, shadow_seg_med, st.cam_count(), st.cam_nd())
+        else:
+            st.total += _bdpt_connect_to_cache(v, sd, has_med, scratch, lvc, lp_idx, path_len, mis_vm_weight_factor, st.cam_count(), st.cam_nd())
+    var ctx_x = BSDF(LobeKind.sss_exit, True, False, n_o, n_o, RGB(Float32(1)), Int32(-1), ex.eta,
+                        Float32(0), Int32(-1), Float32(0), Float32(0), True, False)
+    st.total += _vcm_nee_surface(sd, v, ctx_x, x_o, n_o, st.beta, exit_eta,
+                              v.dVCM, v.dVC, st.cur_med_idx, scratch, st.wl, pcg,
+                              offset_eps(x_o.x, x_o.y, x_o.z), False)
+    st.total += _vcm_mnee(sd, v, x_o.to_simd(), n_o, st.beta, pcg, st.wl, exit_eta, v.dVCM, v.dVC)
+    var cos_out_x = _vcm_sss_exit_scatter(sd, ex, ex.eta, mis_vc_weight_factor, exit_eta, pcg,
+                                          st.ro, st.rd, st.beta, st.dvcm, st.dvc, st.dvm)
+    st.last_bsdf_pdf = cos_out_x * INV_PI
+    st.mnee = VCMMneeTrack(x_o.to_simd(), cos_out_x * INV_PI, Int32(0), Int32(0), Vec3f(Float32(0)))
+    return True
