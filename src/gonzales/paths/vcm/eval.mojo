@@ -272,7 +272,7 @@ def _vcm_mnee_light_point(
 @no_inline   # one copy of the solver in the camera bounce
 def _vcm_mnee(
     ref sd: SceneView, v: BDPTVertex, hit_v: Vec3f, gn: Vec3f, beta: SpectralSample, mut pcg: PCG32,
-    wl: SampledWavelengths, eta_x: Float32, dvcm: Float32, dvc: Float32,
+    wl: SampledWavelengths, eta_x: Float32, dvcm: Float32, dvc: Float32, long_path: Bool = False,
 ) -> SpectralSample:
     """MNEE from camera vertex `v` to a light behind glass, balance-weighted against BSDF sampling through the chain
     and against every light-subpath strategy that reaches v through it. dvcm/dvc are v's arrival carries."""
@@ -318,7 +318,7 @@ def _vcm_mnee(
     t_ch *= _mnee_pass(t_med)   # every rival crosses the chain's media unscattered
     var g = c[5]
     var w_light = _mnee_bsdf_over_light(le.pdf_fwd, t_ch, g, p_a)
-    var w_camera = side / PI / (eta_ch * eta_ch) * c[6] * g * t_ch * (eta_x + dvcm + dvc * le.pdf_rev)
+    var w_camera = Float32(0) if long_path else side / PI / (eta_ch * eta_ch) * c[6] * g * t_ch * (eta_x + dvcm + dvc * le.pdf_rev)
     var w = Float32(1) / (w_light + Float32(1) + w_camera)
     return (beta * le.f_cos * t_med
         * spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, emission.r, emission.g, emission.b, wl)
@@ -381,7 +381,7 @@ def _vcm_gsms_on(ref sd: SceneView, v: BDPTVertex) -> Bool:
 @no_inline   # one copy of the solver in the camera bounce
 def _vcm_gsms(
     ref sd: SceneView, v: BDPTVertex, hit_v: Vec3f, gn: Vec3f, beta: SpectralSample, mut pcg: PCG32,
-    wl: SampledWavelengths, eta_x: Float32, dvcm: Float32, dvc: Float32,
+    wl: SampledWavelengths, eta_x: Float32, dvcm: Float32, dvc: Float32, long_path: Bool = False,
 ) -> SpectralSample:
     """Glossy SMS from camera vertex `v` (transport/glossy_sms.mojo), balance-weighted like _vcm_mnee: its density in
     every weight is the deterministic solve's, p_A / g (Scenes/vcm_glossy_sms_mis_derivation.py)."""
@@ -419,7 +419,7 @@ def _vcm_gsms(
     t_ch *= _mnee_pass(t_med)
     var g = r[3]
     var w_light = _mnee_bsdf_over_light(le.pdf_fwd, t_ch, g, p_a)
-    var w_camera = side / PI / (eta_ch * eta_ch) * abs(dot(gn, w0)) * g * t_ch * (eta_x + dvcm + dvc * le.pdf_rev)
+    var w_camera = Float32(0) if long_path else side / PI / (eta_ch * eta_ch) * abs(dot(gn, w0)) * g * t_ch * (eta_x + dvcm + dvc * le.pdf_rev)
     var w = Float32(1) / (w_light + Float32(1) + w_camera)
     return (beta * le.f_cos * t_med
         * spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, emission.r, emission.g, emission.b, wl)

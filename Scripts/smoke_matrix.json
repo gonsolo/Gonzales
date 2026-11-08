@@ -55,8 +55,8 @@
     "tol": 0.03
   },
   "closed-cavity.vcm": {
-    "mean": 0.846812,
-    "median": 0.847727,
+    "mean": 0.996636,
+    "median": 0.993295,
     "tol": 0.03
   },
   "curves-hair.pt": {

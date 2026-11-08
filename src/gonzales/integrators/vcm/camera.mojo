@@ -36,7 +36,7 @@ from gonzales.core.spectrum import (
     SampledWavelengths, SpectralSample, spec_refl, spec_refl_unbounded, spec_illum,
     rgb_bands_to_spectral_sample,
 )
-from gonzales.paths.vcm.vertex import _VCM_SSS_CAMERA_ONLY, _VOL_PHASE_HIT, _vcm_walk_limit, _BDPT_MAX_VERTS, BDPTVertex, _null_vertex
+from gonzales.paths.vcm.vertex import _VCM_SSS_CAMERA_ONLY, _VOL_PHASE_HIT, _vcm_walk_limit, BDPTVertex, _null_vertex
 from gonzales.paths.vcm.nee import _bdpt_simple_light_count, _bdpt_sample_simple_light, _bdpt_nee_contribute
 from gonzales.paths.vcm.eval import (
     _vcm_sphere_slot, _vcm_infinite_slot, _vcm_nee_surface, _vertex_ctx, _bdpt_vertex_mis_scoped, _vcm_mnee,
@@ -501,8 +501,6 @@ def _bdpt_camera_path_bounce[use_gpu: Bool, defer_walk: Bool = False](
 ) -> Bool:
     """One bounce of a camera subpath, shared by the per-path loop and the wavefront kernels; False ends the path.
     `defer_walk`: a subsurface walk is left in walkers[lp_idx] for the walk kernels, _vcm_camera_walk_exit ends the bounce."""
-        if st.n_verts >= _BDPT_MAX_VERTS:
-            return False   # mirrors the original loop's top-of-iteration guard
         # Zero carries do not mean no competitor: a walk's exit behind glass has none, and MNEE still samples this path.
         var mnee_rival = st.last_bsdf_pdf == PDF_DELTA_FULL and st.mnee.pdf0 > Float32(0)
         # Past the cache only camera strategies exist: see VcmStrategies.past_cache.
@@ -724,14 +722,14 @@ def _bdpt_camera_path_bounce[use_gpu: Bool, defer_walk: Bool = False](
             var spawn_eps = lh.spawn_eps; var on_curve = lh.on_curve; var eff_alb = lh.eff_alb
             v.dVCM = st.dvcm; v.dVC = st.dvc; v.dVM = st.dvm
             if v.is_delta != Int32(0):
-                if VcmStrategies.ends_at_delta(sd, st.cam_count()):
+                if VcmStrategies.ends_at(sd, st.cam_count()):
                     return False   # a delta vertex past d starts no strategy either
                 st.n_delta += 1
                 if _vcm_skin_arrival_here(mat, inter, med_in):
                     st.n_arrivals += 1
             if v.is_delta == Int32(0):
                 if st.n_verts == 0: st.first_alb = eff_alb
-                if VcmStrategies.ends_at_vertex(sd, st.cam_count(), st.n_verts):
+                if VcmStrategies.ends_at(sd, st.cam_count()):
                     return False   # a vertex past d starts no strategy (see VcmStrategies.depth)
                 st.n_verts += 1
                 # Merging queries the GLOBAL photon grid and does not use this
@@ -756,9 +754,11 @@ def _bdpt_camera_path_bounce[use_gpu: Bool, defer_walk: Bool = False](
                                           VcmStrategies.beyond_cache(st.cam_nd()))
                 # MNEE toward a light behind glass, one more strategy in the balance (_vcm_mnee).
                 if VcmStrategies.has_manifold(v):
-                    st.total += _vcm_mnee(sd, v, hit.to_simd(), gn, st.beta, pcg, st.wl, eta_x, st.dvcm, st.dvc)
+                    st.total += _vcm_mnee(sd, v, hit.to_simd(), gn, st.beta, pcg, st.wl, eta_x, st.dvcm, st.dvc,
+                                          VcmStrategies.beyond_cache(st.cam_nd()))
                 elif _vcm_gsms_on(sd, v):   # glossy SMS through chains that may reflect, same balance
-                    st.total += _vcm_gsms(sd, v, hit.to_simd(), gn_geo, st.beta, pcg, st.wl, eta_x, st.dvcm, st.dvc)
+                    st.total += _vcm_gsms(sd, v, hit.to_simd(), gn_geo, st.beta, pcg, st.wl, eta_x, st.dvcm, st.dvc,
+                                          VcmStrategies.beyond_cache(st.cam_nd()))
 
             # Scatter through THE lobe sampler -- the same BSDF connect,
             # merge and NEE evaluate this vertex with (see _vcm_scatter).
@@ -784,7 +784,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool, defer_walk: Bool = False](
                 st.mnee.pdf0 = Float32(0)
 
         elif mat.type == MatKind.dielectric or mat.type == MatKind.thin_dielectric:
-            if VcmStrategies.ends_at_delta(sd, st.cam_count()):
+            if VcmStrategies.ends_at(sd, st.cam_count()):
                 return False   # a delta vertex past d starts no strategy either
             if _vcm_skin_arrival_here(mat, inter, med_in):
                 st.n_arrivals += 1   # walk or reflection: either way the light's arrival here holds a slot
@@ -851,7 +851,7 @@ def _vcm_camera_walk_exit[use_gpu: Bool](
                                  Int32(inter.primId.materialIndex))
     var exit_eta = VcmStrategies.merge_density(sd, v, mis_vm_weight_factor)
     if st.n_verts == 0: st.first_alb = mat.sss_mean_refl
-    if VcmStrategies.ends_at_vertex(sd, st.cam_count(), st.n_verts):
+    if VcmStrategies.ends_at(sd, st.cam_count()):
         return False   # a vertex past d starts no strategy (see VcmStrategies.depth)
     st.n_verts += 1
     st.total_merge += _bdpt_merge_from_cache(v, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2,
@@ -866,8 +866,8 @@ def _vcm_camera_walk_exit[use_gpu: Bool](
                         Float32(0), Int32(-1), Float32(0), Float32(0), True, False)
     st.total += _vcm_nee_surface(sd, v, ctx_x, x_o, n_o, st.beta, exit_eta,
                               v.dVCM, v.dVC, st.cur_med_idx, scratch, st.wl, pcg,
-                              offset_eps(x_o.x, x_o.y, x_o.z), False)
-    st.total += _vcm_mnee(sd, v, x_o.to_simd(), n_o, st.beta, pcg, st.wl, exit_eta, v.dVCM, v.dVC)
+                              offset_eps(x_o.x, x_o.y, x_o.z), False, VcmStrategies.beyond_cache(st.cam_nd()))
+    st.total += _vcm_mnee(sd, v, x_o.to_simd(), n_o, st.beta, pcg, st.wl, exit_eta, v.dVCM, v.dVC, VcmStrategies.beyond_cache(st.cam_nd()))
     var cos_out_x = _vcm_sss_exit_scatter(sd, ex, ex.eta, mis_vc_weight_factor, exit_eta, pcg,
                                           st.ro, st.rd, st.beta, st.dvcm, st.dvc, st.dvm)
     st.last_bsdf_pdf = cos_out_x * INV_PI

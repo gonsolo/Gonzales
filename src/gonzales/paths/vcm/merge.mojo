@@ -89,7 +89,7 @@ def _bdpt_merge_from_cache(
 ) -> SpectralSample:
     """Vertex MERGING (photon-mapping-style density estimation) against the
     shared Light Vertex Cache -- the "M" in VCM, run UNCONDITIONALLY"""
-    if cv.is_delta != Int32(0):
+    if cv.is_delta != Int32(0) or VcmStrategies.beyond_cache(cam_nd):   # past the cache every merge is too long
         return SpectralSample(Float32(0))
     # The merge GRID is what this needs, so test the grid -- not, as the call
     # sites used to, whether THIS pixel's own paired light path happened to

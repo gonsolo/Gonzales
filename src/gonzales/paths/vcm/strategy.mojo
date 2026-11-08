@@ -107,15 +107,9 @@ struct VcmStrategies:
 
     @staticmethod
     @always_inline
-    def ends_at_delta(ref sd: SceneView, count: Int) -> Bool:
-        """A delta vertex at the depth limit starts no strategy."""
+    def ends_at(ref sd: SceneView, count: Int) -> Bool:
+        """A camera vertex at the depth limit starts no strategy. Past the cache it still starts the camera ones."""
         return count >= VcmStrategies.depth(sd)
-
-    @staticmethod
-    @always_inline
-    def ends_at_vertex(ref sd: SceneView, count: Int, stored: Int) -> Bool:
-        """Nor does a stored vertex there, or one that would not fit the cache."""
-        return count >= VcmStrategies.depth(sd) or stored >= _VCM_MAX_STORED
 
     @staticmethod
     @always_inline

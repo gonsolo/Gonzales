@@ -9,6 +9,7 @@ classify it alike, and when it is not long every structurally possible strategy,
 Enumerates every path of diffuse (D), glass (G), smooth (S) and rough (R) skin walks, smooth (F) and rough (Q) skin\nreflections, both light kinds.
 Rules: "current" (dffec8af), "fixed": the camera counts one cache slot per skin hit from outside, the arrival a light
 path stores there; the light stores an arrival whenever a slot is left and ends its path when that was the last one.
+"deep": "fixed", and the camera goes on past the cache with its own strategies only, so every path is reached.
 Usage: vcm_sss_arrival_slots.py    (exit status 1 on failure)
 """
 import itertools, sys
@@ -47,7 +48,7 @@ def light_slots(path, area, rule):
             need = (2 if kind == "Q" else 1) if rule == "current" else 1
             if n + need <= MAX_VERTS:
                 store(i, "arrival")
-            if rule == "fixed" and n >= MAX_VERTS:
+            if rule != "current" and n >= MAX_VERTS:
                 break
             if kind == "Q":
                 if n >= MAX_VERTS:
@@ -57,7 +58,7 @@ def light_slots(path, area, rule):
             need = (3 if kind == "R" else 2) if rule == "current" else 1
             if n + need <= MAX_VERTS:
                 store(i, "arrival")
-            if rule == "fixed" and n >= MAX_VERTS:
+            if rule != "current" and n >= MAX_VERTS:
                 break
             if kind == "R":
                 if n >= MAX_VERTS:
@@ -78,14 +79,15 @@ def camera_vertices(path, rule):
     light arrives), before the exit merges; for a reflection after the vertex merges (the light's own slot there already
     sits after that arrival) and before it connects."""
     out, outm, n_verts, arr = {}, {}, 0, 0
-    fixed = rule == "fixed"
+    fixed = rule != "current"
+    cap = MAX_STORED if rule != "deep" else 10 ** 9      # the camera's own cut-off; deep has only the depth limit
     i = len(path) - 2
     while i >= 1:
         kind, _, role = path[i]
-        if n_verts >= MAX_VERTS:
+        if n_verts >= cap + 1:
             return out, outm, i + 1, n_verts + arr
         if kind in "DQ":
-            if n_verts >= MAX_STORED:
+            if n_verts >= cap:
                 return out, outm, i + 1, n_verts + arr                    # ends_at_vertex
             n_verts += 1; outm[i] = n_verts + arr
             if kind == "Q" and fixed:
@@ -95,10 +97,10 @@ def camera_vertices(path, rule):
             arr += fixed
         elif kind in "SR":                                 # role b: the camera enters here
             if kind == "R":
-                if n_verts >= MAX_STORED:
+                if n_verts >= cap:
                     return out, outm, i + 1, n_verts + arr
                 n_verts += 1; out[i] = outm[i] = n_verts + arr
-            if n_verts >= MAX_STORED:
+            if n_verts >= cap:
                 return out, outm, i + 1, n_verts + arr
             n_verts += 1; arr += fixed
             out[i - 1] = outm[i - 1] = n_verts + arr       # the walk's exit, at role a
@@ -147,8 +149,8 @@ def check(tokens, area, rule):
     possible.add(("hit",))                                 # the camera hits the light: long by its whole count
     if reached <= 1:
         ran.add(("hit",)); views.append(cam_final > MAX_STORED)
-    if not views:
-        return None                                        # nothing reaches this path: no strategy, nothing to weight
+    if not views:                                          # nothing reaches this path: energy lost
+        return "unreached" if rule == "deep" else None
     if len(set(views)) > 1:
         return "splits disagree"
     if not views[0]:
@@ -160,7 +162,7 @@ def check(tokens, area, rule):
 
 def main():
     worst = {}
-    for rule in ("current", "fixed"):
+    for rule in ("current", "fixed", "deep"):
         bad, total, example = 0, 0, None
         for L in range(1, 7):
             for tokens in itertools.product("DSRGFQ", repeat=L):
@@ -175,7 +177,7 @@ def main():
         worst[rule] = bad
         print(f"  {rule:8s} {bad:6d} of {total} paths with a strategy counted but not run, or splits that disagree"
               + (f"; e.g. {example}" if example else ""))
-    sys.exit(0 if worst["fixed"] == 0 and worst["current"] > 0 else 1)
+    sys.exit(0 if worst["fixed"] == 0 and worst["deep"] == 0 and worst["current"] > 0 else 1)
 
 
 if __name__ == "__main__":
