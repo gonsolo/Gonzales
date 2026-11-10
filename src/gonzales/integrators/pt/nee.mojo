@@ -425,6 +425,7 @@ def _mnee_area_light_contribute(
     al: AreaLight,
     inv_pdf_area: Float32,
     lobe_w: Float32,
+    live: Bool,   # _mnee_live as the caller saw it when it marked the vertex
     exit_eta: Float32 = Float32(0),   # a walk's exit: its lobe (sss_boundary_lobe) on top of `alb`
 ) -> Bool:
     """MNEE glass-caustic probing for one already-chosen area-light sample,
@@ -466,7 +467,7 @@ def _mnee_area_light_contribute(
     # tangents (ldp_du_v/ldp_dv_v) — well-defined for a flat mesh triangle,
     # not for a curve's swept tube. Curve lights (kind==1) fall back to
     # plain (non-MNEE) shadow-ray NEE through glass.
-    if al.kind != Int8(0) or not _mnee_live(ctx):
+    if al.kind != Int8(0) or not live:
         return False
 
     # Most samples see no glass: skip the solver's heavy setup for them (it would return not-found untouched).
@@ -502,7 +503,7 @@ def _mnee_at_walk_exit(
     mut pcg: PCG32,
 ):
     """MNEE from a walk's exit, for skin seen through glass: _nee_area_lights' draw, without its plain shadow ray."""
-    if ctx.lights.area_light_count == 0:
+    if ctx.lights.area_light_count == 0 or not _mnee_live(ctx):
         return
     path_ptr[].last_ns_n = n
     path_ptr[].last_ns_p = hit_point
@@ -518,7 +519,7 @@ def _mnee_at_walk_exit(
         return
     path_ptr[].pcgState = pcg.state
     _ = _mnee_area_light_contribute(path_ptr, ctx, n, hit_point, RGB(Float32(1)), to_light * (Float32(1) / dist), dist,
-                                    light_point, du, dv, al, al.total_area / sel_pdf, Float32(1), eta)
+                                    light_point, du, dv, al, al.total_area / sel_pdf, Float32(1), True, eta)
     pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
 
 
@@ -830,8 +831,10 @@ def _nee_area_lights[enqueue_shadow: Bool, mnee: Bool = True, defer_only: Bool =
     # landed on a face turned away (most of a cube lamp seen from below),
     # and the BSDF ray through the glass was then counted on top of MNEE:
     # a mesh-cube lamp over a glass slab read 1.25x pbrt, 1.5x under it.
-    # The ReSTIR SMS branch never marked, and still does not.
-    if not (pixel_idx >= 0 and _is_real_ptr(sms_io.read)):
+    # The ReSTIR SMS branch never marked, and still does not. Only a vertex that runs MNEE marks: the stats flag
+    # can switch MNEE off mid-batch, so the emitter hit trusts the mark, not a second look at the flag.
+    var live = mnee and _mnee_live(ctx)
+    if live and not (pixel_idx >= 0 and _is_real_ptr(sms_io.read)):
         path_ptr[].last_ns_n = normal
         path_ptr[].last_ns_p = hit_point
         path_ptr[].ns_spec = Int8(0)
@@ -884,7 +887,7 @@ def _nee_area_lights[enqueue_shadow: Bool, mnee: Bool = True, defer_only: Bool =
             # independent of where the BSDF ray goes.
             var used_mnee = False
             comptime if mnee:
-                if _shadow_inline(ctx, guide_write) and _mnee_live(ctx) and al.kind == Int8(0):
+                if _shadow_inline(ctx, guide_write) and live and al.kind == Int8(0):
                     # A clear straight ray means no glass is in the way, so the MNEE probe is only needed when
                     # something blocks it (the probe's segment lies inside the shadow ray's).
                     if not _shadow_blocked(ctx, hit_point, shadow_dir, dist * Float32(0.9999)):
@@ -893,13 +896,13 @@ def _nee_area_lights[enqueue_shadow: Bool, mnee: Bool = True, defer_only: Bool =
                         _ = _mnee_area_light_contribute(
                             path_ptr, ctx, normal, hit_point, alb, shadow_dir, dist,
                             light_point, ldp_du_v, ldp_dv_v, al,
-                            al.total_area / light_sel_pdf_nee, lobe_w)
+                            al.total_area / light_sel_pdf_nee, lobe_w, True)
                     used_mnee = True
                 else:
                     used_mnee = _mnee_area_light_contribute(
                         path_ptr, ctx, normal, hit_point, alb, shadow_dir, dist,
                         light_point, ldp_du_v, ldp_dv_v, al,
-                        al.total_area / light_sel_pdf_nee, lobe_w)
+                        al.total_area / light_sel_pdf_nee, lobe_w, live)
             if not used_mnee:
                 var contrib = path_ptr[].throughput * spec_w
                 _shadow_contribute[enqueue_shadow, defer_only](path_ptr, ctx, hit_point, shadow_dir, dist * Float32(0.9999), contrib, guide_write)

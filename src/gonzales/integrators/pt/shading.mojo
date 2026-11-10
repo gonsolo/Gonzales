@@ -28,7 +28,7 @@ from gonzales.transport.texturing import _get_tri_verts
 from gonzales.transport.shade_context import GIPendingX1, LightContext, ShadeContext
 from gonzales.transport.manifold import _emitter_face_normal
 from gonzales.integrators.pt.common import area_light_hit_cos, curve_light_hit, _geom_normal_and_ray, _hit_emission, _clamped, _to_spec_illum
-from gonzales.integrators.pt.nee import _mnee_bsdf_weight, _mnee_live, _glossy_sms_bsdf_weight
+from gonzales.integrators.pt.nee import _mnee_bsdf_weight, _glossy_sms_bsdf_weight
 from gonzales.transport.glossy_sms import glossy_sms_live, GSMS_DEBUG, GLOSSY_SMS_MIN_PDF
 from gonzales.transport.manifold import _mnee_first_probe
 from gonzales.integrators.pt.materials import shade_diffuse_transmission, _shade_sss_exit, shade_coated_diffuse, shade_dielectric, shade_thin_dielectric, shade_conductor, shade_measured, shade_hair, shade_diffuse, shade_interface
@@ -396,7 +396,7 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
         var hp = Vec3f(path_ptr[].ray.origin.x, path_ptr[].ray.origin.y, path_ptr[].ray.origin.z) \
                  + Vec3f(path_ptr[].ray.direction.x, path_ptr[].ray.direction.y, path_ptr[].ray.direction.z) * inter.tHit
         var shared_with = 0   # 1: MNEE from a diffuse vertex may sample this path, 2: glossy SMS may
-        if _mnee_live(ctx) and path_ptr[].specularBounce == Int8(1) and dot(ns_n, ns_n) > Float32(0.0) and al.kind == Int8(0):
+        if path_ptr[].specularBounce == Int8(1) and dot(ns_n, ns_n) > Float32(0.0) and al.kind == Int8(0):   # marked only where MNEE ran
             # This arrived through a specular chain from a vertex that
             # delegates such paths to MNEE/SMS. Drop it exactly when MNEE
             # owns the point reached, by re-asking MNEE's own questions for

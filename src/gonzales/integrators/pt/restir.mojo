@@ -15,7 +15,7 @@ from gonzales.transport.restir_di import DIReservoir, di_reservoir_init, di_targ
 from gonzales.transport.restir_gi import GIReservoir, gi_reservoir_init
 from gonzales.transport.shade_context import ShadeContext
 from gonzales.integrators.pt.common import _to_spec_diffuse_lit, _emitter_invisible, _shadow_contribute
-from gonzales.integrators.pt.nee import _sample_light_point_and_normal, _mnee_area_light_contribute
+from gonzales.integrators.pt.nee import _sample_light_point_and_normal, _mnee_area_light_contribute, _mnee_live
 
 
 # ── ReSTIR DI (Phase 2, restir_di.mojo's DIReservoir/di_target_pdf) ─────────
@@ -195,7 +195,7 @@ def di_resolve(
     var used_mnee = _mnee_area_light_contribute(
         path_ptr, ctx, normal, hit_point, alb, wi, dist,
         res.sample_point, res.ldp_du, res.ldp_dv, al,
-        res.state.w * dist_sq / cos_l, Float32(1.0))
+        res.state.w * dist_sq / cos_l, Float32(1.0), _mnee_live(ctx))
     if not used_mnee:
         _shadow_contribute[False](path_ptr, ctx, hit_point, wi, dist * Float32(0.9999), contrib)
 
