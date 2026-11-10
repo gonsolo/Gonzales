@@ -11,7 +11,7 @@ from gonzales.scene.shapes.primitives import mesh_pos
 from gonzales.transport.render_state import PathState, SssWalk
 from gonzales.core.rng import PCG32
 from gonzales.transport.surface import sss_entry_tint
-from gonzales.core.spectrum import SampledWavelengths, SpectralHandle, SpectralSample, spec_refl, spec_refl_unbounded
+from gonzales.core.spectrum import SampledWavelengths, SpectralHandle, SpectralSample, spec_refl_unbounded
 from std.collections import Array
 from std.math import abs, cos, exp, log, pow, sin, sqrt
 
@@ -27,15 +27,17 @@ def sss_relative_eta(mat: Material, outside_ior: Float32) -> Float32:
 def sss_walk_start(mat: Material, inter: Intersection, hit: Vec3f, geo_normal: Vec3f, wi: Vec3f, wl: SampledWavelengths, h: SpectralHandle,
                    outside_ior: Float32) -> Tuple[Ray, SssWalk]:
     """The ray and state of a walk entering a pbrt subsurface boundary at `hit` along the refracted direction wi, from a
-    medium of index `outside_ior`. Its coefficients are upsampled as any medium's (medium_sigma_s_spectral: unbounded
-    sigma_t, bounded albedo)."""
-    var st = mat.checker_tex1
-    var al = mat.checker_tex2
+    medium of index `outside_ior`. Its coefficients are upsampled as any medium's (medium_sigma_t_spectral)."""
+    var sa = mat.checker_tex1
+    var ss = mat.checker_tex2
+    var sig_s = spec_refl_unbounded(h.coeffs, h.res, h.cie_x, h.cie_y, h.cie_z, h.d65, ss.r, ss.g, ss.b, wl)
+    var sig_t = spec_refl_unbounded(h.coeffs, h.res, h.cie_x, h.cie_y, h.cie_z, h.d65, sa.r, sa.g, sa.b, wl) + sig_s
+    var alb = SpectralSample(sig_s.v0 / max(sig_t.v0, Float32(1e-30)), sig_s.v1 / max(sig_t.v1, Float32(1e-30)),
+                             sig_s.v2 / max(sig_t.v2, Float32(1e-30)), sig_s.v3 / max(sig_t.v3, Float32(1e-30)))
     var out_n = face_toward(geo_normal, -wi)
     var org = offset_point(hit, -out_n)
     return (Ray(Point3f(org[0], org[1], org[2]), Vec3f(wi[0], wi[1], wi[2])),
-            SssWalk(spec_refl_unbounded(h.coeffs, h.res, h.cie_x, h.cie_y, h.cie_z, h.d65, st.r, st.g, st.b, wl),
-                    spec_refl(h.coeffs, h.res, h.cie_x, h.cie_y, h.cie_z, h.d65, al.r, al.g, al.b, wl),
+            SssWalk(sig_t, alb,
                     mat.checker_uscale, Int32(inter.primId.id1), inter.primId.instanceIdx, Int32(0), Int32(0),
                     hit, out_n, Float32(-1), Float32(1), Float32(1), Float32(1), Float32(0), Float32(0), Float32(0),
                     sss_relative_eta(mat, outside_ior)))

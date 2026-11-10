@@ -2,8 +2,10 @@ from std.math import abs, min, max
 from std.testing import assert_true, TestSuite
 from gonzales.core.spectrum import (
     load_spectral_context, spectral_handle, sample_wavelengths,
-    spec_refl, spec_refl_unbounded, rgb_bands_to_spectral_sample,
+    spec_refl, spec_refl_unbounded, rgb_bands_to_spectral_sample, SampledWavelengths,
 )
+from gonzales.core.geometry import RGB
+from gonzales.scene.appearance.media import Medium, medium_sigma_t_spectral, medium_sigma_s_spectral
 
 # Does a GREY RGB coefficient survive the smooth (Jakob-Hanika) upsampler
 # unchanged, lane by lane?
@@ -95,6 +97,26 @@ def test_chromatic_coefficient_is_not_flat() raises:
     var hi = max(max(c.v0, c.v1), max(c.v2, c.v3))
     assert_true(hi - lo > Float32(0.01),
                 "a chromatic coefficient must vary across lanes")
+
+
+def test_medium_absorption_is_pbrts_sigma_a() raises:
+    """sigma_t - sigma_s on each lane is pbrt's RGBUnboundedSpectrum(sigma_a), not a by-product of fitting the RGB
+    sum and ratio (that read 8% low at 550 nm here and rendered the ball 3% bright in green)."""
+    var loaded = load_spectral_context(DATA_DIR)
+    if not loaded[0]:
+        print("SKIP test_medium_absorption_is_pbrts_sigma_a: no spectrum table")
+        return
+    var ctx = loaded[1].copy()
+    var h = spectral_handle(ctx)
+    var med = Medium(RGB(Float32(0.3), Float32(0.8), Float32(1.6)), RGB(Float32(40)), Float32(0.0),
+                     Int32(-1), Int32(-1), Int32(-1), Float32(0.0), Float32(0.0), Float32(1.0), Int32(0))
+    var wl = SampledWavelengths(Float32(400), Float32(500), Float32(600), Float32(700))
+    var st = medium_sigma_t_spectral(med, wl, h.coeffs, h.res, h.cie_x, h.cie_y, h.cie_z, h.d65)
+    var ss = medium_sigma_s_spectral(med, wl, h.coeffs, h.res, h.cie_x, h.cie_y, h.cie_z, h.d65)
+    var want = SIMD[DType.float32, 4](1.9353, 1.1169, 0.5009, 0.2270)   # pbrt-v4's sRGB table at 400/500/600/700 nm
+    for i in range(4):
+        assert_true(abs((st.get(i) - ss.get(i)) - want[i]) < Float32(2e-3), "sigma_a(lambda) off pbrt")
+        assert_true(abs(ss.get(i) - Float32(40)) < Float32(1e-3), "grey sigma_s must stay flat")
 
 
 def main() raises:

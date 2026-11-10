@@ -9,7 +9,7 @@ geometry.mojo already imported for them (nanovdb.mojo, spectrum.mojo,
 rng.mojo), confirmed by a symbol-reference scan of each block with comments
 and docstrings stripped before moving it."""
 from std.math import sqrt, cos, sin, min, max, abs, floor, log, exp
-from gonzales.core.spectrum import SampledWavelengths, SpectralSample, spec_refl, spec_refl_unbounded, rgb_illuminant_to_spectral_sample
+from gonzales.core.spectrum import SampledWavelengths, SpectralSample, spec_refl_unbounded, rgb_illuminant_to_spectral_sample
 from gonzales.scene.appearance.nanovdb import nvdb_sample_index, nvdb_majorant_at, nvdb_leaf_base, nvdb_leaf_value
 from gonzales.core.rgb2spec import CIE_Y_INTEGRAL
 from gonzales.core.rng import PCG32
@@ -356,19 +356,27 @@ def medium_sigma_t_spectral(
     spectral_cie_z: Pointer[Float32, MutUntrackedOrigin],
     spectral_d65: Pointer[Float32, MutUntrackedOrigin],
 ) -> SpectralSample:
-    """Upsample a medium's total extinction sigma_t = sigma_a + sigma_s from
-    its 3 authored RGB channels to the 4 hero wavelengths via
-    spec_refl_unbounded -- the same unbounded-coefficient upsampler used for
-    reflectance-shaped weights that may exceed 1 (an extinction coefficient
-    is the same kind of quantity). Shared by spectral_free_flight_weight,
-    bdpt_nee.mojo's _visible_transmittance and gpu.mojo's _sample_medium_core
-    (via medium_transmittance_ratio_spectral below) so all consumers agree on
-    what "the medium's colour" means."""
-    var sig_t = med.sigma_a + med.sigma_s
-    return spec_refl_unbounded(
-        spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
-        sig_t.r, sig_t.g, sig_t.b, wavelengths)
+    """sigma_t on the 4 hero lanes as pbrt's HomogeneousMedium has it: sigma_a and sigma_s each upsampled
+    (spec_refl_unbounded, pbrt's RGBUnboundedSpectrum), then summed. Shared by every free flight, transmittance and
+    the walk, so all consumers agree on the medium's colour."""
+    return medium_sigma_a_spectral(med, wavelengths, spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y,
+                                   spectral_cie_z, spectral_d65) + \
+           medium_sigma_s_spectral(med, wavelengths, spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y,
+                                   spectral_cie_z, spectral_d65)
 
+@always_inline
+def medium_sigma_a_spectral(
+    med: Medium, wavelengths: SampledWavelengths,
+    spectral_coeffs: Pointer[Float32, MutUntrackedOrigin], spectral_res: Int,
+    spectral_cie_x: Pointer[Float32, MutUntrackedOrigin],
+    spectral_cie_y: Pointer[Float32, MutUntrackedOrigin],
+    spectral_cie_z: Pointer[Float32, MutUntrackedOrigin],
+    spectral_d65: Pointer[Float32, MutUntrackedOrigin],
+) -> SpectralSample:
+    return spec_refl_unbounded(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z,
+                               spectral_d65, med.sigma_a.r, med.sigma_a.g, med.sigma_a.b, wavelengths)
+
+@always_inline
 def medium_sigma_s_spectral(
     med: Medium, wavelengths: SampledWavelengths,
     spectral_coeffs: Pointer[Float32, MutUntrackedOrigin], spectral_res: Int,
@@ -377,43 +385,14 @@ def medium_sigma_s_spectral(
     spectral_cie_z: Pointer[Float32, MutUntrackedOrigin],
     spectral_d65: Pointer[Float32, MutUntrackedOrigin],
 ) -> SpectralSample:
-    """The SCATTERING coefficient sigma_s on the 4 hero lanes, upsampled with
-    the SAME smooth curve medium_sigma_t_spectral uses for sigma_t.
+    """sigma_s on the 4 hero lanes, the half of medium_sigma_t_spectral that scatters. Both halves are non-negative
+    curves, so sigma_s(lambda) <= sigma_t(lambda) and the albedo stays <= 1 on every lane by construction.
 
-    Using one conversion for sigma_t and a different one for sigma_s (this
-    used to be band-picked from RGB in gpu.mojo) makes the per-lane single-
-    scattering albedo sigma_s(lambda)/sigma_t(lambda) a ratio of two
-    INCONSISTENT quantities. Harmless at two or three scatters, catastrophic
-    in a subsurface walk: skin's albedo is ~0.99 and the walk runs hundreds
-    of scatters, so a 1% per-lane albedo error compounds as 0.99^250 ~ 12x
-    and inverts the hue. head.pbrt rendered BLUE-dominant (chromaticity
-    b .406 against pbrt's .270, red 0.49x) until sigma_s came through here.
-
-    Rule: whenever a per-lane RATIO of two medium coefficients is formed,
-    both sides must come from the same upsampler."""
-    # NOT an independent unbounded fit of sigma_s. sigma_s and sigma_t fitted
-    # SEPARATELY are two different curves, and nothing makes the second stay
-    # above the first, so their ratio -- the single-scattering albedo -- can
-    # come out GREATER THAN 1 on some lanes. That is an energy-creating
-    # medium, and a subsurface walk compounds it over hundreds of scatters:
-    # measured on head.pbrt, 35% of pixels blown out and a max of 1.7e31.
-    #
-    # Upsample the ALBEDO instead, with the BOUNDED upsampler that clamps to
-    # [0,1] (an albedo is exactly the reflectance-shaped quantity spec_refl
-    # exists for), and rebuild sigma_s from it. sigma_s(lambda) <= sigma_t(lambda)
-    # then holds on every lane by construction.
-    var sig_t_rgb = med.sigma_a + med.sigma_s
-    var alb_r = med.sigma_s.r / sig_t_rgb.r if sig_t_rgb.r > Float32(0.0) else Float32(0.0)
-    var alb_g = med.sigma_s.g / sig_t_rgb.g if sig_t_rgb.g > Float32(0.0) else Float32(0.0)
-    var alb_b = med.sigma_s.b / sig_t_rgb.b if sig_t_rgb.b > Float32(0.0) else Float32(0.0)
-    var alb = spec_refl(
-        spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
-        alb_r, alb_g, alb_b, wavelengths)
-    var sig_t = medium_sigma_t_spectral(
-        med, wavelengths, spectral_coeffs, spectral_res,
-        spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65)
-    return SpectralSample(alb.v0 * sig_t.v0, alb.v1 * sig_t.v1,
-                          alb.v2 * sig_t.v2, alb.v3 * sig_t.v3)
+    Never fit sigma_t (or the albedo) from its RGB sum/ratio instead: the sum of two fits is not the fit of the sum.
+    Upsampling sigma_a + sigma_s as one triple and the albedo as a bounded reflectance near 1 left an absorption
+    sigma_t * (1 - albedo) up to 8% off pbrt's sigma_a(lambda) (green, sigma_a [0.3 0.8 1.6] under sigma_s 40)."""
+    return spec_refl_unbounded(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z,
+                               spectral_d65, med.sigma_s.r, med.sigma_s.g, med.sigma_s.b, wavelengths)
 
 @always_inline
 def medium_transmittance_ratio_spectral(

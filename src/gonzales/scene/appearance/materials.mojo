@@ -236,8 +236,8 @@ struct Material(TrivialRegisterPassable):
     def sss_walk_van_de_hulst(self) -> Bool:
         return self.checker_tex2.b != Float32(0)
 
-    # A dielectric with sss_walk bounds a pbrt subsurface interior: checker_tex1 = extinction, checker_tex2 = single
-    # scattering albedo, checker_uscale = anisotropy.
+    # A dielectric with sss_walk bounds a pbrt subsurface interior: checker_tex1 = sigma_a, checker_tex2 = sigma_s,
+    # checker_uscale = anisotropy.
     @always_inline
     def sss_walk_interior(self) -> Bool:
         return self.type == MatKind.dielectric and self.sss_walk != Int8(0)

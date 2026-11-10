@@ -2555,11 +2555,9 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
                 ref ps = s[unsafe_offset=0]
                 var sa = RGB(ps.med_sa[3 * k], ps.med_sa[3 * k + 1], ps.med_sa[3 * k + 2])
                 var ss = RGB(ps.med_ss[3 * k], ps.med_ss[3 * k + 1], ps.med_ss[3 * k + 2])
-                var st = RGB(sa.r + ss.r, sa.g + ss.g, sa.b + ss.b)
                 mats[unsafe_offset=i].sss_walk = Int8(1)
-                mats[unsafe_offset=i].checker_tex1 = st
-                mats[unsafe_offset=i].checker_tex2 = RGB(ss.r / max(st.r, Float32(1e-12)), ss.g / max(st.g, Float32(1e-12)),
-                                                         ss.b / max(st.b, Float32(1e-12)))
+                mats[unsafe_offset=i].checker_tex1 = sa
+                mats[unsafe_offset=i].checker_tex2 = ss
                 mats[unsafe_offset=i].checker_uscale = ps.med_g[k]
         elif material_kind == MatKind.coated_diffuse:
             mats[unsafe_offset=i].albedo = nm3.albedo
