@@ -2,7 +2,7 @@
 # Part of the BDPT/VCM machinery that used to be one file (bdpt_*.mojo).
 
 from std.sys import has_accelerator
-from std.os import getenv
+from gonzales.core.env import env_str, env_on
 from gonzales.transport.render_state import PathState
 from gonzales.gpu.pt.wavefront import read_counter
 from gonzales.integrators.vcm.camera import VcmWalkResume
@@ -181,8 +181,8 @@ struct VcmGpu(Movable):
         self.c2r = ctx.enqueue_create_buffer[DType.uint8](9 * size_of[Float32]())
         self.wavefront = wavefront
         self.shadow_batch = False
-        self.vt_on = getenv("GZ_VCM_TIMING") != ""
-        self.vt_trace = getenv("GZ_VCM_TIMING") == "2"
+        self.vt_on = env_on["GZ_VCM_TIMING"]()
+        self.vt_trace = env_str["GZ_VCM_TIMING"]() == "2"
         self.vt = SIMD[DType.int64, 8](0)
         self.iters = SIMD[DType.int64, 2](0)
         var n_l = self.n_light_paths if wavefront else 0

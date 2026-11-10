@@ -2,7 +2,7 @@ from gonzales.scene.description.pbrt_parser import ParsedScene_Mojo, mojo_parse_
 from gonzales.scene.shapes.ply_prefetch import PlyPrefetch
 from gonzales.scene.description.mitsuba_parser import mojo_parse_mitsuba_scene
 from gonzales.scene.description.scene_cache import scene_cache_load, scene_cache_save
-from std.os import getenv
+from gonzales.core.env import env_str
 from gonzales.core.geometry import _is_real_ptr
 from std.memory.alloc import unsafe_alloc
 
@@ -14,7 +14,7 @@ from std.memory.alloc import unsafe_alloc
 # elsewhere.
 # GONZALES_CAMERA_SCENE=<pbrt file>: take camera and maxdepth from it, so one scene cache serves several views.
 def _camera_override(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin]):
-    var env = getenv("GONZALES_CAMERA_SCENE")
+    var env = env_str["GONZALES_CAMERA_SCENE"]()
     if env.byte_length() == 0:
         return
     var cpath = unsafe_alloc[UInt8](env.byte_length() + 1)
@@ -42,7 +42,7 @@ def mojo_parse_scene_any(path: Pointer[UInt8, MutUntrackedOrigin],
                   and path[unsafe_offset=pi - 2] == UInt8(109) and path[unsafe_offset=pi - 1] == UInt8(108))
     if is_xml:
         return mojo_parse_mitsuba_scene(path, verbose)
-    var cache_env = getenv("GONZALES_SCENE_CACHE")
+    var cache_env = env_str["GONZALES_SCENE_CACHE"]()
     if cache_env.byte_length() == 0:
         return mojo_parse_scene(path, verbose, plys)
     var cpath = unsafe_alloc[UInt8](cache_env.byte_length() + 1)

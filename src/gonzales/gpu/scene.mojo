@@ -14,7 +14,7 @@ from gonzales.scene.shapes.primitives import Instance, Intersection, PrimId, Sph
 from gonzales.core.sampling import FILTER_LUT_N, fill_filter_lut, ThinLens
 from gonzales.transport.render_state import FilmDims, FilterParams, PathState, ShadowTask, SHADOW_SLOTS
 from gonzales.scene.appearance.materials import GpuTexture, NormalSlopeMap
-from std.os import getenv
+from gonzales.core.env import env_str, env_on
 from std.os.path import exists, getsize
 from gonzales.core.spectrum import SpectralHandle
 from gonzales.scene.accel.rtcore import rtcore_device_free, rtcore_host_register, rtcore_device_total
@@ -1023,14 +1023,14 @@ def _bench_counters() -> Pointer[Int, MutUntrackedOrigin]:
     var b = unsafe_alloc[Int](32)       # 16: shade preamble, 17 + kind: that material's shade kernels
     for i in range(32):
         b[unsafe_offset=i] = 0
-    if getenv("GONZALES_BENCH") != "":
-        b[unsafe_offset=3] = 2 if getenv("GONZALES_BENCH_TRACE") != "" else 1
-    if getenv("GONZALES_TRAVERSE_COUNT") != "":
+    if env_on["GONZALES_BENCH"]():
+        b[unsafe_offset=3] = 2 if env_on["GONZALES_BENCH_TRACE"]() else 1
+    if env_on["GONZALES_TRAVERSE_COUNT"]():
         b[unsafe_offset=10] = 1
     return b
 
 def _gpu_free_log(tag: String):
-    if getenv("GONZALES_GPU_LOG") != "":
+    if env_on["GONZALES_GPU_LOG"]():
         print("GPU free after " + tag + ": " + String(Int(rtcore_device_free()) // (1024 * 1024)) + " MB")
 
 # Uploads count elements of T from a host array into a fresh device buffer
@@ -1046,7 +1046,7 @@ def _gpu_upload_array[T: AnyType](
     count: Int,
 ) raises -> DeviceBuffer[DType.uint8]:
     var nbytes = max(count, 1) * size_of[T]()
-    if nbytes >= (8 if getenv("GONZALES_GPU_LOG") != "" else 128) * 1024 * 1024:
+    if nbytes >= (8 if env_on["GONZALES_GPU_LOG"]() else 128) * 1024 * 1024:
         print("GPU: uploading " + String(nbytes // (1024 * 1024)) + " MB (" + String(count) + " x " + String(size_of[T]()) + " B)")
     var buf = ctx.enqueue_create_buffer[DType.uint8](nbytes)
     if count > 0:
@@ -1313,7 +1313,7 @@ def heat_fill(heat: List[Float64], bytes: List[Int], budget: Int, mut placed: Li
 def _meshes_on_device(ref s: ParsedScene_Mojo, host_kb: Int) raises -> List[Bool]:
     var nm = Int(s.mesh_count)
     var keep = List[Bool](length=max(nm, 1), fill=False)
-    if host_kb == 0 or getenv("GONZALES_MESH_VRAM_MB") == "":
+    if host_kb == 0 or not env_on["GONZALES_MESH_VRAM_MB"]():
         return keep^
     var blas_of = List[Int]()
     var pieces = XertPieces(s)
@@ -1325,7 +1325,7 @@ def _meshes_on_device(ref s: ParsedScene_Mojo, host_kb: Int) raises -> List[Bool
         if blas_of[i] >= 0:
             bytes[blas_of[i]] += _mesh_bytes(s, i)
     var placed = List[Bool]()
-    var held = heat_fill(heat, bytes, atol(getenv("GONZALES_MESH_VRAM_MB")) * 1048576, placed)
+    var held = heat_fill(heat, bytes, atol(env_str["GONZALES_MESH_VRAM_MB"]()) * 1048576, placed)
     var used = 0
     var total = 0.0
     for b in range(n_blas):
@@ -1342,8 +1342,8 @@ def _meshes_on_device(ref s: ParsedScene_Mojo, host_kb: Int) raises -> List[Bool
 # would not fit the card moves its mesh arrays (about +10% frame time); if it still would not fit, the environment pixels as well
 # (+8% for half a GB) -- first the environment map drops to half resolution (a quarter of the texels, no frame cost). The environment's sampling table stays on the card: its dependent reads are far too slow over PCIe.
 def _host_plan(ctx: DeviceContext, ref s: ParsedScene_Mojo, n_pixels: Int) raises -> Tuple[Int, Int, Bool]:
-    var mesh_env = getenv("GONZALES_MESH_HOST")
-    var env_env = getenv("GONZALES_ENV_HOST")
+    var mesh_env = env_str["GONZALES_MESH_HOST"]()
+    var env_env = env_str["GONZALES_ENV_HOST"]()
     var forced_mesh = -1
     var forced_env = -1
     try:
@@ -1355,12 +1355,12 @@ def _host_plan(ctx: DeviceContext, ref s: ParsedScene_Mojo, n_pixels: Int) raise
         pass
     var mesh_kb = max(forced_mesh, 0)
     var env_kb = max(forced_env, 0)
-    var env_down = getenv("GONZALES_ENV_DOWN") == "1"
-    if (forced_mesh >= 0 and forced_env >= 0) or getenv("GONZALES_RT_PRUNE") == "":
+    var env_down = env_str["GONZALES_ENV_DOWN"]() == "1"
+    if (forced_mesh >= 0 and forced_env >= 0) or not env_on["GONZALES_RT_PRUNE"]():
         return (mesh_kb, env_kb, env_down)
-    var path = getenv("GONZALES_RT_CACHE")
-    if path == "" and getenv("GONZALES_SCENE_CACHE") != "":
-        path = getenv("GONZALES_SCENE_CACHE") + ".rt"
+    var path = env_str["GONZALES_RT_CACHE"]()
+    if path == "" and env_on["GONZALES_SCENE_CACHE"]():
+        path = env_str["GONZALES_SCENE_CACHE"]() + ".rt"
     var rt_bytes = 0
     try:
         if path != "":
@@ -1388,7 +1388,7 @@ def _host_plan(ctx: DeviceContext, ref s: ParsedScene_Mojo, n_pixels: Int) raise
         mesh_kb = 1024
         need -= mesh_bytes
         print("GPU: mesh arrays stay in host memory (the scene needs about", (need + mesh_bytes) // (1024 * 1024), "MB of", total // (1024 * 1024), "MB)")
-    if forced_env < 0 and need > budget and env_bytes > 0 and getenv("GONZALES_ENV_DOWN") == "":
+    if forced_env < 0 and need > budget and env_bytes > 0 and not env_on["GONZALES_ENV_DOWN"]():
         env_down = True
         need -= env_bytes * 5 // 4       # pixels 6 B and table 4 B a texel, three quarters gone
         print("GPU: environment map at half resolution (still about", need // (1024 * 1024), "MB)")
@@ -1500,7 +1500,7 @@ def gpu_upload_scene(
                     kind_mask |= Int32(1) << Int32(MatKind.diffuse)
                 if s.materials[unsafe_offset=mi].type == MatKind.interface:
                     has_iface_mat = True
-                if s.materials[unsafe_offset=mi].is_specular_glass() and getenv("GONZALES_NO_MNEE") == "":
+                if s.materials[unsafe_offset=mi].is_specular_glass() and not env_on["GONZALES_NO_MNEE"]():
                     has_glass_mat = True
             var lights = LightBuffers.upload(ctx, s, host_plan[1], host_plan[2])
             ctx.synchronize()
@@ -1519,8 +1519,8 @@ def gpu_upload_scene(
             # --rt-hardware defers up to SHADOW_SLOTS shadow rays per path; everything else needs one slot per path.
             # The software BVH defers too (gpu.mojo sw_shadow) when every NEE candidate of a bounce has a slot and there is no medium.
             var nee_candidates = (1 if s.area_light_count > 0 else 0) + Int(s.distant_count) + Int(s.point_count) + Int(s.sphere_count) + Int(s.infinite_count)
-            var sw_defer = Int(s.medium_count) == 0 and nee_candidates <= SHADOW_SLOTS and getenv("GONZALES_NO_SW_SHADOW") == ""
-            var r_shadow_slots = SHADOW_SLOTS if getenv("GONZALES_RTCORE") != "" or sw_defer else 1
+            var sw_defer = Int(s.medium_count) == 0 and nee_candidates <= SHADOW_SLOTS and not env_on["GONZALES_NO_SW_SHADOW"]()
+            var r_shadow_slots = SHADOW_SLOTS if env_on["GONZALES_RTCORE"]() or sw_defer else 1
             var r_prev_c2w_buf = ctx.enqueue_create_buffer[DType.uint8](64)
             ctx.enqueue_memset(r_prev_c2w_buf, UInt8(0))
             var r_shade_ctx_buf = ctx.enqueue_create_buffer[DType.uint8](1024)
@@ -1693,11 +1693,11 @@ def gpu_alloc_pixel_buffers(handle: Pointer[GpuSceneHandle, MutUntrackedOrigin],
     h.restir_vol_a_buf = ctx.enqueue_create_buffer[DType.uint8](n_vol * size_of[VolReservoir]())
     h.restir_vol_b_buf = ctx.enqueue_create_buffer[DType.uint8](n_vol * size_of[VolReservoir]())
     h.restir_vol_used_buf = ctx.enqueue_create_buffer[DType.uint8](n_vol * size_of[Int8]())
-    h.rt_scratch_buf = ctx.enqueue_create_buffer[DType.uint8](n_paths * 32 if getenv("GONZALES_RTCORE") != "" and h.meshes.has_alpha else 32)
+    h.rt_scratch_buf = ctx.enqueue_create_buffer[DType.uint8](n_paths * 32 if env_on["GONZALES_RTCORE"]() and h.meshes.has_alpha else 32)
     h.shadow_buf = ctx.enqueue_create_buffer[DType.uint8](n_paths * size_of[ShadowTask]() * h.shadow_slots)
     ctx.synchronize()
     _gpu_free_log("per-pixel buffers")
-    if getenv("GONZALES_GPU_LOG") != "":
+    if env_on["GONZALES_GPU_LOG"]():
         print("GPU per-pixel: n_pix", n_pix, "glass", h.has_glass_material, "alpha", h.meshes.has_alpha, "shadow slots", h.shadow_slots, "restir_di", restir_di, "restir_vol", restir_vol, "path B", size_of[PathState](), "inter B", size_of[Intersection](), "shadow B", size_of[ShadowTask]())
     ctx.enqueue_memset(h.shadow_buf, UInt8(0))      # every slot free (active == 0)
     h.active_idx_buf = ctx.enqueue_create_buffer[DType.uint8](n_paths * 4 * 4)

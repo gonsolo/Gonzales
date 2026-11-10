@@ -2,7 +2,8 @@ from std.ffi import external_call
 from std.sys import argv, exit, get_defined_int
 from std.sys.info import _accelerator_arch
 from std.time import perf_counter_ns
-from std.os import getenv, setenv
+from std.os import setenv
+from gonzales.core.env import env_str, env_on, env_set
 from std.memory.alloc import unsafe_alloc
 from gonzales.app.pipeline import _generate_sobol_matrices, parse_and_render, render_interactive, debug_trace_pixel, debug_render_vulkanrt, bake_scene
 from gonzales.core.spectrum import load_spectral_context, spectral_handle, SpectralContext
@@ -252,7 +253,7 @@ def main() raises:
             use_vulkan_rt_shade = True
             rt_hardware = True
             use_vcm_wavefront = True          # with --vcm: the staged VCM driver is the one with the trace hook
-            _ = setenv("GONZALES_RTCORE", "1", True)
+            env_set["GONZALES_RTCORE"]("1")
         elif arg == "--bake":
             bake = True
         elif arg == "--vcm":
@@ -359,7 +360,7 @@ def main() raises:
             ckpt.path = ckpt.resume     # a resumed render keeps its checkpoint going
         ckpt.scene = scene_path
         ckpt.seed_given = seed_override >= 0
-    var data_dir = getenv("GONZALES_DATA_DIR", "src/gonzales/data")
+    var data_dir = env_str["GONZALES_DATA_DIR"]("src/gonzales/data")
 
     var path_len = scene_path.byte_length()
     var path_cstr = unsafe_alloc[UInt8](path_len + 1)
@@ -373,13 +374,13 @@ def main() raises:
     # The Vulkan backends take one material a mesh, so object templates stay unmerged for them
     # (pbrt_parser._merge_template_meshes).
     # (--rt-hardware on the path tracer builds its own structures and reads a merged template's per-triangle materials.)
-    var own_rt_only = rt_hardware and not use_vcm and getenv("GONZALES_RTCORE_VULKAN") == ""
+    var own_rt_only = rt_hardware and not use_vcm and not env_on["GONZALES_RTCORE_VULKAN"]()
     if use_vulkan_rt or (use_vulkan_rt_shade and not own_rt_only):
-        _ = setenv("GONZALES_MERGE_TEMPLATES", "0", True)
-    if getenv("GONZALES_RT_PRUNE") != "" and not (own_rt_only or bake):
+        env_set["GONZALES_MERGE_TEMPLATES"]("0")
+    if env_on["GONZALES_RT_PRUNE"]() and not (own_rt_only or bake):
         # Without the RT cores nothing would trace the pruned triangles.
         print("GONZALES_RT_PRUNE needs --rt-hardware on the path tracer: ignored")
-        _ = setenv("GONZALES_RT_PRUNE", "", True)
+        env_set["GONZALES_RT_PRUNE"]("")
     if bake:
         bake_scene(path_cstr, verbose)
         return

@@ -6,7 +6,7 @@ from std.atomic import Atomic
 from std.math import floor, ceil
 from std.memory import bitcast
 from std.memory.alloc import unsafe_alloc
-from std.os import getenv
+from gonzales.core.env import env_str
 from std.sys import get_defined_int
 from std.sys.info import num_performance_cores
 
@@ -874,7 +874,7 @@ struct RtTlas(Movable):
 def _build_binary_items(order: PI, tlo: PD, thi: PD, tc: PD, m: Int, bn_s: PI, bn_c: PI, bn_l: PI, bn_r: PI, bn_box: PD, n_fixed: Int) -> Int:
     """Binary tree whose leaves are single items (instances). The first n_fixed items keep their places: the root separates
     them from the rest and they are split at the middle of their range, so item i stays at position i."""
-    var leaf_granule = 1 if "loose" in getenv("GONZALES_RT_ABLATE") else RT_LEAF_TRIS      # ablation: leaves not filled
+    var leaf_granule = 1 if "loose" in env_str["GONZALES_RT_ABLATE"]() else RT_LEAF_TRIS      # ablation: leaves not filled
     var stack = unsafe_alloc[Int32](256)
     var nb = 1
     bn_s[unsafe_offset=0] = Int32(0); bn_c[unsafe_offset=0] = Int32(m)

@@ -1,5 +1,5 @@
 from max.gpu import MAX_THREADS_PER_BLOCK_METADATA
-from std.os import getenv
+from gonzales.core.env import env_str, env_on
 from std.time import perf_counter_ns
 from std.utils import StaticTuple
 from gonzales.core.gpu_tuning import MINCTA_TRAVERSE
@@ -980,7 +980,7 @@ def rtcore_alpha_passes(
         var tmp = list_in
         list_in = list_out
         list_out = tmp
-    if cnt > 0 and getenv("GONZALES_RT_ALPHA_LOG") != "":
+    if cnt > 0 and env_on["GONZALES_RT_ALPHA_LOG"]():
         print("alpha leftover", cnt, "of", n_total, "after", p + 1, "passes")
     if cnt > 0:
         ctx.enqueue_function[rtcore_alpha_finish_kernel](
@@ -1191,7 +1191,7 @@ def _ray_dump(ctx: DeviceContext, rays_buf: DeviceBuffer[DType.float32], results
     var host = unsafe_alloc[Float32](len(rays_buf))
     ctx.enqueue_copy(host, rays_buf)
     ctx.synchronize()
-    var path = getenv("GONZALES_RAY_DUMP") + "_" + tag + ".bin"
+    var path = env_str["GONZALES_RAY_DUMP"]() + "_" + tag + ".bin"
     var c = unsafe_alloc[UInt8](path.byte_length() + 3)
     for k in range(path.byte_length()): c[unsafe_offset=k] = path.unsafe_ptr()[unsafe_offset=k]
     c[unsafe_offset=path.byte_length()] = UInt8(0)

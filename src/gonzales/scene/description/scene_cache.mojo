@@ -8,7 +8,7 @@ The snapshot is the ParsedScene_Mojo struct as it stands in memory, followed by 
 Scenes with media, distant or point lights, normal maps, alpha cut-outs or measured materials are not cached.
 """
 from std.ffi import external_call
-from std.os import getenv
+from gonzales.core.env import env_str, env_on, env_int
 from std.memory.alloc import unsafe_alloc
 from std.sys.info import size_of, num_performance_cores
 from std.time import perf_counter_ns
@@ -50,7 +50,7 @@ def _put[T: AnyType](f: Int, p: Pointer[T, MutUntrackedOrigin], n: Int):
 
 def _get[T: AnyType](f: Int, n: Int) -> Pointer[T, MutUntrackedOrigin]:
     """n elements read into an allocation of at least one, which is zero when n is 0 (an empty BVH's root)."""
-    if n * size_of[T]() >= 100 * 1024 * 1024 and getenv("GONZALES_SCENE_CACHE_LOG") != "":
+    if n * size_of[T]() >= 100 * 1024 * 1024 and env_on["GONZALES_SCENE_CACHE_LOG"]():
         print("scene cache: array of", n * size_of[T]() // (1024 * 1024), "MB,", size_of[T](), "bytes an element")
     var p = unsafe_alloc[T](max(n, 1))
     var raw = p.unsafe_bitcast[UInt8]()
@@ -133,16 +133,16 @@ def _unsupported(ref s: ParsedScene_Mojo) -> String:
 
 def scene_cache_variant() -> Int:
     """The settings that change what the parser builds from the same file: template merging, RT pruning and instance culling."""
-    var v = 1 if getenv("GONZALES_MERGE_TEMPLATES", "1") == "0" else 0
+    var v = 1 if env_str["GONZALES_MERGE_TEMPLATES"]("1") == "0" else 0
     var prune: Int
     try:
-        prune = Int(getenv("GONZALES_RT_PRUNE", "0"))
+        prune = env_int["GONZALES_RT_PRUNE"](0)
     except:
         prune = 0
-    var cull = getenv("GONZALES_CULL_SIZE", "0")
+    var cull = env_str["GONZALES_CULL_SIZE"]("0")
     if cull != "" and cull != "0":
         var h = 0
-        for c in (cull + "@" + getenv("GONZALES_CAMERA_SCENE")).as_bytes():
+        for c in (cull + "@" + env_str["GONZALES_CAMERA_SCENE"]()).as_bytes():
             h = (h * 31 + Int(c)) & 0xFFFFFFF
         v += 64 * (h + 1)
     return v + 2 * prune

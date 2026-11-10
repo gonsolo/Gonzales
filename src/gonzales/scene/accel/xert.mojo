@@ -1,6 +1,6 @@
 from std.atomic import Atomic
 from std.ffi import external_call
-from std.os import getenv
+from gonzales.core.env import env_str, env_on
 from std.math import ceildiv, sqrt
 from std.memory import OpaquePointer, bitcast
 from std.sys.info import is_amd_gpu, is_apple_gpu, is_gpu, is_nvidia_gpu
@@ -61,9 +61,9 @@ def xert_set_heat(counts: UInt64, n: Int64):
 
 # Per-instance hit counts: GONZALES_XERT_HEAT, else next to the scene cache ("" = none).
 def xert_heat_path() -> String:
-    var path = getenv("GONZALES_XERT_HEAT")
-    if path == "" and getenv("GONZALES_SCENE_CACHE") != "":
-        path = getenv("GONZALES_SCENE_CACHE") + ".heat"
+    var path = env_str["GONZALES_XERT_HEAT"]()
+    if path == "" and env_on["GONZALES_SCENE_CACHE"]():
+        path = env_str["GONZALES_SCENE_CACHE"]() + ".heat"
     return path
 
 # Writes the profiled hit counts (one UInt32 per instance) to xert_heat_path().

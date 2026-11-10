@@ -1,6 +1,6 @@
 from std.collections import Array
 from std.ffi import external_call
-from std.os import getenv
+from gonzales.core.env import env_str, env_int
 from std.time import perf_counter_ns
 from std.memory.alloc import unsafe_alloc
 from std.memory import unsafe_memcpy
@@ -1725,7 +1725,7 @@ def _wrap_world_meshes(s: Pointer[SceneParseState, MutUntrackedOrigin]):
     one mesh in BVH order, no 32-byte record a triangle) and become units like any other object. A scene
     without instances is left alone: the extra level would only slow its traversal. Emitters, alpha
     cutouts and medium boundaries stay as they are. GONZALES_MERGE_TEMPLATES=0 switches this off too."""
-    if getenv("GONZALES_MERGE_TEMPLATES", "1") == "0" or len(s[unsafe_offset=0].instance_template_idx) == 0:
+    if env_str["GONZALES_MERGE_TEMPLATES"]("1") == "0" or len(s[unsafe_offset=0].instance_template_idx) == 0:
         return
     var n = len(s[unsafe_offset=0].meshes)
     var i = 0
@@ -1767,7 +1767,7 @@ def _merge_template_meshes(s: Pointer[SceneParseState, MutUntrackedOrigin], defa
     its BLAS index triangles directly (PrimId.type 7) instead of through a 32-byte record each.
     Templates whose meshes differ in ways the mesh itself carries (alpha, media, uvs or normals on
     some only) keep the old form. GONZALES_MERGE_TEMPLATES=0 switches this off."""
-    if getenv("GONZALES_MERGE_TEMPLATES", "1") == "0":
+    if env_str["GONZALES_MERGE_TEMPLATES"]("1") == "0":
         return
     var n_mats = len(s[unsafe_offset=0].named_materials)
     for tmpl in range(len(s[unsafe_offset=0].object_mesh_start)):
@@ -1842,7 +1842,7 @@ def _plan_ptex_budget(files: List[String]):
         fname.unsafe_free()
     if n_ptx > 0:
         var budget_mb = 2048
-        var env = getenv("GONZALES_PTEX_BUDGET_MB", "")
+        var env = env_str["GONZALES_PTEX_BUDGET_MB"]("")
         if env != "":
             try:
                 budget_mb = Int(env)
@@ -2307,7 +2307,7 @@ def _cull_small_instances(s: Pointer[SceneParseState, MutUntrackedOrigin], psc: 
     var n = len(s[unsafe_offset=0].instance_template_idx)
     var limit = Float32(0)
     try:
-        limit = Float32(Float64(getenv("GONZALES_CULL_SIZE", "0")))
+        limit = Float32(Float64(env_str["GONZALES_CULL_SIZE"]("0")))
     except:
         pass
     if limit <= Float32(0) or n == 0:
@@ -2317,7 +2317,7 @@ def _cull_small_instances(s: Pointer[SceneParseState, MutUntrackedOrigin], psc: 
     var py = psc[unsafe_offset=0].camera_to_world[unsafe_offset=13]
     var pz = psc[unsafe_offset=0].camera_to_world[unsafe_offset=14]
     var fov = s[unsafe_offset=0].camera_fov
-    var env = getenv("GONZALES_CAMERA_SCENE")
+    var env = env_str["GONZALES_CAMERA_SCENE"]()
     if env.byte_length() > 0:
         var cpath = unsafe_alloc[UInt8](env.byte_length() + 1)
         for k in range(env.byte_length()): cpath[unsafe_offset=k] = env.as_bytes()[k]
@@ -2962,7 +2962,7 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
     var prune_mask = 0
     if total_instances > Int32(0):
         try:
-            prune_mask = Int(getenv("GONZALES_RT_PRUNE", "0"))
+            prune_mask = env_int["GONZALES_RT_PRUNE"](0)
         except:
             prune_mask = 0
     if prune_mask == 1:
@@ -2974,7 +2974,7 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
     var prune_inst = (prune_mask & 4) != 0    # the instance BVH covers only instances of templates with curves
 
     # GONZALES_WIDE_BVH=1: quad templates and the instance tree get wide quantised nodes (bvh.collapse_bvh_wide).
-    var wide_bvh = getenv("GONZALES_WIDE_BVH", "0") == "1"
+    var wide_bvh = env_str["GONZALES_WIDE_BVH"]("0") == "1"
     var inst_wide = Int8(0)
 
     var prim_bounds = unsafe_alloc[Float32](Int(total_prims_gpu + total_instances) * 6 + 6)
@@ -3158,7 +3158,7 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
             var q_order = unsafe_alloc[Int32](nq)
             var quad_leaf = 8
             try:
-                quad_leaf = Int(getenv("GONZALES_QUAD_LEAF", "8"))
+                quad_leaf = env_int["GONZALES_QUAD_LEAF"](8)
             except:
                 pass
             var q_node_count = build_bvh2(q_bounds, Int32(nq), q_nodes, q_order, min_leaf=quad_leaf, max_leaf=quad_leaf)
@@ -3398,7 +3398,7 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
         # Eight instances a leaf by default: a node costs half an instance record, smaller leaves cull better.
         var inst_leaf = 8
         try:
-            inst_leaf = Int(getenv("GONZALES_INST_LEAF", "8"))
+            inst_leaf = env_int["GONZALES_INST_LEAF"](8)
         except:
             pass
         var inst_node_count = build_bvh2(prim_bounds.unsafe_offset(inst_slot), Int32(n_ci), inst_nodes, inst_order, min_leaf=inst_leaf, max_leaf=inst_leaf)

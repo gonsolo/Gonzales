@@ -12,7 +12,7 @@ from max.gpu.host import DeviceBuffer
 from std.math import ceildiv
 from std.memory.alloc import unsafe_alloc
 from std.sys import has_accelerator, size_of
-from std.os import getenv
+from gonzales.core.env import env_str, env_on
 from std.ffi import external_call
 from std.time import perf_counter_ns
 from gonzales.transport.shade_context import ShadeContext
@@ -282,7 +282,7 @@ def _gpu_bounce_kernels(
             path_ptr_c, live_idx, live_count, kind_idx, live_count.unsafe_offset(14),
             grid_dim=grid_dim, block_dim=block_size)
         var inter_ptr = handle[].inter_buf.unsafe_ptr().unsafe_bitcast[Intersection]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
-        if rt_compact and getenv("GONZALES_SSS_RT") != "0":
+        if rt_compact and env_str["GONZALES_SSS_RT"]() != "0":
             var instance_base = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling()
             if instance_base_mesh_buf:
                 instance_base = instance_base_mesh_buf.value().unsafe_ptr().unsafe_bitcast[Int32]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
@@ -390,11 +390,11 @@ def _gpu_bounce_kernels(
     # the last material kernel. Needs the task buffer (no media), no guiding/ReSTIR, and no live MNEE (its probe wants the
     # shadow result inline).
     var sw_shadow_ok = (not use_vulkan_rt) and Int(handle[].shadow_slots) == SHADOW_SLOTS and handle[].media.n_mediums == 0 \
-        and not use_restir and not guide_is_active(handle[].guide_write) and getenv("GONZALES_NO_SW_SHADOW") == ""
+        and not use_restir and not guide_is_active(handle[].guide_write) and not env_on["GONZALES_NO_SW_SHADOW"]()
     var sw_shadow = sw_shadow_ok and not handle[].has_glass_material
     # Hair NEE has no MNEE probe, so its shadow rays are deferred with glass in the scene too (the fur's rays dominate).
     var sw_shadow_hair = sw_shadow_ok and handle[].has_material(MatKind.hair)
-    var sw_defer_coated = getenv("GONZALES_NO_SW_COATED") == ""
+    var sw_defer_coated = not env_on["GONZALES_NO_SW_COATED"]()
     var shadow_ptr = Pointer[ShadowTask, MutUntrackedOrigin].unsafe_dangling()
     if hw_shadow or sw_shadow:
         shadow_ptr = handle[].shadow_buf.unsafe_ptr().unsafe_bitcast[ShadowTask]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
@@ -950,7 +950,7 @@ def gpu_render_wavefront(
             if handle[].media.has_sss_medium or handle[].has_sss_walk:
                 gpu_max_rounds += _SSS_WALK_ROUNDS
             var live_paths = n_total
-            var round_log = getenv("GONZALES_ROUND_LOG") != ""
+            var round_log = env_on["GONZALES_ROUND_LOG"]()
             var log_line = String("rounds live:")
             for round in range(gpu_max_rounds):
                 live_paths = _gpu_bounce_kernels(

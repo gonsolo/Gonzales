@@ -54,7 +54,7 @@ from std.sys import exit
 from std.atomic import Atomic
 from std.sys.info import num_performance_cores
 from gonzales.scene.accel.rtcore import rtcore_set_gid_compact, rtcore_create_own_scene, rtcore_create_own, rtcore_set_shadow, rtcore_set_alpha, rtcore_create_scene, rtcore_set_domains, rtcore_set_instance_decode, rtcore_instance_records, RtCoreHandle, rtcore_create, rtcore_set_meshes, rtcore_set_active, rtcore_active, rtcore_destroy
-from std.os import getenv
+from gonzales.core.env import env_str, env_on, env_int
 from std.os.path import exists, getsize
 from std.ffi import external_call
 from gonzales.integrators.outputs import _cstr
@@ -335,7 +335,7 @@ struct _RtMerged(Movable):
 # the Vulkan/CUDA path.
 def _rtcore_merge(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin]) -> _RtMerged:
     var m = _RtMerged()
-    if getenv("GONZALES_RTCORE") == "":
+    if not env_on["GONZALES_RTCORE"]():
         return m^
     if psc[unsafe_offset=0].instance_count > Int32(0):
         return m^                       # instanced scenes keep their top-level structure: see _rtcore_native_wanted
@@ -394,7 +394,7 @@ def _rtcore_merge(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin]) -> _RtMerg
 # A path relative to the working directory silently fell back to the Vulkan ray-query path whenever a scene was rendered
 # from its own directory. GONZALES_RTCORE_CUBIN overrides.
 def _rtcore_cubin_path() -> String:
-    var env = getenv("GONZALES_RTCORE_CUBIN")
+    var env = env_str["GONZALES_RTCORE_CUBIN"]()
     if env != "":
         return env
     var buf = unsafe_alloc[UInt8](4096)
@@ -420,7 +420,7 @@ def _rtcore_cubin_path() -> String:
 # Instanced scenes are traced through the Vulkan-built top-level structure as it is: the hardware reports the
 # hit instance, and per-instance decode tables map (instance, triangle) back to (mesh, template geometry).
 def _rtcore_native_wanted(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin]) -> Bool:
-    return getenv("GONZALES_RTCORE") != "" and psc[unsafe_offset=0].instance_count > Int32(0)
+    return env_on["GONZALES_RTCORE"]() and psc[unsafe_offset=0].instance_count > Int32(0)
 
 # Alpha cutouts need the any-hit test the hardware trace does not run: shadow rays then stay on the software BVH.
 def _scene_has_alpha(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin]) -> Bool:
@@ -562,7 +562,7 @@ def _rtcore_attach_native(interop_scene: VulkanInteropRtSceneHandle, psc: Pointe
 # A fully pruned scene shades from the RT-core TLAS records instead of its own instance array (the software structures only
 # reach the first instance_prefix instances, whose places do not change): the instances are reordered into record order.
 def _instances_in_tlas(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin]) -> Bool:
-    return getenv("GONZALES_RT_PRUNE") == "1" and getenv("GONZALES_RTCORE_VULKAN") == "" and _rtcore_native_wanted(psc)
+    return env_str["GONZALES_RT_PRUNE"]() == "1" and not env_on["GONZALES_RTCORE_VULKAN"]() and _rtcore_native_wanted(psc)
 
 def _share_instances(handle: Pointer[GpuSceneHandle, MutUntrackedOrigin], rt_hw: RtCoreHandle, psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin]):
     if _instances_in_tlas(psc) and Int(rt_hw) != 0:
@@ -651,7 +651,7 @@ def _rtcore_attach_own_native(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin]
         if not is_template[unsafe_offset=i]:
             n_ord += 1
             ord_tris += Int(psc[unsafe_offset=0].mesh_n_tris[unsafe_offset=i])
-    var has_ord = ord_tris > 0 and getenv("GONZALES_RT_NO_ORD") == ""
+    var has_ord = ord_tris > 0 and not env_on["GONZALES_RT_NO_ORD"]()
     var n_blas = nt + (1 if has_ord else 0)
     var blas_bytes = unsafe_alloc[Pointer[UInt8, MutUntrackedOrigin]](max(n_blas, 1))
     var blas_sizes = unsafe_alloc[Int64](max(n_blas, 1))
@@ -672,11 +672,11 @@ def _rtcore_attach_own_native(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin]
                 continue
             n_tris += Int(psc[unsafe_offset=0].mesh_n_tris[unsafe_offset=i])
         blas_ntri[unsafe_offset=b] = n_tris
-    if getenv("GONZALES_GEOM_DUMP") != "":
-        _dump_geometry(psc, getenv("GONZALES_GEOM_DUMP"), nt, n_blas, is_template, blas_ntri, has_ord)
-    var cache_path = getenv("GONZALES_RT_CACHE")
-    if cache_path == "" and getenv("GONZALES_SCENE_CACHE") != "":
-        cache_path = getenv("GONZALES_SCENE_CACHE") + ".rt"
+    if env_on["GONZALES_GEOM_DUMP"]():
+        _dump_geometry(psc, env_str["GONZALES_GEOM_DUMP"](), nt, n_blas, is_template, blas_ntri, has_ord)
+    var cache_path = env_str["GONZALES_RT_CACHE"]()
+    if cache_path == "" and env_on["GONZALES_SCENE_CACHE"]():
+        cache_path = env_str["GONZALES_SCENE_CACHE"]() + ".rt"
     var key = _rt_cache_key(psc, blas_ntri, n_blas)
     var loaded = False
     var cached = RtCacheTlas(unsafe_alloc[UInt8](1), 0, 0, 0, unsafe_alloc[Int32](1))
@@ -725,7 +725,7 @@ def _rtcore_attach_own_native(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin]
                         var p = mesh_pos(mesh, mesh_vi(mesh, t * 3 + k))
                         tv[unsafe_offset=w] = p.x; tv[unsafe_offset=w + 1] = p.y; tv[unsafe_offset=w + 2] = p.z
                         w += 3
-            var r = rt_build_blas(tv, n_tris, True, True, "noquads" not in getenv("GONZALES_RT_ABLATE"), 0, pair_ok)
+            var r = rt_build_blas(tv, n_tris, True, True, "noquads" not in env_str["GONZALES_RT_ABLATE"](), 0, pair_ok)
             tv.unsafe_free(); pair_ok.unsafe_free()
             blas_bytes[unsafe_offset=b] = r.bytes; blas_sizes[unsafe_offset=b] = Int64(r.size)
             for q6 in range(6): blas_box[unsafe_offset=b * 6 + q6] = r.box[unsafe_offset=q6]
@@ -859,7 +859,7 @@ def _rtcore_attach_own_native(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin]
             pre[unsafe_offset=e] = run; rawv[unsafe_offset=e] = Int32(i); geom[unsafe_offset=e] = Int32(0)
             run += psc[unsafe_offset=0].mesh_n_tris[unsafe_offset=i]
             e += 1
-    var dump_dir = getenv("GONZALES_RT_DUMP")
+    var dump_dir = env_str["GONZALES_RT_DUMP"]()
     if dump_dir != "":
         try:
             var tl = List[UInt8](length=tlas.size, fill=UInt8(0))
@@ -1066,15 +1066,15 @@ struct _RtBufs(Movable):
 # apart and OptiX takes them, else fiber-aligned clusters in software (curve_bvh.mojo).
 def _rt_curve_clusters(handle: Pointer[GpuSceneHandle, MutUntrackedOrigin], psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin]) raises:
     var first = Int(psc[unsafe_offset=0].curve_first)
-    if (psc[unsafe_offset=0].curve_root < Int32(0) and first < 0) or getenv("GONZALES_CURVE_BVH") == "0":
+    if (psc[unsafe_offset=0].curve_root < Int32(0) and first < 0) or env_str["GONZALES_CURVE_BVH"]() == "0":
         return
     var t0 = perf_counter_ns()
-    var timing = getenv("GONZALES_TIMING") != ""
+    var timing = env_on["GONZALES_TIMING"]()
     if first >= 0:                                   # the device has no curve PrimIds: upload them for the build
         var n = Int(psc[unsafe_offset=0].prim_count) - first
         var ids = handle[].ctx.enqueue_create_buffer[DType.uint8](n * size_of[PrimId]())
         handle[].ctx.enqueue_copy(ids, psc[unsafe_offset=0].prim_ids_cpu.unsafe_offset(first).unsafe_bitcast[UInt8]())
-        if getenv("GONZALES_OPTIX_CURVES") != "0" and not _scene_has_alpha(psc):   # the alpha retrace walks clusters
+        if env_str["GONZALES_OPTIX_CURVES"]() != "0" and not _scene_has_alpha(psc):   # the alpha retrace walks clusters
             var refs = handle[].ctx.enqueue_create_buffer[DType.uint8](1)
             var ox = gpu_build_optix_curves(handle[].ctx, typed_ptr[PrimId](ids), handle[].curves.curves_ptr(),
                                             handle[].scene_descriptor().materials, n, refs)
@@ -1115,10 +1115,10 @@ def _xert_placement(ctx: DeviceContext, psc: Pointer[ParsedScene_Mojo, MutUntrac
         hits += heat[b]
     var mesh_blas = List[Int]()
     _ = xert_mesh_blas(psc[], pieces, mesh_blas)
-    var auto = getenv("GONZALES_XERT_VRAM_MB") == ""
+    var auto = not env_on["GONZALES_XERT_VRAM_MB"]()
     var budget = 0
     if auto:
-        var reserve = atol(getenv("GONZALES_XERT_RESERVE_MB")) if getenv("GONZALES_XERT_RESERVE_MB") != "" else 2800
+        var reserve = env_int["GONZALES_XERT_RESERVE_MB"](2800)
         budget = Int(ctx.get_memory_info()[0]) - 145 * n_inst - reserve * 1048576
         for b in range(n_blas):     # the mesh arrays of BLAS b are item n_blas + b
             heat.append(heat[b]); bytes.append(0)
@@ -1131,7 +1131,7 @@ def _xert_placement(ctx: DeviceContext, psc: Pointer[ParsedScene_Mojo, MutUntrac
             if mesh_blas[i] >= 0:
                 bytes[n_blas + mesh_blas[i]] += mesh_host_bytes(psc[], i, mesh_host_kb)
     else:
-        budget = atol(getenv("GONZALES_XERT_VRAM_MB")) * 1048576
+        budget = atol(env_str["GONZALES_XERT_VRAM_MB"]()) * 1048576
     # A BLAS hit stands for a whole traversal, a mesh hit for a few vertex reads (unculled island x4 399 ms, x8 243; culled x16 +2%).
     var weighted = heat.copy()
     if auto:
@@ -1420,9 +1420,9 @@ def _rt_wavefront_setup(handle: Pointer[GpuSceneHandle, MutUntrackedOrigin], psc
     if not (xe and xert_curve_table(1) != UInt64(0)):     # Intel traces the curves in its structures
         _rt_curve_clusters(handle, psc)
     var light_kinds = Int(psc[unsafe_offset=0].area_light_count > Int32(0)) + Int(psc[unsafe_offset=0].infinite_count > Int32(0)) + Int(psc[unsafe_offset=0].distant_count > Int32(0)) + Int(psc[unsafe_offset=0].point_count > Int32(0))
-    var rt_pruned = getenv("GONZALES_RT_PRUNE") != "" and psc[unsafe_offset=0].instance_count > Int32(0)
+    var rt_pruned = env_on["GONZALES_RT_PRUNE"]() and psc[unsafe_offset=0].instance_count > Int32(0)
     var usable_slots = 2 if (light_kinds >= 2 or rt_pruned) else 1
-    var shadow = Int32(0) if getenv("GONZALES_RTCORE_NOSHADOW") != "" else Int32(usable_slots)
+    var shadow = Int32(0) if env_on["GONZALES_RTCORE_NOSHADOW"]() else Int32(usable_slots)
     var alpha = Int32(1) if _scene_has_alpha(psc) else Int32(0)
     if xe:
         xert_set_scene(xe_scene[0], xe_scene[1], xe_scene[2], Int64(psc[unsafe_offset=0].mesh_count), shadow, alpha)
@@ -1458,7 +1458,7 @@ def _rt_wavefront_setup(handle: Pointer[GpuSceneHandle, MutUntrackedOrigin], psc
 # --bake: parse the scene (writing GONZALES_SCENE_CACHE) and build the RT structures (writing GONZALES_RT_CACHE or the
 # scene cache's .rt) on every core, without a GPU or a window, so that a later start only reads files.
 def bake_scene(path: Pointer[UInt8, MutUntrackedOrigin], verbose: Bool):
-    if getenv("GONZALES_SCENE_CACHE") == "":
+    if not env_on["GONZALES_SCENE_CACHE"]():
         print("--bake: set GONZALES_SCENE_CACHE=<file> to say where the caches go")
         return
     var t0 = perf_counter_ns()
@@ -1467,7 +1467,7 @@ def bake_scene(path: Pointer[UInt8, MutUntrackedOrigin], verbose: Bool):
         print("--bake: the scene did not parse")
         return
     print("--bake: scene parsed, cached in", Float64(perf_counter_ns() - t0) / 1.0e9, "s")
-    if getenv("GONZALES_RTCORE") != "" and _rtcore_native_wanted(psc):
+    if env_on["GONZALES_RTCORE"]() and _rtcore_native_wanted(psc):
         _ = _rtcore_attach_own_native(psc, True)
         print("--bake: done in", Float64(perf_counter_ns() - t0) / 1.0e9, "s")
     else:
@@ -2386,7 +2386,7 @@ def parse_and_render(
             var n_meshes_vk_vcm = 0
             if use_vk_vcm:
                 # --rt-hardware lifts the sphere / instancing limits (analytic sphere passes, TLAS instancing); curves stay out.
-                var hw_vcm = getenv("GONZALES_RTCORE") != ""
+                var hw_vcm = env_on["GONZALES_RTCORE"]()
                 if psc[unsafe_offset=0].curve_count > Int32(0) or ((psc[unsafe_offset=0].sphere_count > Int32(0) or psc[unsafe_offset=0].instance_count > Int32(0)) and not hw_vcm):
                     print("WARNING: --vulkan-rt-shade requested but scene uses curves/spheres/instancing (unsupported) -- falling back to CUDA intersection")
                     use_vk_vcm = False
@@ -2464,7 +2464,7 @@ def parse_and_render(
                         if Int(rt_hw_v) != 0:
                             rtcore_set_active(rt_hw_v)
                             rtcore_set_shadow(Int32(0))      # VCM resolves its own shadow rays (resolve_shadow_connect_gpu)
-                            rtcore_set_alpha(Int32(1) if _scene_has_alpha(psc) and getenv("GONZALES_RTCORE_NOALPHA") == "" else Int32(0))
+                            rtcore_set_alpha(Int32(1) if _scene_has_alpha(psc) and not env_on["GONZALES_RTCORE_NOALPHA"]() else Int32(0))
                         elif rt_merged_vcm.valid:
                             hw_failed_vcm = True           # the interop scene holds one merged mesh: Vulkan cannot report real mesh ids
                             vulkaninterop_rt_destroy_scene(interop_scene_vcm)
@@ -2711,7 +2711,7 @@ def parse_and_render(
                 vk_mesh_count = 1
                 vk_point_counts = rt_merged.point_counts
                 vk_idx_counts = rt_merged.idx_counts
-            var own_rt = (rt_merged.valid or _rtcore_native_wanted(psc)) and getenv("GONZALES_RTCORE_VULKAN") == ""
+            var own_rt = (rt_merged.valid or _rtcore_native_wanted(psc)) and not env_on["GONZALES_RTCORE_VULKAN"]()
             own_rt_used = own_rt
             if not own_rt:
                 vulkaninterop_rt_set_merge_ordinary(Int32(1) if _rtcore_native_wanted(psc) else Int32(0))
@@ -2749,14 +2749,14 @@ def parse_and_render(
                     # scene has more than one kind of light (measured: it costs ~13 ms/spp otherwise).
                     var light_kinds = Int(psc[unsafe_offset=0].area_light_count > Int32(0)) + Int(psc[unsafe_offset=0].infinite_count > Int32(0)) + Int(psc[unsafe_offset=0].distant_count > Int32(0)) + Int(psc[unsafe_offset=0].point_count > Int32(0))
                     # Pruned software structures cannot trace a candidate that finds no free slot: give every candidate one.
-                    var rt_pruned = getenv("GONZALES_RT_PRUNE") != "" and psc[unsafe_offset=0].instance_count > Int32(0)
+                    var rt_pruned = env_on["GONZALES_RT_PRUNE"]() and psc[unsafe_offset=0].instance_count > Int32(0)
                     var usable_slots = 2 if (light_kinds >= 2 or rt_pruned) else 1
                     var has_alpha = _scene_has_alpha(psc)
-                    rtcore_set_shadow(Int32(0) if getenv("GONZALES_RTCORE_NOSHADOW") != "" else Int32(usable_slots))
+                    rtcore_set_shadow(Int32(0) if env_on["GONZALES_RTCORE_NOSHADOW"]() else Int32(usable_slots))
                     rtcore_set_alpha(Int32(1) if has_alpha else Int32(0))
                 else:
                     hw_failed = True
-                    if getenv("GONZALES_RT_PRUNE") != "" and psc[unsafe_offset=0].instance_count > Int32(0):
+                    if env_on["GONZALES_RT_PRUNE"]() and psc[unsafe_offset=0].instance_count > Int32(0):
                         print("ERROR: the RT structures failed (out of memory?) and GONZALES_RT_PRUNE left the software BVH without triangles")
                         exit(1)
                     if not own_rt:
@@ -3155,7 +3155,7 @@ def render_interactive(
             mojo_parsed_free(psc)
             return
     var rtb = _RtBufs()
-    if use_gpu and getenv("GONZALES_RTCORE") != "" and not use_restir:
+    if use_gpu and env_on["GONZALES_RTCORE"]() and not use_restir:
         try:
             rtb = _rt_wavefront_setup(handle, psc, n_pixels * WAVEFRONT_BATCH)
         except:
@@ -3186,7 +3186,7 @@ def render_interactive(
     # GONZALES_TEX_SPP=1 asks for the pixel's own (4% frame time on the island instead of 19%, blurrier close up).
     var FP_SPP = 16
     try:
-        FP_SPP = Int(getenv("GONZALES_TEX_SPP", "16"))
+        FP_SPP = env_int["GONZALES_TEX_SPP"](16)
     except:
         pass
     if use_gpu:
@@ -3366,20 +3366,20 @@ def render_interactive(
         filterWeight=Float32(0), pixelX=Int32(0), pixelY=Int32(0))
 
     var headless = headless_frames > Int32(0)
-    var frame_log = getenv("GONZALES_FRAME_LOG") != ""
+    var frame_log = env_on["GONZALES_FRAME_LOG"]()
     # Test hook: slide the headless camera sideways by this much each frame (film restarts every frame).
     var move_step = Float32(0)
-    if headless and getenv("GONZALES_TEST_MOVE") != "":
+    if headless and env_on["GONZALES_TEST_MOVE"]():
         try:
-            move_step = Float32(Float64(getenv("GONZALES_TEST_MOVE")))
+            move_step = Float32(Float64(env_str["GONZALES_TEST_MOVE"]()))
         except:
             pass
     var t_render = 0; var t_denoise = 0; var t_sensor = 0; var t_present = 0
     # GONZALES_BENCH=<warm-up frames>: headless ray and time counts over the frames after them.
     var bench_warm = 0; var bench_render = 0
-    if headless and getenv("GONZALES_BENCH") != "":
+    if headless and env_on["GONZALES_BENCH"]():
         try:
-            bench_warm = Int(getenv("GONZALES_BENCH"))
+            bench_warm = Int(env_str["GONZALES_BENCH"]())
         except:
             pass
     # Ptex streaming: frames show what is resident; between frames the faces they asked for load in the background.
@@ -3457,7 +3457,7 @@ def render_interactive(
             comptime n_base4_i = 8
             var si = Int32(frame_count % 65536)
             var t_r = perf_counter_ns()
-            handle[].bench[unsafe_offset=7] = 1 if (bench_warm > 0 and frame_count == bench_warm - 2 and getenv("GONZALES_RAY_DUMP") != "") else 0
+            handle[].bench[unsafe_offset=7] = 1 if (bench_warm > 0 and frame_count == bench_warm - 2 and env_on["GONZALES_RAY_DUMP"]()) else 0
             if rtb.on:
                 gpu_render_wavefront(
                     handle, c2w_buf.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
@@ -3509,7 +3509,7 @@ def render_interactive(
             gpu_atrous_denoise(handle, denoised.unsafe_ptr(), Int64(n_pixels),
                                     Int32(1 if move_step != Float32(0) else frame_count),
                                     psc[unsafe_offset=0].film_iso, psc[unsafe_offset=0].film_max_comp,
-                                    apply_denoise=(headless and getenv("GONZALES_NO_DENOISE") == "") or (not headless and viewer_denoise_enabled(v) != Int32(0)), min_passes=5)
+                                    apply_denoise=(headless and not env_on["GONZALES_NO_DENOISE"]()) or (not headless and viewer_denoise_enabled(v) != Int32(0)), min_passes=5)
             var t_b = perf_counter_ns()
             apply_film_sensor(denoised.unsafe_ptr(), n_pixels, psc[unsafe_offset=0].film_exposuretime, psc[unsafe_offset=0].film_wb)
             t_denoise += Int(t_b - t_a); t_sensor += Int(perf_counter_ns() - t_b)
@@ -3749,7 +3749,7 @@ def session_new(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin], sobol: Point
                 spectral: SpectralHandle, gpu_ctx: Optional[DeviceContext]) -> SessionPtr:
     """Uploads the parsed scene, which the session then owns; dangling if that fails."""
     var n_pixels = Int(psc[unsafe_offset=0].film_w) * Int(psc[unsafe_offset=0].film_h)
-    var timing = getenv("GONZALES_TIMING") != ""
+    var timing = env_on["GONZALES_TIMING"]()
     var t0 = perf_counter_ns()
     var handle = gpu_upload_scene(psc, sobol, n_pixels, spectral.coeffs, spectral.res, spectral.cie_x, spectral.cie_y,
                                   spectral.cie_z, spectral.d65, gpu_ctx, restir_di=False, restir_vol=False, verbose=False,
@@ -3761,7 +3761,7 @@ def session_new(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin], sobol: Point
         print("Gonzales:   gpu upload", Float64(perf_counter_ns() - t0) / 1.0e9, "s")
     t0 = perf_counter_ns()
     var rtb = _RtBufs()
-    if getenv("GONZALES_RTCORE") != "":
+    if env_on["GONZALES_RTCORE"]():
         try:
             rtb = _rt_wavefront_setup(handle, psc, n_pixels * _session_batch(n_pixels))
         except e:
@@ -3926,7 +3926,7 @@ def session_render(s: SessionPtr, n_spp: Int) raises -> Int:
         var handle = s[].renderer.handle
         if handle[].adaptive_threshold > Float32(0) and end >= handle[].adaptive_min:
             gpu_adaptive_update(handle, end)
-            if getenv("GONZALES_ADAPTIVE_LOG") != "":
+            if env_on["GONZALES_ADAPTIVE_LOG"]():
                 var n = handle[].n_pixels
                 var host = unsafe_alloc[UInt8](n)
                 handle[].ctx.enqueue_copy(host, handle[].px_active_buf)
