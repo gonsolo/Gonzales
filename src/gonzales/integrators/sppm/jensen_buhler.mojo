@@ -18,7 +18,7 @@ def jb_point_radiance(cache: IrradianceCache, i: Int, photons: Pointer[SPPMPhoto
     """Point i's radiance through its exit lobe this pass: arrival photons in a disk of radius sqrt(r2), plus NEE."""
     var p = cache.pos[unsafe_offset=i]
     var mi = cache.mat[unsafe_offset=i]
-    var eta = sd.materials[unsafe_offset=Int(mi)].albedo.r
+    var eta = cache.eta[unsafe_offset=i]
     return jb_point_photons(cache, i, photons, heads, inv_cell, r2, sd, pass_idx) \
         + _sppm_nee_at(_point_vp(p, cache.nrm[unsafe_offset=i], mi, eta, pass_wl), sd, pcg)
 
@@ -29,8 +29,7 @@ def jb_point_photons(cache: IrradianceCache, i: Int, photons: Pointer[SPPMPhoton
     """The photon half of jb_point_radiance."""
     var p = cache.pos[unsafe_offset=i]
     var n = cache.nrm[unsafe_offset=i]
-    var mi = cache.mat[unsafe_offset=i]
-    var eta = sd.materials[unsafe_offset=Int(mi)].albedo.r
+    var eta = cache.eta[unsafe_offset=i]
     var phi = SpectralSample(Float32(0))
     var cix = Int(floor(p.x * inv_cell)); var ciy = Int(floor(p.y * inv_cell)); var ciz = Int(floor(p.z * inv_cell))
     var buckets = neighbour_buckets(cix, ciy, ciz)
@@ -69,7 +68,7 @@ def jb_dipole_vp(vps: Pointer[SPPMPixel, MutUntrackedOrigin], i: Int, cache: Irr
     var vp = vps[unsafe_offset=i]
     if vp.valid == Int32(0) or vp.mat_kind != LobeKind.dipole:
         return
-    var dip = dipole_of(sd.materials[unsafe_offset=Int(vp.mat_idx)], pass_wl, sd.spectral)
+    var dip = dipole_of(sd.materials[unsafe_offset=Int(vp.mat_idx)], vp.alpha, pass_wl, sd.spectral)
     var l = cache.radiance(vp.pos, vp.mat_idx, dip)
     var h = sd.spectral
     var (r, g, b) = spectral_sample_to_rgb(h.coeffs, h.res, h.cie_x, h.cie_y, h.cie_z, h.d65, l, pass_wl)

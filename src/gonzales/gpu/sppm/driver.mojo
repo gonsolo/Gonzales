@@ -183,6 +183,7 @@ def sppm_render_gpu(
             var jb_nrm = _upload(handle[].ctx, cache.nrm.unsafe_bitcast[UInt8](), n_pts * size_of[Vec3f]())
             var jb_mat = _upload(handle[].ctx, cache.mat.unsafe_bitcast[UInt8](), n_pts * size_of[Int32]())
             var jb_area = _upload(handle[].ctx, cache.area.unsafe_bitcast[UInt8](), n_pts * size_of[Float32]())
+            var jb_eta = _upload(handle[].ctx, cache.eta.unsafe_bitcast[UInt8](), n_pts * size_of[Float32]())
             var jb_lx = handle[].ctx.enqueue_create_buffer[DType.uint8](n_pts * size_of[SpectralSample]())
             var jb_center = _upload(handle[].ctx, cache.center.unsafe_bitcast[UInt8](), n_nodes * size_of[Point3f]())
             var jb_far2 = _upload(handle[].ctx, cache.far2.unsafe_bitcast[UInt8](), n_nodes * size_of[Float32]())
@@ -192,7 +193,7 @@ def sppm_render_gpu(
             var jb_sum = handle[].ctx.enqueue_create_buffer[DType.uint8](n_nodes * size_of[SpectralSample]())
             var jb_first = _upload(handle[].ctx, cache.mat_first.unsafe_bitcast[UInt8](), n_mat * size_of[Int32]())
             var jb_last = _upload(handle[].ctx, cache.mat_end.unsafe_bitcast[UInt8](), n_mat * size_of[Int32]())
-            var dcache = IrradianceCache(cache.n, _dev[Point3f](jb_pos), _dev[Vec3f](jb_nrm), _dev[Int32](jb_mat), _dev[Float32](jb_area),
+            var dcache = IrradianceCache(cache.n, _dev[Point3f](jb_pos), _dev[Vec3f](jb_nrm), _dev[Int32](jb_mat), _dev[Float32](jb_area), _dev[Float32](jb_eta),
                                          _dev[SpectralSample](jb_lx), cache.n_nodes, _dev[Point3f](jb_center), _dev[Float32](jb_far2),
                                          _dev[Int32](jb_skip), _dev[Int32](jb_begin), _dev[Int32](jb_end), _dev[SpectralSample](jb_sum),
                                          _dev[Int32](jb_first), _dev[Int32](jb_last), cache.spacing)

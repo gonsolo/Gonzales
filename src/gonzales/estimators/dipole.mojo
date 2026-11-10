@@ -42,12 +42,13 @@ struct Dipole(TrivialRegisterPassable):
         return SpectralSample(v[0], v[1], v[2], v[3])
 
 
-def dipole_of(mat: Material, wl: SampledWavelengths, h: SpectralHandle) -> Dipole:
-    """A pbrt subsurface material's dipole, from the coefficients its random walk upsamples (sss_walk_start)."""
+def dipole_of(mat: Material, eta: Float32, wl: SampledWavelengths, h: SpectralHandle) -> Dipole:
+    """A pbrt subsurface material's dipole, from the coefficients its random walk upsamples (sss_walk_start); eta is
+    the boundary's index relative to the medium outside."""
     var c1 = mat.checker_tex1
     var c2 = mat.checker_tex2
     var st = spec_refl_unbounded(h.coeffs, h.res, h.cie_x, h.cie_y, h.cie_z, h.d65, c1.r, c1.g, c1.b, wl)
     var al = spec_refl(h.coeffs, h.res, h.cie_x, h.cie_y, h.cie_z, h.d65, c2.r, c2.g, c2.b, wl)
     var st4 = F4(st.v0, st.v1, st.v2, st.v3)
     var ss4 = F4(al.v0, al.v1, al.v2, al.v3) * st4
-    return Dipole.of(st4 - ss4, ss4 * (Float32(1) - mat.checker_uscale), mat.albedo.r)
+    return Dipole.of(st4 - ss4, ss4 * (Float32(1) - mat.checker_uscale), eta)

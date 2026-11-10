@@ -12,7 +12,7 @@ from std.atomic import Atomic
 from std.memory import bitcast
 from gonzales.transport.medium import MediumView
 from gonzales.core.geometry import face_toward
-from gonzales.transport.sss_walk import SssExit, sss_entered, sss_hop, sss_leave, sss_walks_below
+from gonzales.transport.sss_walk import SssExit, sss_entered, sss_hop, sss_leave, sss_walks_below, sss_relative_eta
 from gonzales.transport.medium_interface import default_emit_medium, medium_after
 from gonzales.core.geometry import offset_eps, TERMINAL_SEGMENT_GRACE_ROUNDS, RGB, Point3f, Point2f, Vec3f, vec3f, point3f, dot, cross, PI, INV_FOUR_PI, Frame, _is_real_ptr
 from gonzales.scene.appearance.materials import Material, MatKind, LobeKind, PhotonKind, fr_dielectric, resolve_mix
@@ -627,7 +627,7 @@ def _vp_at_walk_exit(mut vp: SPPMPixel, ex: SssExit, mat: Material, mat_idx: Int
 
 
 @always_inline
-def _vp_at_dipole(mut vp: SPPMPixel, hit: Point3f, n_out: Vec3f, mat: Material, mat_idx: Int):
+def _vp_at_dipole(mut vp: SPPMPixel, hit: Point3f, n_out: Vec3f, mat: Material, mat_idx: Int, outside_ior: Float32):
     """Jensen-Buhler: the camera's refraction into skin ends at a visible point lit by the dipole."""
     vp.pos = hit
     vp.normal = n_out
@@ -635,7 +635,7 @@ def _vp_at_dipole(mut vp: SPPMPixel, hit: Point3f, n_out: Vec3f, mat: Material, 
     vp.wo = n_out
     vp.alb = RGB(Float32(1))
     vp.mat_kind = LobeKind.dipole
-    vp.alpha = mat.albedo.r
+    vp.alpha = sss_relative_eta(mat, outside_ior)
     vp.mat_idx = Int32(mat_idx)
     vp.is_volume = PhotonKind.surface
     vp.valid = Int32(1)
@@ -962,7 +962,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
                         break
                     if rough_skin and s_v.transmit and dipole:
                         vp.beta = vp.beta * _spectral_gain_rgb(sd, s_v.weight * SpectralSample(mat.albedo.r * mat.albedo.r), vp.wavelengths)
-                        _vp_at_dipole(vp, hit, vec3f(face_toward(gn_geo, (-rd).to_simd())), mat, mat_idx)
+                        _vp_at_dipole(vp, hit, vec3f(face_toward(gn_geo, (-rd).to_simd())), mat, mat_idx, current_dielectric_ior)
                         break
                     if rough_skin and s_v.transmit:   # a walk leaves into the medium it came from, so no compression
                         var ex_r = sss_hop[use_gpu](sd, mat, inter, hit.to_simd(), _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd()),
@@ -1090,7 +1090,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
                 var g_w = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
                 if dipole:
                     vp.beta = vp.beta * radiance_scale
-                    _vp_at_dipole(vp, hit, vec3f(face_toward(g_w, -ray_dir)), mat, mat_idx)
+                    _vp_at_dipole(vp, hit, vec3f(face_toward(g_w, -ray_dir)), mat, mat_idx, current_dielectric_ior)
                     break
                 var ex = sss_hop[use_gpu](sd, mat, inter, hit.to_simd(), g_w, new_dir, vp.wavelengths, pcg, current_dielectric_ior)
                 if ex.ok:

@@ -2,11 +2,14 @@
 from std.math import floor, max, min, sqrt
 from std.memory.alloc import unsafe_alloc
 from std.builtin.device_passable import DevicePassable, DeviceTypeEncoder
-from gonzales.core.geometry import Point3f, Vec3f, cross, dot, _is_real_ptr
+from gonzales.core.geometry import Point3f, Ray, Vec3f, cross, dot, point3f, _is_real_ptr
 from gonzales.core.rng import PCG32
 from gonzales.core.spectrum import SpectralSample
-from gonzales.scene.shapes.primitives import PrimId, mesh_normal, mesh_pos, mesh_vi
-from gonzales.scene.accel.bvh import SceneView
+from gonzales.scene.shapes.primitives import Intersection, PrimId, mesh_normal, mesh_pos, mesh_vi
+from gonzales.scene.shapes.geom_normal import _geom_normal
+from gonzales.scene.accel.bvh import SceneView, traverse_dispatch
+from gonzales.scene.appearance.materials import MatKind
+from gonzales.transport.sss_walk import sss_relative_eta
 from gonzales.estimators.dipole import Dipole
 
 comptime _LEAF = 8
@@ -29,6 +32,7 @@ struct IrradianceCache(TrivialRegisterPassable, DevicePassable):
     var nrm: Pointer[Vec3f, MutUntrackedOrigin]
     var mat: Pointer[Int32, MutUntrackedOrigin]
     var area: Pointer[Float32, MutUntrackedOrigin]
+    var eta: Pointer[Float32, MutUntrackedOrigin]      # the boundary's index relative to the medium outside, as the walk's
     var lx: Pointer[SpectralSample, MutUntrackedOrigin]
     var n_nodes: Int
     var center: Pointer[Point3f, MutUntrackedOrigin]
@@ -118,10 +122,14 @@ struct IrradianceCache(TrivialRegisterPassable, DevicePassable):
         var nrm = unsafe_alloc[Vec3f](max(n, 1)).unsafe_origin_cast[MutUntrackedOrigin]()
         var mat = unsafe_alloc[Int32](max(n, 1)).unsafe_origin_cast[MutUntrackedOrigin]()
         var area = unsafe_alloc[Float32](max(n, 1)).unsafe_origin_cast[MutUntrackedOrigin]()
+        var eta = unsafe_alloc[Float32](max(n, 1)).unsafe_origin_cast[MutUntrackedOrigin]()
+        var hit = unsafe_alloc[Intersection](1).unsafe_origin_cast[MutUntrackedOrigin]()
         for j in range(n):
             var i = order[j]
             pos[unsafe_offset=j] = pts[i]; nrm[unsafe_offset=j] = nrms[i]; mat[unsafe_offset=j] = mats[i]
             area[unsafe_offset=j] = Float32(step[Int(mats[i])])
+            eta[unsafe_offset=j] = sss_relative_eta(sd.materials[unsafe_offset=Int(mats[i])], _outside_ior(sd, pts[i], nrms[i], hit))
+        hit.unsafe_free()
         var nn = len(t.skip)
         var center = unsafe_alloc[Point3f](max(nn, 1)).unsafe_origin_cast[MutUntrackedOrigin]()
         var far2 = unsafe_alloc[Float32](max(nn, 1)).unsafe_origin_cast[MutUntrackedOrigin]()
@@ -131,14 +139,14 @@ struct IrradianceCache(TrivialRegisterPassable, DevicePassable):
         for k in range(nn):
             center[unsafe_offset=k] = t.center[k]; far2[unsafe_offset=k] = t.far2[k]; skip[unsafe_offset=k] = t.skip[k]
             begin[unsafe_offset=k] = t.begin[k]; end[unsafe_offset=k] = t.end[k]
-        return IrradianceCache(n, pos, nrm, mat, area,
+        return IrradianceCache(n, pos, nrm, mat, area, eta,
                                unsafe_alloc[SpectralSample](max(n, 1)).unsafe_origin_cast[MutUntrackedOrigin](),
                                nn, center, far2, skip, begin, end,
                                unsafe_alloc[SpectralSample](max(nn, 1)).unsafe_origin_cast[MutUntrackedOrigin](),
                                mat_first, mat_end, s)
 
     def free(self):
-        self.pos.unsafe_free(); self.nrm.unsafe_free(); self.mat.unsafe_free(); self.area.unsafe_free()
+        self.pos.unsafe_free(); self.nrm.unsafe_free(); self.mat.unsafe_free(); self.area.unsafe_free(); self.eta.unsafe_free()
         self.lx.unsafe_free(); self.center.unsafe_free(); self.far2.unsafe_free(); self.skip.unsafe_free()
         self.begin.unsafe_free(); self.end.unsafe_free(); self.sum.unsafe_free()
         self.mat_first.unsafe_free(); self.mat_end.unsafe_free()
@@ -251,6 +259,30 @@ def _select(mut order: List[Int], pts: List[Point3f], lo: Int, hi: Int, kth: Int
 def _dist2(a: Point3f, b: Point3f) -> Float32:
     var dx = a.x - b.x; var dy = a.y - b.y; var dz = a.z - b.z
     return dx * dx + dy * dy + dz * dz
+
+
+def _outside_ior(ref sd: SceneView, x: Point3f, n: Vec3f, hit: Pointer[Intersection, MutUntrackedOrigin]) -> Float32:
+    """The index of the dielectric around a translucent point: along its normal, the first one left before entered."""
+    var o = x.to_simd()
+    var d = n
+    var depth = 0
+    for _ in range(32):
+        o = o + d * Float32(1e-4)
+        traverse_dispatch(sd.bvh4, sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, Ray(point3f(o), n),
+                          Float32(1.0e38), hit, sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances, sd.spheres, Int(sd.sphereCount))
+        if hit[].hit == Int8(0):
+            return Float32(1)
+        o = o + d * hit[].tHit
+        var m = sd.materials[unsafe_offset=Int(hit[].primId.materialIndex)]
+        if m.type != MatKind.dielectric or m.sss_walk_interior():
+            continue
+        if dot(_geom_normal(hit[], sd.meshes, sd.instances, sd.spheres, o), d) > Float32(0):
+            if depth == 0:
+                return m.albedo.r
+            depth -= 1
+        else:
+            depth += 1
+    return Float32(1)
 
 
 def _tri_area(ref sd: SceneView, p: PrimId) -> Float32:
