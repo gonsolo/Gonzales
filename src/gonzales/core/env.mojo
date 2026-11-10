@@ -32,7 +32,6 @@ comptime ENV_SWITCHES: List[EnvSwitch] = [
     EnvSwitch("GONZALES_RTCORE", "set: trace on the NVIDIA RT cores (--rt-hardware sets it; Hydra sessions read it)"),
     EnvSwitch("GONZALES_RTCORE_VULKAN", "set: --rt-hardware builds its structures with Vulkan, not the own builders"),
     EnvSwitch("GONZALES_RTCORE_NOSHADOW", "set: no shadow rays deferred to the RT cores"),
-    EnvSwitch("GONZALES_RTCORE_NOALPHA", "set: VCM on the RT cores ignores alpha cut-outs"),
     EnvSwitch("GONZALES_RT_PRUNE", "1: software structures drop instance triangles, the RT cores trace them; 8+bits: single steps"),
     EnvSwitch("GONZALES_RT_ABLATE", "loose,noquads: switch single RT builder steps off (size ablation)"),
     EnvSwitch("GONZALES_RT_NO_ORD", "set: ordinary (non-instanced) meshes left out of the own RT structures (debug)"),

@@ -2464,7 +2464,7 @@ def parse_and_render(
                         if Int(rt_hw_v) != 0:
                             rtcore_set_active(rt_hw_v)
                             rtcore_set_shadow(Int32(0))      # VCM resolves its own shadow rays (resolve_shadow_connect_gpu)
-                            rtcore_set_alpha(Int32(1) if _scene_has_alpha(psc) and not env_on["GONZALES_RTCORE_NOALPHA"]() else Int32(0))
+                            rtcore_set_alpha(Int32(1) if _scene_has_alpha(psc) else Int32(0))
                         elif rt_merged_vcm.valid:
                             hw_failed_vcm = True           # the interop scene holds one merged mesh: Vulkan cannot report real mesh ids
                             vulkaninterop_rt_destroy_scene(interop_scene_vcm)
