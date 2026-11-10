@@ -176,6 +176,13 @@ and SPPM's medium vertices (their lobe eval reads the medium through
 `LobeTables.media`). It also keeps the albedo <= 1 on every lane by
 construction, since both curves are non-negative.
 
+The same session found the path tracer's volume NEE in a *homogeneous*
+medium still off the per-lane model: non-area lights attenuated every lane
+with red's `sigma_t` (an infinite-lit chromatic scatterer read blue 1.66x
+pbrt) and area lights exponentiated the RGB `sigma_t` and upsampled the
+product (blue +2.5% on `Scenes/media-chromatic-scatter.pbrt`). Both now take
+`exp(-sigma_t(lambda) d)` per lane and match pbrt to 0.1%.
+
 ### Where this still falls short, measured
 
 It is tempting to grade chromatic media against the obvious closed form:
