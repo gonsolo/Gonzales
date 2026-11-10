@@ -6,6 +6,7 @@ from gonzales.scene.shapes.curves import CURVE_DEFER_K, Curve, CurveBvh, CurveSe
 from gonzales.scene.accel.curve_bvh import CurveBvhDev
 from gonzales.core.geometry import Point3f, _is_real_ptr
 from gonzales.transport.guide import GuideGrid, null_guide
+from gonzales.transport.glossy_sms import gsms_queue_bytes
 from gonzales.scene.appearance.lights import AreaLight, DistantLight, InfiniteLight, PointLight, LightSampler, LIGHT_BOUNDS_STRIDE, env_build_cdf, env_downsample
 from gonzales.scene.appearance.materials import MatKind, Material, MeasuredBRDF
 from gonzales.scene.appearance.footprint import CameraFootprint
@@ -856,6 +857,9 @@ struct GpuSceneHandle(Movable):
     var bench: Pointer[Int, MutUntrackedOrigin]      # closest rays, shadow rays, trace ns, mode (1 frame sync, 2 trace timing)
     # one parked glass-chain emitter hit per path (SuppressTask), resolved by resolve_suppress_gpu; 32 bytes when unused
     var suppress_buf: DeviceBuffer[DType.uint8]
+    # glossy SMS roots parked by the conductor kernel for resolve_gsms_gpu (glossy_sms.gsms_park); gsms_cap of them
+    var gsms_buf: DeviceBuffer[DType.uint8]
+    var gsms_cap: Int
     # One bit per MatKind present in the scene's material table. The bounce
     # loop launches one kernel per kind; a kind the scene does not contain
     # would still cost a full-grid launch every round.
@@ -1568,6 +1572,8 @@ def gpu_upload_scene(
                 has_glass_material=has_glass_mat,
                 bench=_bench_counters(),
                 suppress_buf=_gpu_placeholder(ctx),
+                gsms_buf=_gpu_placeholder(ctx),
+                gsms_cap=0,
                 mat_kind_mask=kind_mask,
                 has_interface_material=has_iface_mat,
                 has_sss_walk=has_walk,
@@ -1665,6 +1671,8 @@ def gpu_alloc_pixel_buffers(handle: Pointer[GpuSceneHandle, MutUntrackedOrigin],
     var n_paths = n_pix * batch
     h.suppress_buf = ctx.enqueue_create_buffer[DType.uint8](n_paths * 32 if h.has_glass_material else 32)
     ctx.enqueue_memset(h.suppress_buf, UInt8(0))
+    h.gsms_cap = min(2 * n_paths, 1 << 17) if h.has_glass_material else 0
+    h.gsms_buf = ctx.enqueue_create_buffer[DType.uint8](gsms_queue_bytes(h.gsms_cap))
     h.path_buf = ctx.enqueue_create_buffer[DType.uint8](n_paths * size_of[PathState]())
     h.inter_buf = ctx.enqueue_create_buffer[DType.uint8](n_paths * size_of[Intersection]())
     h.film_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 12)

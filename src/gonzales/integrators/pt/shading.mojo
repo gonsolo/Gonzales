@@ -644,7 +644,7 @@ def cpu_shade_context(
 ) -> ShadeContext:
     """The per-render-invariant ShadeContext of the CPU wavefront; build once, set path_idx per path."""
     return ShadeContext(
-        paths_base=Pointer[PathState, MutUntrackedOrigin].unsafe_dangling(), has_glass=has_glass, glossy_sms=has_glass, bvh4=bvh4, suppress_tasks=Pointer[SuppressTask, MutUntrackedOrigin].unsafe_dangling(),
+        paths_base=Pointer[PathState, MutUntrackedOrigin].unsafe_dangling(), has_glass=has_glass, glossy_sms=has_glass, bvh4=bvh4, suppress_tasks=Pointer[SuppressTask, MutUntrackedOrigin].unsafe_dangling(), gsms_queue=Pointer[UInt8, MutUntrackedOrigin].unsafe_dangling(),
         n_mediums=0, mediums=Pointer[Medium, MutUntrackedOrigin].unsafe_dangling(), medium_ifaces=Pointer[MediumInterface, MutUntrackedOrigin].unsafe_dangling(),
         grids=Pointer[Grid, MutUntrackedOrigin].unsafe_dangling(), nvdb_grids=Pointer[NvdbGrid, MutUntrackedOrigin].unsafe_dangling(),
                 path_idx=0, bvh2Nodes=bvh2Nodes, primIds=primIds, meshes=meshes, curves=curves, materials=materials,

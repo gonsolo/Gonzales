@@ -99,6 +99,7 @@ def _make_ctx_with_light(
         Pointer[PathState, MutUntrackedOrigin].unsafe_dangling(), True, True,
         BVH4.none(),
         Pointer[SuppressTask, MutUntrackedOrigin].unsafe_dangling(),
+        Pointer[UInt8, MutUntrackedOrigin].unsafe_dangling(),
         0, Pointer[Medium, MutUntrackedOrigin].unsafe_dangling(), Pointer[MediumInterface, MutUntrackedOrigin].unsafe_dangling(),
         Pointer[Grid, MutUntrackedOrigin].unsafe_dangling(), Pointer[NvdbGrid, MutUntrackedOrigin].unsafe_dangling(),
         Float32(0),

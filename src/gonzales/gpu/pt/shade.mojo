@@ -1,5 +1,6 @@
 from max.gpu import MAX_THREADS_PER_BLOCK_METADATA
 from std.utils import StaticTuple
+from std.sys import get_defined_int
 from gonzales.core.gpu_tuning import MINCTA_NEE, MINCTA_DIFFUSE, MINCTA_COATED, MINCTA_CONDUCTOR, MINCTA_MEASURED, MINCTA_DIELECTRIC
 from gonzales.scene.accel.bvh import SceneView
 from gonzales.core.geometry import _is_real_ptr, Vec3f, dot
@@ -11,7 +12,14 @@ from gonzales.core.rng import PCG32
 from gonzales.integrators.pt.materials import _shade_sss_exit, shade_coated_diffuse, shade_conductor, shade_dielectric, shade_diffuse, shade_diffuse_transmission, shade_hair, shade_interface, shade_measured, shade_thin_dielectric
 from gonzales.integrators.pt.shading import shade_nee_core
 from gonzales.integrators.pt.nee import _mnee_bsdf_weight, _glossy_sms_bsdf_weight
-from gonzales.transport.glossy_sms import GSMS_DEBUG
+from gonzales.transport.glossy_sms import (GSMS_DEBUG, GLOSSY_SMS_MAX_TRIALS, SMSRoot, gsms_queue_count, gsms_queue_task, gsms_queue_long,
+    gsms_queue_root, gsms_trial_rng, glossy_sms_refinds)
+from gonzales.transport.bxdf import LobeTables
+from gonzales.integrators.pt.common import _clamped
+from std.memory import stack_allocation
+from max.gpu.sync import barrier
+from std.atomic import Atomic, Ordering
+from max.gpu.memory import AddressSpace
 from gonzales.transport.shade_context import ShadeContext, _shade_context
 from max.gpu import block_dim, block_idx, thread_idx
 
@@ -279,6 +287,7 @@ def shade_conductor_gpu(
     live_idx: Pointer[Int32, MutUntrackedOrigin],
     live_count: Pointer[Int32, MutUntrackedOrigin],
     shadow_tasks: Pointer[ShadowTask, MutUntrackedOrigin],
+    gsms_queue: Pointer[UInt8, MutUntrackedOrigin],
 ):
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
     if tid >= Int(live_count[unsafe_offset=0]):
@@ -291,8 +300,91 @@ def shade_conductor_gpu(
     var inter = intersections[unsafe_offset=tid]
     var mat = sd.materials[unsafe_offset=Int(inter.primId.materialIndex)]
     mat = mat.glossy_filtered(path_ptr[].min_ray_pdf, sd.filterGlossy)
-    var ctx = _shade_context(sd, sobol_matrices, path_idx=tid, shadow_tasks=shadow_tasks)
+    var ctx = _shade_context(sd, sobol_matrices, path_idx=tid, shadow_tasks=shadow_tasks, gsms_queue=gsms_queue)
     shade_conductor[True, True](path_ptr, inter, ctx, mat)
+
+
+def gsms_queue_reset_gpu(gsms_queue: Pointer[UInt8, MutUntrackedOrigin], cap: Int32):
+    if Int(block_idx.x) == 0 and Int(thread_idx.x) == 0:
+        gsms_queue.unsafe_bitcast[Int32]()[unsafe_offset=0] = Int32(0)
+        gsms_queue.unsafe_bitcast[Int32]()[unsafe_offset=1] = cap
+        gsms_queue.unsafe_bitcast[Int32]()[unsafe_offset=2] = Int32(0)
+
+
+# The reciprocal estimates of the glossy SMS roots shade_conductor_gpu parked (transport/glossy_sms.mojo). Trial i of a
+# root draws from its own sequence, so any lane may run it: a workgroup takes GSMS_GROUP trial indices of a root at a
+# time and records the lowest that finds it; a root is done once its next index reaches that lowest one. The count is
+# then exactly the sequential loop's. The first pass gives each root one group for GSMS_FIRST_ROUNDS takes; the second
+# spreads all groups over the roots it left, which would otherwise hold the GPU for their thousands of trials.
+comptime GSMS_GROUP = get_defined_int["GSMS_GROUP", 16]()
+comptime GSMS_GROUPS = get_defined_int["GSMS_GROUPS", 2048]()
+comptime GSMS_FIRST_ROUNDS = get_defined_int["GSMS_FIRST_ROUNDS", 4]()
+
+
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(GSMS_GROUP)))
+def resolve_gsms_gpu[long: Bool](sd: SceneView, gsms_queue: Pointer[UInt8, MutUntrackedOrigin]):
+    var sh = stack_allocation[2, Scalar[DType.int32], address_space=AddressSpace.SHARED]()
+    var lane = Int(thread_idx.x)
+    var g = Int(block_idx.x)
+    var ctx = _shade_context(sd, Pointer[UInt32, MutUntrackedOrigin].unsafe_dangling())
+    var tab = LobeTables(ctx.materials, ctx.curves, ctx.measured_brdfs, ctx.spectral)
+    var head = gsms_queue.unsafe_bitcast[Int32]()
+    var long_list = gsms_queue_long(gsms_queue)
+    var count = Int(head[unsafe_offset=2]) if long else gsms_queue_count(gsms_queue)
+    var j = 0
+    var cur = -1
+    var task = gsms_queue_task(gsms_queue, 0)[]
+    var root = SMSRoot(fill=Vec3f(Float32(0)))
+    while (j < count) if long else (g + j * GSMS_GROUPS < count):
+        var t = Int(long_list[unsafe_offset=(g + j) % count]) if long else g + j * GSMS_GROUPS
+        var tp = gsms_queue_task(gsms_queue, t)
+        var nxt = Pointer(to=tp[].next).unsafe_origin_cast[MutUntrackedOrigin]()
+        var fst = Pointer(to=tp[].first).unsafe_origin_cast[MutUntrackedOrigin]()
+        if lane == 0:   # the group's next GSMS_GROUP trial indices, or none
+            var lim = Atomic.load[ordering=Ordering.RELAXED](fst)
+            var n_at = Atomic.load[ordering=Ordering.RELAXED](nxt)
+            var stop = lim if long else min(lim, Int32(GSMS_GROUP * GSMS_FIRST_ROUNDS))
+            var base = lim
+            if n_at < stop:
+                base = Atomic.fetch_add[ordering=Ordering.RELAXED](nxt, Int32(GSMS_GROUP))
+            elif not long and n_at < lim:   # out of first-pass takes, unfinished
+                long_list[unsafe_offset=Int(Atomic.fetch_add[ordering=Ordering.RELAXED](head.unsafe_offset(2), Int32(1)))] = Int32(t)
+            sh[unsafe_offset=0] = lim
+            sh[unsafe_offset=1] = base
+        barrier()
+        var lim = Int(sh[unsafe_offset=0])
+        var base = Int(sh[unsafe_offset=1])
+        barrier()
+        if base >= lim:
+            j += 1
+            continue
+        if cur != t:
+            task = tp[]
+            root = gsms_queue_root(gsms_queue, t, Int(task.n))
+            cur = t
+        var i = base + lane
+        if i < lim:
+            var pcg = gsms_trial_rng(task.seed, i)
+            if glossy_sms_refinds(ctx, task.x0, task.bsdf, tab, task.wl, task.y, task.ldu, task.ldv, pcg, root, Int(task.n)):
+                _ = Atomic.min[ordering=Ordering.RELAXED](fst, Int32(i))
+
+
+# Each root's contribution times its trial count, the lowest index that found it plus one (the cap when none did).
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+def finish_gsms_gpu(paths: Pointer[PathState, MutUntrackedOrigin], sd: SceneView, gsms_queue: Pointer[UInt8, MutUntrackedOrigin]):
+    var t = Int(block_idx.x * block_dim.x + thread_idx.x)
+    if t >= gsms_queue_count(gsms_queue):
+        return
+    var task = gsms_queue_task(gsms_queue, t)[]
+    var c = task.c * Float32(min(Int(task.first) + 1, GLOSSY_SMS_MAX_TRIALS))
+    comptime if GSMS_DEBUG != 1:
+        c = _clamped(_shade_context(sd, Pointer[UInt32, MutUntrackedOrigin].unsafe_dangling()), c, Int(task.bounce))
+    # atomic: a path may have parked a root at several bounces
+    var e = Pointer(to=paths.unsafe_offset(Int(task.path))[].estimate).unsafe_bitcast[Float32]().unsafe_origin_cast[MutUntrackedOrigin]()
+    _ = Atomic[Float32].fetch_add(e, c.v0)
+    _ = Atomic[Float32].fetch_add(e.unsafe_offset(1), c.v1)
+    _ = Atomic[Float32].fetch_add(e.unsafe_offset(2), c.v2)
+    _ = Atomic[Float32].fetch_add(e.unsafe_offset(3), c.v3)
 
 
 @__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
