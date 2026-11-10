@@ -67,9 +67,8 @@ struct IrradianceCache(TrivialRegisterPassable, DevicePassable):
             area_m[Int(p.materialIndex)] += Float64(_tri_area(sd, p))
             var m = sd.materials[unsafe_offset=Int(p.materialIndex)]
             var g = m.checker_uscale
-            st_max = max(st_max, max(m.checker_tex1.r * (Float32(1) - m.checker_tex2.r * g),
-                                     max(m.checker_tex1.g * (Float32(1) - m.checker_tex2.g * g),
-                                         m.checker_tex1.b * (Float32(1) - m.checker_tex2.b * g))))
+            var rst = m.checker_tex1 + m.checker_tex2 * (Float32(1) - g)   # reduced extinction sigma_a + sigma_s (1 - g)
+            st_max = max(st_max, max(rst.r, max(rst.g, rst.b)))
         var total = Float64(0)
         for m in range(n_mat):
             total += area_m[m]
