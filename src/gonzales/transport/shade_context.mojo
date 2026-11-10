@@ -148,6 +148,8 @@ struct ShadeContext:
     var bvh4: BVH4
     # GPU only: where the emitter-hit code parks a glass-chain hit for resolve_suppress_gpu; dangling = decide inline
     var suppress_tasks: Pointer[SuppressTask, MutUntrackedOrigin]
+    # GPU PT only: glossy SMS roots parked for resolve_gsms_gpu (glossy_sms.gsms_park); dangling = re-solve inline
+    var gsms_queue: Pointer[UInt8, MutUntrackedOrigin]
     # Participating media for surface-NEE shadow rays; n_mediums == 0 keeps the plain any-hit test.
     var n_mediums:     Int
     var mediums:       Pointer[Medium, MutUntrackedOrigin]
@@ -168,10 +170,11 @@ def _shade_context(
     use_restir: Bool = False,
     shadow_tasks: Pointer[ShadowTask, MutUntrackedOrigin] = Pointer[ShadowTask, MutUntrackedOrigin].unsafe_dangling(),
     suppress_tasks: Pointer[SuppressTask, MutUntrackedOrigin] = Pointer[SuppressTask, MutUntrackedOrigin].unsafe_dangling(),
+    gsms_queue: Pointer[UInt8, MutUntrackedOrigin] = Pointer[UInt8, MutUntrackedOrigin].unsafe_dangling(),
 ) -> ShadeContext:
     """A ShadeContext over a SceneView: the GPU kernels' and VCM's way to reach the shading code."""
     return ShadeContext(
-        paths_base=Pointer[PathState, MutUntrackedOrigin].unsafe_dangling(), has_glass=(sd.hasGlass & Int32(1)) != Int32(0), glossy_sms=(sd.hasGlass & Int32(2)) != Int32(0), mnee_stats=Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(), bvh4=BVH4.none(), suppress_tasks=suppress_tasks,
+        paths_base=Pointer[PathState, MutUntrackedOrigin].unsafe_dangling(), has_glass=(sd.hasGlass & Int32(1)) != Int32(0), glossy_sms=(sd.hasGlass & Int32(2)) != Int32(0), mnee_stats=Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(), bvh4=BVH4.none(), suppress_tasks=suppress_tasks, gsms_queue=gsms_queue,
         n_mediums=Int(sd.mediumCount), mediums=sd.mediums, medium_ifaces=sd.mediumInterfaces, grids=sd.grids, nvdb_grids=sd.nvdbGrids,
         path_idx=path_idx, bvh2Nodes=sd.bvh2Nodes, primIds=sd.primIds, meshes=sd.meshes, curves=sd.curves,
         materials=sd.materials,

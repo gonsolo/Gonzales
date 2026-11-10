@@ -18,7 +18,7 @@ from std.time import perf_counter_ns
 from gonzales.transport.shade_context import ShadeContext
 from gonzales.gpu.pt.media import sample_medium_gpu, update_medium_gpu
 from gonzales.gpu.scene import GpuSceneHandle
-from gonzales.gpu.pt.shade import shared_shade_context, resolve_suppress_gpu, shade_coated_conductor_gpu, shade_coated_diffuse_gpu, shade_conductor_gpu, shade_dielectric_gpu, shade_diffuse_gpu, shade_diffuse_transmit_gpu, shade_hair_gpu, shade_interface_gpu, shade_measured_gpu, shade_mix_gpu, shade_nee_preamble_gpu, shade_thin_dielectric_gpu
+from gonzales.gpu.pt.shade import GSMS_GROUP, GSMS_GROUPS, gsms_queue_reset_gpu, resolve_gsms_gpu, finish_gsms_gpu, shared_shade_context, resolve_suppress_gpu, shade_coated_conductor_gpu, shade_coated_diffuse_gpu, shade_conductor_gpu, shade_dielectric_gpu, shade_diffuse_gpu, shade_diffuse_transmit_gpu, shade_hair_gpu, shade_interface_gpu, shade_measured_gpu, shade_mix_gpu, shade_nee_preamble_gpu, shade_thin_dielectric_gpu
 from gonzales.transport.guide import guide_is_active
 from gonzales.gpu.pt.wavefront import sw_pack_shadow_tasks_gpu, sw_add_shadow_gpu, sw_resolve_shadow_gpu, compact_active_paths_gpu, compact_by_kind_gpu, accumulate_cone_gpu, accumulate_film_gpu, accumulate_film_wavefront_gpu, clear_film_gpu, clear_scalar_film_gpu, compact_curve_paths_gpu, compact_walking_gpu, adaptive_converge_gpu, adaptive_dilate_gpu, sss_walk_gpu, deactivate_paths_past_maxdepth_gpu, gen_primary_rays_gpu, gen_primary_rays_wavefront_gpu, reset_curve_counter_gpu, reset_restir_reservoirs_gpu, reset_restir_vol_reservoirs_gpu, reset_shadow_tasks_gpu, read_counter, reset_vol_used_gpu, resolve_curve_candidates_gpu, traverse_paths_gpu, rtcore_closest_hit_gpu, rtcore_shadow_rays_compact_gpu, rtcore_sss_walk_gpu, vulkaninterop_rt_traverse_paths_gpu
 
@@ -48,6 +48,27 @@ def _stop_if_out_of_memory(msg: String):
     if "OUT_OF_MEMORY" in msg:
         print("GPU: out of memory, the scene does not fit on this card at this resolution")
         _ = external_call["exit", NoneType, Int32](Int32(1))
+
+# The glossy SMS roots the conductor kernel parks during a sample's rounds; dangling when the scene has no glass.
+def _gsms_queue(handle: Pointer[GpuSceneHandle, MutUntrackedOrigin]) -> Pointer[UInt8, MutUntrackedOrigin]:
+    if handle[].gsms_cap == 0:
+        return Pointer[UInt8, MutUntrackedOrigin].unsafe_dangling()
+    return handle[].gsms_buf.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
+
+def _gsms_begin(handle: Pointer[GpuSceneHandle, MutUntrackedOrigin]) raises:
+    if handle[].gsms_cap > 0:
+        handle[].ctx.enqueue_function[gsms_queue_reset_gpu](_gsms_queue(handle), Int32(handle[].gsms_cap), grid_dim=1, block_dim=1)
+
+# After the rounds, before the film: the reciprocal estimates of every root parked during them.
+def _gsms_resolve(handle: Pointer[GpuSceneHandle, MutUntrackedOrigin]) raises:
+    if handle[].gsms_cap > 0:
+        var sd = handle[].scene_descriptor()
+        handle[].ctx.enqueue_function[resolve_gsms_gpu[False]](sd, _gsms_queue(handle), grid_dim=GSMS_GROUPS, block_dim=GSMS_GROUP)
+        handle[].ctx.enqueue_function[resolve_gsms_gpu[True]](sd, _gsms_queue(handle), grid_dim=GSMS_GROUPS, block_dim=GSMS_GROUP)
+        handle[].ctx.enqueue_function[finish_gsms_gpu](
+            handle[].path_buf.unsafe_ptr().unsafe_bitcast[PathState]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
+            sd, _gsms_queue(handle), grid_dim=(handle[].gsms_cap + 255) // 256, block_dim=256,
+        )
 
 # Trace-timing bench mode: wait for the queue, charge the time since the last mark to a stage slot.
 def _bench_stage(handle: Pointer[GpuSceneHandle, MutUntrackedOrigin], slot: Int, count_index: Int = -1, count_slot: Int = 0) raises:
@@ -553,6 +574,7 @@ def _gpu_bounce_kernels(
             handle[].sobol_buf.unsafe_ptr().unsafe_bitcast[UInt32](),
             Int64(n), kind_idx, live_count.unsafe_offset(1 + Int(MatKind.conductor)),
             shadow_ptr,
+            _gsms_queue(handle),
             grid_dim=grid_dim,
             block_dim=block_size,
         )
@@ -816,6 +838,7 @@ def gpu_render_sample[Oc: Origin[mut=True]](
             if handle[].media.has_sss_medium or handle[].has_sss_walk:
                 gpu_max_rounds += _SSS_WALK_ROUNDS
             _bench_stage(handle, 9)
+            _gsms_begin(handle)
             for _ in range(gpu_max_rounds):
                 _ = _gpu_bounce_kernels(handle, n_int, grid_dim, maxDepth,
                                     use_restir=use_restir,
@@ -826,6 +849,7 @@ def gpu_render_sample[Oc: Origin[mut=True]](
                                     restir_vol_gbuf_depth=vol_gbuf_depth_ptr,
                                     restir_vol_gbuf_world_pos=vol_gbuf_world_pos_ptr,
                                     restir_vol_frame_w=vol_fw, restir_vol_frame_h=vol_fh)
+            _gsms_resolve(handle)
             handle[].ctx.enqueue_function[accumulate_film_gpu](
                 handle[].path_buf.unsafe_ptr().unsafe_bitcast[PathState]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
                 handle[].film_buf.unsafe_ptr().unsafe_bitcast[Float32](),
@@ -974,6 +998,7 @@ def gpu_render_wavefront(
             var live_paths = n_total
             var round_log = getenv("GONZALES_ROUND_LOG") != ""
             var log_line = String("rounds live:")
+            _gsms_begin(handle)
             for round in range(gpu_max_rounds):
                 live_paths = _gpu_bounce_kernels(
                     handle, n_total, grid_total, maxDepth,
@@ -991,6 +1016,7 @@ def gpu_render_wavefront(
                     break
             if round_log:
                 print(log_line, "of", n_total)
+            _gsms_resolve(handle)
             handle[].ctx.enqueue_function[accumulate_film_wavefront_gpu](
                 handle[].path_buf.unsafe_ptr().unsafe_bitcast[PathState]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
                 handle[].film_buf.unsafe_ptr().unsafe_bitcast[Float32](),

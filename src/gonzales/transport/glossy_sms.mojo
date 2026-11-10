@@ -3,9 +3,11 @@ reflect as well as refract, seeded by the glossy lobe (Zeltner et al. 2020, with
 from std.collections import Array
 from std.math import sqrt, abs
 from std.sys import get_defined_int
+from std.sys.info import size_of
+from std.atomic import Atomic
 from gonzales.core.geometry import Point3f, Vec3f, Ray, dot
 from gonzales.core.rng import PCG32
-from gonzales.core.spectrum import SampledWavelengths
+from gonzales.core.spectrum import SampledWavelengths, SpectralSample
 from gonzales.scene.appearance.materials import Material, MatKind, LobeKind
 from gonzales.scene.shapes.primitives import Intersection, PrimId, mesh_pos
 from gonzales.scene.accel.bvh import traverse_dispatch
@@ -256,6 +258,98 @@ def glossy_sms_trials(
         if glossy_sms_refinds(ctx, x0, bsdf, tab, wl, y, ldu, ldv, pcg, root, n):
             break
     return trials
+
+
+# ── The reciprocal estimate off the shading kernel (GPU PT) ─────────────────
+# Its trial count is geometric and runs to the cap, so inline one path's re-solves held its whole warp. A queue
+# instead parks each root; resolve_gsms_gpu re-solves it with a workgroup, trial i on lane i mod the group, each with
+# its own random sequence, and counts up to the first trial that finds the root: the same count, in parallel.
+# Queue layout: [count, capacity] Int32 in a 64-byte head, then the tasks, each task's root positions and the list of
+# long ones (gsms_queue_long).
+@fieldwise_init
+struct GsmsTask(TrivialRegisterPassable):
+    var c: SpectralSample   # the contribution with one trial; the estimate adds c * trials
+    var x0: Vec3f
+    var y: Vec3f
+    var ldu: Vec3f
+    var ldv: Vec3f
+    var bsdf: BSDF
+    var wl: SampledWavelengths
+    var seed: UInt64
+    var n: Int32
+    var path: Int32
+    var bounce: Int32
+    var next: Int32    # the next trial index a workgroup takes
+    var first: Int32   # the lowest trial index that found the root so far; GLOSSY_SMS_MAX_TRIALS: none
+
+
+comptime _GSMS_HEAD = 64
+comptime _GSMS_ROOT_F = 3 * MAX_SMS_VERTICES
+
+
+def gsms_queue_bytes(cap: Int) -> Int:
+    return _GSMS_HEAD + cap * (size_of[GsmsTask]() + _GSMS_ROOT_F * size_of[Float32]() + size_of[Int32]())
+
+
+@always_inline
+def gsms_queue_long(q: Pointer[UInt8, MutUntrackedOrigin]) -> Pointer[Int32, MutUntrackedOrigin]:
+    """The roots resolve_gsms_gpu's first pass left unfinished; their count is the head's third Int32."""
+    var cap = Int(q.unsafe_bitcast[Int32]()[unsafe_offset=1])
+    return q.unsafe_offset(_GSMS_HEAD + cap * (size_of[GsmsTask]() + _GSMS_ROOT_F * size_of[Float32]())).unsafe_bitcast[Int32]()
+
+
+@always_inline
+def gsms_queue_count(q: Pointer[UInt8, MutUntrackedOrigin]) -> Int:
+    var h = q.unsafe_bitcast[Int32]()
+    return min(Int(h[unsafe_offset=0]), Int(h[unsafe_offset=1]))
+
+
+@always_inline
+def gsms_queue_task(q: Pointer[UInt8, MutUntrackedOrigin], i: Int) -> Pointer[GsmsTask, MutUntrackedOrigin]:
+    return q.unsafe_offset(_GSMS_HEAD).unsafe_bitcast[GsmsTask]().unsafe_offset(i)
+
+
+@always_inline
+def _gsms_queue_root(q: Pointer[UInt8, MutUntrackedOrigin], i: Int) -> Pointer[Float32, MutUntrackedOrigin]:
+    var cap = Int(q.unsafe_bitcast[Int32]()[unsafe_offset=1])
+    return q.unsafe_offset(_GSMS_HEAD + cap * size_of[GsmsTask]()).unsafe_bitcast[Float32]().unsafe_offset(i * _GSMS_ROOT_F)
+
+
+def gsms_queue_root(q: Pointer[UInt8, MutUntrackedOrigin], i: Int, n: Int) -> SMSRoot:
+    var p = _gsms_queue_root(q, i)
+    var r = SMSRoot(fill=Vec3f(Float32(0)))
+    for k in range(n):
+        r[k] = Vec3f(p[unsafe_offset=3 * k], p[unsafe_offset=3 * k + 1], p[unsafe_offset=3 * k + 2])
+    return r^
+
+
+def gsms_park(q: Pointer[UInt8, MutUntrackedOrigin], task: GsmsTask, verts: SMSChain) -> Bool:
+    """Queues a root for resolve_gsms_gpu; False when the queue is full (the caller re-solves inline)."""
+    var h = q.unsafe_bitcast[Int32]()
+    var slot = Int(Atomic.fetch_add(h, Int32(1)))
+    if slot >= Int(h[unsafe_offset=1]):
+        return False
+    gsms_queue_task(q, slot)[] = task
+    var p = _gsms_queue_root(q, slot)
+    for k in range(Int(task.n)):
+        p[unsafe_offset=3 * k] = verts[k].pos[0]
+        p[unsafe_offset=3 * k + 1] = verts[k].pos[1]
+        p[unsafe_offset=3 * k + 2] = verts[k].pos[2]
+    return True
+
+
+@always_inline
+def _splitmix64(v: UInt64) -> UInt64:
+    var z = v + UInt64(0x9E3779B97F4A7C15)
+    z = (z ^ (z >> 30)) * UInt64(0xBF58476D1CE4E5B9)
+    z = (z ^ (z >> 27)) * UInt64(0x94D049BB133111EB)
+    return z ^ (z >> 31)
+
+
+@always_inline
+def gsms_trial_rng(seed: UInt64, i: Int) -> PCG32:
+    """Trial i's own random sequence."""
+    return PCG32(_splitmix64(seed ^ (UInt64(i) * UInt64(0xD1B54A32D192ED03))), _splitmix64(seed))
 
 
 @always_inline

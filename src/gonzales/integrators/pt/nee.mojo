@@ -23,7 +23,8 @@ from gonzales.transport.texturing import _get_tri_verts
 from gonzales.transport.shade_context import ShadeContext
 from gonzales.transport.manifold import _emitter_face_normal, _mnee_chain, _mnee_bsdf_over_light, _mnee_chain_t_eta, _mnee_first_probe, _mnee_reproduce, _sms_solve_from_probe, _mnee_chain_transmittance, _mnee_pass
 from gonzales.core.spectrum import SpectralSample
-from gonzales.transport.glossy_sms import GSMS_DEBUG, glossy_sms_stage, glossy_sms_solve, glossy_sms_mis, glossy_sms_reproduce, glossy_sms_t_chain
+from gonzales.transport.glossy_sms import (GSMS_DEBUG, GLOSSY_SMS_MAX_TRIALS, GsmsTask, gsms_park, glossy_sms_stage, glossy_sms_root,
+    glossy_sms_root_pos, glossy_sms_trials, glossy_sms_mis, glossy_sms_reproduce, glossy_sms_t_chain)
 from gonzales.transport.sms import mnee_orthonormal_basis
 from gonzales.integrators.pt.common import _to_spec_illum, _clamped, _to_spec_diffuse_lit, _emitter_invisible, _shadow_inline, _shadow_blocked, _shadow_contribute
 
@@ -541,7 +542,7 @@ def _glossy_sms_nee(
             path_ptr[].estimate += SpectralSample(Float32(1)) * glossy_sms_stage(ctx, hit_point, bsdf, tab, wl, y, ldu, ldv, pcg)
         return
     var verts = Array[SMSVertex, MAX_SMS_VERTICES](fill=sms_vertex_init())
-    var r = glossy_sms_solve(ctx, hit_point, bsdf, tab, wl, y, ldu, ldv, pcg, verts)
+    var r = glossy_sms_root(ctx, hit_point, bsdf, tab, wl, y, ldu, ldv, pcg, verts)
     if not r[0]:
         return
     var n = r[1]
@@ -554,7 +555,15 @@ def _glossy_sms_nee(
     var p_area = sel_pdf / al.total_area
     var t_med = _mnee_chain_transmittance(ctx, hit_point, verts, n, y, path_ptr[].current_medium_idx, wl)
     var w = glossy_sms_mis(ev.pdf_fwd, glossy_sms_t_chain(hit_point, verts, n) * _mnee_pass(t_med), r[3], p_area)
-    var c = path_ptr[].throughput * ev.f_cos * _to_spec_illum(ctx, al.emission, wl) * t_med * (r[2] * r[3] * r[4] * w / p_area)
+    var c = path_ptr[].throughput * ev.f_cos * _to_spec_illum(ctx, al.emission, wl) * t_med * (r[2] * r[3] * w / p_area)
+    if c.is_black():
+        return   # nothing for the re-solves to scale
+    if _is_real_ptr(ctx.gsms_queue):
+        var seed = (UInt64(pcg.next_uint()) << 32) | UInt64(pcg.next_uint())
+        if gsms_park(ctx.gsms_queue, GsmsTask(c, hit_point, y, ldu, ldv, bsdf, wl, seed, Int32(n), Int32(ctx.path_idx),
+                                              Int32(path_ptr[].bounce), Int32(0), Int32(GLOSSY_SMS_MAX_TRIALS)), verts):
+            return
+    c = c * glossy_sms_trials(ctx, hit_point, bsdf, tab, wl, y, ldu, ldv, pcg, glossy_sms_root_pos(verts, n), n)
     comptime if GSMS_DEBUG == 1:
         path_ptr[].estimate += c
     path_ptr[].estimate += _clamped(ctx, c, Int(path_ptr[].bounce))
