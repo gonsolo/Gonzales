@@ -1,6 +1,7 @@
 """Every environment switch Gonzales reads, one line each. Mojo reads them only through env_str/env_on/env_int/env_set,
 which check the name against ENV_SWITCHES at compile time; entries marked (C), (C++) or (Python) are read outside Mojo."""
 from std.os import getenv, setenv
+from std.sys import stderr
 
 
 @fieldwise_init
@@ -103,6 +104,30 @@ def env_on[name: StaticString]() -> Bool:
 def env_int[name: StaticString](default: Int) raises -> Int:
     var v = env_str[name]()
     return default if v == "" else atol(v)
+
+
+def env_registered(name: String) -> Bool:
+    comptime for i in range(len(ENV_SWITCHES)):
+        comptime known = ENV_SWITCHES[i].name
+        if name == known:
+            return True
+    return False
+
+
+# Warns once for each GONZALES_* or GZ_* variable at startup that is no switch (a typo).
+def env_warn_unknown():
+    var text: String
+    try:
+        with open("/proc/self/environ", "r") as f:
+            text = f.read()
+    except:
+        return
+    for entry in text.split("\0"):
+        if not (entry.startswith("GONZALES_") or entry.startswith("GZ_")):
+            continue
+        var name = String(entry.split("=")[0])
+        if not env_registered(name):
+            print("Warning:", name, "is set but is no Gonzales environment switch", file=stderr)
 
 
 def env_set[name: StaticString](value: String):

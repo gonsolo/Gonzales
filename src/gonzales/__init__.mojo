@@ -3,7 +3,7 @@ from std.sys import argv, exit, get_defined_int
 from std.sys.info import _accelerator_arch
 from std.time import perf_counter_ns
 from std.os import setenv
-from gonzales.core.env import env_str, env_on, env_set
+from gonzales.core.env import env_str, env_on, env_set, env_warn_unknown
 from std.memory.alloc import unsafe_alloc
 from gonzales.app.pipeline import _generate_sobol_matrices, parse_and_render, render_interactive, debug_trace_pixel, debug_render_vulkanrt, bake_scene
 from gonzales.core.spectrum import load_spectral_context, spectral_handle, SpectralContext
@@ -128,6 +128,7 @@ def main() raises:
     comptime if _GZ_DEV:
         _ = setenv("IGC_FunctionControl", "3", False)
     var t0 = perf_counter_ns()
+    env_warn_unknown()
 
     var args = argv()
     var scene_path = String("")

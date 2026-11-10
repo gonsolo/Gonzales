@@ -3,7 +3,7 @@ from std.ffi import external_call
 from std.memory.alloc import unsafe_alloc
 from std.memory import unsafe_memcpy
 from std.os import setenv
-from gonzales.core.env import env_str, env_on
+from gonzales.core.env import env_str, env_on, env_warn_unknown
 from std.time import perf_counter_ns
 from std.runtime import initialize_runtime
 from max.gpu.host import DeviceContext
@@ -37,6 +37,7 @@ def gz_renderer_new(data_dir: Pointer[UInt8, MutUntrackedOrigin]) abi("C") -> Re
     # Without the caching allocator a freed session gives its memory back to the driver; renders allocate nothing.
     _ = setenv("MODULAR_DEVICE_CONTEXT_MEMORY_MANAGER_SIZE", "0", False)
     initialize_runtime()  # Mojo's CPU worker pool; an executable's main starts it
+    env_warn_unknown()
     var dir = String(unsafe_from_utf8_ptr=data_dir.as_imm())
     var sobol = _generate_sobol_matrices(dir + "/new-joe-kuo-6.21201")
     var spectral = load_spectral_context(dir)
