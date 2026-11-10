@@ -857,7 +857,7 @@ def gpu_mnee_adapt(handle: Pointer[GpuSceneHandle, MutUntrackedOrigin]) raises:
     if not handle[].has_glass_material or handle[].mnee_adapt_done:
         return
     # A plain host copy: the host-buffer API pins a ~1.3 GiB pool on first use (0.8 s, plus 0.5 s to release at exit).
-    var host = unsafe_alloc[Int32](2)
+    var host = unsafe_alloc[Int32](len(handle[].mnee_stats_buf))   # the copy fills the whole buffer
     handle[].ctx.enqueue_copy(host, handle[].mnee_stats_buf)
     handle[].ctx.synchronize()
     var probes = Int(host[unsafe_offset=0])
