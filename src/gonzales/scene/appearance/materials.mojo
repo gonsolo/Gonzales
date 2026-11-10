@@ -34,6 +34,7 @@ struct LobeKind:
     comptime sss_entry   = Int32(7)   # a photon arrived at skin, stored before the boundary chooses; only a camera walk exit merges it
     comptime layered = Int32(8)   # coateddiffuse as pbrt's LayeredBxDF (layered.mojo): f, pdf_fwd, pdf_rev all real
     comptime rough_dielectric = Int32(9)   # pbrt DielectricBxDF over Trowbridge-Reitz (layered.mojo diel_*); param = alpha, IOR from the material
+    comptime dipole = Int32(10)   # a camera hit on skin lit by Jensen-Buhler's dipole (sppm/jensen_buhler.mojo); no BSDF
 
     @staticmethod
     @always_inline

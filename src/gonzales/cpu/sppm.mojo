@@ -1,6 +1,6 @@
 """SPPM on the CPU: its passes and their threads."""
 from max.algorithm import parallelize
-from std.math import max, min
+from std.math import max, min, pow
 from std.memory.alloc import unsafe_alloc
 from gonzales.transport.medium_interface import default_emit_medium
 from gonzales.scene.shapes.primitives import Intersection
@@ -13,7 +13,9 @@ from gonzales.scene.description.pbrt_parser import ParsedScene_Mojo
 from gonzales.core.progress import Progress
 from gonzales.integrators.outputs import finish_render
 from gonzales.core.spectrum import SampledWavelengths, pass_wavelengths
-from gonzales.integrators.sppm.sppm import _photon_depth_cap, _VP_SAMPLES, SPPMPixel, SPPMPhoton, _sppm_trace_visible_point, _sppm_trace_photon, _sppm_count_photon, _sppm_insert_photon, _sppm_gather_one, _sppm_nee_one, _sppm_flush_one, _sppm_finalize_albedo_one_pixel, _sppm_finalize_one_pixel
+from gonzales.estimators.irradiance_cache import IrradianceCache
+from gonzales.integrators.sppm.jensen_buhler import jb_point_radiance, jb_dipole_vp
+from gonzales.integrators.sppm.sppm import _ALPHA, _photon_depth_cap, _VP_SAMPLES, SPPMPixel, SPPMPhoton, _sppm_trace_visible_point, _sppm_trace_photon, _sppm_count_photon, _sppm_insert_photon, _sppm_gather_one, _sppm_nee_one, _sppm_flush_one, _sppm_finalize_albedo_one_pixel, _sppm_finalize_one_pixel
 
 
 def _sppm_camera_pass(
@@ -28,6 +30,7 @@ def _sppm_camera_pass(
     seed:     UInt64,
     maxdepth: Int,
     film_filter: FilmFilter,
+    jb: Bool = False,
 ):
     """Trace `vp_samples` independent primary rays per pixel, ONCE for the
     whole render (not once per SPPM pass — see sppm_render's docstring for
@@ -51,7 +54,7 @@ def _sppm_camera_pass(
         var px = pix % Int(fw)
         var py = pix // Int(fw)
         var pcg = PCG32(seed ^ UInt64(combined * 6364136223846793005 + 1), UInt64(1))
-        vps[unsafe_offset=combined] = _sppm_trace_visible_point[False](sd, pcg, r2c, c2w, px, py, Int32(pix), init_r2, scratch.unsafe_offset(combined), maxdepth, film_filter, combined % vp_samples)
+        vps[unsafe_offset=combined] = _sppm_trace_visible_point[False](sd, pcg, r2c, c2w, px, py, Int32(pix), init_r2, scratch.unsafe_offset(combined), maxdepth, film_filter, combined % vp_samples, dipole=jb)
 
     parallelize(trace_one, n_pix * vp_samples)
 
@@ -70,6 +73,7 @@ def _sppm_photon_pass(
     seed:         UInt64,
     pass_idx:     Int,
     maxdepth:     Int,
+    shared_wl:    Bool = False,
 ) -> Int:
     """CPU driver: emit n_emit photon paths, returning the number actually
     stored (clamped to max_photons)."""
@@ -99,7 +103,7 @@ def _sppm_photon_pass(
         var pcg = PCG32(seed ^ UInt64(pass_idx * 1000003 + k), UInt64(7))
         _sppm_trace_photon[True, False](sd, pcg, scratch.unsafe_offset(k), n_emit, photons, max_photons, counter, default_emit_med, maxdepth,
             sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y,
-            sd.spectral.cie_z, sd.spectral.d65, pass_wavelengths(pass_idx * n_emit + k))
+            sd.spectral.cie_z, sd.spectral.d65, pass_wavelengths(pass_idx if shared_wl else pass_idx * n_emit + k))
 
     parallelize(emit_one, n_emit)
 
@@ -186,6 +190,26 @@ def _sppm_nee_update(
     parallelize(nee_one, n_vps)
 
 
+def _jb_pass(cache: IrradianceCache, vps: Pointer[SPPMPixel, MutUntrackedOrigin], n_vps: Int,
+             photons: Pointer[SPPMPhoton, MutUntrackedOrigin], heads: Pointer[Int32, MutUntrackedOrigin],
+             inv_cell: Float32, init_r2: Float32, ref sd: SceneView, pass_idx: Int, seed: UInt64):
+    """One Jensen-Buhler pass: irradiance at the points (radius shrinking as Knaus-Zwicker's), then every dipole VP."""
+    var wl = pass_wavelengths(pass_idx)
+    var r2 = init_r2 * pow(Float32(pass_idx + 1), _ALPHA - Float32(1))
+
+    def point_one(i: Int) {imm}:
+        var pcg = PCG32(seed ^ UInt64(pass_idx * 1000003 + i), UInt64(23))
+        cache.lx[unsafe_offset=i] = jb_point_radiance(cache, i, photons, heads, inv_cell, r2, sd, wl, pass_idx, pcg)
+
+    parallelize(point_one, cache.n)
+    cache.aggregate()
+
+    def vp_one(i: Int) {imm}:
+        jb_dipole_vp(vps, i, cache, sd, wl)
+
+    parallelize(vp_one, n_vps)
+
+
 def _sppm_render_core(
     psc:      Pointer[ParsedScene_Mojo, MutUntrackedOrigin],
     ref sd:       SceneView,
@@ -193,6 +217,9 @@ def _sppm_render_core(
     n_photons_per_pass: Int,
     initial_radius: Float32,
     verbose:  Bool,
+    jb: Bool = False,
+    jb_spacing: Float32 = Float32(0),
+    jb_near: Float32 = Float32(4),
 ) -> Tuple[Bool, Pointer[Float32, MutUntrackedOrigin], Pointer[Float32, MutUntrackedOrigin], Pointer[Float32, MutUntrackedOrigin]]:
     """Stochastic Progressive Photon Mapping main loop, factored out of
     `sppm_render` so the CPU driver's aux-buffer/denoise/write tail is a
@@ -282,7 +309,14 @@ def _sppm_render_core(
         sd, init_r2, cam_seed, Int(psc[unsafe_offset=0].max_depth),
         film_filter_of(psc[unsafe_offset=0].filter_type, psc[unsafe_offset=0].filter_sigma,
                        psc[unsafe_offset=0].filter_support_x, psc[unsafe_offset=0].filter_support_y),
+        jb,
     )
+    # Jensen-Buhler: irradiance points on the translucent surfaces; photons then share each pass's wavelengths.
+    var cache = IrradianceCache.build(sd, psc[unsafe_offset=0].prim_ids_cpu, Int(psc[unsafe_offset=0].prim_count_cpu) if jb else 0,
+                                      jb_spacing, jb_near, psc[unsafe_offset=0].rng_seed ^ UInt64(0x51ED))
+    if jb:
+        print("Jensen-Buhler: " + String(cache.n) + " irradiance points, spacing " + String(cache.spacing)
+              + ", " + String(cache.n_nodes) + " nodes")
     if verbose:
         var n_valid = 0
         for i in range(n_vps):
@@ -293,10 +327,13 @@ def _sppm_render_core(
     var prog = Progress(n_passes, "passes", quiet=verbose)
     for pass_idx in range(n_passes):
         var pass_seed = psc[unsafe_offset=0].rng_seed ^ UInt64(pass_idx * 2654435761 + 1)
-        var n_stored = _sppm_photon_pass(photons, n_photons_per_pass, max_photons, sd, pass_seed, pass_idx, Int(psc[unsafe_offset=0].max_depth))
-        if n_stored > 0:
+        var n_stored = _sppm_photon_pass(photons, n_photons_per_pass, max_photons, sd, pass_seed, pass_idx, Int(psc[unsafe_offset=0].max_depth), jb)
+        if n_stored > 0 or jb:
             _build_grid(photons, n_stored, heads, inv_cell, pass_idx)
+        if n_stored > 0:
             _gather_update(vps, n_vps, photons, heads, inv_cell, sd, pass_wavelengths(pass_idx), pass_idx)
+        if jb:
+            _jb_pass(cache, vps, n_vps, photons, heads, inv_cell, init_r2, sd, pass_idx, psc[unsafe_offset=0].rng_seed)
         var nee_seed = psc[unsafe_offset=0].rng_seed ^ UInt64(pass_idx * 0xBF58476D1CE4E5B9 + 3)
         _sppm_nee_update(vps, n_vps, sd, nee_seed, pass_idx)
         def flush_one(i: Int) {imm}:
@@ -339,6 +376,7 @@ def _sppm_render_core(
 
     parallelize(finalize_one, n_pix)
 
+    cache.free()
     heads.unsafe_free()
     photons.unsafe_free()
     vps.unsafe_free()
@@ -354,13 +392,16 @@ def sppm_render(
     initial_radius: Float32,
     no_denoise: Bool,
     verbose:  Bool,
+    jb: Bool = False,
+    jb_spacing: Float32 = Float32(0),
+    jb_near: Float32 = Float32(4),
 ) -> Int32:
     """CLI-facing SPPM entry point: run the progressive photon-mapping
     estimator (`_sppm_render_core`), then denoise (SPPMPixel.alb as the
     albedo AOV, normals/depth from the same integrator-agnostic
     render_aux_buffers the plain path tracer and VCM use) and write."""
     var (ok, out_global, out_caustic, albedo_pixels) = _sppm_render_core(
-        psc, sd, n_passes, n_photons_per_pass, initial_radius, verbose)
+        psc, sd, n_passes, n_photons_per_pass, initial_radius, verbose, jb, jb_spacing, jb_near)
     if not ok:
         return Int32(-1)
 

@@ -147,6 +147,9 @@ def main() raises:
     var sppm_passes = Int32(64)
     var sppm_photons = Int32(-1)   # -1 = not passed on CLI; fall back to scene/pbrt-matching default
     var sppm_radius = Float32(-1)  # -1 = not passed on CLI; fall back to scene/pbrt-matching default
+    var use_jb = False             # --jb: SPPM with Jensen-Buhler's dipole on subsurface objects (CPU)
+    var jb_spacing = Float32(0)    # --jb-spacing S: irradiance point spacing, 0 = half the shortest reduced mfp
+    var jb_near = Float32(4)       # --jb-near K: cells within K cell edges summed per point, 0 = every point
     var use_guide = False
     var use_vcm = False
     var vcm_spp = Int32(-1)  # -1 = not passed on CLI; fall back to scene pixelsamples
@@ -316,6 +319,15 @@ def main() raises:
             ckpt.stop_after = Int(_parse_int32(String(args[i]), 0))
         elif arg == "--sppm":
             use_sppm = True
+        elif arg == "--jb":
+            use_sppm = True
+            use_jb = True
+        elif arg == "--jb-spacing" and i + 1 < len(args):
+            i += 1
+            jb_spacing = _parse_float32(String(args[i]))
+        elif arg == "--jb-near" and i + 1 < len(args):
+            i += 1
+            jb_near = _parse_float32(String(args[i]))
         elif arg == "--sppm-passes" and i + 1 < len(args):
             i += 1
             sppm_passes = _parse_int32(String(args[i]), 0)
@@ -462,7 +474,7 @@ def main() raises:
     elif interactive:
         render_interactive(path_cstr, sobol, use_gpu, spectral=spectral, fullscreen=fullscreen, override_w=override_w, override_h=override_h, spp_override=spp_override, seed_override=seed_override, verbose=verbose, use_restir=use_restir, use_restir_gi=use_restir_gi, use_sms_restir=use_sms_restir, use_vol_restir_reuse=use_vol_restir_reuse, headless_frames=headless_frames)
     else:
-        var rc = parse_and_render(path_cstr, sobol, use_gpu, spectral=spectral, preparsed=preparsed, gpu_ctx=gpu_ctx, override_w=override_w, override_h=override_h, no_denoise=no_denoise, spp_override=spp_override, seed_override=seed_override, verbose=verbose, use_sppm=use_sppm, sppm_passes=sppm_passes, sppm_photons=sppm_photons, sppm_radius=sppm_radius, use_guide=use_guide, use_vcm=use_vcm, vcm_spp=vcm_spp, vcm_photons=vcm_photons, vcm_budget=vcm_budget, vcm_cap=vcm_cap, vcm_no_keep_mis=vcm_no_keep_mis, vcm_radius_from_camera=vcm_radius_from_camera, vcm_radius_cam_percentile=vcm_radius_cam_percentile, vcm_radius_cam_fraction_mult=vcm_radius_cam_fraction_mult, vcm_no_footprint=vcm_no_footprint, vcm_radius_scale=vcm_radius_scale, use_vulkan_rt_shade=use_vulkan_rt_shade, use_vcm_wavefront=use_vcm_wavefront, use_restir=use_restir, use_restir_gi=use_restir_gi, use_sms_restir=use_sms_restir, use_vol_restir_reuse=use_vol_restir_reuse, ckpt=ckpt)
+        var rc = parse_and_render(path_cstr, sobol, use_gpu, spectral=spectral, preparsed=preparsed, gpu_ctx=gpu_ctx, override_w=override_w, override_h=override_h, no_denoise=no_denoise, spp_override=spp_override, seed_override=seed_override, verbose=verbose, use_sppm=use_sppm, sppm_passes=sppm_passes, sppm_photons=sppm_photons, sppm_radius=sppm_radius, use_jb=use_jb, jb_spacing=jb_spacing, jb_near=jb_near, use_guide=use_guide, use_vcm=use_vcm, vcm_spp=vcm_spp, vcm_photons=vcm_photons, vcm_budget=vcm_budget, vcm_cap=vcm_cap, vcm_no_keep_mis=vcm_no_keep_mis, vcm_radius_from_camera=vcm_radius_from_camera, vcm_radius_cam_percentile=vcm_radius_cam_percentile, vcm_radius_cam_fraction_mult=vcm_radius_cam_fraction_mult, vcm_no_footprint=vcm_no_footprint, vcm_radius_scale=vcm_radius_scale, use_vulkan_rt_shade=use_vulkan_rt_shade, use_vcm_wavefront=use_vcm_wavefront, use_restir=use_restir, use_restir_gi=use_restir_gi, use_sms_restir=use_sms_restir, use_vol_restir_reuse=use_vol_restir_reuse, ckpt=ckpt)
         var elapsed_s = Float64(perf_counter_ns() - t0) / 1_000_000_000.0
         print("Gonzales Total Execution Time:", elapsed_s, "s")
         if rc != Int32(0):

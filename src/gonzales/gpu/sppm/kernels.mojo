@@ -12,6 +12,8 @@ from gonzales.core.rng import PCG32
 from gonzales.integrators.sppm.sppm import _sppm_count_photon, SPPMPixel, SPPMPhoton, _sppm_insert_photon, _sppm_gather_one, _sppm_nee_one, _sppm_finalize_albedo_one_pixel, _sppm_finalize_one_pixel, _sppm_trace_visible_point, _sppm_trace_photon, _sppm_flush_one
 from gonzales.estimators.photon_grid import grid_reset_cell
 from gonzales.core.spectrum import pass_wavelengths
+from gonzales.estimators.irradiance_cache import IrradianceCache
+from gonzales.integrators.sppm.jensen_buhler import jb_point_radiance, jb_dipole_vp
 
 @__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
 @__llvm_metadata(`nvvm.minctasm`=SIMDLength(1))    # NVIDIA keeps its old register budget; AMD ignores this
@@ -35,6 +37,7 @@ def sppm_gen_vp_gpu(
     max_depth_dp: Int64,
     film_filter: FilmFilter,
     sd: SceneView,
+    dipole_dp: Int32 = Int32(0),
 ):
     """One thread per (pixel, vp_sample). Calls the SAME
     _sppm_trace_visible_point the CPU driver (_sppm_camera_pass) calls,
@@ -48,7 +51,7 @@ def sppm_gen_vp_gpu(
     var px = pix % Int(fw)
     var py = pix // Int(fw)
     var pcg = PCG32(seed ^ UInt64(combined * 6364136223846793005 + 1), UInt64(1))
-    vps[unsafe_offset=combined] = _sppm_trace_visible_point[True](sd, pcg, r2c, c2w, px, py, Int32(pix), init_r2, inter_scratch.unsafe_offset(combined), Int(max_depth_dp), film_filter, combined % vp_samples)
+    vps[unsafe_offset=combined] = _sppm_trace_visible_point[True](sd, pcg, r2c, c2w, px, py, Int32(pix), init_r2, inter_scratch.unsafe_offset(combined), Int(max_depth_dp), film_filter, combined % vp_samples, dipole=dipole_dp != Int32(0))
 
 
 @__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
@@ -64,6 +67,7 @@ def sppm_emit_photons_gpu(
     pass_idx_dp: Int64,
     max_depth_dp: Int64,
     sd: SceneView,
+    shared_wl_dp: Int32 = Int32(0),
 ):
     """One thread per emitted photon path. Calls the SAME _sppm_trace_photon
     the CPU driver (_sppm_photon_pass) calls, with use_gpu=True so"""
@@ -92,7 +96,7 @@ def sppm_emit_photons_gpu(
     var pcg = PCG32(seed ^ UInt64(pass_idx * 1000003 + k), UInt64(7))
     _sppm_trace_photon[True, True](sd, pcg, inter_scratch.unsafe_offset(k), n_emit, photons, max_photons, stored_counter, default_emit_med, Int(max_depth_dp),
         spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y,
-        spectral_cie_z, spectral_d65, pass_wavelengths(pass_idx * Int(n_emit) + k))
+        spectral_cie_z, spectral_d65, pass_wavelengths(pass_idx if shared_wl_dp != Int32(0) else pass_idx * Int(n_emit) + k))
 
 
 @__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
@@ -209,6 +213,7 @@ def sppm_retrace_vp_gpu(
     film_filter: FilmFilter,
     pass_idx_dp: Int64,
     sd: SceneView,
+    dipole_dp: Int32 = Int32(0),
 ):
     """pbrt-style SPPM: one fresh visible point per pixel every pass. The pixel keeps its
     radius, photon count, tau and gsum; only the visible point itself is replaced."""
@@ -220,7 +225,7 @@ def sppm_retrace_vp_gpu(
     var px = pix % Int(fw)
     var py = pix // Int(fw)
     var pcg = PCG32(seed ^ UInt64(pix * 6364136223846793005 + 1), UInt64(1))
-    var nv = _sppm_trace_visible_point[True](sd, pcg, r2c, c2w, px, py, Int32(pix), init_r2, inter_scratch.unsafe_offset(pix), Int(max_depth_dp), film_filter, pass_idx, pass_idx)
+    var nv = _sppm_trace_visible_point[True](sd, pcg, r2c, c2w, px, py, Int32(pix), init_r2, inter_scratch.unsafe_offset(pix), Int(max_depth_dp), film_filter, pass_idx, pass_idx, dipole=dipole_dp != Int32(0))
     if pass_idx > 0:
         var old = vps[unsafe_offset=pix]
         nv.r2 = old.r2
@@ -271,3 +276,34 @@ def sppm_finalize_gpu(
 
 
 # ── GPU host driver ───────────────────────────────────────────────────────────
+
+
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+@__llvm_metadata(`nvvm.minctasm`=SIMDLength(1))    # NVIDIA keeps its old register budget; AMD ignores this
+def sppm_jb_points_gpu(cache: IrradianceCache, photons: Pointer[SPPMPhoton, MutUntrackedOrigin],
+                       heads: Pointer[Int32, MutUntrackedOrigin], inv_cell: Float32, r2: Float32, seed: UInt64,
+                       pass_idx_dp: Int64, sd: SceneView):
+    """Jensen-Buhler: one thread per irradiance point, as the CPU driver's _jb_pass."""
+    var i = Int(block_idx.x * block_dim.x + thread_idx.x)
+    if i >= cache.n:
+        return
+    var pass_idx = Int(pass_idx_dp)
+    var pcg = PCG32(seed ^ UInt64(pass_idx * 1000003 + i), UInt64(23))
+    cache.lx[unsafe_offset=i] = jb_point_radiance(cache, i, photons, heads, inv_cell, r2, sd, pass_wavelengths(pass_idx), pass_idx, pcg)
+
+
+def sppm_jb_aggregate_gpu(cache: IrradianceCache):
+    """The tree's sums, bottom up: a few thousand nodes, one thread."""
+    if block_idx.x * block_dim.x + thread_idx.x == 0:
+        cache.aggregate()
+
+
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+@__llvm_metadata(`nvvm.minctasm`=SIMDLength(1))    # NVIDIA keeps its old register budget; AMD ignores this
+def sppm_jb_vp_gpu(vps: Pointer[SPPMPixel, MutUntrackedOrigin], n_vps_dp: Int64, cache: IrradianceCache,
+                   pass_idx_dp: Int64, sd: SceneView):
+    """Jensen-Buhler: one thread per visible point; only dipole points add anything."""
+    var i = Int(block_idx.x * block_dim.x + thread_idx.x)
+    if i >= Int(n_vps_dp):
+        return
+    jb_dipole_vp(vps, i, cache, sd, pass_wavelengths(Int(pass_idx_dp)))

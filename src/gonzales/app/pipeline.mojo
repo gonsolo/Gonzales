@@ -2239,6 +2239,9 @@ def parse_and_render(
     sppm_passes: Int32 = Int32(64),
     sppm_photons: Int32 = Int32(-1),
     sppm_radius: Float32 = Float32(-1),
+    use_jb: Bool = False,
+    jb_spacing: Float32 = Float32(0),
+    jb_near: Float32 = Float32(4),
     use_guide: Bool = False,
     use_vcm: Bool = False,
     vcm_spp: Int32 = Int32(-1),  # -1 = not passed on CLI; fall back to scene pixelsamples
@@ -2546,7 +2549,7 @@ def parse_and_render(
         var ret = sppm_render_gpu(
             handle, psc, sd[unsafe_offset=0],
             Int(sppm_passes), Int(resolved[0]), resolved[1],
-            no_denoise, verbose, ckpt,
+            no_denoise, verbose, use_jb, jb_spacing, jb_near, ckpt,
         )
         gpu_free_scene(handle)
         sd.unsafe_free()
@@ -2967,7 +2970,7 @@ def parse_and_render(
         var ret = sppm_render(
             psc, sd[unsafe_offset=0],
             Int(sppm_passes), Int(resolved[0]), resolved[1],
-            no_denoise, verbose,
+            no_denoise, verbose, use_jb, jb_spacing, jb_near,
         )
         sd.unsafe_free()
         mojo_parsed_free(psc)
