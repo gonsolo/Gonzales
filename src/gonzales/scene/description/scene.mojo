@@ -183,6 +183,5 @@ struct Scene(Movable):
             walkNodesArr      = Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
             walkPrimsArr      = Pointer[Pointer[PrimId, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
             walkBvhOfMesh     = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
-            mneeStats         = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
             bvh4              = BVH4.none(),
         )

@@ -400,14 +400,9 @@ def _mnee_bsdf_weight(
 
 @always_inline
 def _mnee_live(ctx: ShadeContext) -> Bool:
-    """MNEE (and the emitter-hit suppression that goes with it) runs only while the scene has smooth glass and the
-    glass probes have not shown it to be rare. Cycles' sessions leave it off: Cycles runs MNEE only between objects
-    flagged as caustic caster and receiver."""
-    if not ctx.has_glass or ctx.cycles[3] != 0:
-        return False
-    if _is_real_ptr(ctx.mnee_stats) and ctx.mnee_stats[unsafe_offset=2] != Int32(0):
-        return False
-    return True
+    """MNEE (and the emitter-hit suppression that goes with it) runs wherever the scene has smooth glass. Cycles'
+    sessions leave it off: Cycles runs MNEE only between objects flagged as caustic caster and receiver."""
+    return ctx.has_glass and ctx.cycles[3] == 0
 
 
 @always_inline
@@ -472,12 +467,6 @@ def _mnee_area_light_contribute(
 
     # Most samples see no glass: skip the solver's heavy setup for them (it would return not-found untouched).
     var (probe_glass, probe_inter) = _mnee_first_probe(ctx, hit_point, shadow_dir, dist)
-    if _is_real_ptr(ctx.mnee_stats) and ((path_ptr[].pcgState >> 20) & UInt64(15)) == UInt64(0):
-        var probes = Int(Atomic.fetch_add(ctx.mnee_stats, Int32(1))) + 1
-        if probe_glass:
-            _ = Atomic.fetch_add(ctx.mnee_stats.unsafe_offset(1), Int32(1))
-        if probes == 4096 and Int(ctx.mnee_stats[unsafe_offset=1]) * 20 < probes:
-            ctx.mnee_stats[unsafe_offset=2] = Int32(1)   # glass on under 5% of probes: MNEE is not worth its cost in this scene
     if not probe_glass:
         return False
 
@@ -831,8 +820,8 @@ def _nee_area_lights[enqueue_shadow: Bool, mnee: Bool = True, defer_only: Bool =
     # landed on a face turned away (most of a cube lamp seen from below),
     # and the BSDF ray through the glass was then counted on top of MNEE:
     # a mesh-cube lamp over a glass slab read 1.25x pbrt, 1.5x under it.
-    # The ReSTIR SMS branch never marked, and still does not. Only a vertex that runs MNEE marks: the stats flag
-    # can switch MNEE off mid-batch, so the emitter hit trusts the mark, not a second look at the flag.
+    # The ReSTIR SMS branch never marked, and still does not. Only a vertex that runs MNEE marks, and the emitter hit
+    # trusts the mark.
     var live = mnee and _mnee_live(ctx)
     if live and not (pixel_idx >= 0 and _is_real_ptr(sms_io.read)):
         path_ptr[].last_ns_n = normal

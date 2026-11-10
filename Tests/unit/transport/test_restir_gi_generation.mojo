@@ -97,7 +97,6 @@ def _make_ctx_with_light(
         gi_pending,
         gi_reservoir_io_null(),
         Pointer[PathState, MutUntrackedOrigin].unsafe_dangling(), True, True,
-        Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
         BVH4.none(),
         Pointer[SuppressTask, MutUntrackedOrigin].unsafe_dangling(),
         0, Pointer[Medium, MutUntrackedOrigin].unsafe_dangling(), Pointer[MediumInterface, MutUntrackedOrigin].unsafe_dangling(),

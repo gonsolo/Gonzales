@@ -637,7 +637,6 @@ def cpu_shade_context(
     textures: Pointer[GpuTexture, MutUntrackedOrigin] = Pointer[GpuTexture, MutUntrackedOrigin].unsafe_dangling(),
     n_textures: Int = 0,
     has_glass: Bool = True,
-    mnee_stats: Pointer[Int32, MutUntrackedOrigin] = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
     bvh4: BVH4 = BVH4.none(),
     filter_glossy: Float32 = Float32(0),
     clamp: SIMD[DType.float32, 2] = SIMD[DType.float32, 2](0),
@@ -645,7 +644,7 @@ def cpu_shade_context(
 ) -> ShadeContext:
     """The per-render-invariant ShadeContext of the CPU wavefront; build once, set path_idx per path."""
     return ShadeContext(
-        paths_base=Pointer[PathState, MutUntrackedOrigin].unsafe_dangling(), has_glass=has_glass, glossy_sms=has_glass, mnee_stats=mnee_stats, bvh4=bvh4, suppress_tasks=Pointer[SuppressTask, MutUntrackedOrigin].unsafe_dangling(),
+        paths_base=Pointer[PathState, MutUntrackedOrigin].unsafe_dangling(), has_glass=has_glass, glossy_sms=has_glass, bvh4=bvh4, suppress_tasks=Pointer[SuppressTask, MutUntrackedOrigin].unsafe_dangling(),
         n_mediums=0, mediums=Pointer[Medium, MutUntrackedOrigin].unsafe_dangling(), medium_ifaces=Pointer[MediumInterface, MutUntrackedOrigin].unsafe_dangling(),
         grids=Pointer[Grid, MutUntrackedOrigin].unsafe_dangling(), nvdb_grids=Pointer[NvdbGrid, MutUntrackedOrigin].unsafe_dangling(),
                 path_idx=0, bvh2Nodes=bvh2Nodes, primIds=primIds, meshes=meshes, curves=curves, materials=materials,
@@ -705,14 +704,13 @@ def shade_core_cpu_nee(
     textures: Pointer[GpuTexture, MutUntrackedOrigin] = Pointer[GpuTexture, MutUntrackedOrigin].unsafe_dangling(),
     n_textures: Int = 0,
     has_glass: Bool = True,
-    mnee_stats: Pointer[Int32, MutUntrackedOrigin] = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
     bvh4: BVH4 = BVH4.none(),
 ):
     var path_ptr = paths.unsafe_offset(tid)
     if path_ptr[].active == 0:
         return
     var inter = intersections[unsafe_offset=tid]
-    var ctx = cpu_shade_context(bvh2Nodes=bvh2Nodes, primIds=primIds, meshes=meshes, curves=curves, materials=materials, areaLights=areaLights, areaLightCount=areaLightCount, tex_filenames=tex_filenames, distantLights=distantLights, distantLightCount=distantLightCount, pointLights=pointLights, pointLightCount=pointLightCount, infiniteLights=infiniteLights, infiniteLightCount=infiniteLightCount, spheres=spheres, sphereCount=sphereCount, light_sampler=light_sampler, sobol_matrices=sobol_matrices, guide=guide, blasNodesArr=blasNodesArr, blasPrimIdsArr=blasPrimIdsArr, instances=instances, guide_write=guide_write, spectral=spectral, measured_brdfs=measured_brdfs, use_restir=use_restir, gi_pending=gi_pending, gi_io=gi_io, nmaps=nmaps, textures=textures, n_textures=n_textures, has_glass=has_glass, mnee_stats=mnee_stats, bvh4=bvh4)
+    var ctx = cpu_shade_context(bvh2Nodes=bvh2Nodes, primIds=primIds, meshes=meshes, curves=curves, materials=materials, areaLights=areaLights, areaLightCount=areaLightCount, tex_filenames=tex_filenames, distantLights=distantLights, distantLightCount=distantLightCount, pointLights=pointLights, pointLightCount=pointLightCount, infiniteLights=infiniteLights, infiniteLightCount=infiniteLightCount, spheres=spheres, sphereCount=sphereCount, light_sampler=light_sampler, sobol_matrices=sobol_matrices, guide=guide, blasNodesArr=blasNodesArr, blasPrimIdsArr=blasPrimIdsArr, instances=instances, guide_write=guide_write, spectral=spectral, measured_brdfs=measured_brdfs, use_restir=use_restir, gi_pending=gi_pending, gi_io=gi_io, nmaps=nmaps, textures=textures, n_textures=n_textures, has_glass=has_glass, bvh4=bvh4)
     ctx.path_idx = tid
     shade_nee_core[False, False](path_ptr, inter, ctx, guide_write, restir_io, pixel_idx, sms_io)
 

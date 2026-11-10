@@ -853,10 +853,6 @@ struct GpuSceneHandle(Movable):
     var materials_buf: DeviceBuffer[DType.uint8]
     var material_count: Int
     var has_glass_material: Bool
-    var has_chain_glass: Bool   # glass at upload; glossy SMS stays on when the MNEE probes switch has_glass_material off
-    # MNEE auto-off: [probes, probes that found glass] written by the diffuse kernel; gpu_mnee_adapt reads it after a batch.
-    var mnee_stats_buf: DeviceBuffer[DType.int32]
-    var mnee_adapt_done: Bool
     var bench: Pointer[Int, MutUntrackedOrigin]      # closest rays, shadow rays, trace ns, mode (1 frame sync, 2 trace timing)
     # one parked glass-chain emitter hit per path (SuppressTask), resolved by resolve_suppress_gpu; 32 bytes when unused
     var suppress_buf: DeviceBuffer[DType.uint8]
@@ -999,7 +995,7 @@ struct GpuSceneHandle(Movable):
             vcmKeepInvCell=Float32(0), vcmKeepScale=Float32(1), vcmMaxDepth=Int32(9),
             vcmCamX=Float32(0), vcmCamY=Float32(0), vcmCamZ=Float32(0),
             vcmFootprint=Float32(0), vcmMergeR=Float32(0),
-            vcmMneeStats=Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(), camFp=self.cam_fp,
+            camFp=self.cam_fp,
             sphereLightCount=Int64(self.n_sphere_lights),
             lightPickCdf=self.lights.light_pick_ptr(),
             vcmStatIn=Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
@@ -1007,7 +1003,7 @@ struct GpuSceneHandle(Movable):
             vcmLambda=Float32(0),
             vcmShrink=Float32(1),
             vcmBucketCap=Int32(0),
-            hasGlass=(Int32(1) if self.has_glass_material else Int32(0)) | (Int32(2) if self.has_chain_glass else Int32(0)),
+            hasGlass=Int32(3) if self.has_glass_material else Int32(0),
             lens=self.lens,
             filterGlossy=self.filter_glossy,
             clamp=self.clamp,
@@ -1017,7 +1013,6 @@ struct GpuSceneHandle(Movable):
             walkNodesArr=typed_ptr[Pointer[BVH2Node, MutUntrackedOrigin]](self.walk_bvh.nodes_ptrs_buf),
             walkPrimsArr=typed_ptr[Pointer[PrimId, MutUntrackedOrigin]](self.walk_bvh.prims_ptrs_buf),
             walkBvhOfMesh=typed_ptr[Int32](self.walk_bvh.of_mesh_buf) if self.walk_bvh.n > 0 else Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
-            mneeStats=Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
             bvh4=BVH4.none(),
         )
 
@@ -1526,8 +1521,6 @@ def gpu_upload_scene(
             var nee_candidates = (1 if s.area_light_count > 0 else 0) + Int(s.distant_count) + Int(s.point_count) + Int(s.sphere_count) + Int(s.infinite_count)
             var sw_defer = Int(s.medium_count) == 0 and nee_candidates <= SHADOW_SLOTS and getenv("GONZALES_NO_SW_SHADOW") == ""
             var r_shadow_slots = SHADOW_SLOTS if getenv("GONZALES_RTCORE") != "" or sw_defer else 1
-            var r_mnee_stats = ctx.enqueue_create_buffer[DType.int32](4)   # as the CPU's: probes, found, off flag
-            ctx.enqueue_memset(r_mnee_stats, Int32(0))
             var r_prev_c2w_buf = ctx.enqueue_create_buffer[DType.uint8](64)
             ctx.enqueue_memset(r_prev_c2w_buf, UInt8(0))
             var r_shade_ctx_buf = ctx.enqueue_create_buffer[DType.uint8](1024)
@@ -1573,9 +1566,6 @@ def gpu_upload_scene(
                 materials_buf=mat_buf^,
                 material_count=Int(s.material_count),
                 has_glass_material=has_glass_mat,
-                has_chain_glass=has_glass_mat,
-                mnee_stats_buf=r_mnee_stats^,
-                mnee_adapt_done=False,
                 bench=_bench_counters(),
                 suppress_buf=_gpu_placeholder(ctx),
                 mat_kind_mask=kind_mask,
@@ -1673,7 +1663,7 @@ def gpu_alloc_pixel_buffers(handle: Pointer[GpuSceneHandle, MutUntrackedOrigin],
     ref h = handle[]
     var n_pix = max(n_pixels, 1)
     var n_paths = n_pix * batch
-    h.suppress_buf = ctx.enqueue_create_buffer[DType.uint8](n_paths * 32 if h.has_chain_glass else 32)
+    h.suppress_buf = ctx.enqueue_create_buffer[DType.uint8](n_paths * 32 if h.has_glass_material else 32)
     ctx.enqueue_memset(h.suppress_buf, UInt8(0))
     h.path_buf = ctx.enqueue_create_buffer[DType.uint8](n_paths * size_of[PathState]())
     h.inter_buf = ctx.enqueue_create_buffer[DType.uint8](n_paths * size_of[Intersection]())

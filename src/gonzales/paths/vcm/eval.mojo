@@ -293,10 +293,6 @@ def _vcm_mnee(
     var shadow_dir = to_light * (Float32(1) / dist)
     var ctx = _shade_context(sd, Pointer[UInt32, MutUntrackedOrigin].unsafe_dangling())
     var (glass, probe) = _mnee_first_probe(ctx, hit_v, shadow_dir, dist)
-    if _is_real_ptr(sd.vcmMneeStats):
-        _ = Atomic.fetch_add(sd.vcmMneeStats, Int32(1))
-        if glass:
-            _ = Atomic.fetch_add(sd.vcmMneeStats.unsafe_offset(1), Int32(1))
     if not glass:
         return z
     var c = _mnee_chain(ctx, gn, hit_v, shadow_dir, dist, light_point, l_du, l_dv, pcg, probe)

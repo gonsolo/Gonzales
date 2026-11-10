@@ -22,12 +22,10 @@ def shared_shade_context(
     paths_base: Pointer[PathState, MutUntrackedOrigin],
     use_restir: Bool,
     shadow_tasks: Pointer[ShadowTask, MutUntrackedOrigin],
-    mnee_stats: Pointer[Int32, MutUntrackedOrigin] = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
 ) -> ShadeContext:
     """The context of _shade_context with the per-thread path index replaced by the base of the path array."""
     var ctx = _shade_context(sd, sobol_matrices, use_restir=use_restir, shadow_tasks=shadow_tasks)
     ctx.paths_base = paths_base
-    ctx.mnee_stats = mnee_stats
     return ctx^
 
 

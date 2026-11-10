@@ -36,7 +36,7 @@ from gonzales.transport.restir_di import DIReservoir, di_reservoir_init, Reservo
 from gonzales.transport.restir_gi import GIReservoir, gi_reservoir_init, GIReservoirIO, gi_reservoir_io_null
 from gonzales.integrators.pt.restir_sms import SMSReservoir, sms_reservoir_init, SMSReservoirIO, sms_reservoir_io_null
 from gonzales.integrators.pt.restir_vol import VolReservoir, vol_reservoir_init, vol_reservoir_io_null
-from gonzales.gpu.pt.driver import gpu_render_sample, gpu_render_wavefront, gpu_adaptive_update, gpu_mnee_adapt, gpu_download_albedo, gpu_clear_film, gpu_clear_restir, gpu_clear_restir_vol
+from gonzales.gpu.pt.driver import gpu_render_sample, gpu_render_wavefront, gpu_adaptive_update, gpu_download_albedo, gpu_clear_film, gpu_clear_restir, gpu_clear_restir_vol
 from gonzales.gpu.scene import GpuSceneHandle, XertPieces, heat_fill, mesh_host_bytes, xert_heat, xert_mesh_blas, WAVEFRONT_BATCH, gpu_available, gpu_upload_scene, gpu_alloc_pixel_buffers, gpu_free_scene, gpu_ptex_begin, gpu_ptex_finish, gpu_ptex_withhold, gpu_ptex_withheld, gpu_ptex_redo_upload, gpu_ptex_stream_start, gpu_ptex_poll, gpu_ptex_stream_finish, gpu_ptex_make_room, gpu_set_curve_bvh_dev, typed_ptr
 from gonzales.gpu.denoise import gpu_atrous_denoise
 from gonzales.gpu.pt.wavefront import gpu_gen_aux_buffers
@@ -2044,7 +2044,6 @@ struct GpuGuidedRenderer(GuidedRenderer):
             if self.ptex_on:
                 self._ptex_step(si, actual_batch)
             si += actual_batch
-            gpu_mnee_adapt(self.handle)
             self.progress.update(si)
         if self.ptex_on:
             self._ptex_flush()
@@ -2150,9 +2149,6 @@ struct GpuGuidedRenderer(GuidedRenderer):
         ck.io("film_sq", self.handle[].ctx, self.handle[].film_sq_buf)
         ck.io("aux_film", self.handle[].ctx, self.handle[].aux_film_buf)
         ck.io("px_active", self.handle[].ctx, self.handle[].px_active_buf)
-        ck.io("mnee_stats", self.handle[].ctx, self.handle[].mnee_stats_buf)
-        ck.flag("glass", self.handle[].has_glass_material)
-        ck.flag("mnee_adapt_done", self.handle[].mnee_adapt_done)
 
     def _checkpoint(mut self, mut ck: Checkpoint, done: Int, partial: Bool) raises:
         ck.begin_write(done)
@@ -3484,10 +3480,6 @@ def render_interactive(
                     use_vol_restir_reuse=use_vol_restir_reuse,
                 )
             frame_count += 1
-            try:
-                gpu_mnee_adapt(handle)
-            except:
-                pass
             if ptex_live:
                 var t_p = Int(perf_counter_ns())
                 try:

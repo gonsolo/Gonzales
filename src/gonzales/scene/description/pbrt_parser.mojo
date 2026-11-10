@@ -4540,7 +4540,6 @@ def mojo_parsed_scene_descriptor(
     sd[unsafe_offset=0].vcmCamX = Float32(0); sd[unsafe_offset=0].vcmCamY = Float32(0); sd[unsafe_offset=0].vcmCamZ = Float32(0)
     sd[unsafe_offset=0].vcmFootprint     = Float32(0)   # CPU VCM: one global radius
     sd[unsafe_offset=0].vcmMergeR        = Float32(0)
-    sd[unsafe_offset=0].vcmMneeStats     = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling()
     sd[unsafe_offset=0].camFp            = camera_footprint(psc[unsafe_offset=0].raster_to_camera,
         psc[unsafe_offset=0].camera_to_world, Int(psc[unsafe_offset=0].film_w), Int(psc[unsafe_offset=0].film_h),
         Int(psc[unsafe_offset=0].samples_per_pixel))
@@ -4586,10 +4585,6 @@ def mojo_parsed_scene_descriptor(
     sd[unsafe_offset=0].walkNodesArr    = Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling()
     sd[unsafe_offset=0].walkPrimsArr    = Pointer[Pointer[PrimId, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling()
     sd[unsafe_offset=0].walkBvhOfMesh   = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling()
-    var mnee_stats = unsafe_alloc[Int32](4)
-    for k in range(4):
-        mnee_stats[unsafe_offset=k] = Int32(0)
-    sd[unsafe_offset=0].mneeStats       = mnee_stats
     sd[unsafe_offset=0].blasNodesArr    = psc[unsafe_offset=0].blas_nodes_arr
     sd[unsafe_offset=0].blasPrimIdsArr  = psc[unsafe_offset=0].blas_primids_arr
     sd[unsafe_offset=0].blasCount       = Int64(psc[unsafe_offset=0].blas_count)

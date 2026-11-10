@@ -312,7 +312,7 @@ def _gpu_bounce_kernels(
         )
         _bench_stage(handle, 12)
     var suppress_tasks = Pointer[SuppressTask, MutUntrackedOrigin].unsafe_dangling()
-    if handle[].has_chain_glass:
+    if handle[].has_glass_material:
         suppress_tasks = handle[].suppress_buf.unsafe_ptr().unsafe_bitcast[SuppressTask]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
     handle[].ctx.enqueue_function[shade_nee_preamble_gpu](
         handle[].path_buf.unsafe_ptr().unsafe_bitcast[PathState]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
@@ -324,7 +324,7 @@ def _gpu_bounce_kernels(
         grid_dim=grid_dim,
         block_dim=block_size,
     )
-    if handle[].has_chain_glass:
+    if handle[].has_glass_material:
         handle[].ctx.enqueue_function[resolve_suppress_gpu](
             handle[].path_buf.unsafe_ptr().unsafe_bitcast[PathState]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
             handle[].inter_buf.unsafe_ptr().unsafe_bitcast[Intersection]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
@@ -414,10 +414,7 @@ def _gpu_bounce_kernels(
             grid_dim=grid_dim, block_dim=block_size,
         )
     var path_base = handle[].path_buf.unsafe_ptr().unsafe_bitcast[PathState]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
-    var mnee_stats = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling()
-    if handle[].has_glass_material and not handle[].mnee_adapt_done:
-        mnee_stats = handle[].mnee_stats_buf.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
-    var shared_ctx = shared_shade_context(sd, handle[].sobol_buf.unsafe_ptr().unsafe_bitcast[UInt32](), path_base, use_restir, shadow_ptr, mnee_stats)
+    var shared_ctx = shared_shade_context(sd, handle[].sobol_buf.unsafe_ptr().unsafe_bitcast[UInt32](), path_base, use_restir, shadow_ptr)
     shared_ctx.guide = handle[].guide_read
     shared_ctx.guide_write = handle[].guide_write
     comptime assert size_of[ShadeContext]() <= 1024, "grow GpuSceneHandle.shade_ctx_buf"
@@ -851,25 +848,6 @@ def gpu_render_sample[Oc: Origin[mut=True]](
 # Wavefront render: generates actual_batch samples worth of primary rays for all pixels,
 # runs the full bounce loop over n_pixels × actual_batch paths together, then accumulates.
 # Caller loops over spp in steps of WAVEFRONT_BATCH; progress reporting is up to the caller.
-# MNEE only pays where glass really sits between surfaces and lights. After the first batch, if fewer than 2% of the
-# sampled MNEE probes found glass, switch it (and the emitter-hit suppression that goes with it) off for the rest of the render.
-def gpu_mnee_adapt(handle: Pointer[GpuSceneHandle, MutUntrackedOrigin]) raises:
-    if not handle[].has_glass_material or handle[].mnee_adapt_done:
-        return
-    # A plain host copy: the host-buffer API pins a ~1.3 GiB pool on first use (0.8 s, plus 0.5 s to release at exit).
-    var host = unsafe_alloc[Int32](len(handle[].mnee_stats_buf))   # the copy fills the whole buffer
-    handle[].ctx.enqueue_copy(host, handle[].mnee_stats_buf)
-    handle[].ctx.synchronize()
-    var probes = Int(host[unsafe_offset=0])
-    var found = Int(host[unsafe_offset=1])
-    host.unsafe_free()
-    if probes >= 4096:
-        handle[].mnee_adapt_done = True
-        if found * 20 < probes:
-            handle[].has_glass_material = False
-            print("MNEE off: glass on", 100.0 * Float64(found) / Float64(probes), "% of probes")
-
-
 def gpu_render_wavefront(
     handlePtr: Pointer[GpuSceneHandle, MutUntrackedOrigin],
     c2w: Pointer[Float32, MutUntrackedOrigin],
