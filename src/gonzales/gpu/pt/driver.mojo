@@ -394,7 +394,6 @@ def _gpu_bounce_kernels(
     var sw_shadow = sw_shadow_ok and not handle[].has_glass_material
     # Hair NEE has no MNEE probe, so its shadow rays are deferred with glass in the scene too (the fur's rays dominate).
     var sw_shadow_hair = sw_shadow_ok and handle[].has_material(MatKind.hair)
-    var sw_defer_coated = not env_on["GONZALES_NO_SW_COATED"]()
     var shadow_ptr = Pointer[ShadowTask, MutUntrackedOrigin].unsafe_dangling()
     if hw_shadow or sw_shadow:
         shadow_ptr = handle[].shadow_buf.unsafe_ptr().unsafe_bitcast[ShadowTask]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
@@ -497,7 +496,7 @@ def _gpu_bounce_kernels(
             path_ptr_c, live_idx, live_count, kind_idx, live_count.unsafe_offset(1 + Int(MatKind.coated_diffuse)), Int32(MatKind.coated_diffuse),
             grid_dim=grid_dim, block_dim=block_size,
         )
-        if sw_shadow and sw_defer_coated:
+        if sw_shadow:
             handle[].ctx.enqueue_function[shade_coated_diffuse_gpu[True]](
                 handle[].path_buf.unsafe_ptr().unsafe_bitcast[PathState]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
                 handle[].inter_buf.unsafe_ptr().unsafe_bitcast[Intersection]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
