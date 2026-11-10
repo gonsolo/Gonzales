@@ -3,7 +3,7 @@ from std.sys import argv, exit, get_defined_int
 from std.sys.info import _accelerator_arch
 from std.time import perf_counter_ns
 from std.os import setenv
-from gonzales.core.env import env_str, env_on, env_set, env_warn_unknown
+from gonzales.core.env import env_str, env_on, env_set, env_warn_unknown, env_list
 from std.memory.alloc import unsafe_alloc
 from gonzales.app.pipeline import _generate_sobol_matrices, parse_and_render, render_interactive, debug_trace_pixel, debug_render_vulkanrt, bake_scene
 from gonzales.core.spectrum import load_spectral_context, spectral_handle, SpectralContext
@@ -199,7 +199,10 @@ def main() raises:
     while i < len(args):
         var arg = String(args[i])
         if arg == "--help" or arg == "-h":
-            print("Usage: gonzales [--interactive] [--gpu] [--fullscreen] [--no-denoise] [--verbose] [--spp N] [--seed N] [--resolution WxH] [--width W] [--height H] [--pixel X Y] [--vulkan-rt] [--checkpoint FILE] [--checkpoint-every MIN] [--resume FILE] [--stop-after N] scene.pbrt")
+            print("Usage: gonzales [--interactive] [--gpu] [--fullscreen] [--no-denoise] [--verbose] [--spp N] [--seed N] [--resolution WxH] [--width W] [--height H] [--pixel X Y] [--vulkan-rt] [--checkpoint FILE] [--checkpoint-every MIN] [--resume FILE] [--stop-after N] [--list-env] scene.pbrt")
+            return
+        elif arg == "--list-env":
+            env_list()
             return
         elif arg == "--interactive":
             interactive = True

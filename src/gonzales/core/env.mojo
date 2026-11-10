@@ -127,9 +127,18 @@ def env_warn_unknown():
             continue
         var name = String(entry.split("=")[0])
         if not env_registered(name):
-            print("Warning:", name, "is set but is no Gonzales environment switch", file=stderr)
+            print("Warning:", name, "is set but is no Gonzales environment switch (gonzales --list-env)", file=stderr)
 
 
 def env_set[name: StaticString](value: String):
     comptime assert _registered[name](), "environment switch not in ENV_SWITCHES (core/env.mojo): " + name
     _ = setenv(name, value, True)
+
+
+# --list-env: every switch, its value when set, and what it does.
+def env_list():
+    comptime for i in range(len(ENV_SWITCHES)):
+        comptime s = ENV_SWITCHES[i]
+        var v = getenv(s.name)
+        print(s.name + ("=" + v if v != "" else ""))
+        print("    " + s.desc)

@@ -127,6 +127,7 @@ make release  # optimized release build
    make view_release
    ```
 3. Or render any scene directly: `.build/release/gonzales path/to/scene.pbrt`
+4. Environment switches (caches, memory budgets, logs): `gonzales --list-env` lists them; the table is `src/gonzales/core/env.mojo`.
 
 ## Acknowledgments
 
