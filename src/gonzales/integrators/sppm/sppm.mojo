@@ -556,7 +556,7 @@ def _sppm_gsms(
     var p_a = p_pick / area
     var (ldu, ldv) = mnee_orthonormal_basis(l_du, l_dv)
     var ctx = _shade_context(sd, Pointer[UInt32, MutUntrackedOrigin].unsafe_dangling())
-    var tab = LobeTables(sd.materials, sd.curves, sd.measuredBrdfs, sd.spectral)
+    var tab = LobeTables(sd.materials, sd.curves, sd.measuredBrdfs, sd.spectral, sd.mediums)
     var verts = SMSChain(fill=sms_vertex_init())
     var r = glossy_sms_solve(ctx, x0, bsdf, tab, wl, y, ldu, ldv, pcg, verts)
     if not r[0]:
@@ -936,7 +936,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
                         comptime if GSMS_DEBUG == 1:
                             dbg += vp.beta * RGB(gr, gg, gb)
                     var s_v = bsdf_g.sample(pcg.next_float(), pcg.next_float(), pcg.next_float(), pcg.next_float(),
-                        LobeTables(sd.materials, sd.curves, sd.measuredBrdfs, sd.spectral), vp.wavelengths)
+                        LobeTables(sd.materials, sd.curves, sd.measuredBrdfs, sd.spectral, sd.mediums), vp.wavelengths)
                     gs_pdf = s_v.pdf_fwd if gsms and s_v.valid and not s_v.is_delta else Float32(0)
                     gs_x0 = hit.to_simd()
                     gs_dir = s_v.wi
@@ -1378,8 +1378,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
                                    curve=Int32(-1)),
                         photons, max_photons, counter)
                 # Scatter: the albedo the gather and the path tracer use, sigma_s/sigma_t per wavelength.
-                flux *= spec_refl(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
-                                  (ff.albedo).r, (ff.albedo).g, (ff.albedo).b, ph_wavelengths)
+                flux *= medv.albedo(ph_wavelengths)
                 # Sample new isotropic direction (uniform sphere)
                 var hs = medv.sample_phase((-rd).to_simd(), pcg.next_float(), pcg.next_float())
                 rd = vec3f(Vec3f(hs[0], hs[1], hs[2]))
@@ -1420,7 +1419,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
                     photons, max_photons, counter)
             var sh = surface_hit[tex_gpu](sd, inter, mat, hit, ray_dir, Float32(-1.0))
             var s_l = sh.bsdf(mat, mat_idx, adjoint=True).sample(pcg.next_float(), pcg.next_float(), pcg.next_float(),
-                pcg.next_float(), LobeTables(sd.materials, sd.curves, sd.measuredBrdfs, sd.spectral), ph_wavelengths)
+                pcg.next_float(), LobeTables(sd.materials, sd.curves, sd.measuredBrdfs, sd.spectral, sd.mediums), ph_wavelengths)
             if not s_l.valid:
                 break
             var rr_l = min(Float32(1.0), s_l.weight.max_component())
@@ -1637,7 +1636,7 @@ def _sppm_gather_one(
                 # Lambertian/phase branches already rely on).
                 if vp.is_volume == PhotonKind.volume:
                     if Int(vp.med_idx) >= 0:   # no `continue`: k advances at the bottom of this loop
-                        var term_2 = MediumView.at(sd, vp.med_idx).photon_scale(vp.alb, vp.pos.to_simd(), ph.wavelengths) \
+                        var term_2 = MediumView.at(sd, vp.med_idx).photon_scale(vp.pos.to_simd(), ph.wavelengths) \
                                * _vp_phase(sd, vp, -ph.dir_in.to_simd()) * ph.flux
                         var (tr_2, tg_2, tb_2) = spectral_sample_to_rgb(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, term_2, ph.wavelengths)
                         phi_rgb += RGB(tr_2, tg_2, tb_2)
@@ -1645,7 +1644,7 @@ def _sppm_gather_one(
                     # The VP's BSDF, bare f: the density estimate carries the cosine.
                     var le = (BSDF(vp.mat_kind, True, False, vp.normal.to_simd(), vp.wo.to_simd(), vp.alb,
                                 vp.mat_idx, _vp_base_alpha(vp.alpha), Float32(0), vp.hair_curve_idx,
-                                vp.hair_h, vp.hair_v, True, False)).f[want_pdfs=False]((-ph.dir_in).to_simd(), LobeTables(sd.materials, sd.curves, sd.measuredBrdfs, sd.spectral), ph.wavelengths)
+                                vp.hair_h, vp.hair_v, True, False)).f[want_pdfs=False]((-ph.dir_in).to_simd(), LobeTables(sd.materials, sd.curves, sd.measuredBrdfs, sd.spectral, sd.mediums), ph.wavelengths)
                     if le.cos_used > Float32(1e-6):
                         var term_3 = le.f_cos * (Float32(1.0) / le.cos_used) * ph.flux
                         var (tr_3, tg_3, tb_3) = spectral_sample_to_rgb(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, term_3, ph.wavelengths)
@@ -1727,8 +1726,7 @@ def _sppm_nee_weight(
         # _sppm_nee_one, which likewise applies none.
         if not ls.valid or ls.pdf <= Float32(0.0):
             return SpectralSample(Float32(0))
-        var ph_v = spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65,
-                             vp.alb.r, vp.alb.g, vp.alb.b, vp.wavelengths) * _vp_phase(sd, vp, ls.wi)
+        var ph_v = MediumView.at(sd, vp.med_idx).albedo(vp.wavelengths) * _vp_phase(sd, vp, ls.wi)
         var li_v = spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65,
                               ls.Li.r, ls.Li.g, ls.Li.b, vp.wavelengths)
         return ph_v * li_v * (Float32(1.0) / ls.pdf)
@@ -1744,7 +1742,7 @@ def _sppm_nee_weight(
     # deficit), and this is the same fix applied uniformly rather than at
     # one material's call site.
     return (BSDF(vp.mat_kind, True, False, vn, wo, vp.alb, vp.mat_idx, alpha,
-                Float32(0), vp.hair_curve_idx, vp.hair_h, vp.hair_v, True, False)).nee_weight_mis(ls, LobeTables(sd.materials, sd.curves, sd.measuredBrdfs, sd.spectral), vp.wavelengths, mis_policy_power() if shares else mis_policy_sole())
+                Float32(0), vp.hair_curve_idx, vp.hair_h, vp.hair_v, True, False)).nee_weight_mis(ls, LobeTables(sd.materials, sd.curves, sd.measuredBrdfs, sd.spectral, sd.mediums), vp.wavelengths, mis_policy_power() if shares else mis_policy_sole())
 
 
 @always_inline
@@ -1899,8 +1897,7 @@ def _sppm_nee_at(
                     var inv_pdf_area = Float32(n_area) * al.total_area
                     var geom = cos_light / dist2 * inv_pdf_area
                     if is_vol:
-                        ld += (spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65,
-                                                vp.alb.r, vp.alb.g, vp.alb.b, vp.wavelengths) * _vp_phase(sd, vp, wi)
+                        ld += (MediumView.at(sd, vp.med_idx).albedo(vp.wavelengths) * _vp_phase(sd, vp, wi)
                                       * spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, al.emission.r, al.emission.g, al.emission.b, vp.wavelengths)
                                       * geom * tr_a)
                     else:
@@ -1908,7 +1905,7 @@ def _sppm_nee_at(
                         var bsdf_vp = BSDF(vp.mat_kind, True, False, vn, wo, vp.alb,
                                     vp.mat_idx, _vp_base_alpha(vp.alpha), Float32(0), vp.hair_curve_idx,
                                     vp.hair_h, vp.hair_v, True, False)
-                        var tab_vp = LobeTables(sd.materials, sd.curves, sd.measuredBrdfs, sd.spectral)
+                        var tab_vp = LobeTables(sd.materials, sd.curves, sd.measuredBrdfs, sd.spectral, sd.mediums)
                         var le_vp = bsdf_vp.f[want_pdfs=False](wi, tab_vp, vp.wavelengths)
                         if shares and al.kind == Int8(0):   # a curve light's hit takes no share: NEE keeps it whole
                             geom *= power_heuristic(dist2 / (cos_light * inv_pdf_area), bsdf_vp.f[want_pdfs=True](wi, tab_vp, vp.wavelengths).pdf_fwd)

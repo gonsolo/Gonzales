@@ -9,7 +9,7 @@ geometry.mojo already imported for them (nanovdb.mojo, spectrum.mojo,
 rng.mojo), confirmed by a symbol-reference scan of each block with comments
 and docstrings stripped before moving it."""
 from std.math import sqrt, cos, sin, min, max, abs, floor, log, exp
-from gonzales.core.spectrum import SampledWavelengths, SpectralSample, spec_refl_unbounded, rgb_illuminant_to_spectral_sample
+from gonzales.core.spectrum import SampledWavelengths, SpectralHandle, SpectralSample, spec_refl_unbounded, rgb_illuminant_to_spectral_sample
 from gonzales.scene.appearance.nanovdb import nvdb_sample_index, nvdb_majorant_at, nvdb_leaf_base, nvdb_leaf_value
 from gonzales.core.rgb2spec import CIE_Y_INTEGRAL
 from gonzales.core.rng import PCG32
@@ -393,6 +393,14 @@ def medium_sigma_s_spectral(
     sigma_t * (1 - albedo) up to 8% off pbrt's sigma_a(lambda) (green, sigma_a [0.3 0.8 1.6] under sigma_s 40)."""
     return spec_refl_unbounded(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z,
                                spectral_d65, med.sigma_s.r, med.sigma_s.g, med.sigma_s.b, wavelengths)
+
+@always_inline
+def medium_albedo_spectral(med: Medium, wl: SampledWavelengths, h: SpectralHandle) -> SpectralSample:
+    """sigma_s / sigma_t per hero lane, from the same curves as the free flight. Never upsample the RGB ratio."""
+    var ss = medium_sigma_s_spectral(med, wl, h.coeffs, h.res, h.cie_x, h.cie_y, h.cie_z, h.d65)
+    var st = ss + medium_sigma_a_spectral(med, wl, h.coeffs, h.res, h.cie_x, h.cie_y, h.cie_z, h.d65)
+    return SpectralSample(ss.v0 / max(st.v0, Float32(1e-30)), ss.v1 / max(st.v1, Float32(1e-30)),
+                          ss.v2 / max(st.v2, Float32(1e-30)), ss.v3 / max(st.v3, Float32(1e-30)))
 
 @always_inline
 def medium_transmittance_ratio_spectral(

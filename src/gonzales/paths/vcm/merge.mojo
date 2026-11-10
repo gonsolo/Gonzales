@@ -184,7 +184,7 @@ def _bdpt_merge_from_cache(
                     total += f_cv * lv.beta * (w * keep_w)
     var result = total * cv.beta * kernel.norm
     if vol_cv:
-        result *= MediumView.at(sd, cv.med_idx).photon_scale(cv.alb, cv.pos.to_simd(), cv.wavelengths)
+        result *= MediumView.at(sd, cv.med_idx).photon_scale(cv.pos.to_simd(), cv.wavelengths)
     # Truncation: the photons came only from the part of the disk that is
     # surface (gather_disk_coverage). Queries that found nothing have nothing
     # to correct, and a disk the probes find empty keeps the plain estimate.

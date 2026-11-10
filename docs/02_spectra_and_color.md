@@ -161,6 +161,21 @@ blended by MIS into a biased estimate. A grey RGB now upsamples to an exactly
 flat spectrum (pbrt's constant sigmoid for r = g = b); before, the table's fit
 drifted up to 0.7% at 360 nm for dark greys, which a subsurface walk compounds.
 
+**Update (2026-11-10).** That albedo was still the wrong curve. pbrt's
+`HomogeneousMedium` upsamples `sigma_a` and `sigma_s` *separately*
+(`RGBUnboundedSpectrum` each) and sums them; gonzales upsampled the RGB sum
+`sigma_a + sigma_s` and the RGB ratio `sigma_s / sigma_t` (bounded, near 1).
+The sum of two fits is not the fit of the sum, so the implied absorption
+`sigma_t (1 - albedo)` drifted off pbrt's `sigma_a(lambda)`: for
+`sigma_a = (0.3, 0.8, 1.6)` under `sigma_s = 40` it read 8% low at 550 nm and
+5% high at 400 nm, and a ball of that medium rendered +1.1/+3.2/+1.5% against
+pbrt in both its medium and subsurface forms (grey: exact, since a grey fit is
+flat). Now every consumer takes `medium_sigma_a/s_spectral` and forms the
+albedo per lane from them (`medium_albedo_spectral`): PT, the walk, and VCM's
+and SPPM's medium vertices (their lobe eval reads the medium through
+`LobeTables.media`). It also keeps the albedo <= 1 on every lane by
+construction, since both curves are non-negative.
+
 ### Where this still falls short, measured
 
 It is tempting to grade chromatic media against the obvious closed form:
