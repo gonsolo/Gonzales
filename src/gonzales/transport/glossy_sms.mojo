@@ -33,6 +33,7 @@ comptime _LAND2: Float32 = Float32(1e-7)
 comptime GSMS_DEBUG: Int = get_defined_int["GSMS_DEBUG", 0]()
 
 comptime SMSChain = Array[SMSVertex, MAX_SMS_VERTICES]
+comptime SMSRoot = Array[Vec3f, MAX_SMS_VERTICES]   # a solved chain's vertex positions
 
 
 @always_inline
@@ -133,10 +134,10 @@ def sms_chain_lands(
 
 
 @always_inline
-def _same_root(x0: Vec3f, a: SMSChain, b: SMSChain, n: Int) -> Bool:
+def _same_root(x0: Vec3f, a: SMSChain, b: SMSRoot, n: Int) -> Bool:
     for i in range(n):
         var da = a[i].pos - x0
-        var db = b[i].pos - x0
+        var db = b[i] - x0
         var c = dot(da, db) / sqrt(max(dot(da, da) * dot(db, db), Float32(1e-30)))
         if abs(c - Float32(1.0)) > SMS_UNIQUENESS_COS_EPS:
             return False
@@ -198,30 +199,63 @@ def glossy_sms_stage(
     return Float32(1) if _glossy_sms_try(ctx, x0, bsdf, tab, wl, y, ldu, ldv, pcg, verts)[0] else Float32(0)
 
 
+def glossy_sms_root(
+    ctx: ShadeContext, x0: Vec3f, bsdf: BSDF, tab: LobeTables, wl: SampledWavelengths,
+    y: Vec3f, ldu: Vec3f, ldv: Vec3f, mut pcg: PCG32, mut verts: SMSChain,
+) -> Tuple[Bool, Int, Float32, Float32]:
+    """A root of the chains from x0 to the light point y, found from a random seed (_glossy_sms_try); none when the
+    lobe's density toward it is below GLOSSY_SMS_MIN_PDF. (ok, n, weight, g = dw0/dA_y), the chain in `verts`.
+    ldu, ldv: the light's orthonormal tangents."""
+    var first = _glossy_sms_try(ctx, x0, bsdf, tab, wl, y, ldu, ldv, pcg, verts)
+    if not first[0]:
+        return (False, 0, Float32(0), Float32(0))
+    var d0 = verts[0].pos - x0
+    if bsdf.f(d0 * (Float32(1) / sqrt(dot(d0, d0))), tab, wl).pdf_fwd < GLOSSY_SMS_MIN_PDF:
+        return (False, 0, Float32(0), Float32(0))   # no share (glossy_sms_mis): skip the re-solves
+    return (True, first[1], first[2], _mnee_chain_g(x0, verts, first[3]))
+
+
+def glossy_sms_root_pos(verts: SMSChain, n: Int) -> SMSRoot:
+    var r = SMSRoot(fill=Vec3f(Float32(0)))
+    for i in range(n):
+        r[i] = verts[i].pos
+    return r^
+
+
+def glossy_sms_refinds(
+    ctx: ShadeContext, x0: Vec3f, bsdf: BSDF, tab: LobeTables, wl: SampledWavelengths,
+    y: Vec3f, ldu: Vec3f, ldv: Vec3f, mut pcg: PCG32, root: SMSRoot, n: Int,
+) -> Bool:
+    """One re-solve of the reciprocal estimate: whether a fresh seed finds the root `root` again."""
+    var other = SMSChain(fill=sms_vertex_init())
+    var k = _glossy_sms_try(ctx, x0, bsdf, tab, wl, y, ldu, ldv, pcg, other)
+    return k[0] and k[1] == n and _same_root(x0, other, root, n)
+
+
 def glossy_sms_solve(
     ctx: ShadeContext, x0: Vec3f, bsdf: BSDF, tab: LobeTables, wl: SampledWavelengths,
     y: Vec3f, ldu: Vec3f, ldv: Vec3f, mut pcg: PCG32, mut verts: SMSChain,
 ) -> Tuple[Bool, Int, Float32, Float32, Float32]:
-    """A root of the chains from x0 to the light point y, found from a random seed (_glossy_sms_try), and the
-    reciprocal of the chance a seed finds it, estimated by re-seeding until one does (Zeltner et al. 2020, Sec. 4.3);
-    none when the lobe's density toward it is below GLOSSY_SMS_MIN_PDF. (ok, n, weight, g = dw0/dA_y, trial count),
-    the chain in `verts`. ldu, ldv: the light's orthonormal tangents."""
-    var first = _glossy_sms_try(ctx, x0, bsdf, tab, wl, y, ldu, ldv, pcg, verts)
-    var n = first[1]
-    if not first[0]:
+    """glossy_sms_root and the reciprocal of the chance a seed finds it, estimated by re-seeding until one does
+    (Zeltner et al. 2020, Sec. 4.3). (ok, n, weight, g, trial count), the chain in `verts`."""
+    var r = glossy_sms_root(ctx, x0, bsdf, tab, wl, y, ldu, ldv, pcg, verts)
+    if not r[0]:
         return (False, 0, Float32(0), Float32(0), Float32(0))
-    var d0 = verts[0].pos - x0
-    if bsdf.f(d0 * (Float32(1) / sqrt(dot(d0, d0))), tab, wl).pdf_fwd < GLOSSY_SMS_MIN_PDF:
-        return (False, 0, Float32(0), Float32(0), Float32(0))   # no share (glossy_sms_mis): skip the re-solves
+    var trials = glossy_sms_trials(ctx, x0, bsdf, tab, wl, y, ldu, ldv, pcg, glossy_sms_root_pos(verts, r[1]), r[1])
+    return (True, r[1], r[2], r[3], trials)
+
+
+def glossy_sms_trials(
+    ctx: ShadeContext, x0: Vec3f, bsdf: BSDF, tab: LobeTables, wl: SampledWavelengths,
+    y: Vec3f, ldu: Vec3f, ldv: Vec3f, mut pcg: PCG32, root: SMSRoot, n: Int,
+) -> Float32:
+    """The reciprocal estimate: re-solves until one finds `root` again, at most GLOSSY_SMS_MAX_TRIALS."""
     var trials = Float32(0)
     for _t in range(GLOSSY_SMS_MAX_TRIALS):
         trials += Float32(1)
-        var other = SMSChain(fill=sms_vertex_init())
-        var k = _glossy_sms_try(ctx, x0, bsdf, tab, wl, y, ldu, ldv, pcg, other)
-        if k[0] and k[1] == n and _same_root(x0, other, verts, n):
+        if glossy_sms_refinds(ctx, x0, bsdf, tab, wl, y, ldu, ldv, pcg, root, n):
             break
-    var g = _mnee_chain_g(x0, verts, first[3])
-    return (True, n, first[2], g, trials)
+    return trials
 
 
 @always_inline
