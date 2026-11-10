@@ -59,7 +59,6 @@ def _volume_nee_light(
         return
     var med = medv.med
     var g = med.g
-    var sigma_t_r = (med.sigma_a + med.sigma_s).r
     var use_nvdb = med.nvdb_idx >= Int32(0)
     var use_dense = med.grid_idx >= Int32(0)
     var edir = Vec3f(ls.wi[0], ls.wi[1], ls.wi[2])
@@ -97,12 +96,13 @@ def _volume_nee_light(
                            Pointer(to=exit_i), sd.blasNodesArr, sd.blasPrimIdsArr,
                            sd.instances, sd.spheres, n_spheres)
         var span = ls.dist if exit_i.hit == Int8(0) else exit_i.tHit
-        var Th = exp(-sigma_t_r * span)
+        var st = medv.sigma_t(path_ptr[].wavelengths)   # per lane: red's sigma_t for all of them tinted chromatic media
+        var Th = SpectralSample(exp(-st.v0 * span), exp(-st.v1 * span), exp(-st.v2 * span), exp(-st.v3 * span))
         var ph_h = hg_phase(dot(wo, edir), g)
         var mis_h = Float32(1.0) if ls.is_delta else power_heuristic(ls.pdf, ph_h)
         path_ptr[].estimate += path_ptr[].throughput * medium_emission_spectral(
         ls.Li, path_ptr[].wavelengths, sd.spectral.coeffs, sd.spectral.res,
-        sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65) * (Th * ph_h * mis_h / ls.pdf)
+        sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65) * Th * (ph_h * mis_h / ls.pdf)
         return
     var rng = (nvdb_ray_range(medium_nvdb_for(med, sd.nvdbGrids), scatter_pt_w, edir) if use_nvdb
                else grid_ray_range(medium_grid_for(med, sd.grids), scatter_pt_w, edir))
@@ -425,8 +425,7 @@ def _volume_area_light_nee(
                         if exit_mat.type == MatKind.interface:
                             t_med = exit_ptr[unsafe_offset=0].tHit
                     # Density fields ratio-track every lane up to t_med: a grid's box can reach past the medium's
-                    # shape, where it is vacuum. Homogeneous media keep their RGB Beer-Lambert below.
-                    var T = RGB(Float32(1))
+                    # shape, where it is vacuum. Homogeneous media take Beer-Lambert per lane below.
                     var T_lanes = SpectralSample(Float32(1))
                     if med.grid_idx >= Int32(0) or med.nvdb_idx >= Int32(0):
                         T_lanes = medium_ratio_track(med, sd.grids, sd.nvdbGrids, Vec3f(resolve_pt[0], resolve_pt[1], resolve_pt[2]),
@@ -477,7 +476,12 @@ def _volume_area_light_nee(
                         # the vacuum-attenuation bug this very branch was
                         # written to fix -- that fix just never covered the
                         # sphere-bounded case.
-                        T = RGB(exp(-sigma_t.r * t_med), exp(-sigma_t.g * t_med), exp(-sigma_t.b * t_med))
+                        #
+                        # Per hero lane, not exp(-sigma_rgb * t) upsampled after: exponentiating before upsampling
+                        # read a chromatic scatterer's area-lit single scatter 4% bright in blue against pbrt.
+                        var st = MediumView.at(sd, Int32(med_idx)).sigma_t(path_ptr[].wavelengths)
+                        T_lanes = SpectralSample(exp(-st.v0 * t_med), exp(-st.v1 * t_med), exp(-st.v2 * t_med),
+                                                 exp(-st.v3 * t_med))
                     # The old `geom` also carried al.total_area/light_sel_pdf,
                     # i.e. 1/q -- that now lives inside res.state.w, so the
                     # geometry factor here is the bare cos_l/dist^2.
@@ -505,7 +509,7 @@ def _volume_area_light_nee(
                         var pdf_light = dist_sq * sel_pdf_win / (cos_l * al_win.total_area)
                         mis_w = power_heuristic(pdf_light, ph_a)
                     path_ptr[].estimate += path_ptr[].throughput * medium_emission_spectral(
-                        res.le * T, path_ptr[].wavelengths, sd.spectral.coeffs, sd.spectral.res,
+                        res.le, path_ptr[].wavelengths, sd.spectral.coeffs, sd.spectral.res,
                         sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65) * T_lanes * (geom * ph_a * mis_w * res.state.w)
 
 

@@ -101,7 +101,7 @@ def _nee_loop_simple[enqueue_shadow: Bool, defer_only: Bool = False](
         var res = _nee_sample_simple_light(ctx, li, hit_point, pcg)
         var ls = res[0].copy()
         var tmax = res[1]
-        var w = _nee_weight_simple_spectral(ls, mat_kind, alb, alpha, normal, wo, ctx.spectral.coeffs, ctx.spectral.res, ctx.spectral.cie_x, ctx.spectral.cie_y, ctx.spectral.cie_z, ctx.spectral.d65, path_ptr[].wavelengths, LobeTables(ctx.materials, ctx.curves, ctx.measured_brdfs, ctx.spectral)) * lobe_w
+        var w = _nee_weight_simple_spectral(ls, mat_kind, alb, alpha, normal, wo, ctx.spectral.coeffs, ctx.spectral.res, ctx.spectral.cie_x, ctx.spectral.cie_y, ctx.spectral.cie_z, ctx.spectral.d65, path_ptr[].wavelengths, LobeTables(ctx.materials, ctx.curves, ctx.measured_brdfs, ctx.spectral, ctx.mediums)) * lobe_w
         if not w.is_black():
             var contrib = path_ptr[].throughput * w
             _shadow_contribute[enqueue_shadow, defer_only](path_ptr, ctx, hit_point, ls.wi, tmax, contrib, guide_write)
@@ -134,7 +134,7 @@ def _lobe_nee_with[L: NeeLobe, enqueue_shadow: Bool, defer_only: Bool = False](
 ):
     """_lobe_nee with the area-light sample drawn, and the first environment's numbers when `has_u_env` (Sobol).
     A transmitting lobe passes its normal as `side_n`: each shadow ray then leaves to the light's side of it."""
-    var tab = LobeTables(ctx.materials, ctx.curves, ctx.measured_brdfs, ctx.spectral)
+    var tab = LobeTables(ctx.materials, ctx.curves, ctx.measured_brdfs, ctx.spectral, ctx.mediums)
     _lobe_nee_one[L, enqueue_shadow, defer_only](path_ptr, ctx, bsdf, tab, hit_point, ls_area, ls_area.dist * Float32(0.9999), side_n)
     for li in range(_nee_simple_light_count(ctx)):
         var res = _nee_sample_simple_light(ctx, li, hit_point, pcg)
@@ -525,7 +525,7 @@ def _glossy_sms_nee(
         return
     var (y, ln, du, dv) = _sample_light_point_and_normal(ctx, al, u1, u2, pcg, hit_point)
     var (ldu, ldv) = mnee_orthonormal_basis(du, dv)
-    var tab = LobeTables(ctx.materials, ctx.curves, ctx.measured_brdfs, ctx.spectral)
+    var tab = LobeTables(ctx.materials, ctx.curves, ctx.measured_brdfs, ctx.spectral, ctx.mediums)
     var wl = path_ptr[].wavelengths
     comptime if GSMS_DEBUG == 6:
         if path_ptr[].specularBounce == Int8(1):   # reached through the camera's glass only

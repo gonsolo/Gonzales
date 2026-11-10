@@ -1,7 +1,7 @@
 from std.math import sqrt
 from gonzales.transport.layered import diel_f, diel_pdf, diel_sample, layered_f, layered_pdf, layered_sample
 from gonzales.core.geometry import RGB, Vec3f, dot, INV_PI, PI, Frame, INV_FOUR_PI
-from gonzales.scene.appearance.media import hg_phase
+from gonzales.scene.appearance.media import Medium, hg_phase, medium_albedo_spectral
 from gonzales.scene.appearance.materials import LobeKind, MatKind, Material, fr_dielectric, MeasuredBRDF, sss_boundary_lobe
 from gonzales.scene.shapes.curves import Curve
 from gonzales.core.sampling import sample_ggx_vndf, sample_cosine_hemisphere_world
@@ -739,7 +739,6 @@ def _nee_weight_simple(
     var mis_w = nee_mis_weight(mis, ls.pdf, pdf_bsdf, cos_s)
     return f * ls.Li * (cos_s * mis_w / ls.pdf)
 
-@fieldwise_init
 struct LobeTables(TrivialRegisterPassable):
     """The three scene tables a lobe evaluation can read, and nothing else.
 
@@ -757,6 +756,17 @@ struct LobeTables(TrivialRegisterPassable):
     var curves:         Pointer[Curve, MutUntrackedOrigin]
     var measured_brdfs: Pointer[MeasuredBRDF, MutUntrackedOrigin]
     var spectral:       SpectralHandle   # RGB to spectrum for the lobes' colours
+    var media:          Pointer[Medium, MutUntrackedOrigin]   # a volume BSDF's mat_idx indexes this
+
+    @always_inline
+    def __init__(out self, materials: Pointer[Material, MutUntrackedOrigin], curves: Pointer[Curve, MutUntrackedOrigin],
+                 measured_brdfs: Pointer[MeasuredBRDF, MutUntrackedOrigin], spectral: SpectralHandle,
+                 media: Pointer[Medium, MutUntrackedOrigin] = Pointer[Medium, MutUntrackedOrigin].unsafe_dangling()):
+        self.materials = materials
+        self.curves = curves
+        self.measured_brdfs = measured_brdfs
+        self.spectral = spectral
+        self.media = media
 
 
 trait NeeLobe(TrivialRegisterPassable):
@@ -1023,7 +1033,9 @@ def _lobe_eval[want_pdfs: Bool = True, want_rev: Bool = True](
     if not c.is_surface:
         # Volume: the phase function (`param` is g), no surface, and so NO cosine at all.
         var alb_v = rgb_to_spectral_sample(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z,
-                                           spectral_d65, c.alb.r, c.alb.g, c.alb.b, wavelengths)   # as the continuation
+                                           spectral_d65, c.alb.r, c.alb.g, c.alb.b, wavelengths)
+        if c.mat_idx >= Int32(0):   # the medium's own curves, as the continuation
+            alb_v = medium_albedo_spectral(tab.media[unsafe_offset=Int(c.mat_idx)], wavelengths, tab.spectral)
         var ph = hg_phase(dot(c.wo, dir_to_other), c.param)
         return LobeEval(alb_v * ph, Float32(1), ph, ph, False)
 

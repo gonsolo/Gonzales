@@ -109,7 +109,7 @@ def _vcm_nee_surface(
     """NEE from one camera vertex to every distant/point/sphere and infinite
     light, weighted by VCM's balance policy. `ctx` is the lobe, `gn_geo` the geometric"""
     var total = SpectralSample(Float32(0))
-    var tab = LobeTables(sd.materials, sd.curves, sd.measuredBrdfs, sd.spectral)
+    var tab = LobeTables(sd.materials, sd.curves, sd.measuredBrdfs, sd.spectral, sd.mediums)
     for li in range(_bdpt_simple_light_count(sd)):
         var ls = _bdpt_sample_simple_light(sd, li, pos.to_simd(), pcg)
         if not ls.valid:
@@ -132,7 +132,7 @@ def _vertex_ctx(v: BDPTVertex, adjoint: Bool = False) -> BSDF:
     """A stored VCM vertex, as the shared BxDF interface sees it. `adjoint`
     for a light-subpath vertex -- see BSDF.adjoint."""
     return BSDF(v.mat_kind, v.is_surface == Int32(1), v.is_delta != Int32(0),
-                   v.shading_normal.to_simd(), v.wo.to_simd(), v.alb, v.mat_idx,
+                   v.shading_normal.to_simd(), v.wo.to_simd(), v.alb, v.mat_idx if v.is_surface == Int32(1) else v.med_idx,
                    v.pdf_bwd, v.pdf_fwd, v.hair_curve_idx, v.hair_h, v.hair_v, False,
                    adjoint)
 
@@ -151,7 +151,7 @@ def _lobe_eval[want_pdfs: Bool = True](
     adjoint: Bool = False,
 ) -> LobeEval:
     """VCM's view of the shared lobe evaluator (bxdf.mojo)."""
-    var le = (_vertex_ctx(v, adjoint)).f[want_pdfs](dir_to_other, LobeTables(sd.materials, sd.curves, sd.measuredBrdfs, sd.spectral), wavelengths)
+    var le = (_vertex_ctx(v, adjoint)).f[want_pdfs](dir_to_other, LobeTables(sd.materials, sd.curves, sd.measuredBrdfs, sd.spectral, sd.mediums), wavelengths)
     if adjoint and v.is_surface == Int32(1) and v.mat_kind != LobeKind.hair:
         # Veach's adjoint shading-normal correction (pbrt-v3 Vertex::f in
         # Importance mode, CorrectShadingNormal): at a light-subpath vertex
@@ -392,7 +392,7 @@ def _vcm_gsms(
     var (ldu, ldv) = mnee_orthonormal_basis(l_du, l_dv)
     var ctx = _shade_context(sd, Pointer[UInt32, MutUntrackedOrigin].unsafe_dangling())
     var bsdf = _vertex_ctx(v)
-    var tab = LobeTables(sd.materials, sd.curves, sd.measuredBrdfs, sd.spectral)
+    var tab = LobeTables(sd.materials, sd.curves, sd.measuredBrdfs, sd.spectral, sd.mediums)
     var verts = Array[SMSVertex, MAX_SMS_VERTICES](fill=sms_vertex_init())
     var r = glossy_sms_solve(ctx, hit_v, bsdf, tab, wl, y, ldu, ldv, pcg, verts)
     if not r[0]:

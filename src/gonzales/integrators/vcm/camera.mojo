@@ -233,7 +233,7 @@ def _vcm_scatter(
 ) -> LobeSample:
     """Scatter at a stored vertex through THE lobe sampler (bxdf.mojo's
     lobe_sample) and advance VCM's carries. `adjoint` on the light subpath."""
-    var s = (_vertex_ctx(v, adjoint)).sample(pcg.next_float(), pcg.next_float(), pcg.next_float(), pcg.next_float(), LobeTables(sd.materials, sd.curves, sd.measuredBrdfs, sd.spectral), wavelengths)
+    var s = (_vertex_ctx(v, adjoint)).sample(pcg.next_float(), pcg.next_float(), pcg.next_float(), pcg.next_float(), LobeTables(sd.materials, sd.curves, sd.measuredBrdfs, sd.spectral, sd.mediums), wavelengths)
     if not s.valid:
         return s
     if s.is_delta:
@@ -593,7 +593,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool, defer_walk: Bool = False](
                                              st.cur_med_idx, scratch, st.wl, pcg, Float32(0), False,
                                              VcmStrategies.beyond_cache(st.cam_nd()))
                 # Continuation beta = prev × alb_s (same as stored vertex beta)
-                st.beta *= spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (ff.albedo).r, (ff.albedo).g, (ff.albedo).b, st.wl)
+                st.beta *= med.albedo(st.wl)
                 st.rd = vec3f(wi_v)
                 st.ro = sp + st.rd*Float32(0.0002)
                 st.last_bsdf_pdf = _VOL_PHASE_HIT   # see the sentinel's definition

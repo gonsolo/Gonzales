@@ -114,7 +114,7 @@ def shade_diffuse_transmission[use_gpu: Bool, enqueue_shadow: Bool](
                                      null_guide(), lobe_w)
     for inf_i in range(ctx.lights.infinite_count):
         var ls_e = _sample_infinite_light_nee(ctx.lights.infinite_lights[unsafe_offset=inf_i], Point2f(pcg.next_float(), pcg.next_float()), point3f(hit_point))
-        var w_e = _nee_weight_simple_spectral(ls_e, LobeKind.lambertian, lobe_alb, Float32(0), bounce_normal, wo_dt, ctx.spectral.coeffs, ctx.spectral.res, ctx.spectral.cie_x, ctx.spectral.cie_y, ctx.spectral.cie_z, ctx.spectral.d65, path_ptr[].wavelengths, LobeTables(ctx.materials, ctx.curves, ctx.measured_brdfs, ctx.spectral)) * lobe_w
+        var w_e = _nee_weight_simple_spectral(ls_e, LobeKind.lambertian, lobe_alb, Float32(0), bounce_normal, wo_dt, ctx.spectral.coeffs, ctx.spectral.res, ctx.spectral.cie_x, ctx.spectral.cie_y, ctx.spectral.cie_z, ctx.spectral.d65, path_ptr[].wavelengths, LobeTables(ctx.materials, ctx.curves, ctx.measured_brdfs, ctx.spectral, ctx.mediums)) * lobe_w
         if not w_e.is_black():
             var contrib_e = path_ptr[].throughput * w_e
             _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, ls_e.wi, ls_e.dist, contrib_e)
@@ -436,7 +436,7 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool, defer_only: Bool =
                     Float32(0), Int32(-1), Float32(0), Float32(0), True, False)
     _lobe_nee[enqueue_shadow, defer_only](path_ptr, ctx, bsdf, hit_point, pcg)
     var s = bsdf.sample[want_rev=False](pcg.next_float(), pcg.next_float(), pcg.next_float(), Float32(0),
-                                        LobeTables(ctx.materials, ctx.curves, ctx.measured_brdfs, ctx.spectral), path_ptr[].wavelengths)
+                                        LobeTables(ctx.materials, ctx.curves, ctx.measured_brdfs, ctx.spectral, ctx.mediums), path_ptr[].wavelengths)
     _lobe_bounce[False](path_ptr, ctx, s, hit_point, geo_normal, alb, pcg, diffuse=True)
 
 
@@ -652,7 +652,7 @@ def _shade_rough_dielectric[enqueue_shadow: Bool](
     var ls_area = _sample_area_light_nee_u(ctx, hit_raw, ss.light, ss.bary1, ss.bary2, pcg)
     _lobe_nee_with[BSDF, enqueue_shadow](path_ptr, ctx, bsdf, hit_raw, ls_area, Point2f(ss.env1, ss.env2), True, pcg, n)
     var s = bsdf.sample[want_rev=False](ss.rr, ss.scat1, ss.scat2, Float32(0),
-                                        LobeTables(ctx.materials, ctx.curves, ctx.measured_brdfs, ctx.spectral), path_ptr[].wavelengths)
+                                        LobeTables(ctx.materials, ctx.curves, ctx.measured_brdfs, ctx.spectral, ctx.mediums), path_ptr[].wavelengths)
     if s.valid and s.transmit:
         # The radiance f carried 1/etap^2, which eta_scale undoes for Russian roulette (pbrt's etaScale); the
         # touching-dielectric IOR stack pushes on the way in, pops on the way out.
@@ -757,7 +757,7 @@ def shade_conductor[use_gpu: Bool, enqueue_shadow: Bool](
         if gsms:
             _glossy_sms_nee(path_ptr, ctx, bsdf, hit_point, pcg)
     var s = bsdf.sample(pcg.next_float(), pcg.next_float(), pcg.next_float(), Float32(0),
-                        LobeTables(ctx.materials, ctx.curves, ctx.measured_brdfs, ctx.spectral), path_ptr[].wavelengths)
+                        LobeTables(ctx.materials, ctx.curves, ctx.measured_brdfs, ctx.spectral, ctx.mediums), path_ptr[].wavelengths)
     _lobe_bounce[False](path_ptr, ctx, s, hit_point, geo_normal, mat_eff.albedo, pcg)
     if gsms and s.valid:   # a chain this direction starts is glossy SMS's too (_glossy_sms_bsdf_weight)
         path_ptr[].gl_pdf = s.pdf_fwd
@@ -877,7 +877,7 @@ def shade_measured[use_gpu: Bool, enqueue_shadow: Bool](
     _lobe_nee[enqueue_shadow](path_ptr, ctx, bsdf, hit_point, pcg)
 
     var s = bsdf.sample(Float32(0), pcg.next_float(), pcg.next_float(), Float32(0),
-                        LobeTables(ctx.materials, ctx.curves, ctx.measured_brdfs, ctx.spectral), path_ptr[].wavelengths)
+                        LobeTables(ctx.materials, ctx.curves, ctx.measured_brdfs, ctx.spectral, ctx.mediums), path_ptr[].wavelengths)
     _lobe_bounce[True](path_ptr, ctx, s, hit_point, hit_normal, RGB(Float32(0)), pcg)
 
 
@@ -898,7 +898,7 @@ def shade_hair[use_gpu: Bool, enqueue_shadow: Bool](
     var wo = -ray_dir
     var cf = curve_hit_frame(ctx.curves, curve_idx, inter.v, inter.u, wo)
     var hit_base = ray_org + ray_dir * inter.tHit
-    var tab = LobeTables(ctx.materials, ctx.curves, ctx.measured_brdfs, ctx.spectral)
+    var tab = LobeTables(ctx.materials, ctx.curves, ctx.measured_brdfs, ctx.spectral, ctx.mediums)
     var bsdf = HairBSDF.at(BSDF(LobeKind.hair, True, False, cf[3], wo, mat.albedo, Int32(inter.primId.materialIndex),
                                 Float32(0), Float32(0), Int32(curve_idx), inter.u, inter.v, False, False), mat, tab)
     var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
