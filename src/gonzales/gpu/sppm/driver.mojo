@@ -41,7 +41,7 @@ def _upload(ctx: DeviceContext, src: Pointer[UInt8, MutUntrackedOrigin], nbytes:
 
 
 def _dev[T: AnyType](buf: DeviceBuffer[DType.uint8]) -> Pointer[T, MutUntrackedOrigin]:
-    return buf.unsafe_ptr().unsafe_bitcast[T]().unsafe_origin_cast[MutUntrackedOrigin]()
+    return buf.unsafe_ptr().unsafe_mut_cast[True]().unsafe_bitcast[T]().unsafe_origin_cast[MutUntrackedOrigin]()
 
 
 def _sppm_images(handle: Pointer[GpuSceneHandle, MutUntrackedOrigin], vps: Pointer[SPPMPixel, MutUntrackedOrigin], n_pix: Int,
