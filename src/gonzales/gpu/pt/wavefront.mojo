@@ -400,7 +400,7 @@ def sss_walk_gpu(
 # One walk step for each listed walker (sss_walk_gpu's list); those still under the surface list themselves in next_idx
 # with their next segment in `rays`, the RT-core layout, for rtcore_sss_walk_gpu to trace.
 @__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
-def sss_walk_rt_step_gpu(
+def sss_walk_rt_step_gpu[unpack: Bool](
     paths: Pointer[PathState, MutUntrackedOrigin],
     intersections: Pointer[Intersection, MutUntrackedOrigin],
     sd: SceneView,
@@ -409,12 +409,21 @@ def sss_walk_rt_step_gpu(
     next_idx: Pointer[Int32, MutUntrackedOrigin],
     next_count: Pointer[Int32, MutUntrackedOrigin],
     rays: Pointer[Float32, MutUntrackedOrigin],
+    # unpack: walker i's segment is RT result slot i (traced after the last step), not yet in `intersections`
+    results: Pointer[Float32, MutUntrackedOrigin],
+    mesh_material_idx: Pointer[Int64, MutUntrackedOrigin],
+    mesh_al_idx: Pointer[Int32, MutUntrackedOrigin],
+    n_meshes_dp: Int64,
+    instance_base_mesh: Pointer[Int32, MutUntrackedOrigin],
 ):
     var i = Int(block_idx.x * block_dim.x + thread_idx.x)
     var p = 0
     var pending = False
     if i < Int(count[unsafe_offset=0]):
         p = Int(idx[unsafe_offset=i])
+        comptime if unpack:
+            _unpack_rt_result(results, i, p, intersections, mesh_material_idx, mesh_al_idx, Int(n_meshes_dp),
+                              instance_base_mesh, Pointer[PathState, MutUntrackedOrigin].unsafe_dangling(), sd.meshes)
         _sss_walk_step[1](paths, intersections, p, sd)
         pending = paths[unsafe_offset=p].active != 0 and paths[unsafe_offset=p].sss.mesh >= Int32(0)
     var pos = warp_append(next_count, pending)
@@ -595,8 +604,25 @@ def vulkaninterop_unpack_results_kernel(
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
     if tid >= count:
         return
-    var idx = tid * 8
     var ot = Int(ids[unsafe_offset=tid]) if _is_real_ptr(ids) else tid
+    _unpack_rt_result(results, tid, ot, inter, mesh_material_idx, mesh_al_idx, n_meshes, instance_base_mesh, paths, meshes)
+
+
+@always_inline
+def _unpack_rt_result(
+    results: Pointer[Float32, MutUntrackedOrigin],
+    tid: Int,
+    ot: Int,
+    inter: Pointer[Intersection, MutUntrackedOrigin],
+    mesh_material_idx: Pointer[Int64, MutUntrackedOrigin],
+    mesh_al_idx: Pointer[Int32, MutUntrackedOrigin],
+    n_meshes: Int,
+    instance_base_mesh: Pointer[Int32, MutUntrackedOrigin],
+    paths: Pointer[PathState, MutUntrackedOrigin],
+    meshes: Pointer[TriangleMesh, MutUntrackedOrigin],
+):
+    """RT result slot `tid` into the intersection of path `ot`."""
+    var idx = tid * 8
     var iresults = results.unsafe_bitcast[Int32]()
     var hitFlag = iresults[unsafe_offset=idx + 6]
     if hitFlag == Int32(1):
@@ -1647,26 +1673,30 @@ def rtcore_sss_walk_gpu(
     # m bounds the live walkers from above (a step only drops them); the host reads the true count only every
     # SSS_RT_SYNC steps, the kernels read it on the device, and rays past it are traced but never unpacked.
     var m = n_total
+    var mm = mesh_material_idx_buf.unsafe_ptr().unsafe_bitcast[Int64]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
+    var mal = mesh_al_idx_buf.unsafe_ptr().unsafe_bitcast[Int32]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
     for step in range(SSS_RT_STEPS):
         var a = step % 2
         var out_slot = SSS_RT_COUNTS + step % 2
         ctx.enqueue_memset(DeviceBuffer[DType.int32](ctx, counts.unsafe_offset(out_slot), 1, owning=False), Int32(0))
-        ctx.enqueue_function[sss_walk_rt_step_gpu](paths, inter, sd, lists[a], counts.unsafe_offset(slots[a]), lists[1 - a],
-                                                   counts.unsafe_offset(out_slot), rays, grid_dim=ceildiv(m, block_size), block_dim=block_size)
+        if step == 0:   # the first segment is the caller's, already unpacked
+            ctx.enqueue_function[sss_walk_rt_step_gpu[False]](paths, inter, sd, lists[a], counts.unsafe_offset(slots[a]), lists[1 - a],
+                counts.unsafe_offset(out_slot), rays, results, mm, mal, Int64(n_meshes), instance_base_mesh,
+                grid_dim=ceildiv(m, block_size), block_dim=block_size)
+        else:
+            ctx.enqueue_function[sss_walk_rt_step_gpu[True]](paths, inter, sd, lists[a], counts.unsafe_offset(slots[a]), lists[1 - a],
+                counts.unsafe_offset(out_slot), rays, results, mm, mal, Int64(n_meshes), instance_base_mesh,
+                grid_dim=ceildiv(m, block_size), block_dim=block_size)
         slots[1 - a] = out_slot
         if step % SSS_RT_SYNC == 0:
             m = read_counter(ctx, counter_buf, out_slot)
             if m == 0:
                 return
         hw_trace_interop(ctx, Int(rays), Int(results), m)
-        ctx.enqueue_function[vulkaninterop_unpack_results_kernel](
-            results, inter,
-            mesh_material_idx_buf.unsafe_ptr().unsafe_bitcast[Int64]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
-            mesh_al_idx_buf.unsafe_ptr().unsafe_bitcast[Int32]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
-            Int64(n_meshes), Int64(m), instance_base_mesh, lists[1 - a], rt_no_paths(), sd.meshes,
-            counts.unsafe_offset(out_slot),
-            grid_dim=ceildiv(m, block_size), block_dim=block_size)
         if m < SSS_RT_MIN or step == SSS_RT_STEPS - 1:
+            ctx.enqueue_function[vulkaninterop_unpack_results_kernel](
+                results, inter, mm, mal, Int64(n_meshes), Int64(m), instance_base_mesh, lists[1 - a], rt_no_paths(), sd.meshes,
+                counts.unsafe_offset(out_slot), grid_dim=ceildiv(m, block_size), block_dim=block_size)
             ctx.enqueue_function[sss_walk_gpu](paths, inter, sd, lists[1 - a], counts.unsafe_offset(slots[1 - a]),
                                                grid_dim=ceildiv(m, block_size), block_dim=block_size)
             return
