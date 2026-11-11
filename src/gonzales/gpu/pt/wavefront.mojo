@@ -415,8 +415,11 @@ def sss_walk_rt_step_gpu[unpack: Bool](
     mesh_al_idx: Pointer[Int32, MutUntrackedOrigin],
     n_meshes_dp: Int64,
     instance_base_mesh: Pointer[Int32, MutUntrackedOrigin],
+    clear: Pointer[Int32, MutUntrackedOrigin],   # the next step's walker count, zeroed here instead of by a memset
 ):
     var i = Int(block_idx.x * block_dim.x + thread_idx.x)
+    if i == 0:
+        clear[unsafe_offset=0] = Int32(0)
     var p = 0
     var pending = False
     if i < Int(count[unsafe_offset=0]):
@@ -1638,7 +1641,7 @@ def shadow_curves_kernel(
     paths[unsafe_offset=t // SHADOW_SLOTS].estimate += task.contrib
 
 comptime SHADOW_COUNTS = 16        # in the counter buffer, after the shading kinds' counts: the survivors per slot
-comptime SSS_RT_COUNTS = 20        # in the counter buffer: the walkers of the RT steps, alternately
+comptime SSS_RT_COUNTS = 20        # in the counter buffer: the walkers of the RT steps, three slots in turn
 comptime SSS_RT_STEPS = get_defined_int["SSS_RT_STEPS", 256]()        # walk steps a round with RT-core segments (all of a walk)
 comptime SSS_RT_MIN = get_defined_int["SSS_RT_MIN", 1]()             # fewer walkers finish in software
 comptime SSS_RT_SYNC = get_defined_int["SSS_RT_SYNC", 8]()           # steps between host reads of the walker count
@@ -1675,17 +1678,18 @@ def rtcore_sss_walk_gpu(
     var m = n_total
     var mm = mesh_material_idx_buf.unsafe_ptr().unsafe_bitcast[Int64]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
     var mal = mesh_al_idx_buf.unsafe_ptr().unsafe_bitcast[Int32]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
+    ctx.enqueue_memset(DeviceBuffer[DType.int32](ctx, counts.unsafe_offset(SSS_RT_COUNTS), 1, owning=False), Int32(0))
     for step in range(SSS_RT_STEPS):
         var a = step % 2
-        var out_slot = SSS_RT_COUNTS + step % 2
-        ctx.enqueue_memset(DeviceBuffer[DType.int32](ctx, counts.unsafe_offset(out_slot), 1, owning=False), Int32(0))
+        var out_slot = SSS_RT_COUNTS + step % 3
+        var clear = counts.unsafe_offset(SSS_RT_COUNTS + (step + 1) % 3)   # the step after's output, free since step - 1
         if step == 0:   # the first segment is the caller's, already unpacked
             ctx.enqueue_function[sss_walk_rt_step_gpu[False]](paths, inter, sd, lists[a], counts.unsafe_offset(slots[a]), lists[1 - a],
-                counts.unsafe_offset(out_slot), rays, results, mm, mal, Int64(n_meshes), instance_base_mesh,
+                counts.unsafe_offset(out_slot), rays, results, mm, mal, Int64(n_meshes), instance_base_mesh, clear,
                 grid_dim=ceildiv(m, block_size), block_dim=block_size)
         else:
             ctx.enqueue_function[sss_walk_rt_step_gpu[True]](paths, inter, sd, lists[a], counts.unsafe_offset(slots[a]), lists[1 - a],
-                counts.unsafe_offset(out_slot), rays, results, mm, mal, Int64(n_meshes), instance_base_mesh,
+                counts.unsafe_offset(out_slot), rays, results, mm, mal, Int64(n_meshes), instance_base_mesh, clear,
                 grid_dim=ceildiv(m, block_size), block_dim=block_size)
         slots[1 - a] = out_slot
         if step % SSS_RT_SYNC == 0:
