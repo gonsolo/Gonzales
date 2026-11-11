@@ -20,7 +20,7 @@ from gonzales.scene.shapes.geom_normal import _geom_normal
 from gonzales.paths.vcm.vertex import _VCM_SSS_CAMERA_ONLY, _vcm_walk_limit, _BDPT_MAX_VERTS, BDPTVertex, _null_vertex, VCM_GSMS_ARRIVAL
 from gonzales.transport.glossy_sms import GLOSSY_SMS_MIN_PDF
 from gonzales.paths.vcm.eval import _bdpt_vertex_mis_scoped, _vcm_mnee_light_dvcm, _vcm_gsms_on, _vcm_gsms_light_dvcm
-from gonzales.paths.vcm.strategy import VcmStrategies, _VCM_EXIT_MERGE, _vcm_keep, _vcm_eta_scale, _vcm_fibre_scale
+from gonzales.paths.vcm.strategy import VcmStrategies, _vcm_keep, _vcm_eta_scale, _vcm_fibre_scale
 from gonzales.paths.vcm.connect import _bdpt_store_lvc_vertex
 from gonzales.integrators.vcm.camera import (
     _vcm_scatter, _vcm_lobe_vertex, _vcm_sss_walk, _vcm_sss_exit_vertex,
@@ -287,7 +287,7 @@ def _vcm_skin_arrival(
                                        Int(st.mnee.n_glass), st.mnee.first_glass, st.cur_med_idx, st.wl, pcg)
         if d_m > Float32(0):
             dvcm_in = d_m * cos_a   # the walk applies the arrival cosine
-    comptime if not _VCM_EXIT_MERGE:
+    if sd.vcmExitMerge == Int32(0):
         return Float32(0)
     # Stored whenever a slot is left: the camera counts one per skin hit (cam_nd), so every split of a path classifies
     # it alike and the exit merge runs wherever that classification counts it (Scenes/vcm_sss_arrival_slots.py).

@@ -999,6 +999,7 @@ struct GpuSceneHandle(Movable):
             vcmKeepInvCell=Float32(0), vcmKeepScale=Float32(1), vcmMaxDepth=Int32(9),
             vcmCamX=Float32(0), vcmCamY=Float32(0), vcmCamZ=Float32(0),
             vcmFootprint=Float32(0), vcmMergeR=Float32(0),
+            vcmExitMerge=Int32(0) if env_on["GONZALES_VCM_NO_EXIT"]() else Int32(1),
             camFp=self.cam_fp,
             sphereLightCount=Int64(self.n_sphere_lights),
             lightPickCdf=self.lights.light_pick_ptr(),

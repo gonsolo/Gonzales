@@ -22,6 +22,7 @@ comptime ENV_SWITCHES: List[EnvSwitch] = [
     # Features
     EnvSwitch("GONZALES_NO_DENOISE", "set: --interactive-frames output is not denoised"),
     EnvSwitch("GONZALES_NO_MNEE", "set: the GPU path tracer runs no MNEE through smooth glass"),
+    EnvSwitch("GONZALES_VCM_NO_EXIT", "set: VCM without exit merging (the original VCM's strategies on skin)"),
     EnvSwitch("GONZALES_NO_SW_SHADOW", "set: the software BVH traces shadow rays inline instead of deferring them"),
     EnvSwitch("GONZALES_SSS_RT", "0: subsurface walk segments traced in software instead of on the RT cores"),
     EnvSwitch("GONZALES_TEX_SPP", "Ptex streaming footprint as at N samples a pixel (default 16; 1 = the pixel's own)"),

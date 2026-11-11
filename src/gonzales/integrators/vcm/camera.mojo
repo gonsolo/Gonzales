@@ -42,7 +42,7 @@ from gonzales.paths.vcm.eval import (
     _vcm_sphere_slot, _vcm_infinite_slot, _vcm_nee_surface, _vertex_ctx, _bdpt_vertex_mis_scoped, _vcm_mnee,
     _vcm_mnee_hit_term, _vcm_gsms_on, _vcm_gsms, _vcm_gsms_hit_term,
 )
-from gonzales.paths.vcm.strategy import VcmStrategies, _VCM_EXIT_MERGE, _vcm_keep, _vcm_eta_scale, _vcm_fibre_scale
+from gonzales.paths.vcm.strategy import VcmStrategies, _vcm_keep, _vcm_eta_scale, _vcm_fibre_scale
 from gonzales.paths.vcm.connect import _bdpt_connect_to_cache, _bdpt_connect_to_cache_deferred
 from gonzales.paths.vcm.merge import _bdpt_merge_from_cache
 from gonzales.transport.surface import surface_hit
@@ -266,9 +266,11 @@ def _area_light_hit(ref sd: SceneView, inter: Intersection, mat: Material,
 
 
 @always_inline
-def _vcm_skin_arrival_here(mat: Material, inter: Intersection, med_in: Int32) -> Bool:
+def _vcm_skin_arrival_here(ref sd: SceneView, mat: Material, inter: Intersection, med_in: Int32) -> Bool:
     """Does a light path store a skin arrival at this hit (light.mojo's _vcm_skin_arrival)?"""
-    comptime if _VCM_SSS_CAMERA_ONLY or not _VCM_EXIT_MERGE:
+    comptime if _VCM_SSS_CAMERA_ONLY:
+        return False
+    if sd.vcmExitMerge == Int32(0):
         return False
     return sss_walks_below(mat, inter, med_in)
 
@@ -730,7 +732,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool, defer_walk: Bool = False](
                 if VcmStrategies.ends_at(sd, st.cam_count()):
                     return False   # a delta vertex past d starts no strategy either
                 st.n_delta += 1
-                if _vcm_skin_arrival_here(mat, inter, med_in):
+                if _vcm_skin_arrival_here(sd, mat, inter, med_in):
                     st.n_arrivals += 1
             if v.is_delta == Int32(0):
                 if st.n_verts == 0: st.first_alb = eff_alb
@@ -741,7 +743,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool, defer_walk: Bool = False](
                 # pixel's own paired light path, so unlike the connect below it
                 st.total_merge += _bdpt_merge_from_cache(v, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm, mis_vc_weight_factor, st.cam_count(), st.cam_nd(), visit_naive=visit_naive, visit_footprint=visit_footprint, visit_thin=visit_thin)
                 # After the merge: the light vertex it merges with already sits behind this arrival's slot.
-                if _vcm_skin_arrival_here(mat, inter, med_in):
+                if _vcm_skin_arrival_here(sd, mat, inter, med_in):
                     st.n_arrivals += 1
                 if path_len > 0:
                     # Task #163 stage 5: the diffuse branch's connect shadow
@@ -791,7 +793,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool, defer_walk: Bool = False](
         elif mat.type == MatKind.dielectric or mat.type == MatKind.thin_dielectric:
             if VcmStrategies.ends_at(sd, st.cam_count()):
                 return False   # a delta vertex past d starts no strategy either
-            if _vcm_skin_arrival_here(mat, inter, med_in):
+            if _vcm_skin_arrival_here(sd, mat, inter, med_in):
                 st.n_arrivals += 1   # walk or reflection: either way the light's arrival here holds a slot
             var ior_cur = st.current_dielectric_ior; var ior_prev = st.previous_dielectric_ior
             var cross_scale = _vcm_dielectric_cross[use_gpu, True](sd, inter, mat, hit, ray_dir, vcm_cone_w, has_med, pcg,

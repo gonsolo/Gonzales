@@ -282,6 +282,7 @@ struct SceneView(TrivialRegisterPassable, DevicePassable):
     var vcmCamZ:        Float32
     var vcmFootprint:   Float32
     var vcmMergeR:      Float32
+    var vcmExitMerge:   Int32   # 0: the original VCM, no exit merging (GONZALES_VCM_NO_EXIT)
     # pbrt's texture/bump footprint camera data (footprint.mojo); none() =
     # every map at LOD 0 with pbrt's fixed bump step.
     var camFp:          CameraFootprint
