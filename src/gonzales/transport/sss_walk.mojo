@@ -162,14 +162,39 @@ def _sss_walk_trace(ref sd: SceneView, walk: SssWalk, ray: Ray, store: Pointer[I
             sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances)
 
 
-# Inlined so `sd` stays in kernel param space: a non-inlined call needs its
-# address, which copies the whole descriptor to local memory per thread.
+# Traces a walk's later segments: the software BVH (BvhWalkTracer) or the RT cores.
+trait WalkTracer(TrivialRegisterPassable):
+    def trace(self, ref sd: SceneView, walk: SssWalk, ray: Ray, store: Pointer[Intersection, MutUntrackedOrigin]):
+        ...
+
+struct BvhWalkTracer(WalkTracer):
+    def __init__(out self):
+        pass
+
+    @always_inline
+    def trace(self, ref sd: SceneView, walk: SssWalk, ray: Ray, store: Pointer[Intersection, MutUntrackedOrigin]):
+        _sss_walk_trace(sd, walk, ray, store)
+
+
 @always_inline
 def _sss_walk_step[steps: Int = 256](
     paths: Pointer[PathState, MutUntrackedOrigin],
     intersections: Pointer[Intersection, MutUntrackedOrigin],
     i: Int,
     ref sd: SceneView,
+):
+    _sss_walk_step[steps](paths, intersections, i, sd, BvhWalkTracer())
+
+
+# Inlined so `sd` stays in kernel param space: a non-inlined call needs its
+# address, which copies the whole descriptor to local memory per thread.
+@always_inline
+def _sss_walk_step[steps: Int, T: WalkTracer](
+    paths: Pointer[PathState, MutUntrackedOrigin],
+    intersections: Pointer[Intersection, MutUntrackedOrigin],
+    i: Int,
+    ref sd: SceneView,
+    tracer: T,
 ):
     """A random walk under a surface (PathState.sss), as Cycles' subsurface_random_walk: each distance comes from one
     hero wavelength picked by albedo times throughput, directions are Henyey-Greenstein or, for a guided fraction,
@@ -197,7 +222,7 @@ def _sss_walk_step[steps: Int = 256](
     var ray = path_ptr[].ray
     for it in range(steps):
         if it > 0:
-            _sss_walk_trace(sd, walk, ray, store.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]())
+            tracer.trace(sd, walk, ray, store.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]())
         var step = path_ptr[].sss.steps
         if step >= Int32(_SSS_MAX_STEPS):
             path_ptr[].active = 0   # Cycles' BSSRDF_MAX_BOUNCES: a walk this long is given up

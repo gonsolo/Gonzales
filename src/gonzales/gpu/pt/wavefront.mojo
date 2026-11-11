@@ -20,11 +20,13 @@ from gonzales.core.sampling import gen_primary_ray_state, ThinLens
 from gonzales.core.spectrum import SpectralSample, spectral_sample_to_rgb
 from gonzales.core.transform import transform_normal, Mat4
 from gonzales.scene.accel.vulkaninterop import VulkanInteropRtSceneHandle, vulkaninterop_rt_trace
+from std.builtin.device_passable import DevicePassable, DeviceTypeEncoder
+from gonzales.scene.accel.xert import XeScene, xert_active, xert_scene, xert_trace_interop_one
 from gonzales.scene.accel.hw_rt import hw_alpha, hw_curves, hw_rt_active, hw_trace_interop, hw_trace_shadow
 from gonzales.scene.accel.optixcurves import oxc_active, oxc_scratch, oxc_trace_closest, oxc_trace_shadow
 from max.gpu import WARP_SIZE, barrier, block_dim, block_idx, lane_id, thread_idx
 from max.gpu.memory import AddressSpace
-from std.memory import stack_allocation
+from std.memory import bitcast, stack_allocation
 from max.gpu.primitives.warp import vote
 from std.bit import pop_count
 from std.memory.alloc import unsafe_alloc
@@ -35,7 +37,7 @@ from std.atomic import Atomic
 from std.math import ceildiv, sqrt
 from std.sys import has_accelerator
 from gonzales.gpu.scene import GpuSceneHandle
-from gonzales.transport.sss_walk import _sss_walk_step
+from gonzales.transport.sss_walk import _sss_walk_step, WalkTracer
 
 @__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
 @__llvm_metadata(`nvvm.minctasm`=SIMDLength(1))    # NVIDIA keeps its old register budget; AMD ignores this
@@ -396,6 +398,48 @@ def sss_walk_gpu(
         return
     _sss_walk_step(paths, intersections, Int(idx[unsafe_offset=i]), sd)
 
+
+# A walk segment traced inline on the Intel RT cores, the hit unpacked as from an RT step's result.
+@fieldwise_init
+struct XeWalkTracer(WalkTracer, DevicePassable):
+    comptime device_type: AnyType = Self
+    var sc: XeScene
+    var mesh_material_idx: Pointer[Int64, MutUntrackedOrigin]
+    var mesh_al_idx: Pointer[Int32, MutUntrackedOrigin]
+    var n_meshes: Int64
+    var instance_base_mesh: Pointer[Int32, MutUntrackedOrigin]
+
+    @always_inline
+    def trace(self, ref sd: SceneView, walk: SssWalk, ray: Ray, store: Pointer[Intersection, MutUntrackedOrigin]):
+        var r = SIMD[DType.float32, 8](ray.origin.x, ray.origin.y, ray.origin.z, 0,
+                                       ray.direction.x, ray.direction.y, ray.direction.z, 1.0e8)
+        var res = bitcast[DType.float32](xert_trace_interop_one(self.sc, r, UInt32(0)))
+        _unpack_rt_result(Pointer(to=res).bitcast[Float32]().unsafe_origin_cast[MutUntrackedOrigin](), 0, 0, store,
+                          self.mesh_material_idx, self.mesh_al_idx, Int(self.n_meshes), self.instance_base_mesh,
+                          Pointer[PathState, MutUntrackedOrigin].unsafe_dangling(), sd.meshes)
+        _ = res
+
+    def _to_device_type(self, mut encoder: Some[DeviceTypeEncoder], target: MutOpaquePointer[_]):
+        encoder.encode(self, target)
+
+    @staticmethod
+    def get_type_name() -> String:
+        return "XeWalkTracer"
+
+# sss_walk_gpu with its segments traced on the Intel RT cores.
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+def sss_walk_xe_gpu(
+    paths: Pointer[PathState, MutUntrackedOrigin],
+    intersections: Pointer[Intersection, MutUntrackedOrigin],
+    sd: SceneView,
+    idx: Pointer[Int32, MutUntrackedOrigin],
+    count: Pointer[Int32, MutUntrackedOrigin],
+    tracer: XeWalkTracer,
+):
+    var i = Int(block_idx.x * block_dim.x + thread_idx.x)
+    if i >= Int(count[unsafe_offset=0]):
+        return
+    _sss_walk_step[256](paths, intersections, Int(idx[unsafe_offset=i]), sd, tracer)
 
 # One walk step for each listed walker (sss_walk_gpu's list); those still under the surface list themselves in next_idx
 # with their next segment in `rays`, the RT-core layout, for rtcore_sss_walk_gpu to trace.
@@ -1665,7 +1709,7 @@ def rtcore_sss_walk_gpu(
 ) raises:
     """The walks of the listed walkers, their segments traced on the RT cores a step at a time, so the walkers of a step
     are full warps and no lane waits on another's long walk; the few walks still going after SSS_RT_STEPS steps, or
-    once fewer than SSS_RT_MIN remain, finish in software (sss_walk_gpu)."""
+    once fewer than SSS_RT_MIN remain, finish in software (sss_walk_gpu). On Intel each walk runs in one kernel."""
     comptime block_size = 256
     var rays = rays_buf.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
     var results = results_buf.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
@@ -1679,6 +1723,11 @@ def rtcore_sss_walk_gpu(
     var mm = mesh_material_idx_buf.unsafe_ptr().unsafe_bitcast[Int64]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
     var mal = mesh_al_idx_buf.unsafe_ptr().unsafe_bitcast[Int32]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
     ctx.enqueue_memset(DeviceBuffer[DType.int32](ctx, counts.unsafe_offset(SSS_RT_COUNTS), 1, owning=False), Int32(0))
+    if xert_active():   # Intel traces inside the kernel: each walk in one loop, as Cycles, no launch per step
+        ctx.enqueue_function[sss_walk_xe_gpu](paths, inter, sd, lists[0], counts.unsafe_offset(walkers),
+            XeWalkTracer(xert_scene(), mm, mal, Int64(n_meshes), instance_base_mesh),
+            grid_dim=ceildiv(n_total, block_size), block_dim=block_size)
+        return
     for step in range(SSS_RT_STEPS):
         var a = step % 2
         var out_slot = SSS_RT_COUNTS + step % 3
