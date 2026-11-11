@@ -231,35 +231,61 @@ def xert_trace_interop_gpu(accel: MutPointer[UInt8, MutAnyOrigin], rays: MutPoin
     var i = global_idx.x
     if i >= Int(n):
         return
-    var r = rays.unsafe_load[width=8](8 * i)
-    var hit = xert_trace(accel, XeRayDesc(r[0], r[1], r[2], r[4], r[5], r[6], r[3], r[7], 0xFF, flags),
-                         XeCurves(curves, leaves, leaf_base, inst_blas, materials, piece_rec, piece_base))
-    var o = results.unsafe_offset(8 * i)
+    var sc = XeScene(accel.unsafe_origin_cast[MutUntrackedOrigin](), n_meshes, ord_inst, ord_mesh.unsafe_origin_cast[MutUntrackedOrigin](),
+                     XeCurves(curves, leaves, leaf_base, inst_blas, materials, piece_rec, piece_base),
+                     heat.unsafe_origin_cast[MutUntrackedOrigin]())
+    results.unsafe_store(8 * i, xert_trace_interop_one(sc, rays.unsafe_load[width=8](8 * i), flags))
+
+# The scene of xert_trace_interop_gpu's arguments, for kernels that trace in their own loop.
+@fieldwise_init
+struct XeScene(TrivialRegisterPassable):
+    var accel: Pointer[UInt8, MutUntrackedOrigin]
+    var n_meshes: Int64
+    var ord_inst: Int64
+    var ord_mesh: Pointer[Int32, MutUntrackedOrigin]
+    var cv: XeCurves
+    var heat: Pointer[UInt32, MutUntrackedOrigin]
+
+def xert_scene() -> XeScene:
+    return XeScene(
+        Pointer[UInt8, MutUntrackedOrigin](unsafe_from_address=Int(external_call["xert_scene_accel", UInt64]())),
+        external_call["xert_scene_n_meshes", Int64](), external_call["xert_scene_ord_inst", Int64](),
+        Pointer[Int32, MutUntrackedOrigin](unsafe_from_address=Int(external_call["xert_scene_ord_mesh", UInt64]())),
+        XeCurves(Pointer[Curve, MutUntrackedOrigin](unsafe_from_address=Int(xert_curve_table(0))),
+                 Pointer[PrimId, MutUntrackedOrigin](unsafe_from_address=Int(xert_curve_table(1))),
+                 Pointer[Int32, MutUntrackedOrigin](unsafe_from_address=Int(xert_curve_table(2))),
+                 Pointer[Int32, MutUntrackedOrigin](unsafe_from_address=Int(xert_curve_table(3))),
+                 Pointer[Material, MutUntrackedOrigin](unsafe_from_address=Int(xert_curve_table(4))),
+                 Pointer[Int32, MutUntrackedOrigin](unsafe_from_address=Int(xert_curve_table(5))), Int32(Int(xert_curve_table(6)))),
+        Pointer[UInt32, MutUntrackedOrigin](unsafe_from_address=Int(external_call["xert_heat", UInt64]())))
+
+# One ray r (interop layout) traced into its 8 result words.
+@always_inline
+def xert_trace_interop_one(sc: XeScene, r: SIMD[DType.float32, 8], flags: UInt32) -> SIMD[DType.uint32, 8]:
+    var hit = xert_trace(sc.accel.unsafe_origin_cast[MutAnyOrigin](), XeRayDesc(r[0], r[1], r[2], r[4], r[5], r[6], r[3], r[7], 0xFF, flags), sc.cv)
+    var o = SIMD[DType.uint32, 8](0)
     if hit.prim < 0:
-        o[unsafe_offset=6] = 0
-        return
-    if Int(heat) != 0:
-        _ = Atomic.fetch_add(heat.unsafe_offset(Int(hit.slot)), UInt32(1))
-    var ordinary = ord_inst >= 0 and Int(hit.inst) >= Int(ord_inst)
+        return o
+    if Int(sc.heat) != 0:
+        _ = Atomic.fetch_add(sc.heat.unsafe_offset(Int(hit.slot)), UInt32(1))
+    var ordinary = sc.ord_inst >= 0 and Int(hit.inst) >= Int(sc.ord_inst)
+    o[0] = bitcast[DType.uint32](hit.t)
+    o[1] = bitcast[DType.uint32](hit.u)
+    o[2] = bitcast[DType.uint32](hit.v)
     if hit.curve >= 0:
-        var p = leaves[unsafe_offset=Int(hit.curve)]
-        o[unsafe_offset=0] = bitcast[DType.uint32](hit.t)
-        o[unsafe_offset=1] = bitcast[DType.uint32](hit.u)
-        o[unsafe_offset=2] = bitcast[DType.uint32](hit.v)
-        o[unsafe_offset=3] = UInt32(0xFFFFFFFF) if ordinary else UInt32(hit.inst)
-        o[unsafe_offset=4] = UInt32(Int(p.id1))
-        o[unsafe_offset=5] = UInt32(Int(p.id2))
-        o[unsafe_offset=6] = 2 if ordinary else 4
-        o[unsafe_offset=7] = UInt32(Int(p.materialIndex))
-        return
-    o[unsafe_offset=0] = bitcast[DType.uint32](hit.t)
-    o[unsafe_offset=1] = bitcast[DType.uint32](hit.u)
-    o[unsafe_offset=2] = bitcast[DType.uint32](hit.v)
-    o[unsafe_offset=3] = UInt32(0xFFFFFFFF)
-    o[unsafe_offset=4] = UInt32(ord_mesh[unsafe_offset=Int(hit.inst) - Int(ord_inst)]) if ordinary else UInt32(Int(n_meshes) + Int(hit.inst))
-    o[unsafe_offset=5] = UInt32(hit.prim)
-    o[unsafe_offset=6] = 1
-    o[unsafe_offset=7] = 0 if ordinary else UInt32(hit.geom)
+        var p = sc.cv.leaves[unsafe_offset=Int(hit.curve)]
+        o[3] = UInt32(0xFFFFFFFF) if ordinary else UInt32(hit.inst)
+        o[4] = UInt32(Int(p.id1))
+        o[5] = UInt32(Int(p.id2))
+        o[6] = 2 if ordinary else 4
+        o[7] = UInt32(Int(p.materialIndex))
+        return o
+    o[3] = UInt32(0xFFFFFFFF)
+    o[4] = UInt32(sc.ord_mesh[unsafe_offset=Int(hit.inst) - Int(sc.ord_inst)]) if ordinary else UInt32(Int(sc.n_meshes) + Int(hit.inst))
+    o[5] = UInt32(hit.prim)
+    o[6] = 1
+    o[7] = 0 if ordinary else UInt32(hit.geom)
+    return o
 
 # Enqueues the trace of m rays (device addresses, interop layout) against the active scene; any_hit for shadow rays.
 def xert_trace_interop(ctx: DeviceContext, rays: Int, results: Int, m: Int, any_hit: Bool) raises:
