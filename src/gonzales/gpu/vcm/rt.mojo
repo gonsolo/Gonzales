@@ -119,7 +119,7 @@ def _vcm_rt_trace_paths[camera: Bool](
         Int64(n_meshes),
         Int64(n_total),
         instance_base_ptr,
-        rt_no_ids(), rt_no_paths(), rt_no_meshes(),
+        rt_no_ids(), rt_no_paths(), rt_no_meshes(), Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
         grid_dim=grid, block_dim=block_size,
     )
 

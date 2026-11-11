@@ -585,9 +585,13 @@ def vulkaninterop_unpack_results_kernel(
     paths: Pointer[PathState, MutUntrackedOrigin] = Pointer[PathState, MutUntrackedOrigin].unsafe_dangling(),
     # A merged template mesh keeps a material a triangle in the mesh itself; real pointer = look it up there.
     meshes: Pointer[TriangleMesh, MutUntrackedOrigin] = Pointer[TriangleMesh, MutUntrackedOrigin].unsafe_dangling(),
+    # The live count on the device, when count_dp is only an upper bound (rays past it are stale).
+    count_dev: Pointer[Int32, MutUntrackedOrigin] = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
 ):
     var n_meshes = Int(n_meshes_dp)
     var count = Int(count_dp)
+    if _is_real_ptr(count_dev):
+        count = min(count, Int(count_dev[unsafe_offset=0]))
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
     if tid >= count:
         return
@@ -1133,7 +1137,7 @@ def rtcore_trace_unpack_gpu(
         Int64(n_meshes),
         Int64(n_total),
         instance_base_mesh_ptr,
-        rt_no_ids(), rt_no_paths(), sd.meshes,
+        rt_no_ids(), rt_no_paths(), sd.meshes, Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
         grid_dim=grid, block_dim=block_size,
     )
     if alpha:
@@ -1293,7 +1297,7 @@ def rtcore_closest_hit_gpu(
         results, inter,
         mesh_material_idx_buf.unsafe_ptr().unsafe_bitcast[Int64]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
         mesh_al_idx_buf.unsafe_ptr().unsafe_bitcast[Int32]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
-        Int64(n_meshes), Int64(m), instance_base_mesh_ptr, ids, fuse_paths, sd.meshes,
+        Int64(n_meshes), Int64(m), instance_base_mesh_ptr, ids, fuse_paths, sd.meshes, Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
         grid_dim=gm, block_dim=block_size,
     )
     if alpha:
@@ -1609,8 +1613,9 @@ def shadow_curves_kernel(
 
 comptime SHADOW_COUNTS = 16        # in the counter buffer, after the shading kinds' counts: the survivors per slot
 comptime SSS_RT_COUNTS = 20        # in the counter buffer: the walkers of the RT steps, alternately
-comptime SSS_RT_STEPS = 16         # walk steps a round with RT-core segments, while enough walkers remain
-comptime SSS_RT_MIN = 4096         # fewer walkers finish in software: the tail of long walks
+comptime SSS_RT_STEPS = get_defined_int["SSS_RT_STEPS", 256]()        # walk steps a round with RT-core segments (all of a walk)
+comptime SSS_RT_MIN = get_defined_int["SSS_RT_MIN", 1]()             # fewer walkers finish in software
+comptime SSS_RT_SYNC = get_defined_int["SSS_RT_SYNC", 8]()           # steps between host reads of the walker count
 
 
 def rtcore_sss_walk_gpu(
@@ -1639,6 +1644,8 @@ def rtcore_sss_walk_gpu(
     var counts = counter_buf.unsafe_ptr().unsafe_bitcast[Int32]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
     var lists = [ids_base.unsafe_offset(3 * n_total), ids_base.unsafe_offset(2 * n_total)]   # the shadow ids' room, free now
     var slots = [walkers, SSS_RT_COUNTS]
+    # m bounds the live walkers from above (a step only drops them); the host reads the true count only every
+    # SSS_RT_SYNC steps, the kernels read it on the device, and rays past it are traced but never unpacked.
     var m = n_total
     for step in range(SSS_RT_STEPS):
         var a = step % 2
@@ -1646,16 +1653,18 @@ def rtcore_sss_walk_gpu(
         ctx.enqueue_memset(DeviceBuffer[DType.int32](ctx, counts.unsafe_offset(out_slot), 1, owning=False), Int32(0))
         ctx.enqueue_function[sss_walk_rt_step_gpu](paths, inter, sd, lists[a], counts.unsafe_offset(slots[a]), lists[1 - a],
                                                    counts.unsafe_offset(out_slot), rays, grid_dim=ceildiv(m, block_size), block_dim=block_size)
-        m = read_counter(ctx, counter_buf, out_slot)
         slots[1 - a] = out_slot
-        if m == 0:
-            return
+        if step % SSS_RT_SYNC == 0:
+            m = read_counter(ctx, counter_buf, out_slot)
+            if m == 0:
+                return
         hw_trace_interop(ctx, Int(rays), Int(results), m)
         ctx.enqueue_function[vulkaninterop_unpack_results_kernel](
             results, inter,
             mesh_material_idx_buf.unsafe_ptr().unsafe_bitcast[Int64]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
             mesh_al_idx_buf.unsafe_ptr().unsafe_bitcast[Int32]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
             Int64(n_meshes), Int64(m), instance_base_mesh, lists[1 - a], rt_no_paths(), sd.meshes,
+            counts.unsafe_offset(out_slot),
             grid_dim=ceildiv(m, block_size), block_dim=block_size)
         if m < SSS_RT_MIN or step == SSS_RT_STEPS - 1:
             ctx.enqueue_function[sss_walk_gpu](paths, inter, sd, lists[1 - a], counts.unsafe_offset(slots[1 - a]),
@@ -1817,7 +1826,7 @@ def vulkaninterop_rt_traverse_paths_gpu(
             Int64(n_meshes),
             Int64(n_total),
             instance_base_mesh_ptr,
-            rt_no_ids(), rt_no_paths(), rt_no_meshes(),
+            rt_no_ids(), rt_no_paths(), rt_no_meshes(), Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
             grid_dim=grid, block_dim=block_size,
         )
         if alpha:
