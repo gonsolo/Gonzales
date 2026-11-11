@@ -407,7 +407,7 @@ UNIT_TEST_DEPS := unittest-intel-src
 UNIT_TEST_RUN = . $(HAL_ROOT)/env.sh && \
     MODULAR_DRIVER_PLUGINS="level_zero@$(HAL_ROOT)/lib/plugins/LevelZeroPlugin.so;cpu@$(HAL_ROOT)/lib/plugins/CPUPlugin.so" \
     LD_LIBRARY_PATH=$(IGC_FIX_LIB):$$LD_LIBRARY_PATH \
-    uv run mojo run --target-accelerator intel:bmg -I $(BUILD_DIR)/intel-src
+    uv run mojo run --target-accelerator intel:xe2 -I $(BUILD_DIR)/intel-src
 else ifeq ($(HAVE_CUDA),)
 ifdef AMD
 UNIT_TEST_SRCS := $(filter-out $(filter-out Tests/unit/gpu/test_gpu.mojo,$(GPU_ONLY_TEST_SRCS)),$(UNIT_TEST_SRCS))
