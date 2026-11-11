@@ -139,7 +139,7 @@ def _count_steps(handle: Pointer[GpuSceneHandle, MutUntrackedOrigin], sd: SceneV
 
 def _gpu_bounce_kernels(
     handle: Pointer[GpuSceneHandle, MutUntrackedOrigin],
-    n: Int, grid_dim: Int,
+    n: Int, grid_full: Int,
     max_depth: Int32,
     use_vulkan_rt: Bool = False,
     interop_scene: VulkanInteropRtSceneHandle = Pointer[UInt8, MutUntrackedOrigin].unsafe_dangling(),
@@ -178,6 +178,7 @@ def _gpu_bounce_kernels(
     prev_live: Int = 0,
 ) raises -> Int:
     comptime block_size = 256
+    var grid_dim = grid_full
     var sd = handle[].scene_descriptor()
     var rt_compact = use_vulkan_rt and hw_rt_active()
     var live_paths = n
@@ -213,6 +214,7 @@ def _gpu_bounce_kernels(
         )
         if live_paths == 0:
             return 0                                    # every path is finished: the remaining kernels would be no-ops
+        grid_dim = ceildiv(live_paths, block_size)     # the kernels below walk the live list or its subsets
         _bench_stage(handle, 4)
     elif use_vulkan_rt:
         vulkaninterop_rt_traverse_paths_gpu(
@@ -431,7 +433,7 @@ def _gpu_bounce_kernels(
             Int64(n),
             Int64(shadow_slots),
             Int64(usable_slots),
-            grid_dim=grid_dim, block_dim=block_size,
+            grid_dim=grid_full, block_dim=block_size,
         )
     var path_base = handle[].path_buf.unsafe_ptr().unsafe_bitcast[PathState]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
     var shared_ctx = shared_shade_context(sd, handle[].sobol_buf.unsafe_ptr().unsafe_bitcast[UInt32](), path_base, use_restir, shadow_ptr)
