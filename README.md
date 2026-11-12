@@ -10,7 +10,7 @@ A production-capable spectral Monte Carlo renderer written in **Mojo**, designed
 for high-end light transport simulation. Gonzales renders complex scenes —
 including Disney's Moana Island, all 32 Bitterli benchmark scenes and a 65-scene
 pbrt/Bitterli corpus — with path tracing, SPPM, BDPT and VCM on the CPU and on
-NVIDIA GPUs, plus an à-trous wavelet denoiser.
+NVIDIA and Intel GPUs, plus an à-trous wavelet denoiser.
 
 📖 Read the [Gonzales Book](https://gonsolo.github.io/gonzales/) for detailed
 documentation with annotated source code.
@@ -60,7 +60,7 @@ C FFI — not reimplemented.
 ## Key Features
 
 - **Spectral transport** — Four hero wavelengths per path in every integrator, pbrt-style RGB-to-spectrum upsampling and sensor models
-- **Wavefront GPU path tracing** — GPU kernels in Mojo with live-path compaction, compile-time kernel variants, deferred software shadow rays and an optional RT-core backend (`--rt-hardware`) with its own acceleration-structure builders (no Vulkan or OptiX in that path)
+- **Wavefront GPU path tracing** — GPU kernels in Mojo with live-path compaction, compile-time kernel variants, deferred software shadow rays and an optional ray-tracing hardware backend (`--rt-hardware`): on NVIDIA with its own acceleration-structure builders (no Vulkan or OptiX in that path), on Intel through Level Zero's ray-tracing extension and ray queries
 - **Fast CPU renderer** — Per-tile wavefront, 4-wide BVH with triangle records, vectorised shading
 - **Four light-transport algorithms** — Path tracing, SPPM (`--sppm`), BDPT/VCM (`--vcm`) and ReSTIR variants, sharing materials, lights and MIS code
 - **Specular caustics** — MNEE and SMS for glass and mirror caustics, with path-identity MIS so the result matches pbrt on the test cubes
