@@ -3,6 +3,7 @@
 
 from std.collections import Array
 from std.math import sqrt, cos, sin, log, exp, max, min, abs
+from std.sys import get_defined_int
 from gonzales.transport.medium import MediumView
 from gonzales.core.geometry import face_toward
 from gonzales.transport.sss_walk import (
@@ -263,6 +264,21 @@ def _area_light_hit(ref sd: SceneView, inter: Intersection, mat: Material,
     var al_hit = sd.areaLights[unsafe_offset=Int(inter.primId.id1)]
     return (al_hit.emission, al_hit.total_area, Int(inter.primId.id1),
             area_light_hit_cos(inter, sd.meshes, sd.instances, ray_dir))
+
+
+# Throughput, per mille, below which a camera vertex's merge, connections and manifold NEE are rouletted; 0 = off.
+comptime _VCM_EST_RR: Float32 = Float32(get_defined_int["VCM_EST_RR", 1000]()) / Float32(1000)
+
+
+@always_inline
+def _vcm_est_rr(beta: SpectralSample, mut pcg: PCG32) -> Float32:
+    """0 skips the vertex's estimators, else they are scaled by 1/p. No strategy's density changes, so MIS holds."""
+    comptime if _VCM_EST_RR <= Float32(0):
+        return Float32(1)
+    var p = min(Float32(1), max(Float32(0.05), (beta.v0 + beta.v1 + beta.v2 + beta.v3) * Float32(0.25) / _VCM_EST_RR))
+    if p >= Float32(1):
+        return Float32(1)
+    return Float32(1) / p if pcg.next_float() < p else Float32(0)
 
 
 @always_inline
@@ -739,19 +755,21 @@ def _bdpt_camera_path_bounce[use_gpu: Bool, defer_walk: Bool = False](
                 if VcmStrategies.ends_at(sd, st.cam_count()):
                     return False   # a vertex past d starts no strategy (see VcmStrategies.depth)
                 st.n_verts += 1
+                var rr = Float32(1) if defer_shadow_rays else _vcm_est_rr(st.beta, pcg)
                 # Merging queries the GLOBAL photon grid and does not use this
                 # pixel's own paired light path, so unlike the connect below it
-                st.total_merge += _bdpt_merge_from_cache(v, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm, mis_vc_weight_factor, st.cam_count(), st.cam_nd(), visit_naive=visit_naive, visit_footprint=visit_footprint, visit_thin=visit_thin)
+                if rr > Float32(0):
+                    st.total_merge += SpectralSample(rr) * _bdpt_merge_from_cache(v, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm, mis_vc_weight_factor, st.cam_count(), st.cam_nd(), visit_naive=visit_naive, visit_footprint=visit_footprint, visit_thin=visit_thin)
                 # After the merge: the light vertex it merges with already sits behind this arrival's slot.
                 if _vcm_skin_arrival_here(sd, mat, inter, med_in):
                     st.n_arrivals += 1
-                if path_len > 0:
+                if path_len > 0 and rr > Float32(0):
                     # Task #163 stage 5: the diffuse branch's connect shadow
                     # rays are the single highest-volume, cleanest shadow-ray
                     if defer_shadow_rays:
                         _bdpt_connect_to_cache_deferred(v, sd, lvc, lp_idx, path_len, mis_vm_weight_factor, shadow_rays, shadow_pending, shadow_valid, shadow_seg_med, st.cam_count(), st.cam_nd())
                     else:
-                        st.total += _bdpt_connect_to_cache(v, sd, has_med, scratch, lvc, lp_idx, path_len, mis_vm_weight_factor, st.cam_count(), st.cam_nd())
+                        st.total += SpectralSample(rr) * _bdpt_connect_to_cache(v, sd, has_med, scratch, lvc, lp_idx, path_len, mis_vm_weight_factor, st.cam_count(), st.cam_nd())
 
                 # NEE to distant/point/sphere/infinite lights, via the shared
                 # Light interface (bvh.mojo's LightSample samplers) + BxDF
@@ -760,11 +778,11 @@ def _bdpt_camera_path_bounce[use_gpu: Bool, defer_walk: Bool = False](
                                           v.mat_kind == LobeKind.diffuse_transmit or v.mat_kind == LobeKind.hair or v.mat_kind == LobeKind.rough_dielectric,
                                           VcmStrategies.beyond_cache(st.cam_nd()))
                 # MNEE toward a light behind glass, one more strategy in the balance (_vcm_mnee).
-                if VcmStrategies.has_manifold(v):
-                    st.total += _vcm_mnee(sd, v, hit.to_simd(), gn, st.beta, pcg, st.wl, eta_x, st.dvcm, st.dvc,
+                if rr > Float32(0) and VcmStrategies.has_manifold(v):
+                    st.total += SpectralSample(rr) * _vcm_mnee(sd, v, hit.to_simd(), gn, st.beta, pcg, st.wl, eta_x, st.dvcm, st.dvc,
                                           VcmStrategies.beyond_cache(st.cam_nd()))
-                elif _vcm_gsms_on(sd, v):   # glossy SMS through chains that may reflect, same balance
-                    st.total += _vcm_gsms(sd, v, hit.to_simd(), gn_geo, st.beta, pcg, st.wl, eta_x, st.dvcm, st.dvc,
+                elif rr > Float32(0) and _vcm_gsms_on(sd, v):   # glossy SMS through chains that may reflect, same balance
+                    st.total += SpectralSample(rr) * _vcm_gsms(sd, v, hit.to_simd(), gn_geo, st.beta, pcg, st.wl, eta_x, st.dvcm, st.dvc,
                                           VcmStrategies.beyond_cache(st.cam_nd()))
 
             # Scatter through THE lobe sampler -- the same BSDF connect,
