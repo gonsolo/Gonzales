@@ -19,6 +19,22 @@ documentation with annotated source code.
 
 *The whole Moana island, interactive and fullscreen on an RTX 3060 with 12 GB ([video](https://youtu.be/dMYG1hy7kVY)).*
 
+## Gallery
+
+Benedikt Bitterli's scenes:
+
+![Bitterli's scenes rendered with Gonzales](Images/gallery-bitterli.jpg)
+
+The pbrt-v4 scenes:
+
+![The pbrt-v4 scenes rendered with Gonzales](Images/gallery-pbrt.jpg)
+
+*All rendered on an Intel Arc B580. The pbrt-v4 scenes and Bitterli's bathrooms,
+bedroom, cars, classroom and coffee maker: 64 samples per pixel, denoised with
+Intel Open Image Denoise. The other Bitterli scenes: 64 samples per pixel, or 32
+SPPM passes for the two caustic scenes, denoised with Gonzales' own à-trous
+denoiser.*
+
 ## Architecture
 
 The renderer is written entirely in **Mojo** (~54,600 lines in `src/gonzales/`, plus
