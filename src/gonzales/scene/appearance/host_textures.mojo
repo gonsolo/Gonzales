@@ -2,6 +2,7 @@ from gonzales.scene.appearance.materials import Material
 from gonzales.scene.appearance.materials import GpuTexture
 from gonzales.core.os_thread import OsThread, ThreadArg
 from gonzales.core.geometry import _is_real_ptr
+from gonzales.scene.appearance.shader import is_shader_name, shader_words, shader_images
 from max.algorithm import parallelize
 from std.atomic import Atomic
 from std.ffi import external_call
@@ -160,6 +161,14 @@ def _load_host_texture(
 ) -> _HostTexture:
     var result = _HostTexture(Pointer[UInt8, MutUntrackedOrigin].unsafe_dangling(), 0,
                               Int32(0), Int32(0), Int32(0), Int32(0), Int32(GpuTexture.FORMAT_F32), Int32(0))
+    if is_shader_name(filename):
+        var words = shader_words(filename)
+        if len(words) > 0:
+            var code = unsafe_alloc[Int32](len(words))
+            unsafe_memcpy(dest=code, src=words.unsafe_ptr(), count=len(words))
+            result = _HostTexture(code.unsafe_bitcast[UInt8](), 4 * len(words), Int32(len(words)), Int32(1), Int32(1),
+                                  Int32(0), Int32(GpuTexture.FORMAT_SHADER), Int32(0))
+        return result
     var name_len = 0
     while filename[unsafe_offset=name_len] != UInt8(0): name_len += 1
     if name_len > 4 and filename[unsafe_offset=name_len-4] == UInt8(46) and filename[unsafe_offset=name_len-3] == UInt8(112) and \
@@ -357,6 +366,12 @@ def decode_host_textures(
         var nidx = Int(materials[unsafe_offset=mi].normal_tex_idx)
         if nidx >= 0 and nidx < n_textures:
             tex_is_raw[unsafe_offset=nidx] = True
+    # ... and so are the images a node-graph program reads as data.
+    for ti in range(n_textures):
+        if is_shader_name(tex_filenames[unsafe_offset=ti]):
+            for img in shader_images(shader_words(tex_filenames[unsafe_offset=ti])):
+                if img[1] and img[0] >= 0 and img[0] < n_textures:
+                    tex_is_raw[unsafe_offset=img[0]] = True
     # Many scenes (e.g. landscape) declare a separate named Texture per
     # instance even when several instances share the same underlying
     # image file (batch-exported "-renamed-N" duplicates). Dedup by

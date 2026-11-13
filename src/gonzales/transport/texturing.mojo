@@ -10,6 +10,7 @@ from gonzales.scene.appearance.materials import GpuTexture
 from gonzales.scene.shapes.primitives import Intersection, TriangleMesh, Instance, mesh_uv, mesh_has_uvs, mesh_vi, mesh_face
 from gonzales.scene.appearance.footprint import CameraFootprint, UVFootprint, TriWorld, tri_world, hit_uv_footprint
 from gonzales.scene.appearance.image_sample import _srgb_to_linear, _sample_tex, _footprint_lod
+from gonzales.scene.appearance.shader import sample_shader
 
 
 # ── Packed Ptex (GpuTexture.FORMAT_PTEX; layout in oiio.cc) ─────────────────
@@ -148,6 +149,9 @@ def sample_texture[use_gpu: Bool](
                 # A float Ptex is the mean of its channels (pbrt's FloatPtexTexture); no V-flip.
                 var pc = _sample_ptex(tex, ptex_face, u, v, fp_width)
                 return RGB((pc.r + pc.g + pc.b) * Float32(1.0 / 3.0))
+            if Int(tex.format) == GpuTexture.FORMAT_SHADER:
+                var sc = sample_shader(tex, u, v, fp_width, textures, n_textures)
+                return RGB(sc[0], sc[1], sc[2])
             return _sample_tex(tex, su, tv, _footprint_lod(tex, fp_width))
     comptime if not use_gpu:
         if n_textures == 0 and Int(tex_filenames) > 1:
@@ -230,11 +234,16 @@ def _tex_lookup[use_gpu: Bool](
             if has_uvs:
                 su = w0*mesh_uv(mesh, v0)[0]   + inter.u*mesh_uv(mesh, v1)[0]   + inter.v*mesh_uv(mesh, v2)[0]
                 tv = w0*mesh_uv(mesh, v0)[1] + inter.u*mesh_uv(mesh, v1)[1] + inter.v*mesh_uv(mesh, v2)[1]
-            tv = Float32(1.0) - tv  # PBRT V-flip: V=0 at top
+            var t: RGB
+            if Int(tex.format) == GpuTexture.FORMAT_SHADER:
+                var sc = sample_shader(tex, su, tv, fp_width, textures, n_textures)
+                t = RGB(sc[0], sc[1], sc[2])
+            else:
+                # PBRT V-flip: V=0 at top
+                t = _sample_tex(tex, su, Float32(1.0) - tv, _footprint_lod(tex, fp_width))
             # bias + scale*texel is pbrt's "scale"/"mix" texture graph
             # folded into the lookup (scale=1, bias=0 when absent) --
             # see material_builder.mojo's _resolve_affine_rgb.
-            var t = _sample_tex(tex, su, tv, _footprint_lod(tex, fp_width))
             return _albedo_affine(mat, t)
     comptime if not use_gpu:
         if ti >= 0 and n_textures == 0 and _is_real_ptr(tex_filenames):
