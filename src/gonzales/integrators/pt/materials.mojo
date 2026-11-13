@@ -20,7 +20,7 @@ from gonzales.transport.restir_di import ReservoirIO, reservoir_io_null
 from gonzales.transport.restir_gi import gi_target_pdf, gi_temporal_spatial_combine
 from gonzales.integrators.pt.restir_sms import SMSReservoirIO, sms_reservoir_io_null
 from gonzales.transport.surface import sss_texel_tint
-from gonzales.transport.texturing import _apply_surface_maps, _tex_lookup, sample_texture, resolve_rough_texture
+from gonzales.transport.texturing import _apply_surface_maps, _tex_lookup, sample_texture, rough_texture_alpha
 from gonzales.transport.shade_context import GIPendingX1, ShadeContext
 from gonzales.transport.manifold import _interp_vertex_normal
 from gonzales.integrators.pt.common import _shading_normal, _curve_extra_offset, _hit_geom, _to_spec_refl, _clamped, _to_spec_illum, _shadow_inline, _shadow_blocked, _shadow_contribute, RR_THROUGHPUT_CLAMP, BOUNCE_DIFFUSE, BOUNCE_GLOSSY, BOUNCE_TRANSMIT, _count_bounce, _apply_russian_roulette, spawn_origin, _finish_delta_bounce, _apply_normal_map_sphere, _pt_hit_footprint, _build_geom_context_full, _draw_sobol_8
@@ -401,8 +401,8 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool, defer_only: Bool =
         path_ptr[].active = 0
         return
 
-    var m = mat
     var alb: RGB
+    var tex_alpha = Float32(0)
     var normal: Vec3f
     if is_sphere:
         # Analytic sphere: exact normal IS the shading normal, no UV space
@@ -412,7 +412,7 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool, defer_only: Bool =
     else:
         var (tri_cd, fp_cd) = _pt_hit_footprint(path_ptr, mat, ctx.cam_fp, ctx.instances, mesh, v0, v1, v2, inter, ray_org, ray_dir, ctx.textures, ctx.n_textures)
         alb = _tex_lookup[use_gpu](mat, inter, v0, v1, v2, mesh, ctx.tex_filenames, ctx.textures, ctx.n_textures, fp_cd.width)
-        resolve_rough_texture[use_gpu](m, inter, v0, v1, v2, mesh, ctx.tex_filenames, ctx.textures, ctx.n_textures)
+        tex_alpha = rough_texture_alpha[use_gpu](mat, inter, v0, v1, v2, mesh, ctx.tex_filenames, ctx.textures, ctx.n_textures)
         # Use interpolated shading normal (geometric normal still drives hit-point offset)
         normal = _shading_normal(mesh, v0, v1, v2, inter.u, inter.v, geo_normal, inter.primId.instanceIdx, ctx.instances)
         normal = _apply_surface_maps[use_gpu](mat, v0, v1, v2, mesh, inter, normal, geo_normal,
@@ -427,10 +427,10 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool, defer_only: Bool =
         path_ptr[].albedo = alb
 
     var ior = mat.emission.r            # coat IOR (eta_coat/eta_air), set at parse
-    var coat_alpha = max(m.roughU, m.roughV)
+    var coat_alpha = max(max(mat.roughU, mat.roughV), tex_alpha)   # a texture is floored by Filter Glossy's widening
     var wo = Vec3f(-ray_dir[0], -ray_dir[1], -ray_dir[2])  # toward viewer
     if mat.emission.b > Float32(0.5):
-        _shade_principled[enqueue_shadow, defer_only](path_ptr, ctx, m, inter, alb, normal, geo_normal, hit_point, wo,
+        _shade_principled[enqueue_shadow, defer_only](path_ptr, ctx, mat, inter, alb, normal, geo_normal, hit_point, wo,
                                                       ior, coat_alpha, pcg)
         return
     # pbrt's LayeredBxDF through the BSDF. param forces the coat alpha: `mat` may be Filter-Glossy widened.
