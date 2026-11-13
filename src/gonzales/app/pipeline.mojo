@@ -3731,9 +3731,11 @@ struct RenderSession(Movable):
     var resolves: Int   # since the film was cleared
     var integrator: Int # 0 path tracing, 1 BDPT, 2 VCM
     var vcm: Pointer[VcmGpu, MutUntrackedOrigin]   # BDPT's and VCM's buffers, made at their first pass
+    var xert: List[DeviceBuffer[DType.uint8]]      # Intel Xe2 structures and tables: the GPU holds their addresses
+    var xert_host: List[HostBuffer[DType.uint8]]
 
     def __init__(out self, psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin], var renderer: GpuGuidedRenderer,
-                 spectral: SpectralHandle):
+                 spectral: SpectralHandle, var xert: List[DeviceBuffer[DType.uint8]], var xert_host: List[HostBuffer[DType.uint8]]):
         self.psc = psc
         self.renderer = renderer^
         self.spectral = spectral
@@ -3741,6 +3743,8 @@ struct RenderSession(Movable):
         self.resolves = 0
         self.integrator = 0
         self.vcm = Pointer[VcmGpu, MutUntrackedOrigin].unsafe_dangling()
+        self.xert = xert^
+        self.xert_host = xert_host^
 
 comptime SessionPtr = Pointer[RenderSession, MutUntrackedOrigin]
 
@@ -3778,7 +3782,7 @@ def session_new(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin], sobol: Point
         handle, psc, UInt32(mix_bits_u64(UInt64(0))), UInt32(mix_bits_u64(UInt64(1))), n_pixels,
         Int(psc[unsafe_offset=0].samples_per_pixel), False, rtb.on, Pointer[UInt8, MutUntrackedOrigin].unsafe_dangling(),
         rtb.rays, rtb.results, rtb.mesh_material_idx, rtb.mesh_al_idx, rtb.n_meshes, rtb.instance_base_mesh, quiet=True),
-        spectral))
+        spectral, rtb.xert.copy(), rtb.xert_host.copy()))
     session_clear(s)
     return s
 
