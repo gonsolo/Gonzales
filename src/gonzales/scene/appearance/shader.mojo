@@ -5,7 +5,7 @@ A program is Int32 words: the output register, then instructions of SHADER_STRID
 RAMP and CURVES are followed by i0 RGBA table entries. Registers hold four floats; a float value fills all lanes.
 The Blender add-on compiles node trees to it (src/hdgonzales/blender/shader.py)."""
 from std.math import sqrt, floor, ceil, sin, cos, exp, log, abs, min, max
-from std.memory import bitcast, stack_allocation
+from std.memory import bitcast
 from gonzales.core.geometry import _atan2f
 from gonzales.scene.appearance.materials import GpuTexture
 from gonzales.scene.appearance.image_sample import _sample_tex, _footprint_lod
@@ -310,7 +310,7 @@ def _blend(mode: Int, t: Float32, a: F4, b: F4) -> F4:
         r = a * tm + ((F4(1) - a) * b * a + a * scr) * t
     elif mode == Blend.linear: r = a + (b * Float32(2) - F4(1)) * t
     elif mode == Blend.div or mode == Blend.overlay or mode == Blend.dodge or mode == Blend.burn:
-        for k in range(3):
+        comptime for k in range(3):
             var x = a[k]; var y = b[k]
             if mode == Blend.div:
                 if y != Float32(0): x = tm * x + t * x / y
@@ -420,21 +420,39 @@ def _image(textures: Pointer[GpuTexture, MutUntrackedOrigin], n_textures: Int, t
     return F4(c.r, c.g, c.b, 1)
 
 
+# The register file is one vector, read and written by unrolled selects, so it stays out of private memory.
+comptime RegFile = SIMD[DType.float32, 4 * SHADER_REGS]
+
+
+@always_inline
+def _reg(regs: RegFile, i: Int32) -> F4:
+    var out = F4(0)
+    comptime for k in range(SHADER_REGS):
+        if Int(i) == k:
+            out = regs.slice[4, offset=4 * k]()
+    return out
+
+
+@always_inline
+def _set_reg(mut regs: RegFile, i: Int, v: F4):
+    comptime for k in range(SHADER_REGS):
+        if i == k:
+            regs = regs.insert[offset=4 * k](v)
+
+
 @no_inline   # one copy per kernel; inlined at every texture lookup it would multiply the shading kernels' size
 def eval_shader(code: Pointer[Int32, MutUntrackedOrigin], n_words: Int, u: Float32, v: Float32, fp_width: Float32,
                 textures: Pointer[GpuTexture, MutUntrackedOrigin], n_textures: Int) -> F4:
     """Runs a program at texture coordinates (u, v); returns its output register."""
-    var regs = stack_allocation[4 * SHADER_REGS, Float32]()
-    for k in range(4 * SHADER_REGS):
-        regs[unsafe_offset=k] = Float32(0)
+    var regs = RegFile(0)
     var pc = 1
     while pc + SHADER_STRIDE <= n_words:
         var op = code[unsafe_offset=pc]
         var dst = Int(code[unsafe_offset=pc + 1]) & (SHADER_REGS - 1)
-        var a = regs.unsafe_load[width=4](4 * (Int(code[unsafe_offset=pc + 2]) & (SHADER_REGS - 1)))
-        var b = regs.unsafe_load[width=4](4 * (Int(code[unsafe_offset=pc + 3]) & (SHADER_REGS - 1)))
-        var c = regs.unsafe_load[width=4](4 * (Int(code[unsafe_offset=pc + 4]) & (SHADER_REGS - 1)))
-        var d = regs.unsafe_load[width=4](4 * (Int(code[unsafe_offset=pc + 5]) & (SHADER_REGS - 1)))
+        var a = _reg(regs, code[unsafe_offset=pc + 2])
+        var b = _reg(regs, code[unsafe_offset=pc + 3])
+        var c = _reg(regs, code[unsafe_offset=pc + 4])
+        var d = _reg(regs, code[unsafe_offset=pc + 5])
         var i0 = code[unsafe_offset=pc + 6]
         var i1 = code[unsafe_offset=pc + 7]
         var r = F4(0)
@@ -446,7 +464,7 @@ def eval_shader(code: Pointer[Int32, MutUntrackedOrigin], n_words: Int, u: Float
         elif op == ShaderOp.image:
             r = _image(textures, n_textures, Int(i0), i1, a, fp_width)
         elif op == ShaderOp.math:
-            for k in range(4):
+            comptime for k in range(4):
                 var x = _math(Int(i0), a[k], b[k], c[k])
                 r[k] = min(max(x, Float32(0)), Float32(1)) if i1 != Int32(0) else x
         elif op == ShaderOp.vmath:
@@ -460,16 +478,16 @@ def eval_shader(code: Pointer[Int32, MutUntrackedOrigin], n_words: Int, u: Float
         elif op == ShaderOp.clamp:
             r = min(max(a, b), c)
         elif op == ShaderOp.map_range:
-            var t1 = regs.unsafe_load[width=4](4 * (Int(i1) & (SHADER_REGS - 1)))
-            var st = regs.unsafe_load[width=4](4 * (Int(i1 >> 8) & (SHADER_REGS - 1)))
-            for k in range(4):
+            var t1 = _reg(regs, i1 & 255)
+            var st = _reg(regs, (i1 >> 8) & 255)
+            comptime for k in range(4):
                 r[k] = _map_range(Int(i0), a[k], b[k], c[k], d[k], t1[k], st[k], (i1 >> 16) & 1 != 0)
         elif op == ShaderOp.ramp:
             var data = code.unsafe_offset(pc + SHADER_STRIDE)
-            for k in range(4):
+            comptime for k in range(4):
                 r[k] = _table(data, Int(i0), a[0], k, i1 != Int32(0))
         elif op == ShaderOp.hsv:
-            var fac = regs[unsafe_offset=4 * (Int(i0) & (SHADER_REGS - 1))]
+            var fac = _reg(regs, i0)[0]
             var h = _rgb_to_hsv(a)
             h[0] = _fract(h[0] + b[0] + Float32(0.5))
             h[1] = min(max(h[1] * c[0], Float32(0)), Float32(1))
@@ -487,11 +505,11 @@ def eval_shader(code: Pointer[Int32, MutUntrackedOrigin], n_words: Int, u: Float
             if b[0] == Float32(0):
                 r = F4(1, 1, 1, a[3])
             else:
-                for k in range(3):
+                comptime for k in range(3):
                     if a[k] > Float32(0):
                         r[k] = exp(b[0] * log(a[k]))
         elif op == ShaderOp.split:
-            r = F4(a[Int(i0) & 3])
+            r = F4(a[0] if i0 == 0 else (a[1] if i0 == 1 else (a[2] if i0 == 2 else a[3])))
         elif op == ShaderOp.combine:
             r = F4(a[0], b[0], c[0], 1)
         elif op == ShaderOp.hsv_rgb:
@@ -507,15 +525,15 @@ def eval_shader(code: Pointer[Int32, MutUntrackedOrigin], n_words: Int, u: Float
         elif op == ShaderOp.curves:
             var data = code.unsafe_offset(pc + SHADER_STRIDE)
             r = a
-            for k in range(3):
+            comptime for k in range(3):
                 r[k] = _table(data, Int(i0), a[k], k, True) * b[0] + a[k] * (Float32(1) - b[0])
         elif op == ShaderOp.luma:
             r = F4(a[0] * Float32(0.2126) + a[1] * Float32(0.7152) + a[2] * Float32(0.0722))
         elif op == ShaderOp.average:
             r = F4((a[0] + a[1] + a[2]) * Float32(1.0 / 3.0))
-        regs.unsafe_store(4 * dst, r)
+        _set_reg(regs, dst, r)
         pc += instruction_words(op, i0)
-    return regs.unsafe_load[width=4](4 * (Int(code[unsafe_offset=0]) & (SHADER_REGS - 1)))
+    return _reg(regs, code[unsafe_offset=0])
 
 
 @always_inline
