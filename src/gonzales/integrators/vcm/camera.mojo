@@ -461,7 +461,8 @@ def _vcm_lobe_vertex[use_gpu: Bool](
 ) -> VcmLobeHit:
     """The vertex either subpath stores at a lobe material, with the arrival applied to the MIS carries; its dVCM, dVC
     and dVM are the caller's to set. `cone_w` is the camera ray's footprint width for texture filtering, -1 for none."""
-    var h = surface_hit[use_gpu](sd, inter, mat, hit, ray_dir, cone_w)
+    var m = mat
+    var h = surface_hit[use_gpu](sd, inter, m, hit, ray_dir, cone_w)
     (dvcm, dvc, dvm) = vcm_arrival_carries(dvcm, dvc, dvm, h.cos_in)
     var v = _null_vertex()
     v.pos = hit
@@ -471,11 +472,11 @@ def _vcm_lobe_vertex[use_gpu: Bool](
     v.alb = h.alb
     v.is_surface = Int32(1)
     # One lobe per material: everything after evaluates and samples the vertex through its BSDF.
-    v.mat_kind = mat.lobe()
+    v.mat_kind = m.lobe()
     v.mat_idx = Int32(mat_idx)
-    v.pdf_bwd = mat.lobe_param()   # BSDF.param: a conductor's GGX alpha
+    v.pdf_bwd = m.lobe_param()   # BSDF.param: a conductor's GGX alpha, a layered material's coat alpha
     # A smooth conductor is a mirror: it scatters, but stores no vertex and starts no strategy.
-    v.is_delta = Int32(1) if mat.is_mirror() else Int32(0)
+    v.is_delta = Int32(1) if m.is_mirror() else Int32(0)
     v.hair_curve_idx = h.curve_idx
     v.hair_h = h.curve_h
     v.hair_v = h.curve_v

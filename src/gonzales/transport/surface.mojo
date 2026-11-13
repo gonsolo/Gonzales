@@ -6,7 +6,7 @@ from gonzales.scene.appearance.materials import Material, MatKind
 from gonzales.scene.shapes.primitives import Intersection
 from gonzales.scene.accel.bvh import SceneView, curve_hit_frame, curve_offset_eps, curve_tangent, fibre_cos
 from gonzales.scene.shapes.geom_normal import _geom_normal, _shading_normal_at
-from gonzales.transport.texturing import _tex_lookup, _get_tri_verts, apply_surface_maps_at_hit, uv_footprint_at_hit
+from gonzales.transport.texturing import _tex_lookup, _get_tri_verts, apply_surface_maps_at_hit, uv_footprint_at_hit, resolve_rough_texture
 from gonzales.transport.bxdf import BSDF
 from gonzales.core.spectrum import SampledWavelengths, SpectralSample, rgb_bands_to_spectral_sample
 
@@ -65,9 +65,10 @@ def sss_entry_tint[use_gpu: Bool](ref sd: SceneView, mat: Material, inter: Inter
 
 
 @always_inline
-def surface_hit[use_gpu: Bool](ref sd: SceneView, inter: Intersection, mat: Material, hit: Point3f, ray_dir: Vec3f,
+def surface_hit[use_gpu: Bool](ref sd: SceneView, inter: Intersection, mut mat: Material, hit: Point3f, ray_dir: Vec3f,
                                cone_w: Float32) -> SurfaceHit:
-    """The hit at a lobe material. `cone_w` is the camera ray's footprint width for texture filtering, -1 for none."""
+    """The hit at a lobe material, whose textured roughness it resolves into `mat`. `cone_w` is the camera ray's
+    footprint width for texture filtering, -1 for none."""
     # Geometry, not material: a curve hit has its own normal and spawn offset, and no texture or bump map.
     var on_curve = inter.primId.type == Int8(5)
     var spawn_eps = offset_eps(hit.x, hit.y, hit.z)
@@ -90,6 +91,7 @@ def surface_hit[use_gpu: Bool](ref sd: SceneView, inter: Intersection, mat: Mate
     if tex_ok and not on_curve:
         alb = _tex_lookup[use_gpu](mat, inter, tv0, tv1, tv2, tex_mesh, sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount),
             uv_footprint_at_hit(inter, sd.meshes, sd.instances, hit.to_simd(), ray_dir, cone_w, sd.camFp).width)
+        resolve_rough_texture[use_gpu](mat, inter, tv0, tv1, tv2, tex_mesh, sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
     var gn_geo = gn
     if not on_curve:
         gn = apply_surface_maps_at_hit[use_gpu](mat, inter, sd.meshes, sd.instances,

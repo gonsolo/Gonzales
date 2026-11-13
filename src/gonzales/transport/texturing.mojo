@@ -268,6 +268,34 @@ def _tex_lookup[use_gpu: Bool](
     return mat.albedo
 
 
+@always_inline
+def resolve_rough_texture[use_gpu: Bool](
+    mut mat: Material,
+    inter: Intersection,
+    v0: Int, v1: Int, v2: Int,
+    mesh: TriangleMesh,
+    tex_filenames: Pointer[Pointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin],
+    textures: Pointer[GpuTexture, MutUntrackedOrigin],
+    n_textures: Int,
+):
+    """A roughness texture's GGX alpha here (pbrt's remaproughness: the square root of its value) into `mat`, floored
+    by the alpha it already has (Filter Glossy)."""
+    if mat.rough_tex_idx < Int32(0):
+        return
+    var w0 = Float32(1.0) - inter.u - inter.v
+    var su = inter.u + inter.v   # pbrt's default triangle uv: (0,0), (1,0), (1,1)
+    var sv = inter.v
+    if mesh_has_uvs(mesh):
+        su = w0*mesh_uv(mesh, v0)[0] + inter.u*mesh_uv(mesh, v1)[0] + inter.v*mesh_uv(mesh, v2)[0]
+        sv = w0*mesh_uv(mesh, v0)[1] + inter.u*mesh_uv(mesh, v1)[1] + inter.v*mesh_uv(mesh, v2)[1]
+    var found = False
+    var t = sample_texture[use_gpu](Int(mat.rough_tex_idx), su, sv, True, Float32(0.0), tex_filenames, textures, n_textures, found)
+    if found:
+        var a = sqrt(max(t.luma(), Float32(0.0)))
+        mat.roughU = max(mat.roughU, a)
+        mat.roughV = max(mat.roughV, a)
+
+
 # ── Triangle primitive helper ─────────────────────────────────────────────────
 # Decodes the primId encoding into (mesh, v0, v1, v2). Returns ok=False for
 # non-triangle hits (caller should deactivate path and return).

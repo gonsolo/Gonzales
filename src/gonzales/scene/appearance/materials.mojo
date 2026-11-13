@@ -158,9 +158,12 @@ struct Material(TrivialRegisterPassable):
 
     @always_inline
     def lobe_param(self) -> Float32:
-        """The lobe's scalar: the isotropic GGX alpha of a conductor or rough dielectric, else 0."""
+        """The lobe's scalar: the isotropic GGX alpha of a conductor or rough dielectric, a layered material's coat
+        alpha (so a stored vertex keeps a per-hit roughness), else 0."""
         if self.type == MatKind.conductor or self.type == MatKind.dielectric:
             return max(self.roughU, self.roughV)
+        if self.lobe() == LobeKind.layered:
+            return self.coat_alpha()
         return Float32(0)
 
     @always_inline
