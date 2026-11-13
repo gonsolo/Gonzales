@@ -10,7 +10,7 @@ from gonzales.scene.appearance.materials import GpuTexture
 from gonzales.scene.shapes.primitives import Intersection, TriangleMesh, Instance, mesh_uv, mesh_has_uvs, mesh_vi, mesh_face
 from gonzales.scene.appearance.footprint import CameraFootprint, UVFootprint, TriWorld, tri_world, hit_uv_footprint
 from gonzales.scene.appearance.image_sample import _srgb_to_linear, _sample_tex, _footprint_lod
-from gonzales.scene.appearance.shader import sample_shader
+from gonzales.scene.appearance.shader import sample_shader, is_shader_name
 
 
 # ── Packed Ptex (GpuTexture.FORMAT_PTEX; layout in oiio.cc) ─────────────────
@@ -156,7 +156,7 @@ def sample_texture[use_gpu: Bool](
     comptime if not use_gpu:
         if n_textures == 0 and Int(tex_filenames) > 1:
             var filename = tex_filenames[unsafe_offset=tex_idx]
-            if Int(filename) > 1:
+            if Int(filename) > 1 and not is_shader_name(filename):   # a program needs the table
                 su = su - Float32(Int(su))
                 if su < Float32(0.0): su += Float32(1.0)
                 tv = tv - Float32(Int(tv))
@@ -248,7 +248,7 @@ def _tex_lookup[use_gpu: Bool](
     comptime if not use_gpu:
         if ti >= 0 and n_textures == 0 and _is_real_ptr(tex_filenames):
             var filename = tex_filenames[unsafe_offset=ti]
-            if Int(filename) > 1 and has_uvs:
+            if Int(filename) > 1 and has_uvs and not is_shader_name(filename):
                 var w0 = Float32(1.0) - inter.u - inter.v
                 var su = w0*mesh_uv(mesh, v0)[0]   + inter.u*mesh_uv(mesh, v1)[0]   + inter.v*mesh_uv(mesh, v2)[0]
                 var tv = w0*mesh_uv(mesh, v0)[1] + inter.u*mesh_uv(mesh, v1)[1] + inter.v*mesh_uv(mesh, v2)[1]
