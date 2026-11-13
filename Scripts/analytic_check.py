@@ -166,8 +166,14 @@ def _is_aux(f):
     return f == "albedo.exr" or f.endswith(_AUX_SUFFIXES)
 
 
+_warm = set()
+
+
 def render(case, mode, scene=None):
     """Render one case and return its mean radiance over the crop."""
+    # A new binary's first render per mode compiles its kernels (VCM ~22 min cold), so it runs untimed.
+    timeout = 300 if mode in _warm else None
+    _warm.add(mode)
     import numpy as np
     import OpenImageIO as oiio
     c = CASES[case]
@@ -183,7 +189,7 @@ def render(case, mode, scene=None):
     # slowest cell here, so it can only fire on a genuine hang.
     try:
         proc = subprocess.run(cmd, cwd=REPO, capture_output=True, text=True,
-                              timeout=300)
+                              timeout=timeout)
     except subprocess.TimeoutExpired:
         return None, ["TIMED OUT after 300s"]
     written = [f for f in os.listdir(REPO) if f.endswith(".exr")]
