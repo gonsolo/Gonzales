@@ -66,3 +66,17 @@ Gonzales supports two texture types:
 - **Ptex textures** — Disney's per-face texture format, accessed via the
   Ptex C++ library through Mojo's C FFI. Ptex eliminates UV mapping
   entirely — each mesh face stores its own texture data directly.
+- **Shader programs** — a material node graph compiled to a flat program
+  (`scene/appearance/shader.mojo`), in the spirit of Cycles' SVM: Int32
+  instructions `[op, dst, a, b, c, d, i0, i1]` on sixteen four-float
+  registers, covering Cycles' math, vector math, mix and blend modes, colour
+  ramp, curves, hue/saturation, map range, mapping, image and normal-map
+  nodes. A program is an entry of the texture table (its words hex-encoded
+  in the entry's name, `#gzs:...`), so it plugs into any texture slot a
+  material already has — base colour (`tex_idx`), roughness
+  (`rough_tex_idx`), emission (`emit_tex_idx`), normal map and bump — and
+  every integrator that samples that slot runs it at the hit's UV.
+  The Blender add-on compiles node trees with `src/hdgonzales/blender/shader.py`
+  and hands them over through `gz_scene_set_shader`; a graph it cannot
+  compile falls back to the baked value. Outputs are RGB and go through the
+  same RGB-to-spectrum upsampling as image textures.
