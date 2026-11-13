@@ -24,6 +24,8 @@ void gz_scene_add_curves(void *scene, const float *control_points, const float *
 void gz_scene_set_emission(void *scene, int material, const char *texture);
 void gz_scene_set_subsurface(void *scene, int material, float weight, float radius_r, float radius_g, float radius_b,
                              float anisotropy, int van_de_hulst);
+int gz_scene_set_shader(void *scene, int material, int slot, const int *code, int n_words, const char *const *images,
+                        int n_images, float scale);
 void gz_scene_set_camera(void *scene, const float *world_to_camera, float fov_deg, int width, int height);
 void gz_scene_set_lens(void *scene, float radius, float focal_distance);
 void *gz_session_new(void *renderer, void *scene, int spp, int max_depth);

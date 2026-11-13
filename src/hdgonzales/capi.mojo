@@ -14,11 +14,13 @@ from gonzales.scene.description.pbrt_parser import ParsedScene_Mojo, finalize_sc
 from gonzales.app.pipeline import (_generate_sobol_matrices, RenderSession, SessionPtr, session_new, session_set_camera, session_set_samples, session_set_lens, session_set_filter_glossy, session_set_adaptive, session_set_clamp, session_set_bounces, session_set_integrator,
                                session_render, session_resolve, session_free)
 from gonzales.scene.description.scene_builder import store_mesh
+from gonzales.scene.appearance.shader import ShaderOp, SHADER_STRIDE, instruction_words, shader_texture_name
 from gonzales.core.spectrum import load_spectral_context, spectral_handle, SpectralContext
 
 comptime F32Ptr = Pointer[Float32, MutUntrackedOrigin]
 comptime I32Ptr = Pointer[Int32, MutUntrackedOrigin]
 comptime ScenePtr = Pointer[SceneParseState, MutUntrackedOrigin]
+comptime CStrPtr = Pointer[Pointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin]
 
 struct Renderer(Movable):
     var sobol: Pointer[UInt32, MutUntrackedOrigin]
@@ -338,3 +340,48 @@ def gz_scene_add_curves(s: ScenePtr, control_points: F32Ptr, widths: F32Ptr, n_s
         w1[unsafe_offset=i] = widths[unsafe_offset=2 * i + 1]
         if Int(materials) != 0:
             mt[unsafe_offset=i] = materials[unsafe_offset=i]
+
+@export
+def gz_scene_set_shader(s: ScenePtr, material: Int32, slot: Int32, code: I32Ptr, n_words: Int32, images: CStrPtr,
+                        n_images: Int32, scale: Float32) abi("C") -> Int32:
+    """Drives one input of a material by a node-graph program (scene/appearance/shader.mojo) reading `images`, whose
+    image ops name them 0..n_images-1. Slots: 0 base colour, 1 roughness (the program gives alpha squared), 2 emitted
+    radiance, 3 tangent-space normal colour, 4 bump height times `scale`. Returns -1 for a malformed program."""
+    var n = Int(n_words)
+    if n < 1 or slot < Int32(0) or slot > Int32(4):
+        return Int32(-1)
+    var base = Int32(len(s[unsafe_offset=0].tex_names))
+    var words = List[Int32](capacity=n)
+    for i in range(n):
+        words.append(code[unsafe_offset=i])
+    var pc = 1
+    while pc + SHADER_STRIDE <= n:
+        if words[pc] == ShaderOp.image:
+            if words[pc + 6] < Int32(0) or words[pc + 6] >= n_images:
+                return Int32(-1)
+            words[pc + 6] += base
+        pc += instruction_words(words[pc], words[pc + 6])
+    if pc != n:
+        return Int32(-1)
+    for k in range(Int(n_images)):
+        s[unsafe_offset=0].tex_names.append(String("__shader_image"))
+        s[unsafe_offset=0].tex_files.append(String(unsafe_from_utf8_ptr=images[unsafe_offset=k].as_imm()))
+    s[unsafe_offset=0].tex_names.append(String("__shader"))
+    s[unsafe_offset=0].tex_files.append(shader_texture_name(words))
+    var idx = Int32(len(s[unsafe_offset=0].tex_names) - 1)
+    ref nm = s[unsafe_offset=0].named_materials[Int(material)]
+    if slot == Int32(0):
+        nm.tex_idx = idx
+        nm.albedo = RGB(Float32(1))
+    elif slot == Int32(1):
+        nm.rough_tex_idx = idx
+        nm.roughness_u = Float32(0)   # Filter Glossy floors the per-hit alpha, not a constant
+        nm.roughness_v = Float32(0)
+    elif slot == Int32(2):
+        nm.emit_tex_idx = idx
+    elif slot == Int32(3):
+        nm.normal_tex_idx = idx
+    else:
+        nm.bump_tex_idx = idx
+        nm.bump_scale = scale
+    return Int32(0)

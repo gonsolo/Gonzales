@@ -90,6 +90,13 @@ void gz_scene_set_subsurface(void *s, int material, float weight, float rr, floa
 void gz_scene_set_emission(void *s, int material, const char *texture) {
     FWD(gz_scene_set_emission); op(GZ_SET_EMISSION); i32(material); str(texture); real(s, material, texture);
 }
+int gz_scene_set_shader(void *s, int material, int slot, const int *code, int n, const char *const *images, int n_images,
+                        float scale) {
+    FWD(gz_scene_set_shader); op(GZ_SET_SHADER); i32(material); i32(slot); arr(code, 4 * (size_t)n); i32(n); i32(n_images);
+    for (int k = 0; k < n_images; ++k) str(images[k]);
+    f32(scale);
+    return real(s, material, slot, code, n, images, n_images, scale);
+}
 void gz_scene_set_camera(void *s, const float *w2c, float fov, int w, int h) {
     FWD(gz_scene_set_camera); op(GZ_SET_CAMERA); arr(w2c, 64); f32(fov); i32(w); i32(h); real(s, w2c, fov, w, h);
 }

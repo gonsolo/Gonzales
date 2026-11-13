@@ -61,6 +61,15 @@ int main(int argc, char **argv) {
         case GZ_SET_SUBSURFACE: m = i32(); a = f32(); b = f32(); c = f32(); d = f32(); e = f32(); n = i32();
             gz_scene_set_subsurface(scene, m, a, b, c, d, e, n); break;
         case GZ_SET_EMISSION: { m = i32(); char *t = arr(); gz_scene_set_emission(scene, m, t); free(t); } break;
+        case GZ_SET_SHADER: {
+            m = i32(); int slot = i32(); idx = arr(); n = i32(); nv = i32();
+            char **images = malloc(sizeof(char *) * (nv ? nv : 1));
+            for (int k = 0; k < nv; ++k) images[k] = arr();
+            a = f32();
+            gz_scene_set_shader(scene, m, slot, idx, n, (const char *const *)images, nv, a);
+            for (int k = 0; k < nv; ++k) free(images[k]);
+            free(images); free(idx);
+        } break;
         case GZ_SET_CAMERA: x = arr(); a = f32(); nv = i32(); nt = i32(); gz_scene_set_camera(scene, x, a, nv, nt); free(x); break;
         case GZ_SET_LENS: a = f32(); b = f32(); gz_scene_set_lens(scene, a, b); break;
         case GZ_SESSION_NEW: spp = i32(); depth = i32(); break;
