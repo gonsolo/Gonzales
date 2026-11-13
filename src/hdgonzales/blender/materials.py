@@ -8,6 +8,8 @@
 #                     albedo; then its emitted radiance (colour times strength), baked; then "nonormal" when its
 #                     normal is a Bump node, whose height image Hydra passes on as a normal map
 #   <M> diffuse r g b path                                       a Diffuse BSDF, whose colour Hydra does not export
+# principled and diffuse lines may end in "shader <slot> <scale> <hex words> <n> <paths>" groups (shader.py): an input
+# driven per hit by a node-graph program instead of the baked value.
 # Node graphs are evaluated with numpy over many samples at once. Without UVs, images give their mean.
 import hashlib
 import math
@@ -15,6 +17,8 @@ import os
 import tempfile
 
 import numpy as np
+
+from . import shader
 
 _LUMA = np.array([0.2126, 0.7152, 0.0722], dtype=np.float32)
 _images = {}
@@ -362,6 +366,37 @@ def _bake_emission(material, node):
     return path
 
 
+def _emission_program(node):
+    colour, strength = _socket(node, 'Emission Color'), _socket(node, 'Emission Strength')
+    if colour is None or strength is None or not (colour.is_linked or strength.is_linked):
+        return None
+    if not strength.is_linked and _scalar(strength) <= 0:
+        return None
+    return shader.compile(colour, 'emission', strength)
+
+
+def _normal_tokens(node):
+    """Shader groups for a Normal Map or Bump node at the BSDF's Normal input, with "nonormal" so the delegate drops
+    the normal map Hydra exported; empty when there is none or it does not compile."""
+    normal = _socket(node, 'Normal')
+    if normal is None or not normal.is_linked:
+        return ""
+    src = normal.links[0].from_node
+    if src.bl_idname == 'ShaderNodeBump':
+        inner = _socket(src, 'Normal')
+        if inner is not None and inner.is_linked:
+            # Gonzales applies a normal map or a bump, not both: keep the normal map under the bump.
+            program = shader.compile(inner, 'normal')
+            return " " + shader.token('normal', program) + " nonormal" if program else ""
+        program = shader.compile(_socket(src, 'Height'), 'bump')
+        if not program:
+            return ""
+        scale = _scalar(_socket(src, 'Strength')) * _scalar(_socket(src, 'Distance')) * (-1 if src.invert else 1)
+        return " " + shader.token('bump', program, scale) + " nonormal"
+    program = shader.compile(normal, 'normal')
+    return " " + shader.token('normal', program) + " nonormal" if program else ""
+
+
 def _surface(material):
     out = next((n for n in material.node_tree.nodes
                 if n.bl_idname == 'ShaderNodeOutputMaterial' and n.is_active_output), None)
@@ -386,9 +421,13 @@ def _line(material):
         r = _scalar(_socket(node, 'Roughness'))
         return f"{name} glass {_scalar(_socket(node, 'IOR')):.6g} {r * r:.6g}"
     if node.bl_idname == 'ShaderNodeBsdfDiffuse':
-        path = _bake_base_colour(material, _socket(node, 'Color')) or "-"
+        base = shader.compile(_socket(node, 'Color'), 'base')
+        path = "-" if base else _bake_base_colour(material, _socket(node, 'Color')) or "-"
         c = _rgb(value(_socket(node, 'Color'), Context()), 1)[0]
-        return f"{name} diffuse {c[0]:.6g} {c[1]:.6g} {c[2]:.6g} {path}"
+        line = f"{name} diffuse {c[0]:.6g} {c[1]:.6g} {c[2]:.6g} {path}"
+        if base:
+            line += " " + shader.token('base', base)
+        return line + _normal_tokens(node)
     if node.bl_idname == 'ShaderNodeBsdfPrincipled':
         # A coated diffuse: Blender's dielectric layer over its diffuse base. Specular IOR Level scales F0.
         r = _scalar(_socket(node, 'Roughness'))
@@ -396,7 +435,8 @@ def _line(material):
         level = _scalar(_socket(node, 'Specular IOR Level')) if _socket(node, 'Specular IOR Level') else 0.5
         f0 = min(((ior - 1) / (ior + 1)) ** 2 * 2 * level, 0.99)
         eta = (1 + math.sqrt(f0)) / (1 - math.sqrt(f0)) if f0 > 0 else 1.0
-        path = _bake_base_colour(material, _socket(node, 'Base Color')) or "-"
+        base = shader.compile(_socket(node, 'Base Color'), 'base')
+        path = "-" if base else _bake_base_colour(material, _socket(node, 'Base Color')) or "-"
         line = f"{name} principled {r * r:.6g} {eta:.6g} {_scalar(_socket(node, 'Metallic')):.6g} {path}"
         weight = _scalar(_socket(node, 'Subsurface Weight')) if _socket(node, 'Subsurface Weight') else 0.0
         if weight > 0:
@@ -408,13 +448,23 @@ def _line(material):
                 radius = radius * (0.25 / math.pi)   # Cycles' bssrdf_setup_radius
             vdh = 0 if legacy and aniso >= 0 else 1
             line += f" {weight:.6g} {radius[0]:.6g} {radius[1]:.6g} {radius[2]:.6g} {aniso:.6g} {vdh}"
-        emission = _bake_emission(material, node)
+        emission = _emission_program(node)
+        if emission is None:
+            baked = _bake_emission(material, node)
+            if baked:
+                line += f" emission {baked}"
+        if base:
+            line += " " + shader.token('base', base)
+        rough = shader.compile(_socket(node, 'Roughness'), 'roughness')
+        if rough:
+            line += " " + shader.token('roughness', rough)
         if emission:
-            line += f" emission {emission}"
+            line += " " + shader.token('emission', emission)
+        tokens = _normal_tokens(node)
         normal = _socket(node, 'Normal')
-        if normal is not None and normal.is_linked and normal.links[0].from_node.bl_idname == 'ShaderNodeBump':
-            line += " nonormal"
-        return line
+        if not tokens and normal is not None and normal.is_linked and normal.links[0].from_node.bl_idname == 'ShaderNodeBump':
+            tokens = " nonormal"
+        return line + tokens
     return None
 
 
