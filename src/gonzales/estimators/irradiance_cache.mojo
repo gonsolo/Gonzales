@@ -40,10 +40,12 @@ struct IrradianceCache(TrivialRegisterPassable, DevicePassable):
     var skip: Pointer[Int32, MutUntrackedOrigin]       # the node after this subtree
     var begin: Pointer[Int32, MutUntrackedOrigin]      # a leaf's points [begin, end); -1 for an inner node
     var end: Pointer[Int32, MutUntrackedOrigin]
+    var depth: Pointer[Int32, MutUntrackedOrigin]
     var sum: Pointer[SpectralSample, MutUntrackedOrigin]
     var mat_first: Pointer[Int32, MutUntrackedOrigin]  # a material's nodes [mat_first, mat_end)
     var mat_end: Pointer[Int32, MutUntrackedOrigin]
     var spacing: Float32
+    var max_depth: Int
     comptime device_type: AnyType = Self
 
     def _to_device_type(self, mut encoder: Some[DeviceTypeEncoder], target: MutOpaquePointer[_]):
@@ -115,7 +117,7 @@ struct IrradianceCache(TrivialRegisterPassable, DevicePassable):
                     order.append(i)
             mat_first[unsafe_offset=m] = Int32(len(t.skip))
             if len(order) > lo:
-                _build_node(t, order, pts, lo, len(order), near)
+                _build_node(t, order, pts, lo, len(order), near, 0)
             mat_end[unsafe_offset=m] = Int32(len(t.skip))
         var pos = unsafe_alloc[Point3f](max(n, 1)).unsafe_origin_cast[MutUntrackedOrigin]()
         var nrm = unsafe_alloc[Vec3f](max(n, 1)).unsafe_origin_cast[MutUntrackedOrigin]()
@@ -135,34 +137,41 @@ struct IrradianceCache(TrivialRegisterPassable, DevicePassable):
         var skip = unsafe_alloc[Int32](max(nn, 1)).unsafe_origin_cast[MutUntrackedOrigin]()
         var begin = unsafe_alloc[Int32](max(nn, 1)).unsafe_origin_cast[MutUntrackedOrigin]()
         var end = unsafe_alloc[Int32](max(nn, 1)).unsafe_origin_cast[MutUntrackedOrigin]()
+        var depth = unsafe_alloc[Int32](max(nn, 1)).unsafe_origin_cast[MutUntrackedOrigin]()
+        var max_depth = 0
         for k in range(nn):
             center[unsafe_offset=k] = t.center[k]; far2[unsafe_offset=k] = t.far2[k]; skip[unsafe_offset=k] = t.skip[k]
-            begin[unsafe_offset=k] = t.begin[k]; end[unsafe_offset=k] = t.end[k]
+            begin[unsafe_offset=k] = t.begin[k]; end[unsafe_offset=k] = t.end[k]; depth[unsafe_offset=k] = t.depth[k]
+            max_depth = max(max_depth, Int(t.depth[k]))
         return IrradianceCache(n, pos, nrm, mat, area, eta,
                                unsafe_alloc[SpectralSample](max(n, 1)).unsafe_origin_cast[MutUntrackedOrigin](),
-                               nn, center, far2, skip, begin, end,
+                               nn, center, far2, skip, begin, end, depth,
                                unsafe_alloc[SpectralSample](max(nn, 1)).unsafe_origin_cast[MutUntrackedOrigin](),
-                               mat_first, mat_end, s)
+                               mat_first, mat_end, s, max_depth)
 
     def free(self):
         self.pos.unsafe_free(); self.nrm.unsafe_free(); self.mat.unsafe_free(); self.area.unsafe_free(); self.eta.unsafe_free()
         self.lx.unsafe_free(); self.center.unsafe_free(); self.far2.unsafe_free(); self.skip.unsafe_free()
-        self.begin.unsafe_free(); self.end.unsafe_free(); self.sum.unsafe_free()
+        self.begin.unsafe_free(); self.end.unsafe_free(); self.depth.unsafe_free(); self.sum.unsafe_free()
         self.mat_first.unsafe_free(); self.mat_end.unsafe_free()
 
     def aggregate(self):
         """Weights the pass's lx by area and sums every subtree, children before parents."""
         for k in range(self.n_nodes - 1, -1, -1):
-            var b = Int(self.begin[unsafe_offset=k])
-            var s = SpectralSample(Float32(0))
-            if b >= 0:
-                for i in range(b, Int(self.end[unsafe_offset=k])):
-                    var v = self.lx[unsafe_offset=i] * self.area[unsafe_offset=i]
-                    self.lx[unsafe_offset=i] = v
-                    s += v
-            else:
-                s = self.sum[unsafe_offset=k + 1] + self.sum[unsafe_offset=Int(self.skip[unsafe_offset=k + 1])]
-            self.sum[unsafe_offset=k] = s
+            self.aggregate_node(k)
+
+    def aggregate_node(self, k: Int):
+        """A leaf weights its points and sums them; an inner node sums its children."""
+        var b = Int(self.begin[unsafe_offset=k])
+        var s = SpectralSample(Float32(0))
+        if b >= 0:
+            for i in range(b, Int(self.end[unsafe_offset=k])):
+                var v = self.lx[unsafe_offset=i] * self.area[unsafe_offset=i]
+                self.lx[unsafe_offset=i] = v
+                s += v
+        else:
+            s = self.sum[unsafe_offset=k + 1] + self.sum[unsafe_offset=Int(self.skip[unsafe_offset=k + 1])]
+        self.sum[unsafe_offset=k] = s
 
     def radiance(self, x: Point3f, mat_idx: Int32, dip: Dipole) -> SpectralSample:
         """sum_i R_d(|x - x_i|) A_i lx_i over the material's points, a far subtree as one point at its centroid."""
@@ -190,13 +199,14 @@ struct _Tree(Movable):
     var skip: List[Int32]
     var begin: List[Int32]
     var end: List[Int32]
+    var depth: List[Int32]
 
     def __init__(out self):
         self.center = List[Point3f](); self.far2 = List[Float32](); self.skip = List[Int32]()
-        self.begin = List[Int32](); self.end = List[Int32]()
+        self.begin = List[Int32](); self.end = List[Int32](); self.depth = List[Int32]()
 
 
-def _build_node(mut t: _Tree, mut order: List[Int], pts: List[Point3f], lo: Int, hi: Int, near: Float32):
+def _build_node(mut t: _Tree, mut order: List[Int], pts: List[Point3f], lo: Int, hi: Int, near: Float32, d: Int):
     """Node over order[lo:hi] in preorder; split at the median of the longest axis. `near` 0 makes no node far."""
     var cx = Float32(0); var cy = Float32(0); var cz = Float32(0)
     var mn = pts[order[lo]]; var mx = pts[order[lo]]
@@ -212,7 +222,7 @@ def _build_node(mut t: _Tree, mut order: List[Int], pts: List[Point3f], lo: Int,
         r2 = max(r2, _dist2(c, pts[order[j]]))
     var k = len(t.skip)
     t.center.append(c); t.far2.append(near * near * r2 if near > Float32(0) else Float32(3.0e38))
-    t.skip.append(Int32(0)); t.begin.append(Int32(-1)); t.end.append(Int32(-1))
+    t.skip.append(Int32(0)); t.begin.append(Int32(-1)); t.end.append(Int32(-1)); t.depth.append(Int32(d))
     if hi - lo <= _LEAF:
         t.begin[k] = Int32(lo); t.end[k] = Int32(hi)
     else:
@@ -220,8 +230,8 @@ def _build_node(mut t: _Tree, mut order: List[Int], pts: List[Point3f], lo: Int,
         var axis = 0 if ex >= ey and ex >= ez else (1 if ey >= ez else 2)
         var mid = (lo + hi) // 2
         _select(order, pts, lo, hi, mid, axis)
-        _build_node(t, order, pts, lo, mid, near)
-        _build_node(t, order, pts, mid, hi, near)
+        _build_node(t, order, pts, lo, mid, near, d + 1)
+        _build_node(t, order, pts, mid, hi, near, d + 1)
     t.skip[k] = Int32(len(t.skip))
 
 

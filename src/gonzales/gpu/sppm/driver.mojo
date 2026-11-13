@@ -190,13 +190,14 @@ def sppm_render_gpu(
             var jb_skip = _upload(handle[].ctx, cache.skip.unsafe_bitcast[UInt8](), n_nodes * size_of[Int32]())
             var jb_begin = _upload(handle[].ctx, cache.begin.unsafe_bitcast[UInt8](), n_nodes * size_of[Int32]())
             var jb_end = _upload(handle[].ctx, cache.end.unsafe_bitcast[UInt8](), n_nodes * size_of[Int32]())
+            var jb_depth = _upload(handle[].ctx, cache.depth.unsafe_bitcast[UInt8](), n_nodes * size_of[Int32]())
             var jb_sum = handle[].ctx.enqueue_create_buffer[DType.uint8](n_nodes * size_of[SpectralSample]())
             var jb_first = _upload(handle[].ctx, cache.mat_first.unsafe_bitcast[UInt8](), n_mat * size_of[Int32]())
             var jb_last = _upload(handle[].ctx, cache.mat_end.unsafe_bitcast[UInt8](), n_mat * size_of[Int32]())
             var dcache = IrradianceCache(cache.n, _dev[Point3f](jb_pos), _dev[Vec3f](jb_nrm), _dev[Int32](jb_mat), _dev[Float32](jb_area), _dev[Float32](jb_eta),
                                          _dev[SpectralSample](jb_lx), cache.n_nodes, _dev[Point3f](jb_center), _dev[Float32](jb_far2),
-                                         _dev[Int32](jb_skip), _dev[Int32](jb_begin), _dev[Int32](jb_end), _dev[SpectralSample](jb_sum),
-                                         _dev[Int32](jb_first), _dev[Int32](jb_last), cache.spacing)
+                                         _dev[Int32](jb_skip), _dev[Int32](jb_begin), _dev[Int32](jb_end), _dev[Int32](jb_depth), _dev[SpectralSample](jb_sum),
+                                         _dev[Int32](jb_first), _dev[Int32](jb_last), cache.spacing, cache.max_depth)
             cache.free()
 
             # Visible points are traced once per render, not per pass, unless retraced.
@@ -306,7 +307,9 @@ def sppm_render_gpu(
                     handle[].ctx.enqueue_function[sppm_jb_points_gpu](
                         dcache, photons_ptr, heads_ptr, inv_cell, r2, psc[unsafe_offset=0].rng_seed, Int64(pass_idx), gsd,
                         grid_dim=ceildiv(cache.n, block_size), block_dim=block_size)
-                    handle[].ctx.enqueue_function[sppm_jb_aggregate_gpu](dcache, grid_dim=1, block_dim=1)
+                    for lv in range(dcache.max_depth, -1, -1):
+                        handle[].ctx.enqueue_function[sppm_jb_aggregate_gpu](
+                            dcache, Int64(lv), grid_dim=ceildiv(dcache.n_nodes, block_size), block_dim=block_size)
                     handle[].ctx.enqueue_function[sppm_jb_vp_gpu](
                         vps_ptr, Int64(n_vps), dcache, Int64(pass_idx), gsd, grid_dim=grid_vps, block_dim=block_size)
 
@@ -389,7 +392,7 @@ def sppm_render_gpu(
             _ = vps_buf^; _ = photons_buf^; _ = heads_buf^
             _ = inter_cam_buf^; _ = inter_ph_buf^; _ = r2c_buf^; _ = c2w_buf^
             _ = jb_pos^; _ = jb_nrm^; _ = jb_mat^; _ = jb_area^; _ = jb_lx^; _ = jb_center^; _ = jb_far2^
-            _ = jb_skip^; _ = jb_begin^; _ = jb_end^; _ = jb_sum^; _ = jb_first^; _ = jb_last^
+            _ = jb_skip^; _ = jb_begin^; _ = jb_end^; _ = jb_depth^; _ = jb_sum^; _ = jb_first^; _ = jb_last^
 
             var out_pixels = images[0]; var caustic_pixels = images[1]; var albedo_pixels = images[2]
             _ = finish_render(psc, sd, out_pixels, albedo_pixels, no_denoise, caustic_pixels)

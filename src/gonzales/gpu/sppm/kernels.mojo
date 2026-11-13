@@ -292,10 +292,11 @@ def sppm_jb_points_gpu(cache: IrradianceCache, photons: Pointer[SPPMPhoton, MutU
     cache.lx[unsafe_offset=i] = jb_point_radiance(cache, i, photons, heads, inv_cell, r2, sd, pass_wavelengths(pass_idx), pass_idx, pcg)
 
 
-def sppm_jb_aggregate_gpu(cache: IrradianceCache):
-    """The tree's sums, bottom up: a few thousand nodes, one thread."""
-    if block_idx.x * block_dim.x + thread_idx.x == 0:
-        cache.aggregate()
+def sppm_jb_aggregate_gpu(cache: IrradianceCache, level: Int64):
+    """One tree level's sums; the levels run deepest first."""
+    var k = Int(block_idx.x * block_dim.x + thread_idx.x)
+    if k < cache.n_nodes and Int64(cache.depth[unsafe_offset=k]) == level:
+        cache.aggregate_node(k)
 
 
 @__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
