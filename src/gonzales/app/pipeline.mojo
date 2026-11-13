@@ -3764,7 +3764,7 @@ def session_new(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin], sobol: Point
         print("Gonzales:   gpu upload", Float64(perf_counter_ns() - t0) / 1.0e9, "s")
     t0 = perf_counter_ns()
     var rtb = _RtBufs()
-    if env_on["GONZALES_RTCORE"]():
+    if env_on["GONZALES_RTCORE"]() or xert_alignment() > 0:   # Intel Xe2 always, as parse_and_render
         try:
             rtb = _rt_wavefront_setup(handle, psc, n_pixels * _session_batch(n_pixels))
         except e:
