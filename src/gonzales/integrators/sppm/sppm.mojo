@@ -38,7 +38,7 @@ from gonzales.core.sampling import power_heuristic
 from gonzales.transport.bxdf import ggx_lambda, dielectric_interface, bxdf_sample_dielectric, bxdf_sample_thin_dielectric, BxDFFlags, GeomContext, bxdf_sample_conductor, BSDF, LobeTables
 from gonzales.transport.surface import surface_hit
 from gonzales.integrators.pt.common import area_light_hit_cos
-from gonzales.transport.texturing import apply_surface_maps_at_hit, mix_amount_at
+from gonzales.transport.texturing import apply_surface_maps_at_hit, mix_amount_at, emission_at_hit
 from gonzales.scene.shapes.geom_normal import _geom_normal, _shading_normal_at
 from gonzales.estimators.photon_grid import (
     _HSIZE, _hash_cell, NEIGHBOUR_CELLS, neighbour_buckets, _PHOTON_BUCKET_CAP, grid_reset_cell, grid_count, grid_keep, grid_coin_bits, grid_push, grid_weight,
@@ -907,6 +907,10 @@ def _sppm_trace_visible_point[use_gpu: Bool](
         # `bounce` exceeds `max_charged`, a non-emissive hit here refuses to
         # scatter further (no VP store, no continuing dielectric/conductor
         # bounce), exactly as pbrt's own capped path does.
+        if mat.emit_tex_idx >= Int32(0):   # glowing material: no photon leaves it, so the camera pass counts it
+            vp.env += vp.beta * _film_rgb(emission_at_hit[use_gpu](mat, inter, sd.meshes, sd.textures, sd.gpuTextures,
+                                                                   Int(sd.gpuTextureCount)), vp.wavelengths, sd)
+
         if bounce > max_charged:
             break
 

@@ -296,6 +296,30 @@ def resolve_rough_texture[use_gpu: Bool](
         mat.roughV = max(mat.roughV, a)
 
 
+@always_inline
+def emission_at_hit[use_gpu: Bool](
+    mat: Material,
+    inter: Intersection,
+    meshes: Pointer[TriangleMesh, MutUntrackedOrigin],
+    tex_filenames: Pointer[Pointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin],
+    textures: Pointer[GpuTexture, MutUntrackedOrigin],
+    n_textures: Int,
+) -> RGB:
+    """A material's emitted radiance (Material.emit_tex_idx) at a mesh hit. No light samples it, so every integrator
+    counts it in full where a camera path lands on it."""
+    if mat.emit_tex_idx < Int32(0) or inter.primId.type != Int8(0):
+        return RGB(Float32(0.0))
+    var (mesh, v0, v1, v2, ok) = _get_tri_verts(inter, meshes)
+    if not ok or not mesh_has_uvs(mesh):
+        return RGB(Float32(0.0))
+    var w0 = Float32(1.0) - inter.u - inter.v
+    var su = w0 * mesh_uv(mesh, v0)[0] + inter.u * mesh_uv(mesh, v1)[0] + inter.v * mesh_uv(mesh, v2)[0]
+    var sv = w0 * mesh_uv(mesh, v0)[1] + inter.u * mesh_uv(mesh, v1)[1] + inter.v * mesh_uv(mesh, v2)[1]
+    var found = False
+    return sample_texture[use_gpu](Int(mat.emit_tex_idx), su, sv, True, Float32(0.0), tex_filenames, textures, n_textures,
+                                   found)
+
+
 # ── Triangle primitive helper ─────────────────────────────────────────────────
 # Decodes the primId encoding into (mesh, v0, v1, v2). Returns ok=False for
 # non-triangle hits (caller should deactivate path and return).

@@ -24,10 +24,10 @@ from gonzales.core.spectrum import SpectralHandle, null_spectral_handle, Spectra
 from gonzales.transport.restir_di import ReservoirIO, reservoir_io_null
 from gonzales.transport.restir_gi import GIReservoirIO, gi_reservoir_io_null
 from gonzales.integrators.pt.restir_sms import SMSReservoirIO, sms_reservoir_io_null
-from gonzales.transport.texturing import _get_tri_verts, mix_amount_at
+from gonzales.transport.texturing import _get_tri_verts, mix_amount_at, emission_at_hit
 from gonzales.transport.shade_context import GIPendingX1, LightContext, ShadeContext
 from gonzales.transport.manifold import _emitter_face_normal
-from gonzales.integrators.pt.common import area_light_hit_cos, curve_light_hit, _geom_normal_and_ray, _hit_emission, _clamped, _to_spec_illum
+from gonzales.integrators.pt.common import area_light_hit_cos, curve_light_hit, _geom_normal_and_ray, _clamped, _to_spec_illum
 from gonzales.integrators.pt.nee import _mnee_bsdf_weight, _glossy_sms_bsdf_weight
 from gonzales.transport.glossy_sms import glossy_sms_live, GSMS_DEBUG, GLOSSY_SMS_MIN_PDF
 from gonzales.transport.manifold import _mnee_first_probe
@@ -529,8 +529,9 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
         path_ptr[].active = 0
         return
 
-    if mat.emit_tex_idx >= Int32(0) and inter.primId.type == Int8(0):
-        path_ptr[].estimate += _clamped(ctx, path_ptr[].throughput * _to_spec_illum(ctx, _hit_emission[use_gpu](mat, inter, ctx), path_ptr[].wavelengths), Int(path_ptr[].bounce) - 1)
+    if mat.emit_tex_idx >= Int32(0):
+        var le = emission_at_hit[use_gpu](mat, inter, ctx.meshes, ctx.tex_filenames, ctx.textures, ctx.n_textures)
+        path_ptr[].estimate += _clamped(ctx, path_ptr[].throughput * _to_spec_illum(ctx, le, path_ptr[].wavelengths), Int(path_ptr[].bounce) - 1)
 
     # A path that has used its full maxdepth budget dies HERE, at the next
     # real scattering event -- after any emission this segment landed on has

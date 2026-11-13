@@ -343,21 +343,6 @@ def _to_spec_weight(ctx: ShadeContext, c: RGB, wl: SampledWavelengths) -> Spectr
 
 
 @always_inline
-@always_inline
-def _hit_emission[use_gpu: Bool](mat: Material, inter: Intersection, ctx: ShadeContext) -> RGB:
-    """A material's emitted radiance (Material.emit_tex_idx) at a mesh hit; no light samples it, so it counts in full."""
-    var (mesh, v0, v1, v2, ok) = _get_tri_verts(inter, ctx.meshes)
-    if not ok or not mesh_has_uvs(mesh):
-        return RGB(Float32(0.0))
-    var w0 = Float32(1.0) - inter.u - inter.v
-    var su = w0 * mesh_uv(mesh, v0)[0] + inter.u * mesh_uv(mesh, v1)[0] + inter.v * mesh_uv(mesh, v2)[0]
-    var sv = w0 * mesh_uv(mesh, v0)[1] + inter.u * mesh_uv(mesh, v1)[1] + inter.v * mesh_uv(mesh, v2)[1]
-    var found = False
-    return sample_texture[use_gpu](Int(mat.emit_tex_idx), su, sv, True, Float32(0.0), ctx.tex_filenames, ctx.textures,
-                                   ctx.n_textures, found)
-
-
-@always_inline
 def _clamped(ctx: ShadeContext, c: SpectralSample, bounce: Int) -> SpectralSample:
     """Cycles' sample clamp (film_clamp_light): a light contribution whose channels sum past the limit is scaled down to
     it. `bounce` is Cycles' index: 0 for light reaching the camera through the first scattering vertex (direct),
