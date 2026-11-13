@@ -460,7 +460,7 @@ def main() raises:
     bundle.unsafe_free()
 
     if not loaded.sobol:
-        return
+        exit(1)
     var sobol = loaded.sobol.value()
     var spectral_ctx = loaded.spectral.take()
     var spectral = spectral_handle(spectral_ctx)
