@@ -391,7 +391,7 @@ def sppm_render_gpu(
             # Keep the device buffers alive until the kernels that use them are done.
             _ = vps_buf^; _ = photons_buf^; _ = heads_buf^
             _ = inter_cam_buf^; _ = inter_ph_buf^; _ = r2c_buf^; _ = c2w_buf^
-            _ = jb_pos^; _ = jb_nrm^; _ = jb_mat^; _ = jb_area^; _ = jb_lx^; _ = jb_center^; _ = jb_far2^
+            _ = jb_pos^; _ = jb_nrm^; _ = jb_mat^; _ = jb_area^; _ = jb_eta^; _ = jb_lx^; _ = jb_center^; _ = jb_far2^
             _ = jb_skip^; _ = jb_begin^; _ = jb_end^; _ = jb_depth^; _ = jb_sum^; _ = jb_first^; _ = jb_last^
 
             var out_pixels = images[0]; var caustic_pixels = images[1]; var albedo_pixels = images[2]
