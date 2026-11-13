@@ -141,6 +141,14 @@ std::string _EqualAreaBlenderWorld(std::string const &path) {
 }
 
 // Everything the prims synced, rebuilt into a Gonzales scene when it changes.
+// A material input driven per hit by a node-graph program the add-on compiled (gz_scene_set_shader).
+struct Shader {
+    int slot = 0;
+    float scale = 1.0f;
+    std::vector<int> code;
+    std::vector<std::string> images;
+};
+
 // A material the Blender add-on evaluated itself, for what UsdPreviewSurface cannot carry.
 struct Override {
     TfToken kind;              // hair, hairlut, glass, basecolor, principled or diffuse
@@ -153,7 +161,41 @@ struct Override {
     std::string emission;      // principled: the baked emitted radiance, or empty
     bool noNormal = false;     // principled: Hydra's normal map is a bump height image, not a normal map
     int intercepts = 0, randoms = 0, res = 0;
+    std::vector<Shader> shaders;
+    bool Has(int slot) const {
+        return std::any_of(shaders.begin(), shaders.end(), [slot](Shader const &p) { return p.slot == slot; });
+    }
 };
+
+std::string _Unquote(std::string const &s) {
+    std::string out;
+    for (size_t i = 0; i < s.size(); ++i)
+        if (s[i] == '%' && i + 2 < s.size()) {
+            out += char(std::stoi(s.substr(i + 1, 2), nullptr, 16));
+            i += 2;
+        } else
+            out += s[i];
+    return out;
+}
+
+// "shader <slot> <scale> <hex words> <n> <n paths>" at rest[k]; returns the index after it, or 0 when malformed.
+size_t _ParseShader(std::vector<std::string> const &rest, size_t k, Override &o) {
+    if (k + 4 >= rest.size() || rest[k] != "shader")
+        return 0;
+    Shader p;
+    p.slot = std::stoi(rest[k + 1]);
+    p.scale = std::stof(rest[k + 2]);
+    std::string const &hex = rest[k + 3];
+    for (size_t i = 0; i + 8 <= hex.size(); i += 8)
+        p.code.push_back(int(std::stoul(hex.substr(i, 8), nullptr, 16)));
+    size_t n = std::stoul(rest[k + 4]);
+    if (k + 5 + n > rest.size())
+        return 0;
+    for (size_t i = 0; i < n; ++i)
+        p.images.push_back(_Unquote(rest[k + 5 + i]));
+    o.shaders.push_back(std::move(p));
+    return k + 5 + n;
+}
 
 // Lines of "<material prim name> <kind> ..." as written by the add-on's materials.py.
 std::map<std::string, Override> _ParseOverrides(std::string const &text) {
@@ -175,6 +217,14 @@ std::map<std::string, Override> _ParseOverrides(std::string const &text) {
         else if (kind == "diffuse" && (in >> o.sigma[0] >> o.sigma[1] >> o.sigma[2] >> o.path)) {
             if (o.path == "-")
                 o.path.clear();
+            std::vector<std::string> rest{std::istream_iterator<std::string>(in), std::istream_iterator<std::string>()};
+            for (size_t k = 0; k < rest.size();)
+                if (rest[k] == "nonormal")
+                    o.noNormal = true, ++k;
+                else if (size_t next = _ParseShader(rest, k, o))
+                    k = next;
+                else
+                    ++k;
             result[name] = o;
         }
         else if (kind == "basecolor" && (in >> o.path))
@@ -185,18 +235,22 @@ std::map<std::string, Override> _ParseOverrides(std::string const &text) {
             // Then optionally the subsurface fields, then optionally "emission <path>" and "nonormal".
             std::vector<std::string> rest{std::istream_iterator<std::string>(in), std::istream_iterator<std::string>()};
             size_t k = 0;
-            if (rest.size() >= 6 && rest[0] != "emission" && rest[0] != "nonormal") {
+            if (rest.size() >= 6 && rest[0] != "emission" && rest[0] != "nonormal" && rest[0] != "shader") {
                 o.sssWeight = std::stof(rest[0]);
                 o.sssRadius = GfVec3f(std::stof(rest[1]), std::stof(rest[2]), std::stof(rest[3]));
                 o.sssAniso = std::stof(rest[4]);
                 o.sssVanDeHulst = std::stoi(rest[5]);
                 k = 6;
             }
-            for (; k < rest.size(); ++k)
+            while (k < rest.size())
                 if (rest[k] == "emission" && k + 1 < rest.size())
-                    o.emission = rest[++k];
+                    o.emission = rest[k + 1], k += 2;
                 else if (rest[k] == "nonormal")
-                    o.noNormal = true;
+                    o.noNormal = true, ++k;
+                else if (size_t next = _ParseShader(rest, k, o))
+                    k = next;
+                else
+                    ++k;
             result[name] = o;
         }
     }
@@ -831,6 +885,17 @@ std::vector<int> _HairPalette(void *scene, Override const &lut, std::vector<floa
     return result;
 }
 
+void _SetShaders(void *scene, int material, Override const &o) {
+    for (Shader const &p : o.shaders) {
+        std::vector<char const *> images;
+        for (std::string const &i : p.images)
+            images.push_back(i.c_str());
+        if (gz_scene_set_shader(scene, material, p.slot, p.code.data(), int(p.code.size()), images.data(), int(images.size()),
+                                p.scale) != 0)
+            TF_WARN("Gonzales: malformed shader program for slot %d", p.slot);
+    }
+}
+
 void *_BuildScene(Scene &synced, int *version) {
     void *scene = gz_scene_new();
     std::lock_guard<std::mutex> lock(synced.mutex);
@@ -853,12 +918,13 @@ void *_BuildScene(Scene &synced, int *version) {
             materials[id] = gz_scene_add_diffuse(scene, 1, 1, 1, base->path.c_str(), path(mat.normalMap));
         else if (Override const *d = override(id, TfToken("diffuse"))) {
             GfVec3f c = d->path.empty() ? d->sigma : GfVec3f(1);
-            materials[id] = gz_scene_add_diffuse(scene, c[0], c[1], c[2], path(d->path), path(mat.normalMap));
+            materials[id] = gz_scene_add_diffuse(scene, c[0], c[1], c[2], path(d->path), d->noNormal ? nullptr : path(mat.normalMap));
+            _SetShaders(scene, materials[id], *d);
         }
         else if (Override const *pr = override(id, TfToken("principled"))) {
-            // A baked base colour replaces Hydra's texture; otherwise Hydra's colour or texture stays.
-            std::string const &texture = pr->path.empty() ? mat.texture : pr->path;
-            GfVec3f c = pr->path.empty() ? mat.diffuse : GfVec3f(1);
+            // A program or a baked base colour replaces Hydra's texture; otherwise Hydra's colour or texture stays.
+            std::string const &texture = pr->Has(0) ? std::string() : pr->path.empty() ? mat.texture : pr->path;
+            GfVec3f c = pr->path.empty() && !pr->Has(0) ? mat.diffuse : GfVec3f(1);
             materials[id] = gz_scene_add_coated(scene, c[0], c[1], c[2], path(texture), pr->noNormal ? nullptr : path(mat.normalMap),
                                                 pr->alpha, pr->ior);
             if (pr->sssWeight > 0)
@@ -866,6 +932,7 @@ void *_BuildScene(Scene &synced, int *version) {
                                         pr->sssRadius[2], pr->sssAniso, pr->sssVanDeHulst);
             if (!pr->emission.empty())
                 gz_scene_set_emission(scene, materials[id], pr->emission.c_str());
+            _SetShaders(scene, materials[id], *pr);
         }
         else
             materials[id] = gz_scene_add_diffuse(scene, mat.diffuse[0], mat.diffuse[1], mat.diffuse[2],
