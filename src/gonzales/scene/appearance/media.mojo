@@ -914,6 +914,27 @@ def blackbody_rgb(temp: Float32) -> RGB:
     return RGB(max(r, Float32(0.0)), max(g, Float32(0.0)), max(b, Float32(0.0)))
 
 
+def blackbody_peak_luminance(temp: Float32) -> Float32:
+    """Luminance of pbrt's peak-normalised BlackbodySpectrum, which a portal light keeps (no photometric divide)."""
+    if temp <= Float32(0.0):
+        return Float32(0.0)
+    var Y = Float32(0.0)
+    var ybar_sum = Float32(0.0)
+    var lam = Float32(360.0)
+    var lmax = Float32(2897.7721) / temp   # Wien, micrometres
+    var peak = Float32(1.0) / ((exp(Float32(14388.0) / (lmax * temp)) - Float32(1.0)) * lmax * lmax * lmax * lmax * lmax)
+    while lam <= Float32(830.0):
+        var lum = lam * Float32(0.001)
+        var xarg = Float32(14388.0) / (lum * temp)
+        var inv = exp(-xarg) if xarg > Float32(80.0) else Float32(1.0) / (exp(xarg) - Float32(1.0))
+        var ybar = (Float32(0.821) * _bb_lobe(lam, Float32(568.8), Float32(46.9), Float32(40.5))
+                    + Float32(0.286) * _bb_lobe(lam, Float32(530.9), Float32(16.3), Float32(31.1)))
+        Y += inv / (lum * lum * lum * lum * lum) * ybar
+        ybar_sum += ybar
+        lam += Float32(10.0)
+    return Y / (peak * ybar_sum)
+
+
 @always_inline
 def _blackbody_radiance(lambda_nm: Float32, temp_k: Float32) -> Float32:
     """pbrt's raw (unnormalized) Blackbody(lambda,T) (util/spectrum.h) --

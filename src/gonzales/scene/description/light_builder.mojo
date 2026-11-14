@@ -4,6 +4,7 @@ from gonzales.scene.description.lexer import (PbrtScanner, scanner_parse_quoted_
                     _psc_streq)
 from gonzales.scene.description.parse_types import SceneParseState, scene_path
 from gonzales.core.geometry import RGB
+from gonzales.scene.appearance.media import blackbody_peak_luminance
 from gonzales.core.transform import transform_points
 
 def _psc_handle_area_light_source(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
@@ -87,6 +88,10 @@ def handle_light_source(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
             s[unsafe_offset=0].inf_tex_idx.append(Int32(len(s[unsafe_offset=0].tex_names) - 1))
         else:
             s[unsafe_offset=0].inf_tex_idx.append(Int32(-1))
+        var portal_f = params.get_floats("portal")
+        var bb = params.get_floats("L")
+        if len(portal_f) == 12 and filename == "" and len(bb) == 1:
+            scale *= blackbody_peak_luminance(bb[0])   # pbrt's portal path skips the photometric normalisation
         s[unsafe_offset=0].inf_rgb.append(rgb.r * scale)
         s[unsafe_offset=0].inf_rgb.append(rgb.g * scale)
         s[unsafe_offset=0].inf_rgb.append(rgb.b * scale)
@@ -94,7 +99,6 @@ def handle_light_source(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
         for ci in range(16):
             s[unsafe_offset=0].inf_ctm.append(s[unsafe_offset=0].ctm[ci])
         # Portal: 4 world-space points; pbrt does not apply the light's CTM to them (lights.cpp RenderFromWorld).
-        var portal_f = params.get_floats("portal")
         if len(portal_f) == 12:
             for v in portal_f:
                 s[unsafe_offset=0].inf_portal.append(v)
