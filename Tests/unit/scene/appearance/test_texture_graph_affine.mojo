@@ -248,5 +248,16 @@ def test_inverted_glossiness_is_roughness() raises:
     _ = s.unsafe_take_pointee(); s.unsafe_free()
 
 
+def test_mix_material_texture_amount() raises:
+    """Kroken's pillow: a "mix" material whose amount is a float imagemap, not the 0.5 default."""
+    var s = _state()
+    _tex(s, '"dots" "float" "imagemap" "string filename" [ "d.png" ]')
+    _mat(s, '"p" "string materials" [ "a" "b" ] "texture amount" "dots" "string type" [ "mix" ]')
+    var nm = s[unsafe_offset=0].named_materials[0]
+    assert_true(nm.rough_tex_idx == Int32(0))
+    assert_true(_close(nm.rough_scale, Float32(1)))
+    _ = s.unsafe_take_pointee(); s.unsafe_free()
+
+
 def main() raises:
     TestSuite.discover_tests[__functions_in_module()]().run()

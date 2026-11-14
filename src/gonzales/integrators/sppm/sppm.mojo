@@ -38,7 +38,7 @@ from gonzales.core.sampling import power_heuristic
 from gonzales.transport.bxdf import ggx_lambda, dielectric_interface, bxdf_sample_dielectric, bxdf_sample_thin_dielectric, BxDFFlags, GeomContext, bxdf_sample_conductor, BSDF, LobeTables
 from gonzales.transport.surface import surface_hit
 from gonzales.integrators.pt.common import area_light_hit_cos
-from gonzales.transport.texturing import apply_surface_maps_at_hit
+from gonzales.transport.texturing import apply_surface_maps_at_hit, mix_amount_at
 from gonzales.scene.shapes.geom_normal import _geom_normal, _shading_normal_at
 from gonzales.estimators.photon_grid import (
     _HSIZE, _hash_cell, NEIGHBOUR_CELLS, neighbour_buckets, _PHOTON_BUCKET_CAP, grid_reset_cell, grid_count, grid_keep, grid_coin_bits, grid_push, grid_weight,
@@ -859,7 +859,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
                     vp.env += vp.beta * _film_rgb(sph_hit.emission, vp.wavelengths, sd)
                 break
 
-        resolve_mix(sd.materials, pcg, mat, mat_idx)
+        resolve_mix(sd.materials, pcg, mat, mat_idx, mix_amount_at[use_gpu](mat, inter, sd.meshes, sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount)))
 
         if mat.type == MatKind.area_light:
             # Direct hit on a triangle/curve area light — same treatment as
@@ -1420,7 +1420,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
         var mat = sd.materials[unsafe_offset=mat_idx]
         var hit = ro + rd * t_hit
 
-        resolve_mix(sd.materials, pcg, mat, mat_idx)
+        resolve_mix(sd.materials, pcg, mat, mat_idx, mix_amount_at[tex_gpu](mat, inter, sd.meshes, sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount)))
 
         # See geometry.mojo's TERMINAL_SEGMENT_GRACE_ROUNDS and the matching
         # guard in _sppm_trace_visible_point above. A photon that simply

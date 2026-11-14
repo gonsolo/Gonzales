@@ -31,7 +31,7 @@ from gonzales.scene.shapes.geom_normal import _geom_normal, _shading_normal_at
 from gonzales.integrators.sppm.sppm import _dielectric_bounce, _cosine_hemisphere_sample
 from gonzales.scene.appearance.lights import area_light_side_pdf
 from gonzales.integrators.pt.common import area_light_hit_cos, curve_light_hit
-from gonzales.transport.texturing import _get_tri_verts, apply_surface_maps_at_hit
+from gonzales.transport.texturing import _get_tri_verts, apply_surface_maps_at_hit, mix_amount_at
 from gonzales.transport.bxdf import BSDF, LobeSample, LobeTables
 from gonzales.core.spectrum import (
     SampledWavelengths, SpectralSample, spec_refl, spec_refl_unbounded, spec_illum,
@@ -673,7 +673,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool, defer_walk: Bool = False](
                 st.total += st.beta * spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (sph_hit.emission).r, (sph_hit.emission).g, (sph_hit.emission).b, st.wl) * mis_w_sph_hit
                 return False   # direct hit on emissive analytic sphere -- terminates the path
 
-        resolve_mix(sd.materials, pcg, mat, mat_idx)
+        resolve_mix(sd.materials, pcg, mat, mat_idx, mix_amount_at[use_gpu](mat, inter, sd.meshes, sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount)))
         if mat.type == MatKind.hair:   # the fibre kernel's density (_vcm_fibre_scale)
             eta_x = mis_vm_weight_factor * _vcm_fibre_scale(sd, hit, Int(inter.primId.id1), inter.v)
 

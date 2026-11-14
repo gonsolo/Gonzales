@@ -5,6 +5,7 @@ from gonzales.core.gpu_tuning import MINCTA_NEE, MINCTA_DIFFUSE, MINCTA_COATED, 
 from gonzales.scene.accel.bvh import SceneView
 from gonzales.core.geometry import _is_real_ptr, Vec3f, dot
 from gonzales.scene.appearance.materials import MatKind, resolve_mix
+from gonzales.transport.texturing import mix_amount_at
 from gonzales.scene.shapes.primitives import Intersection
 from gonzales.transport.render_state import PathState, ShadowTask, SuppressTask
 from gonzales.transport.restir_di import DIReservoir, ReservoirIO, reservoir_io_null
@@ -270,7 +271,7 @@ def shade_mix_gpu(
     var mat = sd.materials[unsafe_offset=Int(inter.primId.materialIndex)]
     var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
     var mat_idx = Int(inter.primId.materialIndex)
-    resolve_mix(sd.materials, pcg, mat, mat_idx)
+    resolve_mix(sd.materials, pcg, mat, mat_idx, mix_amount_at[True](mat, inter, sd.meshes, sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount)))
     path_ptr[].pcgState = pcg.state
     intersections[unsafe_offset=tid].primId.materialIndex = Int64(mat_idx)
     path_ptr[].pending_mat = mat.type

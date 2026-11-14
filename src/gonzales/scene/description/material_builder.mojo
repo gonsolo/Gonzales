@@ -961,6 +961,15 @@ def _psc_handle_make_named_material(handle: Pointer[PbrtScanner, MutUntrackedOri
 
     # "mix": blend amount and the two component material names.
     var mix_amount = params.get_float("amount", Float32(0.5))
+    var amount_tex = params.get_string("amount", "")
+    if amount_tex != "":   # a textured amount rides in the roughness slot, which a mix does not use
+        var amount_aff = _resolve_affine_rgb(s, amount_tex, 0)
+        if amount_aff.ok and amount_aff.tex_idx >= Int32(0):
+            rough_tex_idx_for_mat = amount_aff.tex_idx
+            rough_scale_for_mat = amount_aff.scale.r
+            rough_bias_for_mat = amount_aff.bias.r
+        elif amount_aff.ok:
+            mix_amount = amount_aff.bias.r
     var mix_names = params.get_strings("materials")
     var mix_name1 = String("")
     var mix_name2 = String("")

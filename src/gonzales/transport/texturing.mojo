@@ -5,7 +5,7 @@ from std.math import sqrt, floor, log2, ceil, abs
 from std.ffi import external_call
 from std.memory.alloc import unsafe_alloc
 from gonzales.core.geometry import RGB, Vec3f, dot, cross, Frame, _is_real_ptr
-from gonzales.scene.appearance.materials import Material
+from gonzales.scene.appearance.materials import Material, MatKind
 from gonzales.scene.appearance.materials import GpuTexture
 from gonzales.scene.shapes.primitives import Intersection, TriangleMesh, Instance, mesh_uv, mesh_has_uvs, mesh_vi, mesh_face
 from gonzales.scene.appearance.footprint import CameraFootprint, UVFootprint, TriWorld, tri_world, hit_uv_footprint
@@ -694,3 +694,30 @@ def uv_footprint_at_hit(
         return UVFootprint.none()
     return hit_uv_footprint(cam, tri_world(mesh, v0, v1, v2, inter.primId.instanceIdx, instances),
         mesh, v0, v1, v2, hit, ray_dir, cone_w)
+
+
+@always_inline
+def mix_amount_at[use_gpu: Bool](
+    mat: Material,
+    inter: Intersection,
+    meshes: Pointer[TriangleMesh, MutUntrackedOrigin],
+    tex_filenames: Pointer[Pointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin],
+    textures: Pointer[GpuTexture, MutUntrackedOrigin],
+    n_textures: Int,
+) -> Float32:
+    """A mix material's amount at a hit: its texture (kept in the rough_* slot, unused by a mix) or roughU."""
+    if mat.type != MatKind.mix or mat.rough_tex_idx < Int32(0) or inter.primId.type != Int8(0):
+        return mat.roughU
+    var (mesh, v0, v1, v2, ok) = _get_tri_verts(inter, meshes)
+    if not ok:
+        return mat.roughU
+    var w0 = Float32(1.0) - inter.u - inter.v
+    var su = inter.u + inter.v   # pbrt's default triangle uv: (0,0), (1,0), (1,1)
+    var sv = inter.v
+    if mesh_has_uvs(mesh):
+        su = w0 * mesh_uv(mesh, v0)[0] + inter.u * mesh_uv(mesh, v1)[0] + inter.v * mesh_uv(mesh, v2)[0]
+        sv = w0 * mesh_uv(mesh, v0)[1] + inter.u * mesh_uv(mesh, v1)[1] + inter.v * mesh_uv(mesh, v2)[1]
+    var found = False
+    var t = sample_texture[use_gpu](Int(mat.rough_tex_idx), su, sv, True, Float32(0.0), tex_filenames, textures, n_textures,
+                                    found)
+    return mat.rough_bias + mat.rough_scale * t.luma() if found else mat.roughU

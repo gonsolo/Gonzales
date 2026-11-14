@@ -24,7 +24,7 @@ from gonzales.core.spectrum import SpectralHandle, null_spectral_handle, Spectra
 from gonzales.transport.restir_di import ReservoirIO, reservoir_io_null
 from gonzales.transport.restir_gi import GIReservoirIO, gi_reservoir_io_null
 from gonzales.integrators.pt.restir_sms import SMSReservoirIO, sms_reservoir_io_null
-from gonzales.transport.texturing import _get_tri_verts
+from gonzales.transport.texturing import _get_tri_verts, mix_amount_at
 from gonzales.transport.shade_context import GIPendingX1, LightContext, ShadeContext
 from gonzales.transport.manifold import _emitter_face_normal
 from gonzales.integrators.pt.common import area_light_hit_cos, curve_light_hit, _geom_normal_and_ray, _hit_emission, _clamped, _to_spec_illum
@@ -127,7 +127,8 @@ def shade_mix[use_gpu: Bool, enqueue_shadow: Bool](
     var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
     var sub_mat = mat
     var sub_idx = Int(inter.primId.materialIndex)
-    resolve_mix(ctx.materials, pcg, sub_mat, sub_idx)
+    resolve_mix(ctx.materials, pcg, sub_mat, sub_idx,
+                mix_amount_at[use_gpu](mat, inter, ctx.meshes, ctx.tex_filenames, ctx.textures, ctx.n_textures))
     path_ptr[].pcgState = pcg.state
     var sub_inter = inter
     sub_inter.primId.materialIndex = Int64(sub_idx)

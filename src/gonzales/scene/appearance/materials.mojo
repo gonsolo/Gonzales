@@ -246,17 +246,18 @@ struct Material(TrivialRegisterPassable):
         return self.type == MatKind.dielectric and self.sss_walk != Int8(0)
 
     @always_inline
-    def mix_pick(self, u: Float32) -> Int:
-        """A mix's sub-material index for a uniform draw `u`."""
-        return Int((self.tex_idx >> 16) & Int32(0xFFFF)) if u < self.roughU else Int(self.tex_idx & Int32(0xFFFF))
+    def mix_pick(self, u: Float32, amount: Float32) -> Int:
+        """A mix's sub-material index for a uniform draw `u` (amount: roughU, or its texture via mix_amount_at)."""
+        return Int((self.tex_idx >> 16) & Int32(0xFFFF)) if u < amount else Int(self.tex_idx & Int32(0xFFFF))
 
 
 @always_inline
-def resolve_mix(materials: Pointer[Material, MutUntrackedOrigin], mut pcg: PCG32, mut mat: Material, mut mat_idx: Int):
+def resolve_mix(materials: Pointer[Material, MutUntrackedOrigin], mut pcg: PCG32, mut mat: Material, mut mat_idx: Int,
+                amount: Float32):
     """A mix becomes one of its sub-materials, a mix of mixes diffuse; draws only for a mix."""
     if mat.type != MatKind.mix:
         return
-    mat_idx = mat.mix_pick(pcg.next_float())
+    mat_idx = mat.mix_pick(pcg.next_float(), amount)
     mat = materials[unsafe_offset=mat_idx]
     if mat.type == MatKind.mix:
         mat.type = MatKind.diffuse

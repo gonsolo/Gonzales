@@ -7,6 +7,7 @@ from gonzales.transport.sss_walk import sss_entered, sss_walks_below, sss_relati
 from gonzales.transport.medium_interface import medium_after
 from gonzales.core.geometry import Point3f, Point2f, Vec3f, vec3f, point3f, dot, face_toward, PI, INV_FOUR_PI, RGB
 from gonzales.scene.appearance.materials import MatKind, LobeKind, Material, resolve_mix
+from gonzales.transport.texturing import mix_amount_at
 from gonzales.scene.shapes.primitives import Intersection
 from gonzales.core.geometry import Ray
 from gonzales.paths.vcm.mis import vcm_scatter_carries, vcm_phase_scatter, vcm_arrival_carries
@@ -433,7 +434,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool, defer_walk: Bool = False](
         var hit = st.ro + st.rd*t_hit
         var eta_x = mis_vm_weight_factor * _vcm_eta_scale(sd, hit)   # merging's MIS density HERE
 
-        resolve_mix(sd.materials, pcg, mat, mat_idx)
+        resolve_mix(sd.materials, pcg, mat, mat_idx, mix_amount_at[use_gpu](mat, inter, sd.meshes, sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount)))
         if mat.type == MatKind.hair:   # the fibre kernel's density (_vcm_fibre_scale)
             eta_x = mis_vm_weight_factor * _vcm_fibre_scale(sd, hit, Int(inter.primId.id1), inter.v)
         if mat.type != MatKind.interface:
