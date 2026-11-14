@@ -734,7 +734,7 @@ def shade_conductor[use_gpu: Bool, enqueue_shadow: Bool](
                 ctx.tex_filenames, ctx.textures, ctx.n_textures, found)
             if found:
                 # Perceptual roughness -> GGX alpha, the default remaproughness=true.
-                var r = sqrt(max(rtex.luma(), Float32(0.0)))
+                var r = sqrt(max(mat_eff.rough_bias + mat_eff.rough_scale * rtex.luma(), Float32(0.0)))
                 mat_eff.roughU = r
                 mat_eff.roughV = r
         normal = _shading_normal(mesh, v0, v1, v2, inter.u, inter.v, geo_normal)

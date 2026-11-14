@@ -84,6 +84,8 @@ struct Material(TrivialRegisterPassable):
                                 # "texture uroughness"/"texture vroughness" textures.
                                 # Conductor only today (shade_conductor); not resolved for
                                 # coated_conductor/dielectric/coated_diffuse's coat.
+    var rough_scale: Float32   # roughness = rough_bias + rough_scale * texel (imagemap "scale"/"invert")
+    var rough_bias: Float32
     var medium_interface_idx: Int32  # -1 = no medium interface bound
     # Procedural checkerboard params, valid only when tex_idx == -2.
     var checker_tex1: RGB

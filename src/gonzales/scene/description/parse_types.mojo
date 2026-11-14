@@ -70,6 +70,8 @@ struct NamedMaterial(Copyable, ImplicitlyCopyable, Movable):
     var tex_idx:        Int32
     var normal_tex_idx: Int32
     var rough_tex_idx:  Int32
+    var rough_scale:    Float32   # roughness = rough_bias + rough_scale * texel
+    var rough_bias:     Float32
     # PBRT "displacement": bump map, resolved to an imagemap texture index
     # (through a "scale" texture wrapper if present -- see handle_texture's
     # "scale" class) + the scalar height multiplier applied to that
@@ -140,6 +142,8 @@ struct NamedMaterial(Copyable, ImplicitlyCopyable, Movable):
         self.dt_tex_lobes   = Int8(0)
         self.normal_tex_idx = Int32(-1)
         self.rough_tex_idx  = Int32(-1)
+        self.rough_scale    = Float32(1)
+        self.rough_bias     = Float32(0)
         self.emit_tex_idx   = Int32(-1)
         self.bump_tex_idx   = Int32(-1)
         self.bump_scale     = Float32(1)

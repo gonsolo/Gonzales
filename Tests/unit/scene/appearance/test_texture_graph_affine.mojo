@@ -224,5 +224,29 @@ def test_imagemap_own_scale_reaches_reflectance() raises:
     _ = s.unsafe_take_pointee(); s.unsafe_free()
 
 
+def test_imagemap_scale_reaches_roughness() raises:
+    """Watercolor's concrete floor: a roughness map with `"float scale" .2`."""
+    var s = _state()
+    _tex(s, '"r" "float" "imagemap" "float scale" .2 "string filename" [ "r.png" ]')
+    _mat(s, '"m" "string type" [ "coateddiffuse" ] "texture roughness" "r"')
+    var nm = s[unsafe_offset=0].named_materials[0]
+    assert_true(nm.rough_tex_idx == Int32(0))
+    assert_true(_close(nm.rough_scale, Float32(0.2)))
+    assert_true(_close(nm.rough_bias, Float32(0)))
+    _ = s.unsafe_take_pointee(); s.unsafe_free()
+
+
+def test_inverted_glossiness_is_roughness() raises:
+    """Kroken's metals: `"bool invert" [ true ]` turns a glossiness map into roughness, 1 - texel."""
+    var s = _state()
+    _tex(s, '"g" "float" "imagemap" "string filename" [ "g.png" ] "bool invert" [ true ]')
+    _mat(s, '"m" "string type" [ "conductor" ] "texture roughness" [ "g" ]')
+    var nm = s[unsafe_offset=0].named_materials[0]
+    assert_true(nm.rough_tex_idx == Int32(0))
+    assert_true(_close(nm.rough_scale, Float32(-1)))
+    assert_true(_close(nm.rough_bias, Float32(1)))
+    _ = s.unsafe_take_pointee(); s.unsafe_free()
+
+
 def main() raises:
     TestSuite.discover_tests[__functions_in_module()]().run()

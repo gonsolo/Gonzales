@@ -725,36 +725,31 @@ def _psc_handle_make_named_material(handle: Pointer[PbrtScanner, MutUntrackedOri
         var ir = params.get_floats("interface.roughness")
         if len(ir) > 0:
             coat_rough = ir[0]
+    var rough_aff = _affine_fail()
     var rough_f = params.get_floats("roughness")
     if len(rough_f) > 0:
         mat_roughU = rough_f[0]; mat_roughV = rough_f[0]
     else:
-        # Isotropic only: applies to both roughU/roughV (matches every
-        # texture-roughness usage seen in this scene corpus so far — a
-        # separate "texture vroughness" would need its own slot, not added
-        # since nothing uses it yet). Imagemap textures only (no constant-
-        # texture/checkerboard fallback, unlike "reflectance" above — a
-        # roughness value read off a procedural checkerboard or flat-color
-        # texture isn't a pattern seen in practice).
+        # Isotropic only: applies to both roughU/roughV ("texture vroughness" has no slot; nothing uses it).
         var rough_tex = params.get_string("roughness", "")
         if rough_tex != "":
-            for ti in range(len(s[unsafe_offset=0].tex_names)):
-                if s[unsafe_offset=0].tex_names[ti] == rough_tex:
-                    rough_tex_idx_for_mat = Int32(ti)
-                    break
+            rough_aff = _resolve_affine_rgb(s, rough_tex, 0)
     var urough_f = params.get_floats("uroughness")
     if len(urough_f) > 0:
         mat_roughU = urough_f[0]
     else:
         var urough_tex = params.get_string("uroughness", "")
         if urough_tex != "":
-            for ti in range(len(s[unsafe_offset=0].tex_names)):
-                if s[unsafe_offset=0].tex_names[ti] == urough_tex:
-                    rough_tex_idx_for_mat = Int32(ti)
-                    break
+            rough_aff = _resolve_affine_rgb(s, urough_tex, 0)
     var vrough_f = params.get_floats("vroughness")
     if len(vrough_f) > 0:
         mat_roughV = vrough_f[0]
+    var rough_scale_for_mat = Float32(1)
+    var rough_bias_for_mat = Float32(0)
+    if rough_aff.ok and rough_aff.tex_idx >= Int32(0):
+        rough_tex_idx_for_mat = rough_aff.tex_idx
+        rough_scale_for_mat = rough_aff.scale.r
+        rough_bias_for_mat = rough_aff.bias.r
 
     # pbrt default: remaproughness=true means roughU/V are a perceptual
     # roughness remapped to GGX alpha via sqrt(); false means the parsed
@@ -1057,6 +1052,8 @@ def _psc_handle_make_named_material(handle: Pointer[PbrtScanner, MutUntrackedOri
     nm.tex_bias       = tex_bias_for_mat
     nm.normal_tex_idx = normal_tex_idx_for_mat
     nm.rough_tex_idx  = rough_tex_idx_for_mat
+    nm.rough_scale    = rough_scale_for_mat
+    nm.rough_bias     = rough_bias_for_mat
     nm.bump_tex_idx   = bump_tex_idx_for_mat
     nm.bump_scale     = bump_scale_for_mat
     nm.checker_tex1   = checker_tex1

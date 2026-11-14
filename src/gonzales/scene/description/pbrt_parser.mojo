@@ -2518,6 +2518,8 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
         mats[unsafe_offset=i].sss_mean_refl = nm3.sss_mean_refl
         mats[unsafe_offset=i].tex_bias = nm3.tex_bias
         mats[unsafe_offset=i].rough_tex_idx = nm3.rough_tex_idx
+        mats[unsafe_offset=i].rough_scale = nm3.rough_scale
+        mats[unsafe_offset=i].rough_bias = nm3.rough_bias
         mats[unsafe_offset=i].emit_tex_idx = nm3.emit_tex_idx
         mats[unsafe_offset=i].medium_interface_idx = Int32(-1)
         # `mats` comes from unsafe_alloc, which does NOT zero. Every other
