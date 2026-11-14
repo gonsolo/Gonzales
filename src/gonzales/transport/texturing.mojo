@@ -289,7 +289,7 @@ def rough_texture_alpha[use_gpu: Bool](
         sv = w0*mesh_uv(mesh, v0)[1] + inter.u*mesh_uv(mesh, v1)[1] + inter.v*mesh_uv(mesh, v2)[1]
     var found = False
     var t = sample_texture[use_gpu](Int(mat.rough_tex_idx), su, sv, True, Float32(0.0), tex_filenames, textures, n_textures, found)
-    return sqrt(max(t.luma(), Float32(0.0))) if found else Float32(0.0)
+    return sqrt(max(mat.rough_bias + mat.rough_scale * t.luma(), Float32(0.0))) if found else Float32(0.0)
 
 
 @always_inline
