@@ -84,8 +84,6 @@ struct Material(TrivialRegisterPassable):
                                 # "texture uroughness"/"texture vroughness" textures.
                                 # Conductor only today (shade_conductor); not resolved for
                                 # coated_conductor/dielectric/coated_diffuse's coat.
-    var rough_scale: Float32   # roughness = rough_bias + rough_scale * texel (imagemap "scale"/"invert")
-    var rough_bias: Float32
     var medium_interface_idx: Int32  # -1 = no medium interface bound
     # Procedural checkerboard params, valid only when tex_idx == -2.
     var checker_tex1: RGB
@@ -120,6 +118,8 @@ struct Material(TrivialRegisterPassable):
     var sss_mean_refl: RGB
     # -1, or a texture of emitted radiance (Blender's Principled emission), added on every hit; not a light to sample.
     var emit_tex_idx: Int32
+    var rough_scale: Float32   # roughness = rough_bias + rough_scale * texel (imagemap "scale"/"invert")
+    var rough_bias: Float32
 
     # ── What integrators may ask a material; none of them compares `type` itself ──
 

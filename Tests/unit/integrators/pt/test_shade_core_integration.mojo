@@ -67,6 +67,7 @@ def disabled_test_shade_core_area_light_hit_adds_emission() raises:
         RGB(Float32(0.0)), RGB(Float32(0.0)), Float32(1.0), Float32(1.0), Int32(-1), RGB(Float32(1.0)), RGB(Float32(0.0)),
         RGB(Float32(1.0)),   # sss_mean_refl (inert)
         Int32(-1),           # emit_tex_idx
+        Float32(1.0), Float32(0.0),  # rough_scale, rough_bias
     )
 
     var ray = Ray(Point3f(0.2, 0.2, -5.0), Vec3f(0.0, 0.0, 1.0))
