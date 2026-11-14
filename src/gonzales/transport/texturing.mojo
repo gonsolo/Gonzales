@@ -264,6 +264,12 @@ def sample_texture[use_gpu: Bool](
 
 
 @always_inline
+@always_inline
+def _albedo_affine(mat: Material, t: RGB) -> RGB:
+    """tex_bias + tex_scale * texel, clamped to [0, 1] as pbrt clamps an albedo texture."""
+    return (mat.tex_bias + mat.tex_scale * t).clamp(Float32(0), Float32(1))
+
+
 def _tex_lookup[use_gpu: Bool](
     mat: Material,
     inter: Intersection,
@@ -305,7 +311,7 @@ def _tex_lookup[use_gpu: Bool](
             pu = pw0*mesh_uv(mesh, v0)[0]   + inter.u*mesh_uv(mesh, v1)[0]   + inter.v*mesh_uv(mesh, v2)[0]
             pv = pw0*mesh_uv(mesh, v0)[1] + inter.u*mesh_uv(mesh, v1)[1] + inter.v*mesh_uv(mesh, v2)[1]
         var pt = _sample_ptex(ptx, Int(mesh_face(mesh, tri)), pu, pv, fp_width)
-        return RGB(mat.tex_bias.r + mat.tex_scale.r * pt.r, mat.tex_bias.g + mat.tex_scale.g * pt.g, mat.tex_bias.b + mat.tex_scale.b * pt.b)
+        return _albedo_affine(mat, pt)
     var has_uvs = mesh_has_uvs(mesh)
     if ti >= 0 and ti < n_textures:
         var tex = textures[unsafe_offset=ti]
@@ -321,9 +327,7 @@ def _tex_lookup[use_gpu: Bool](
             # folded into the lookup (scale=1, bias=0 when absent) --
             # see material_builder.mojo's _resolve_affine_rgb.
             var t = _sample_tex(tex, su, tv, _footprint_lod(tex, fp_width))
-            return RGB(mat.tex_bias.r + mat.tex_scale.r * t.r,
-                       mat.tex_bias.g + mat.tex_scale.g * t.g,
-                       mat.tex_bias.b + mat.tex_scale.b * t.b)
+            return _albedo_affine(mat, t)
     comptime if not use_gpu:
         if ti >= 0 and n_textures == 0 and _is_real_ptr(tex_filenames):
             var filename = tex_filenames[unsafe_offset=ti]
@@ -343,9 +347,7 @@ def _tex_lookup[use_gpu: Bool](
                     Pointer[Float32, MutUntrackedOrigin]](filename, su, tv, tr)
                 var result = RGB(_srgb_to_linear(tr[unsafe_offset=0]), _srgb_to_linear(tr[unsafe_offset=1]), _srgb_to_linear(tr[unsafe_offset=2]))
                 tr.unsafe_free()
-                return RGB(mat.tex_bias.r + mat.tex_scale.r * result.r,
-                           mat.tex_bias.g + mat.tex_scale.g * result.g,
-                           mat.tex_bias.b + mat.tex_scale.b * result.b)
+                return _albedo_affine(mat, result)
     return mat.albedo
 
 

@@ -349,7 +349,7 @@ def _sss_reflectance(s: Pointer[SceneParseState, MutUntrackedOrigin],
                     sr += Float64(ptr[unsafe_offset=k*3+0]); sg += Float64(ptr[unsafe_offset=k*3+1]); sb += Float64(ptr[unsafe_offset=k*3+2])
                 var inv = Float64(1) / Float64(n)
                 var img = _imagemap_affine(s, ti)
-                out = img.bias + img.scale * RGB(Float32(sr*inv), Float32(sg*inv), Float32(sb*inv))
+                out = (img.bias + img.scale * RGB(Float32(sr*inv), Float32(sg*inv), Float32(sb*inv))).clamp(Float32(0), Float32(1))
                 print("Note: subsurface \"reflectance\" is the texture '" + tname +
                       "'; the interior is one homogeneous medium, so its MEAN colour is used.")
                 _ = external_call["free_texture_rgb", Int32,
