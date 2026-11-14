@@ -212,5 +212,17 @@ def test_mix_of_two_constants_collapses_to_flat_albedo() raises:
     _ = s.unsafe_take_pointee(); s.unsafe_free()
 
 
+def test_imagemap_own_scale_reaches_reflectance() raises:
+    """Watercolor's dirt: `"imagemap" "float scale" .15` used directly as reflectance."""
+    var s = _state()
+    _tex(s, '"img" "spectrum" "imagemap" "float scale" .15 "string filename" [ "t.png" ]')
+    _mat(s, '"m" "string type" [ "diffuse" ] "texture reflectance" [ "img" ]')
+    var nm = s[unsafe_offset=0].named_materials[0]
+    assert_true(nm.tex_idx == Int32(0))
+    assert_true(_close(nm.tex_scale.r, Float32(0.15)))
+    assert_true(_close(nm.tex_bias.r, Float32(0)))
+    _ = s.unsafe_take_pointee(); s.unsafe_free()
+
+
 def main() raises:
     TestSuite.discover_tests[__functions_in_module()]().run()

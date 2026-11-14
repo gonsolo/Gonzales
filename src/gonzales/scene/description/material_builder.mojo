@@ -68,6 +68,15 @@ def _affine_const(c: RGB) -> _AffineTex:
     return _AffineTex(True, Int32(-1), RGB(Float32(0)), c)
 
 
+def _imagemap_affine(s: Pointer[SceneParseState, MutUntrackedOrigin], ti: Int) -> _AffineTex:
+    """Texture table entry `ti` with its imagemap's own "scale"/"invert"."""
+    var name = s[unsafe_offset=0].tex_names[ti]
+    for ii in range(len(s[unsafe_offset=0].img_tex_names)):
+        if s[unsafe_offset=0].img_tex_names[ii] == name:
+            return _AffineTex(True, Int32(ti), RGB(s[unsafe_offset=0].img_tex_scale[ii]), RGB(s[unsafe_offset=0].img_tex_bias[ii]))
+    return _AffineTex(True, Int32(ti), RGB(Float32(1)), RGB(Float32(0)))
+
+
 def _resolve_affine_rgb(s: Pointer[SceneParseState, MutUntrackedOrigin],
                         name: String, depth: Int) -> _AffineTex:
     """Fold a named texture -- possibly a nested scale/mix graph -- into one
@@ -82,7 +91,7 @@ def _resolve_affine_rgb(s: Pointer[SceneParseState, MutUntrackedOrigin],
 
     for ti in range(len(s[unsafe_offset=0].tex_names)):
         if s[unsafe_offset=0].tex_names[ti] == name:
-            return _AffineTex(True, Int32(ti), RGB(Float32(1)), RGB(Float32(0)))
+            return _imagemap_affine(s, ti)
 
     for ci in range(len(s[unsafe_offset=0].const_tex_names)):
         if s[unsafe_offset=0].const_tex_names[ci] == name:
@@ -339,7 +348,8 @@ def _sss_reflectance(s: Pointer[SceneParseState, MutUntrackedOrigin],
                 for k in range(n):
                     sr += Float64(ptr[unsafe_offset=k*3+0]); sg += Float64(ptr[unsafe_offset=k*3+1]); sb += Float64(ptr[unsafe_offset=k*3+2])
                 var inv = Float64(1) / Float64(n)
-                out = RGB(Float32(sr*inv), Float32(sg*inv), Float32(sb*inv))
+                var img = _imagemap_affine(s, ti)
+                out = img.bias + img.scale * RGB(Float32(sr*inv), Float32(sg*inv), Float32(sb*inv))
                 print("Note: subsurface \"reflectance\" is the texture '" + tname +
                       "'; the interior is one homogeneous medium, so its MEAN colour is used.")
                 _ = external_call["free_texture_rgb", Int32,
@@ -626,6 +636,10 @@ def _psc_handle_make_named_material(handle: Pointer[PbrtScanner, MutUntrackedOri
                         break
                     if s[unsafe_offset=0].tex_names[ti] == tex_name:
                         tex_idx_for_mat = Int32(ti)
+                        if ptex_file_for_mat == "":
+                            var img = _imagemap_affine(s, ti)
+                            tex_scale_for_mat = img.scale
+                            tex_bias_for_mat = img.bias
                         matched_tex = True
                         break
                 if not matched_tex:
@@ -928,6 +942,8 @@ def _psc_handle_make_named_material(handle: Pointer[PbrtScanner, MutUntrackedOri
         for ti in range(len(s[unsafe_offset=0].tex_names)):
             if s[unsafe_offset=0].tex_names[ti] == disp_tex:
                 bump_tex_idx_for_mat = Int32(ti)
+                if ptex_file_for_mat.byte_length() == 0:
+                    bump_scale_for_mat = _imagemap_affine(s, ti).scale.r
                 matched_disp = True
                 break
         if not matched_disp:
@@ -1020,6 +1036,9 @@ def _psc_handle_make_named_material(handle: Pointer[PbrtScanner, MutUntrackedOri
             for ti in range(len(s[unsafe_offset=0].tex_names)):
                 if s[unsafe_offset=0].tex_names[ti] == trans_tex:
                     tex_idx_for_mat = Int32(ti)
+                    var img = _imagemap_affine(s, ti)
+                    tex_scale_for_mat = img.scale
+                    tex_bias_for_mat = img.bias
                     dt_tex_lobes = Int8(2)
                     break
             for pti in range(len(s[unsafe_offset=0].ptex_tex_names)):

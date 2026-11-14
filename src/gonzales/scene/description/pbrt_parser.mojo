@@ -1696,6 +1696,12 @@ def handle_texture(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
         var file_str = scene_path(s[unsafe_offset=0].scene_dir, filename, "image texture")
         s[unsafe_offset=0].tex_names.append(name_str)
         s[unsafe_offset=0].tex_files.append(file_str)
+        var k = params.get_float("scale", Float32(1))
+        var inv = params.get_bool("invert", False)
+        if k != Float32(1) or inv:   # pbrt: invert ? 1 - scale * texel : scale * texel
+            s[unsafe_offset=0].img_tex_names.append(name_str)
+            s[unsafe_offset=0].img_tex_scale.append(-k if inv else k)
+            s[unsafe_offset=0].img_tex_bias.append(Float32(1) if inv else Float32(0))
 
 # ── ObjectBegin/ObjectEnd/ObjectInstance (two-level BVH instancing) ──────────
 # See geometry.mojo's Instance docs and bvh.mojo's traverse_bvh2_core
