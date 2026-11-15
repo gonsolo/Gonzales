@@ -1172,6 +1172,13 @@ def handle_bilinearmesh_shape(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
 
     var n_tris = Int32(len(idx) // 3)
     store_mesh(s, p.unsafe_ptr(), idx.unsafe_ptr(), n_pts, n_tris)
+    _psc_apply_shape_alpha(s, params)
+    var uv = params.take_floats("uv")
+    if len(uv) == 0 and n_pts == Int32(4):
+        uv = [Float32(0), 0, 1, 0, 0, 1, 1, 1]   # pbrt's single patch: p00, p10, p01, p11
+    if len(uv) >= Int(n_pts) * 2:
+        for ui in range(Int(n_pts) * 2):
+            s[unsafe_offset=0].meshes[len(s[unsafe_offset=0].meshes) - 1].uvs.append(uv[ui])
 
 def _psc_apply_shape_alpha(s: Pointer[SceneParseState, MutUntrackedOrigin],
                            params: ParameterDictionary):
