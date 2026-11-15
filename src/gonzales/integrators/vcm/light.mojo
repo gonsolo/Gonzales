@@ -228,7 +228,7 @@ def _bdpt_light_path_init[use_gpu: Bool](
             return _null_light_path_state()   # infinite-light dir sample had zero pdf
         var emit_dir = -env_dir
         var disk_pt = _sample_disk_perpendicular(emit_dir, center, radius, Point2f(pcg.next_float(), pcg.next_float()))
-        if not il.portal_admits(disk_pt, emit_dir):
+        if not il.portal_emits(disk_pt, emit_dir):
             return _null_light_path_state()
         # Same derivation as distant, but pdf_dir is the CDF's solid-angle pdf
         # instead of an implicit delta (=1): flux = radiance × disk_area × n_lights / pdf_dir.

@@ -79,3 +79,12 @@ def portal_ray_crosses(ray_org: Point3f, ray_dir: Vec3f, p0: Point3f, e1: Vec3f,
     var uu = dot(d, e1) / e1_sq
     var vv = dot(d, e2) / e2_sq
     return uu >= Float32(0) and uu <= Float32(1) and vv >= Float32(0) and vv <= Float32(1)
+
+
+@always_inline
+def portal_passes(origin: Point3f, dir: Vec3f, p0: Point3f, p1: Point3f, p3: Point3f, toward_light: Bool) -> Bool:
+    """Does light pass the portal along this ray? pbrt's portal is one-sided: its light travels against
+    portalFrame.z = p03 x p01, so a ray toward the light heads along it (an emitted one against it)."""
+    var (e1, e2, n, _) = portal_frame(p0, p1, p3)
+    var d = dot(dir, n)   # n = p01 x p03 = -portalFrame.z
+    return (d < Float32(0) if toward_light else d > Float32(0)) and portal_ray_crosses(origin, dir, p0, e1, e2, n)

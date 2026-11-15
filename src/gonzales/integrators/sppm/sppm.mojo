@@ -1305,7 +1305,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
             return
         var emit_dir = -env_dir
         var disk_pt = _sample_disk_perpendicular(emit_dir, center, radius, Point2f(pcg.next_float(), pcg.next_float()))
-        if not il.portal_admits(disk_pt, emit_dir):
+        if not il.portal_emits(disk_pt, emit_dir):
             return
         flux = spec_illum(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, env_rgb.r, env_rgb.g, env_rgb.b, ph_wavelengths) * (inv_pick * PI * radius * radius / pdf_dir) / Float32(n_emit)
         ro = disk_pt
