@@ -347,7 +347,8 @@ DEV_SRC = $(BUILD_DIR)/dev-src
 dev: $(MOJO_SRCS) pyproject.toml $(OIIO_BRIDGE_LIB) $(VIEWER_LIB) $(VULKANRT_LIB) $(VULKANINTEROP_LIB) $(RTCORE_LIB) $(XERT_LIB) $(OPTIXCURVES_LIB) $(NVDB_BRIDGE_LIB)
 	@mkdir -p $(DEV_SRC) && rsync -a --delete src/ $(DEV_SRC)/
 	@grep -rlE '^\s*@(always_inline|no_inline)' $(DEV_SRC) | xargs -r sed -i -E '/^\s*@(always_inline|no_inline)(\s|$$)/d'
-	uv run mojo build $(DEV_SRC)/gonzales/__init__.mojo -I $(DEV_SRC) -o $(BUILD_DIR)/gonzales_dev -D GZ_DEV=1 $(MOJO_BUILD_FLAGS) $(MOJO_LINK_FLAGS)
+	$(if $(INTEL),$(call PORT_SRC,$(DEV_SRC)))
+	$(RELEASE_ENV) uv run mojo build $(DEV_SRC)/gonzales/__init__.mojo -I $(DEV_SRC) -o $(BUILD_DIR)/gonzales_dev -D GZ_DEV=1 $(MOJO_BUILD_FLAGS) $(MOJO_LINK_FLAGS)
 # AMD RX 6800 (gfx1030): without CUDA the RT-core and interop bridges build as stubs
 release-amd:
 	$(MAKE) release BUILD_DIR=build-amd CUDA_HOME=/nonexistent MOJO_BUILD_FLAGS="--target-accelerator gfx1030"
@@ -537,9 +538,10 @@ smoketest: release
 
 ut: unittest
 # The HAL Mojo has _nvidia_cuda under _legacy; rewrite a copy so the working tree stays untouched
+PORT_SRC = @grep -rl 'max.gpu.host._nvidia_cuda' $(1) | xargs -r sed -i 's/max\.gpu\.host\._nvidia_cuda/max.gpu.host._legacy._nvidia_cuda/'
 unittest-intel-src:
 	@mkdir -p $(BUILD_DIR)/intel-src && rsync -a --delete src/ $(BUILD_DIR)/intel-src/
-	@grep -rl 'max.gpu.host._nvidia_cuda' $(BUILD_DIR)/intel-src | xargs -r sed -i 's/max\.gpu\.host\._nvidia_cuda/max.gpu.host._legacy._nvidia_cuda/'
+	$(call PORT_SRC,$(BUILD_DIR)/intel-src)
 # On the AMD card: test_gpu stays in; the CUDA interop and RT-core tests only have stubs there
 unittest-amd:
 	$(MAKE) unittest AMD=1 BUILD_DIR=build-amd CUDA_HOME=/nonexistent
