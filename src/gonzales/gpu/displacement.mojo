@@ -1,7 +1,7 @@
 """Displaced-triangle intersection as a batch kernel: the GPU check of scene/shapes/displacement.mojo, and its benchmark."""
 from max.gpu import block_dim, block_idx, thread_idx
 from gonzales.core.geometry import Vec3f
-from gonzales.scene.shapes.displacement import DisplacedMesh, intersect_displaced
+from gonzales.scene.shapes.displacement import DisplacedMesh, displaced_hit
 
 
 def intersect_displaced_batch_gpu(dm: Pointer[DisplacedMesh, MutUntrackedOrigin], rays: Pointer[Float32, MutUntrackedOrigin],
@@ -12,7 +12,6 @@ def intersect_displaced_batch_gpu(dm: Pointer[DisplacedMesh, MutUntrackedOrigin]
         return
     var o = Vec3f(rays[unsafe_offset=6 * i], rays[unsafe_offset=6 * i + 1], rays[unsafe_offset=6 * i + 2])
     var d = Vec3f(rays[unsafe_offset=6 * i + 3], rays[unsafe_offset=6 * i + 4], rays[unsafe_offset=6 * i + 5])
-    var m = dm[unsafe_offset=0]
-    var h = intersect_displaced(m.tris[unsafe_offset=0], m.rm, o, d, Float32(1e30))
-    res[unsafe_offset=2 * i] = Float32(1) if h.hit else Float32(0)
-    res[unsafe_offset=2 * i + 1] = h.t
+    var h = displaced_hit(dm, 0, o, d, Float32(1e30))
+    res[unsafe_offset=2 * i] = h[0]
+    res[unsafe_offset=2 * i + 1] = h[1]

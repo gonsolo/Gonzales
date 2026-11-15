@@ -661,3 +661,10 @@ def displaced_hit_normal(disp: Pointer[DisplacedMesh, MutUntrackedOrigin], base_
     var p0 = tri.p(tri.t[0], tri.t[1])
     var w = cross(tri.p(tri.t[2], tri.t[3]) - p0, tri.p(tri.t[4], tri.t[5]) - p0)
     return ns if dot(ns, w) >= Float32(0) else -ns
+
+
+@no_inline   # one copy per kernel, not one per traversal loop
+def displaced_hit(dm: Pointer[DisplacedMesh, MutUntrackedOrigin], tri: Int, o: Vec3f, d: Vec3f, tmax: Float32) -> SIMD[DType.float32, 4]:
+    """Triangle tri of dm as (hit, t, b1, b2); hit is 1 or 0."""
+    var h = intersect_displaced(dm[unsafe_offset=0].tris[unsafe_offset=tri], dm[unsafe_offset=0].rm, o, d, tmax)
+    return SIMD[DType.float32, 4](Float32(1) if h.hit else Float32(0), h.t, h.b1, h.b2)

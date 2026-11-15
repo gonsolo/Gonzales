@@ -18,7 +18,7 @@ from gonzales.scene.shapes.primitives import (
 )
 from gonzales.core.geometry import Ray
 from gonzales.scene.shapes.primitives import mesh_pos, mesh_point, surface_prim
-from gonzales.scene.shapes.displacement import intersect_displaced
+from gonzales.scene.shapes.displacement import displaced_hit
 from gonzales.scene.appearance.media import Medium, MediumInterface, Grid, NvdbGrid
 from gonzales.scene.appearance.lights import AreaLight, DistantLight, PointLight, InfiniteLight, LightSampler, il_rgb
 from gonzales.scene.shapes.curves import Curve, curve_at, CurveBvh, intersect_curve, CURVE_DEFER_K, curve_piece_endpoints, curve_view_frame, curve_hit_normal
@@ -1354,9 +1354,8 @@ def _mesh_tri_hit(
 @always_inline
 def _displaced_tri_hit(mesh: TriangleMesh, base_vidx: Int, ray_org: Vec3f, ray_dir: Vec3f, tMax: Float32) -> Tuple[Bool, Float32, Float32, Float32]:
     """A PrimId.type 9 triangle: the displaced surface over it (scene/shapes/displacement.mojo), as intersect_triangle answers."""
-    var dm = mesh.disp[unsafe_offset=0]
-    var h = intersect_displaced(dm.tris[unsafe_offset=base_vidx // 3], dm.rm, ray_org, ray_dir, tMax)
-    return (h.hit, h.t, h.b1, h.b2)
+    var h = displaced_hit(mesh.disp, base_vidx // 3, ray_org, ray_dir, tMax)
+    return (h[0] != Float32(0), h[1], h[2], h[3])
 
 # A merged template's triangles through wide nodes. Returns (hit, tHit, u, v, triangle).
 @always_inline
