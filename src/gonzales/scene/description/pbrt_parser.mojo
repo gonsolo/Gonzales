@@ -19,6 +19,7 @@ from gonzales.scene.description.parse_types import (SceneParseState, MeshAccum, 
 from gonzales.core.geometry import RGB, Point3f, Vec3f, dot, cross, PI, _is_real_ptr
 from gonzales.scene.appearance.materials import Material, MatKind, MeasuredBRDF
 from gonzales.scene.appearance.materials import GpuTexture, NormalSlopeMap, normal_slope_map_none
+from gonzales.scene.appearance.image_sample import _srgb_to_linear
 from gonzales.scene.appearance.host_textures import HostTextures, TexPrefetch, decode_host_textures, host_texture_table
 from gonzales.scene.shapes.primitives import Sphere, TriangleMesh, PrimId, Instance, encode_normal, mesh_points_floats
 from gonzales.scene.accel.quad_pack import quantise_quads
@@ -33,7 +34,7 @@ from gonzales.core.spectrum import SpectralHandle
 from gonzales.core.sampling import gaussian_norm, ThinLens
 from gonzales.scene.shapes.ply import load_ply
 from gonzales.scene.shapes.ply_prefetch import PlyPrefetch, scan_plys, load_all_plys
-from gonzales.scene.description.material_builder import _psc_handle_make_named_material, _psc_handle_named_material
+from gonzales.scene.description.material_builder import _psc_handle_make_named_material, _psc_handle_named_material, _imagemap_affine
 from gonzales.scene.appearance.measured_bsdf import load_measured_brdf_full
 from gonzales.scene.description.light_builder import _psc_handle_area_light_source, handle_light_source
 from gonzales.scene.description.scene_builder import store_mesh
@@ -1196,8 +1197,12 @@ def _psc_apply_shape_alpha(s: Pointer[SceneParseState, MutUntrackedOrigin],
         warn_unsupported("alpha texture", tex_name,
                          "only an imagemap can cut out a shape, so it renders opaque", "imagemap")
         return
+    var aff = _imagemap_affine(s, ti)
+    var k = aff.scale.r; var b = aff.bias.r
+    var srgb = file.endswith(".png") or file.endswith(".PNG")   # pbrt decodes an 8-bit png float texture as sRGB
+    var key = file + "|" + String(k) + "|" + String(b)
     for mi in range(len(s[unsafe_offset=0].alpha_mask_files)):
-        if s[unsafe_offset=0].alpha_mask_files[mi] == file:
+        if s[unsafe_offset=0].alpha_mask_files[mi] == key:
             ma.alpha_mask = Int32(mi)
             return
     var data = unsafe_alloc[Pointer[UInt8, MutUntrackedOrigin]](1)
@@ -1212,8 +1217,16 @@ def _psc_apply_shape_alpha(s: Pointer[SceneParseState, MutUntrackedOrigin],
         fname, data, wh, wh.unsafe_offset(1))
     fname.unsafe_free()
     if ok != Int32(0):
+        var lut = Array[UInt8, 256](fill=UInt8(0))
+        for v in range(256):
+            var a = Float32(v) / Float32(255)
+            a = min(max(b + k * (_srgb_to_linear(a) if srgb else a), Float32(0)), Float32(1))   # pbrt "scale"/"invert"
+            lut[v] = UInt8(Int(a * Float32(255) + Float32(0.5)))
+        var px = data[unsafe_offset=0]
+        for i in range(Int(wh[unsafe_offset=0]) * Int(wh[unsafe_offset=1])):
+            px[unsafe_offset=i] = lut[Int(px[unsafe_offset=i])]
         ma.alpha_mask = Int32(len(s[unsafe_offset=0].alpha_mask_files))
-        s[unsafe_offset=0].alpha_mask_files.append(file)
+        s[unsafe_offset=0].alpha_mask_files.append(key)
         s[unsafe_offset=0].alpha_mask_data.append(data[unsafe_offset=0])
         s[unsafe_offset=0].alpha_mask_w.append(wh[unsafe_offset=0])
         s[unsafe_offset=0].alpha_mask_h.append(wh[unsafe_offset=1])
