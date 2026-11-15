@@ -5,7 +5,7 @@ from std.testing import assert_true, TestSuite
 from gonzales.core.geometry import Vec3f
 from gonzales.core.rng import PCG32
 from gonzales.scene.shapes.displacement import (Rmip, rmip_build, displaced_tri, intersect_displaced,
-    intersect_displaced_brute)
+    intersect_displaced_brute, displaced_normal)
 
 comptime F2 = SIMD[DType.float32, 2]
 
@@ -75,6 +75,22 @@ def test_traversal_matches_brute_force() raises:
     var r3 = _compare(rm, 0.4, F2(3, 4), F2(33, 6), F2(8, 30), 3)
     assert_true(r1[0] > 100 and r2[0] > 100 and r3[0] > 100)
     assert_true(r1[1] == 0 and r2[1] == 0 and r3[1] == 0)
+    h.unsafe_free(); rm.tab.unsafe_free()
+
+
+def test_normal_of_a_ramp() raises:
+    # h = 0.1 * i on a flat triangle whose texel u runs along +x one unit per texel: normal (-0.1, 0, 1)
+    var w = 16; var hh = 16
+    var h = unsafe_alloc[Float32](w * hh)
+    for j in range(hh):
+        for i in range(w):
+            h[unsafe_offset=j * w + i] = Float32(0.1) * Float32(i)
+    var rm = rmip_build(h, w, hh)
+    var up = Vec3f(0, 0, 1)
+    var tri = displaced_tri(Vec3f(0, 0, 0), Vec3f(8, 0, 0), Vec3f(0, 8, 0), up, up, up, F2(2, 2), F2(10, 2), F2(2, 10), rm)
+    var n = displaced_normal(tri, rm, Float32(0.3), Float32(-0.2))
+    var e = Vec3f(-0.1, 0, 1).normalize()
+    assert_true(abs(n.x - e.x) < 1e-4 and abs(n.y - e.y) < 1e-4 and abs(n.z - e.z) < 1e-4)
     h.unsafe_free(); rm.tab.unsafe_free()
 
 

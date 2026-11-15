@@ -7,6 +7,7 @@ the projected ray is split until it spans a few texels, whose micro-triangles ar
 Texture coordinates are texel units, sample (i, j) at integer (i, j), the map repeating."""
 from std.math import sqrt, min, max, abs, floor, ceil
 from std.memory.alloc import unsafe_alloc
+from std.ffi import external_call
 from gonzales.core.geometry import Vec3f, cross, dot
 
 comptime MARCH = 2   # a bound this many texels wide is intersected texel by texel
@@ -113,6 +114,31 @@ def rmip_build(h: Pointer[Float32, MutUntrackedOrigin], w: Int, hh: Int) -> Rmip
                     tab[unsafe_offset=d] = min(tab[unsafe_offset=a], tab[unsafe_offset=c])
                     tab[unsafe_offset=d + 1] = max(tab[unsafe_offset=a + 1], tab[unsafe_offset=c + 1])
     return Rmip(h, tab, Int32(w), Int32(hh), Int32(b), Int32(rx), Int32(ry), Int32(lx), Int32(ly))
+
+
+def load_height_map(filename: String, scale: Float32, bias: Float32) -> Rmip:
+    """pbrt's float imagemap as heights: bias + scale * its red channel (an 8-bit png decoded as sRGB). w = 0 if unreadable."""
+    var n = filename.byte_length()
+    var cs = unsafe_alloc[UInt8](n + 1)
+    for k in range(n): cs[unsafe_offset=k] = filename.unsafe_ptr()[unsafe_offset=k]
+    cs[unsafe_offset=n] = UInt8(0)
+    var data = unsafe_alloc[Pointer[Float32, MutUntrackedOrigin]](1)
+    var wh = unsafe_alloc[Int32](2)
+    var ok = external_call["load_texture_rgb", Int32, Pointer[UInt8, MutUntrackedOrigin],
+        Pointer[Pointer[Float32, MutUntrackedOrigin], MutUntrackedOrigin], Pointer[Int32, MutUntrackedOrigin],
+        Pointer[Int32, MutUntrackedOrigin], Int32](cs, data, wh, wh.unsafe_offset(1), Int32(0))
+    cs.unsafe_free()
+    var w = Int(wh[unsafe_offset=0]); var hh = Int(wh[unsafe_offset=1])
+    var rgb = data[unsafe_offset=0]
+    data.unsafe_free(); wh.unsafe_free()
+    if ok == Int32(0) or w <= 0 or hh <= 0:
+        return Rmip(Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(), Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+                    0, 0, 1, 0, 0, 0, 0)
+    var h = unsafe_alloc[Float32](w * hh)
+    for k in range(w * hh):
+        h[unsafe_offset=k] = bias + scale * rgb[unsafe_offset=3 * k]
+    _ = external_call["free_texture_rgb", Int32, Pointer[Float32, MutUntrackedOrigin]](rgb)
+    return rmip_build(h, w, hh)
 
 
 # ── A displaced base triangle ────────────────────────────────────────────────
@@ -391,6 +417,8 @@ struct DisplacedHit(TrivialRegisterPassable):
     var b1: Float32    # base barycentrics
     var b2: Float32
     var ng: Vec3f      # the micro-triangle's normal (unnormalized)
+    var u: Float32     # local texel coordinates of the hit
+    var v: Float32
 
 
 @always_inline
@@ -460,12 +488,12 @@ def _march(tri: DisplacedTri, rm: Rmip, o: Vec3f, d: Vec3f, u0: Float32, u1: Flo
                 var bc = tri.bary(uv[0], uv[1])
                 comptime EPS = Float32(1e-4)
                 if bc[0] < -EPS or bc[1] < -EPS or bc[0] + bc[1] > Float32(1) + EPS: continue
-                best = DisplacedHit(True, t, bc[0], bc[1], cross(e1, e2))
+                best = DisplacedHit(True, t, bc[0], bc[1], cross(e1, e2), uv[0], uv[1])
 
 
 def intersect_displaced(tri: DisplacedTri, rm: Rmip, o: Vec3f, d: Vec3f, tmax: Float32) -> DisplacedHit:
     """The nearest hit of the displaced triangle in (0, tmax): RMIP's traversal (its Algorithm 1)."""
-    var best = DisplacedHit(False, tmax, 0, 0, Vec3f(0))
+    var best = DisplacedHit(False, tmax, 0, 0, Vec3f(0), 0, 0)
     var ph = prism_hits(tri, o, d)
     var ts = ph[0]; var cnt = ph[1]
     if cnt == 0: return best
@@ -553,8 +581,28 @@ def intersect_displaced(tri: DisplacedTri, rm: Rmip, o: Vec3f, d: Vec3f, tmax: F
 
 def intersect_displaced_brute(tri: DisplacedTri, rm: Rmip, o: Vec3f, d: Vec3f, tmax: Float32) -> DisplacedHit:
     """The same micro-triangles, all of them: the reference the traversal must reproduce."""
-    var best = DisplacedHit(False, tmax, 0, 0, Vec3f(0))
+    var best = DisplacedHit(False, tmax, 0, 0, Vec3f(0), 0, 0)
     var u0 = min(min(tri.t[0], tri.t[2]), tri.t[4]); var u1 = max(max(tri.t[0], tri.t[2]), tri.t[4])
     var v0 = min(min(tri.t[1], tri.t[3]), tri.t[5]); var v1 = max(max(tri.t[1], tri.t[3]), tri.t[5])
     _march(tri, rm, o, d, u0 - Float32(1), u1, v0 - Float32(1), v1, best)
     return best
+
+
+def _corner_normal(tri: DisplacedTri, rm: Rmip, i: Int, j: Int) -> Vec3f:
+    var su = tri.surface(rm, i + 1, j) - tri.surface(rm, i - 1, j)
+    var sv = tri.surface(rm, i, j + 1) - tri.surface(rm, i, j - 1)
+    var n = cross(su, sv)
+    return n if dot(n, tri.n(Float32(i) - tri.tc[0], Float32(j) - tri.tc[1])) >= Float32(0) else -n
+
+
+def displaced_normal(tri: DisplacedTri, rm: Rmip, u: Float32, v: Float32) -> Vec3f:
+    """The smooth shading normal at local (u, v): central-difference normals at the texel's corners, interpolated,
+    as pbrt recomputes vertex normals after displacing; unit, on the side of N."""
+    var x = u + tri.tc[0]; var y = v + tri.tc[1]
+    var i = Int(floor(x)); var j = Int(floor(y))
+    var fx = x - Float32(i); var fy = y - Float32(j)
+    var n = _corner_normal(tri, rm, i, j).normalize() * ((Float32(1) - fx) * (Float32(1) - fy)) \
+          + _corner_normal(tri, rm, i + 1, j).normalize() * (fx * (Float32(1) - fy)) \
+          + _corner_normal(tri, rm, i, j + 1).normalize() * ((Float32(1) - fx) * fy) \
+          + _corner_normal(tri, rm, i + 1, j + 1).normalize() * (fx * fy)
+    return n.normalize()
