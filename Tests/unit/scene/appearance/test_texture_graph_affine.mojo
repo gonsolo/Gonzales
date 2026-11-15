@@ -224,6 +224,16 @@ def test_imagemap_own_scale_reaches_reflectance() raises:
     _ = s.unsafe_take_pointee(); s.unsafe_free()
 
 
+def test_imagemap_uv_mapping_is_recorded() raises:
+    var s = _state()
+    _tex(s, '"a" "spectrum" "imagemap" "string filename" [ "a.png" ]')
+    _tex(s, '"b" "spectrum" "imagemap" "float uscale" 4 "float vscale" 2 "float vdelta" .5 "string filename" [ "b.png" ]')
+    assert_true(len(s[unsafe_offset=0].uv_tex_idx) == 1 and s[unsafe_offset=0].uv_tex_idx[0] == 1)
+    var m = s[unsafe_offset=0].uv_tex_map.copy()
+    assert_true(_close(m[0], 4) and _close(m[1], 2) and _close(m[2], 0) and _close(m[3], 0.5))
+    _ = s.unsafe_take_pointee(); s.unsafe_free()
+
+
 def test_imagemap_scale_reaches_roughness() raises:
     """Watercolor's concrete floor: a roughness map with `"float scale" .2`."""
     var s = _state()

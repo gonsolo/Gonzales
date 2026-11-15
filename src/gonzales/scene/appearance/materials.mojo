@@ -396,6 +396,7 @@ struct GpuTexture(TrivialRegisterPassable):
     comptime FORMAT_U8 = 1    # data holds UInt8, decoded to linear through lut
     comptime FORMAT_PTEX = 2  # packed Ptex: width = face count, height = paging id or -1; data = 8-byte face table + bordered RGB8 mip chains (see oiio.cc)
     comptime FORMAT_SHADER = 3  # a node-graph program (shader.mojo): width = its Int32 word count
+    comptime UV_IDENTITY = SIMD[DType.float32, 4](1, 1, 0, 0)
     var data: Pointer[UInt8, MutUntrackedOrigin]    # device pointer: full mip pyramid, contiguous
     var lut: Pointer[Float32, MutUntrackedOrigin]   # device pointer: 256-entry byte -> linear table (FORMAT_U8 only)
     var pool: Pointer[UInt8, MutUntrackedOrigin]    # FORMAT_PTEX: the shared page pool (demand-loaded faces)
@@ -404,6 +405,7 @@ struct GpuTexture(TrivialRegisterPassable):
     var n_levels: Int32                                  # number of mip levels stored in `data` (>=1)
     var channels: Int32                                  # stored channels per texel: 1 (replicated to RGB) or 3
     var format: Int32                                    # FORMAT_F32 or FORMAT_U8
+    var uv_map: SIMD[DType.float32, 4]   # pbrt UVMapping: su, sv, du, dv
 
 @fieldwise_init
 struct NormalSlopeMap(TrivialRegisterPassable):

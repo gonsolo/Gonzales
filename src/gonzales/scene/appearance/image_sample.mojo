@@ -1,5 +1,5 @@
 """Bilinear and trilinear lookups in one image of the texture table."""
-from std.math import floor, log2
+from std.math import abs, floor, log2
 from gonzales.core.geometry import RGB
 from gonzales.scene.appearance.materials import GpuTexture
 
@@ -95,3 +95,11 @@ def _footprint_lod(tex: GpuTexture, width: Float32) -> Float32:
     if texels > Float32(1.0):
         return floor(log2(texels))
     return Float32(0.0)
+
+
+# pbrt's UVMapping then its V-flip: s = su*u + du, t = 1 - (sv*v + dv); the footprint scales with the mapping.
+@always_inline
+def sample_image(tex: GpuTexture, u: Float32, v: Float32, fp_width: Float32) -> RGB:
+    var m = tex.uv_map
+    var w = fp_width * max(abs(m[0]), abs(m[1]))
+    return _sample_tex(tex, m[0] * u + m[2], Float32(1) - (m[1] * v + m[3]), _footprint_lod(tex, w))

@@ -8,7 +8,7 @@ from std.math import sqrt, floor, ceil, sin, cos, exp, log, abs, min, max
 from std.memory import bitcast
 from gonzales.core.geometry import _atan2f
 from gonzales.scene.appearance.materials import GpuTexture
-from gonzales.scene.appearance.image_sample import _sample_tex, _footprint_lod
+from gonzales.scene.appearance.image_sample import sample_image
 
 comptime F4 = SIMD[DType.float32, 4]
 comptime SHADER_STRIDE = 8
@@ -416,7 +416,7 @@ def _image(textures: Pointer[GpuTexture, MutUntrackedOrigin], n_textures: Int, t
     elif ext == ImageExt.mirror:
         u = Float32(1) - abs(Float32(1) - u + Float32(2) * floor(u * Float32(0.5)))
         v = Float32(1) - abs(Float32(1) - v + Float32(2) * floor(v * Float32(0.5)))
-    var c = _sample_tex(tex, u, Float32(1) - v, _footprint_lod(tex, fp_width))
+    var c = sample_image(tex, u, v, fp_width)
     return F4(c.r, c.g, c.b, 1)
 
 

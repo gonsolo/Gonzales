@@ -334,6 +334,9 @@ struct SceneParseState(Movable):
     var img_tex_names: List[String]
     var img_tex_scale: List[Float32]
     var img_tex_bias:  List[Float32]
+    # imagemap uv mapping (uscale, vscale, udelta, vdelta) by tex_files index; only non-identity entries
+    var uv_tex_idx: List[Int]
+    var uv_tex_map: List[Float32]
     # Alpha cut-out masks (see TriangleMesh.alpha), one per distinct file,
     # loaded once however many shapes name it. MeshAccum.alpha_mask indexes
     # these; the byte buffers are owned by the parsed scene for its lifetime.
@@ -528,6 +531,8 @@ struct SceneParseState(Movable):
         self.img_tex_names = List[String]()
         self.img_tex_scale = List[Float32]()
         self.img_tex_bias = List[Float32]()
+        self.uv_tex_idx = List[Int]()
+        self.uv_tex_map = List[Float32]()
         self.alpha_mask_files = List[String]()
         self.alpha_mask_data  = List[Pointer[UInt8, MutUntrackedOrigin]]()
         self.alpha_mask_w     = List[Int32]()

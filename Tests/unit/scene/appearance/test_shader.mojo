@@ -174,7 +174,7 @@ def test_image() raises:
             data[unsafe_offset=3 * (2 * y + x) + 2] = Float32(0.5)
     var tex = unsafe_alloc[GpuTexture](1)
     tex[unsafe_offset=0] = GpuTexture(data.unsafe_bitcast[UInt8](), Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-                                      Pointer[UInt8, MutUntrackedOrigin].unsafe_dangling(), 2, 2, 1, 3, Int32(GpuTexture.FORMAT_F32))
+                                      Pointer[UInt8, MutUntrackedOrigin].unsafe_dangling(), 2, 2, 1, 3, Int32(GpuTexture.FORMAT_F32), GpuTexture.UV_IDENTITY)
     var p = Prog()
     p.op(ShaderOp.uv, 0)
     p.op(ShaderOp.image, 1, 0, i0=0)
