@@ -6,7 +6,7 @@ RAMP and CURVES are followed by i0 RGBA table entries. Registers hold four float
 The Blender add-on compiles node trees to it (src/hdgonzales/blender/shader.py)."""
 from std.math import sqrt, floor, ceil, sin, cos, exp, log, abs, min, max
 from std.memory import bitcast
-from gonzales.core.geometry import _atan2f
+from gonzales.core.geometry import _atan2f, Vec3f
 from gonzales.scene.appearance.materials import GpuTexture
 from gonzales.scene.appearance.image_sample import sample_image
 
@@ -401,7 +401,7 @@ def _table(data: Pointer[Int32, MutUntrackedOrigin], n: Int, x: Float32, lane: I
 
 
 def _image(textures: Pointer[GpuTexture, MutUntrackedOrigin], n_textures: Int, ti: Int, flags: Int32, uv: F4,
-           fp_width: Float32) -> F4:
+           fp_width: Float32, p: Vec3f) -> F4:
     if ti < 0 or ti >= n_textures:
         return F4(0)
     var tex = textures[unsafe_offset=ti]
@@ -416,7 +416,7 @@ def _image(textures: Pointer[GpuTexture, MutUntrackedOrigin], n_textures: Int, t
     elif ext == ImageExt.mirror:
         u = Float32(1) - abs(Float32(1) - u + Float32(2) * floor(u * Float32(0.5)))
         v = Float32(1) - abs(Float32(1) - v + Float32(2) * floor(v * Float32(0.5)))
-    var c = sample_image(tex, u, v, fp_width)
+    var c = sample_image(tex, u, v, fp_width, p)
     return F4(c.r, c.g, c.b, 1)
 
 
@@ -442,8 +442,8 @@ def _set_reg(mut regs: RegFile, i: Int, v: F4):
 
 @no_inline   # one copy per kernel; inlined at every texture lookup it would multiply the shading kernels' size
 def eval_shader(code: Pointer[Int32, MutUntrackedOrigin], n_words: Int, u: Float32, v: Float32, fp_width: Float32,
-                textures: Pointer[GpuTexture, MutUntrackedOrigin], n_textures: Int) -> F4:
-    """Runs a program at texture coordinates (u, v); returns its output register."""
+                textures: Pointer[GpuTexture, MutUntrackedOrigin], n_textures: Int, p: Vec3f = Vec3f(0, 0, 0)) -> F4:
+    """Runs a program at texture coordinates (u, v) and world point p; returns its output register."""
     var regs = RegFile(0)
     var pc = 1
     while pc + SHADER_STRIDE <= n_words:
@@ -462,7 +462,7 @@ def eval_shader(code: Pointer[Int32, MutUntrackedOrigin], n_words: Int, u: Float
         elif op == ShaderOp.uv:
             r = F4(u, v, 0, 1)
         elif op == ShaderOp.image:
-            r = _image(textures, n_textures, Int(i0), i1, a, fp_width)
+            r = _image(textures, n_textures, Int(i0), i1, a, fp_width, p)
         elif op == ShaderOp.math:
             comptime for k in range(4):
                 var x = _math(Int(i0), a[k], b[k], c[k])
@@ -538,6 +538,6 @@ def eval_shader(code: Pointer[Int32, MutUntrackedOrigin], n_words: Int, u: Float
 
 @always_inline
 def sample_shader(tex: GpuTexture, u: Float32, v: Float32, fp_width: Float32,
-                  textures: Pointer[GpuTexture, MutUntrackedOrigin], n_textures: Int) -> F4:
+                  textures: Pointer[GpuTexture, MutUntrackedOrigin], n_textures: Int, p: Vec3f = Vec3f(0, 0, 0)) -> F4:
     """A shader texture at (u, v): Blender's convention, v up."""
-    return eval_shader(tex.data.unsafe_bitcast[Int32](), Int(tex.width), u, v, fp_width, textures, n_textures)
+    return eval_shader(tex.data.unsafe_bitcast[Int32](), Int(tex.width), u, v, fp_width, textures, n_textures, p)

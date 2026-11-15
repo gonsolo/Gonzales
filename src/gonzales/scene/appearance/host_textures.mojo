@@ -433,7 +433,7 @@ def decode_host_textures(
 
 # The table shading.mojo samples, for the CPU renderer: entries point straight
 # at the host pyramids, which must outlive it.
-def host_texture_table(ht: HostTextures, tex_uv: Pointer[Float32, MutUntrackedOrigin]) -> Pointer[GpuTexture, MutUntrackedOrigin]:
+def host_texture_table(ht: HostTextures, tex_map: Pointer[Float32, MutUntrackedOrigin]) -> Pointer[GpuTexture, MutUntrackedOrigin]:
     var table = unsafe_alloc[GpuTexture](max(ht.count, 1))
     for ti in range(ht.count):
         if ht.dup_of[unsafe_offset=ti] != Int32(-1):
@@ -447,11 +447,11 @@ def host_texture_table(ht: HostTextures, tex_uv: Pointer[Float32, MutUntrackedOr
             continue
         table[unsafe_offset=ti] = GpuTexture(t.data, ht.lut.unsafe_offset(Int(t.lut_off)), Pointer[UInt8, MutUntrackedOrigin].unsafe_dangling(),
             t.width, t.height, t.n_levels, t.channels, t.format, GpuTexture.UV_IDENTITY)
-    set_uv_maps(table, tex_uv, ht.count)
+    set_tex_maps(table, tex_map, ht.count)
     return table.unsafe_origin_cast[MutUntrackedOrigin]()
 
 
-def set_uv_maps(table: Pointer[GpuTexture, MutUntrackedOrigin], tex_uv: Pointer[Float32, MutUntrackedOrigin], n: Int):
+def set_tex_maps(table: Pointer[GpuTexture, MutUntrackedOrigin], tex_map: Pointer[Float32, MutUntrackedOrigin], n: Int):
     for ti in range(n):
-        for c in range(4):
-            table[unsafe_offset=ti].uv_map[c] = tex_uv[unsafe_offset=4 * ti + c]
+        for c in range(16):
+            table[unsafe_offset=ti].map[c] = tex_map[unsafe_offset=16 * ti + c]

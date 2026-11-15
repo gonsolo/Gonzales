@@ -20,7 +20,7 @@ from gonzales.transport.restir_di import ReservoirIO, reservoir_io_null
 from gonzales.transport.restir_gi import gi_target_pdf, gi_temporal_spatial_combine
 from gonzales.integrators.pt.restir_sms import SMSReservoirIO, sms_reservoir_io_null
 from gonzales.transport.surface import sss_texel_tint
-from gonzales.transport.texturing import _apply_surface_maps, _tex_lookup, sample_texture, rough_texture_alpha
+from gonzales.transport.texturing import _apply_surface_maps, _tex_lookup, sample_texture, rough_texture_alpha, hit_point
 from gonzales.transport.shade_context import GIPendingX1, ShadeContext
 from gonzales.transport.manifold import _interp_vertex_normal
 from gonzales.integrators.pt.common import _shading_normal, _curve_extra_offset, _hit_geom, _to_spec_refl, _clamped, _to_spec_illum, _shadow_inline, _shadow_blocked, _shadow_contribute, RR_THROUGHPUT_CLAMP, BOUNCE_DIFFUSE, BOUNCE_GLOSSY, BOUNCE_TRANSMIT, _count_bounce, _apply_russian_roulette, spawn_origin, _finish_delta_bounce, _apply_normal_map_sphere, _pt_hit_footprint, _build_geom_context_full, _draw_sobol_8
@@ -733,7 +733,7 @@ def shade_conductor[use_gpu: Bool, enqueue_shadow: Bool](
             var uv_v = bw0*mesh_uv(mesh, v0)[1] + inter.u*mesh_uv(mesh, v1)[1] + inter.v*mesh_uv(mesh, v2)[1]
             var found = False
             var rtex = sample_texture[use_gpu](Int(mat_eff.rough_tex_idx), uv_u, uv_v, True, Float32(0.0),
-                ctx.tex_filenames, ctx.textures, ctx.n_textures, found)
+                ctx.tex_filenames, ctx.textures, ctx.n_textures, found, p=hit_point(mesh, v0, v1, v2, inter))
             if found:
                 # Perceptual roughness -> GGX alpha, the default remaproughness=true.
                 var r = sqrt(max(mat_eff.rough_bias + mat_eff.rough_scale * rtex.luma(), Float32(0.0)))

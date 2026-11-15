@@ -21,7 +21,7 @@ from gonzales.core.spectrum import SpectralHandle
 from gonzales.scene.accel.rtcore import rtcore_device_free, rtcore_host_register, rtcore_device_total
 from gonzales.scene.accel.xert import xert_alignment, xert_heat_path
 from gonzales.scene.description.pbrt_parser import ParsedScene_Mojo
-from gonzales.scene.appearance.host_textures import decode_host_textures, set_uv_maps
+from gonzales.scene.appearance.host_textures import decode_host_textures, set_tex_maps
 from gonzales.scene.appearance.ptex_cache import PtexCache, PTEX_QUEUE_CAP
 from gonzales.transport.restir_di import DIReservoir
 from gonzales.integrators.pt.restir_vol import VolReservoir
@@ -436,7 +436,7 @@ struct TextureBuffers(Movable):
             gpu_textures_host[unsafe_offset=ti] = GpuTexture(_gpu_upload_owned[UInt8](ctx, tex_data_bufs, ht.data, ht.n_bytes),
                 lut, pool_dev, ht.width, height, ht.n_levels, ht.channels, ht.format, GpuTexture.UV_IDENTITY)
             tex_bytes += ht.n_bytes
-        set_uv_maps(gpu_textures_host, s.tex_uv, n_textures_int)
+        set_tex_maps(gpu_textures_host, s.tex_map, n_textures_int)
         var textures_gpu_buf = _gpu_upload_array[GpuTexture](ctx, gpu_textures_host, n_textures_int)
         # The uploads above are asynchronous; free their host sources once they're done.
         ctx.synchronize()

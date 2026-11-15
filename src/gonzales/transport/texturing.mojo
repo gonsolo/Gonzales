@@ -7,7 +7,7 @@ from std.memory.alloc import unsafe_alloc
 from gonzales.core.geometry import RGB, Vec3f, dot, cross, Frame, _is_real_ptr
 from gonzales.scene.appearance.materials import Material, MatKind, reflectance_f0
 from gonzales.scene.appearance.materials import GpuTexture
-from gonzales.scene.shapes.primitives import Intersection, TriangleMesh, Instance, mesh_uv, mesh_has_uvs, mesh_vi, mesh_face
+from gonzales.scene.shapes.primitives import Intersection, TriangleMesh, Instance, mesh_uv, mesh_has_uvs, mesh_vi, mesh_face, mesh_pos
 from gonzales.scene.appearance.footprint import CameraFootprint, UVFootprint, TriWorld, tri_world, hit_uv_footprint
 from gonzales.scene.appearance.image_sample import _srgb_to_linear, sample_image
 from gonzales.scene.appearance.shader import sample_shader, is_shader_name
@@ -135,6 +135,7 @@ def sample_texture[use_gpu: Bool](
     n_textures: Int,
     mut found: Bool,
     ptex_face: Int = 0,   # Ptex textures only: the hit triangle's face id; (u, v) are then the face's own
+    p: Vec3f = Vec3f(0, 0, 0),   # the hit point, for planar/cylindrical/spherical mappings
 ) -> RGB:
     found = False
     if tex_idx < 0:
@@ -150,9 +151,9 @@ def sample_texture[use_gpu: Bool](
                 var pc = _sample_ptex(tex, ptex_face, u, v, fp_width)
                 return RGB((pc.r + pc.g + pc.b) * Float32(1.0 / 3.0))
             if Int(tex.format) == GpuTexture.FORMAT_SHADER:
-                var sc = sample_shader(tex, u, v, fp_width, textures, n_textures)
+                var sc = sample_shader(tex, u, v, fp_width, textures, n_textures, p)
                 return RGB(sc[0], sc[1], sc[2])
-            return sample_image(tex, u, v, fp_width)
+            return sample_image(tex, u, v, fp_width, p)
     comptime if not use_gpu:
         if n_textures == 0 and Int(tex_filenames) > 1:
             var filename = tex_filenames[unsafe_offset=tex_idx]
@@ -176,6 +177,11 @@ def sample_texture[use_gpu: Bool](
 
 
 @always_inline
+def hit_point(mesh: TriangleMesh, v0: Int, v1: Int, v2: Int, inter: Intersection) -> Vec3f:
+    """The hit on the mesh triangle, in the mesh's space (world unless instanced)."""
+    return mesh_pos(mesh, v0) * (Float32(1) - inter.u - inter.v) + mesh_pos(mesh, v1) * inter.u + mesh_pos(mesh, v2) * inter.v
+
+
 @always_inline
 def _albedo_affine(mat: Material, t: RGB) -> RGB:
     """tex_bias + tex_scale * texel, clamped to [0, 1] as pbrt clamps an albedo texture; a coated metal's is its F0."""
@@ -236,11 +242,12 @@ def _tex_lookup[use_gpu: Bool](
                 su = w0*mesh_uv(mesh, v0)[0]   + inter.u*mesh_uv(mesh, v1)[0]   + inter.v*mesh_uv(mesh, v2)[0]
                 tv = w0*mesh_uv(mesh, v0)[1] + inter.u*mesh_uv(mesh, v1)[1] + inter.v*mesh_uv(mesh, v2)[1]
             var t: RGB
+            var p = hit_point(mesh, v0, v1, v2, inter)
             if Int(tex.format) == GpuTexture.FORMAT_SHADER:
-                var sc = sample_shader(tex, su, tv, fp_width, textures, n_textures)
+                var sc = sample_shader(tex, su, tv, fp_width, textures, n_textures, p)
                 t = RGB(sc[0], sc[1], sc[2])
             else:
-                t = sample_image(tex, su, tv, fp_width)
+                t = sample_image(tex, su, tv, fp_width, p)
             # bias + scale*texel is pbrt's "scale"/"mix" texture graph
             # folded into the lookup (scale=1, bias=0 when absent) --
             # see material_builder.mojo's _resolve_affine_rgb.
@@ -288,7 +295,8 @@ def rough_texture_alpha[use_gpu: Bool](
         su = w0*mesh_uv(mesh, v0)[0] + inter.u*mesh_uv(mesh, v1)[0] + inter.v*mesh_uv(mesh, v2)[0]
         sv = w0*mesh_uv(mesh, v0)[1] + inter.u*mesh_uv(mesh, v1)[1] + inter.v*mesh_uv(mesh, v2)[1]
     var found = False
-    var t = sample_texture[use_gpu](Int(mat.rough_tex_idx), su, sv, True, Float32(0.0), tex_filenames, textures, n_textures, found)
+    var t = sample_texture[use_gpu](Int(mat.rough_tex_idx), su, sv, True, Float32(0.0), tex_filenames, textures, n_textures, found,
+                                    p=hit_point(mesh, v0, v1, v2, inter))
     return sqrt(max(mat.rough_bias + mat.rough_scale * t.luma(), Float32(0.0))) if found else Float32(0.0)
 
 
@@ -702,5 +710,5 @@ def mix_amount_at[use_gpu: Bool](
         sv = w0 * mesh_uv(mesh, v0)[1] + inter.u * mesh_uv(mesh, v1)[1] + inter.v * mesh_uv(mesh, v2)[1]
     var found = False
     var t = sample_texture[use_gpu](Int(mat.rough_tex_idx), su, sv, True, Float32(0.0), tex_filenames, textures, n_textures,
-                                    found)
+                                    found, p=hit_point(mesh, v0, v1, v2, inter))
     return mat.rough_bias + mat.rough_scale * t.luma() if found else mat.roughU

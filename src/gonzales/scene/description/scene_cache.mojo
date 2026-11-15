@@ -24,7 +24,7 @@ from gonzales.scene.appearance.host_textures import TexPrefetch
 from gonzales.core.fast_io import read_parallel, PARALLEL_MIN
 
 comptime _MAGIC: Int = 0x474E5A53434143
-comptime _FORMAT: Int = 12   # 12: texture uv mappings
+comptime _FORMAT: Int = 13   # 13: texture mappings
 
 comptime _Ptr = Pointer[UInt8, MutUntrackedOrigin]
 
@@ -258,7 +258,7 @@ def scene_cache_save(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin], cache_p
     _put_int(f, Int(s.tex_count))
     for ti in range(Int(s.tex_count)):
         _put_cstr(f, s.tex_filenames[unsafe_offset=ti])
-    _put[Float32](f, s.tex_uv, 4 * Int(s.tex_count))
+    _put[Float32](f, s.tex_map, 16 * Int(s.tex_count))
     _put_int(f, _MAGIC)
     _fclose(f)
     print("scene cache: written in " + String(Float64(perf_counter_ns() - t0) / 1.0e9) + " s")
@@ -389,7 +389,7 @@ def scene_cache_load(cache_path: _Ptr, scene_path: _Ptr) -> Pointer[ParsedScene_
     s.tex_filenames = unsafe_alloc[_Ptr](max(n_tex, 1))
     for ti in range(n_tex):
         s.tex_filenames[unsafe_offset=ti] = _get_cstr(f)
-    s.tex_uv = _get[Float32](f, 4 * n_tex)
+    s.tex_map = _get[Float32](f, 16 * n_tex)
     s.nmaps = Pointer[NormalSlopeMap, MutUntrackedOrigin].unsafe_dangling()
     if n_tex > 0:
         s.nmaps = unsafe_alloc[NormalSlopeMap](n_tex)

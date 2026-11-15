@@ -108,7 +108,7 @@ struct ParsedScene_Mojo:
     var sppm_photons_per_iter:  Int32    # -1 = not specified by scene; pbrt itself defaults to film_w*film_h
     var tex_filenames:    Pointer[Pointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin]
     var tex_count:        Int32
-    var tex_uv:           Pointer[Float32, MutUntrackedOrigin]   # 4 per texture: pbrt uv mapping su, sv, du, dv
+    var tex_map:          Pointer[Float32, MutUntrackedOrigin]   # 16 per texture: GpuTexture.map
     # Parallel to `tex_filenames`: the slope-space form of every texture some
     # material uses as a NORMAL map, for the SMS/MNEE manifold walk (see
     # geometry.mojo's NormalSlopeMap). Entries for other textures have
@@ -1703,14 +1703,44 @@ def handle_texture(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
             s[unsafe_offset=0].img_tex_names.append(name_str)
             s[unsafe_offset=0].img_tex_scale.append(-k if inv else k)
             s[unsafe_offset=0].img_tex_bias.append(Float32(1) if inv else Float32(0))
-        var mapping = params.get_string("mapping", "uv")
-        if mapping != "uv":
-            warn_unsupported_in("texture mapping", mapping, "texture", name_str, "it maps by the mesh uv", "uv")
-        var uvm = SIMD[DType.float32, 4](params.get_float("uscale", Float32(1)), params.get_float("vscale", Float32(1)),
-                                         params.get_float("udelta", Float32(0)), params.get_float("vdelta", Float32(0)))
-        if uvm != SIMD[DType.float32, 4](1, 1, 0, 0):
-            s[unsafe_offset=0].uv_tex_idx.append(len(s[unsafe_offset=0].tex_files) - 1)
-            for k in range(4): s[unsafe_offset=0].uv_tex_map.append(uvm[k])
+        var m = _texture_mapping(s, params, name_str)
+        if m != GpuTexture.UV_IDENTITY:
+            s[unsafe_offset=0].map_tex_idx.append(len(s[unsafe_offset=0].tex_files) - 1)
+            for c in range(16): s[unsafe_offset=0].map_tex_map.append(m[c])
+
+
+def _texture_mapping(s: Pointer[SceneParseState, MutUntrackedOrigin], params: ParameterDictionary, name: String) -> SIMD[DType.float32, 16]:
+    """pbrt's TextureMapping2D as GpuTexture.map; the non-uv kinds read the hit point in the CTM's space."""
+    var m = GpuTexture.UV_IDENTITY
+    var du = params.get_float("udelta", Float32(0))
+    var dv = params.get_float("vdelta", Float32(0))
+    var mapping = params.get_string("mapping", "uv")
+    if mapping == "uv":
+        m[0] = params.get_float("uscale", Float32(1)); m[1] = params.get_float("vscale", Float32(1)); m[2] = du; m[3] = dv
+        return m
+    if mapping != "planar" and mapping != "cylindrical" and mapping != "spherical":
+        warn_unsupported_in("texture mapping", mapping, "texture", name, "it maps by the mesh uv", "uv, planar, cylindrical, spherical")
+        return m
+    var tfw = unsafe_alloc[Float32](16)
+    _ = matrix_invert(s[unsafe_offset=0].ctm.unsafe_ptr(), tfw)   # texture from world, column-major
+    if mapping == "planar":
+        var v1 = params.get_floats("v1"); var v2 = params.get_floats("v2")
+        if len(v1) < 3: v1 = [Float32(1), Float32(0), Float32(0)]
+        if len(v2) < 3: v2 = [Float32(0), Float32(1), Float32(0)]
+        m = SIMD[DType.float32, 16](0)
+        m[3] = du; m[7] = dv
+        for j in range(4):   # s = du + v1 . (texture-from-world p), t likewise
+            for i in range(3):
+                m[j] += v1[i] * tfw[unsafe_offset=4 * j + i]
+                m[4 + j] += v2[i] * tfw[unsafe_offset=4 * j + i]
+        m[15] = Float32(GpuTexture.MAP_PLANAR)
+    else:
+        for i in range(3):
+            for j in range(4):
+                m[4 * i + j] = tfw[unsafe_offset=4 * j + i]
+        m[15] = Float32(GpuTexture.MAP_CYLINDRICAL if mapping == "cylindrical" else GpuTexture.MAP_SPHERICAL)
+    tfw.unsafe_free()
+    return m
 
 # ── ObjectBegin/ObjectEnd/ObjectInstance (two-level BVH instancing) ──────────
 # See geometry.mojo's Instance docs and bvh.mojo's traverse_bvh2_core
@@ -3650,12 +3680,12 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
         for ci in range(slen): copy[unsafe_offset=ci] = fstr.unsafe_ptr()[unsafe_offset=ci]
         copy[unsafe_offset=slen] = UInt8(0)
         tex_ptrs[unsafe_offset=ti] = copy
-    var tex_uv = unsafe_alloc[Float32](4 * max(n_tex, 1))
+    var tex_map = unsafe_alloc[Float32](16 * max(n_tex, 1))
     for ti in range(n_tex):
-        for c in range(4): tex_uv[unsafe_offset=4 * ti + c] = Float32(1) if c < 2 else Float32(0)
-    for k in range(len(s[unsafe_offset=0].uv_tex_idx)):
-        for c in range(4):
-            tex_uv[unsafe_offset=4 * s[unsafe_offset=0].uv_tex_idx[k] + c] = s[unsafe_offset=0].uv_tex_map[4 * k + c]
+        for c in range(16): tex_map[unsafe_offset=16 * ti + c] = GpuTexture.UV_IDENTITY[c]
+    for k in range(len(s[unsafe_offset=0].map_tex_idx)):
+        for c in range(16):
+            tex_map[unsafe_offset=16 * s[unsafe_offset=0].map_tex_idx[k] + c] = s[unsafe_offset=0].map_tex_map[16 * k + c]
 
     # ---- Fill output struct ----
     psc[unsafe_offset=0].materials        = mats
@@ -3733,7 +3763,7 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
     psc[unsafe_offset=0].sppm_photons_per_iter = s[unsafe_offset=0].sppm_photons_per_iter
     psc[unsafe_offset=0].tex_filenames    = tex_ptrs
     psc[unsafe_offset=0].tex_count        = Int32(n_tex)
-    psc[unsafe_offset=0].tex_uv           = tex_uv
+    psc[unsafe_offset=0].tex_map          = tex_map
     psc[unsafe_offset=0].host_textures    = Pointer[GpuTexture, MutUntrackedOrigin].unsafe_dangling()
     psc[unsafe_offset=0].tex_prefetch     = Pointer[TexPrefetch, MutUntrackedOrigin].unsafe_dangling()
 
@@ -4386,7 +4416,7 @@ def mojo_parsed_free(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin]):
                 psc[unsafe_offset=0].nmaps[unsafe_offset=ti].slopes.unsafe_free()
         psc[unsafe_offset=0].nmaps.unsafe_free()
         psc[unsafe_offset=0].tex_filenames.unsafe_free()
-        psc[unsafe_offset=0].tex_uv.unsafe_free()
+        psc[unsafe_offset=0].tex_map.unsafe_free()
         if _is_real_ptr(psc[unsafe_offset=0].host_textures):
             psc[unsafe_offset=0].host_textures.unsafe_free()
             psc[unsafe_offset=0].host_tex_pixels.free_pixels()
@@ -4629,7 +4659,7 @@ def mojo_parsed_scene_descriptor(
                                                psc[unsafe_offset=0].materials, Int(psc[unsafe_offset=0].material_count),
                                                psc[unsafe_offset=0].tex_prefetch)
             psc[unsafe_offset=0].host_tex_pixels = decoded
-            psc[unsafe_offset=0].host_textures = host_texture_table(decoded, psc[unsafe_offset=0].tex_uv)
+            psc[unsafe_offset=0].host_textures = host_texture_table(decoded, psc[unsafe_offset=0].tex_map)
         sd[unsafe_offset=0].gpuTextures      = psc[unsafe_offset=0].host_textures
         sd[unsafe_offset=0].gpuTextureCount  = Int64(n_tex)
     return sd

@@ -1,6 +1,6 @@
 """Bilinear and trilinear lookups in one image of the texture table."""
-from std.math import abs, floor, log2
-from gonzales.core.geometry import RGB
+from std.math import abs, floor, log2, acos, sqrt, pi
+from gonzales.core.geometry import RGB, Vec3f, _atan2f
 from gonzales.scene.appearance.materials import GpuTexture
 
 
@@ -97,9 +97,32 @@ def _footprint_lod(tex: GpuTexture, width: Float32) -> Float32:
     return Float32(0.0)
 
 
-# pbrt's UVMapping then its V-flip: s = su*u + du, t = 1 - (sv*v + dv); the footprint scales with the mapping.
 @always_inline
-def sample_image(tex: GpuTexture, u: Float32, v: Float32, fp_width: Float32) -> RGB:
-    var m = tex.uv_map
-    var w = fp_width * max(abs(m[0]), abs(m[1]))
-    return _sample_tex(tex, m[0] * u + m[2], Float32(1) - (m[1] * v + m[3]), _footprint_lod(tex, w))
+def _map_row(m: SIMD[DType.float32, 16], i: Int, p: Vec3f) -> Float32:
+    return m[4 * i] * p.x + m[4 * i + 1] * p.y + m[4 * i + 2] * p.z + m[4 * i + 3]
+
+
+# pbrt's TextureMapping2D (GpuTexture.map) at mesh uv (u, v) or world point p, then its V-flip.
+# The uv footprint filters only the uv mapping; the others sample level 0.
+@always_inline
+def sample_image(tex: GpuTexture, u: Float32, v: Float32, fp_width: Float32, p: Vec3f = Vec3f(0, 0, 0)) -> RGB:
+    var m = tex.map
+    var kind = Int(m[15])
+    var s: Float32
+    var t: Float32
+    var w = Float32(0)
+    if kind == GpuTexture.MAP_UV:
+        s = m[0] * u + m[2]; t = m[1] * v + m[3]
+        w = fp_width * max(abs(m[0]), abs(m[1]))
+    elif kind == GpuTexture.MAP_PLANAR:
+        s = _map_row(m, 0, p); t = _map_row(m, 1, p)
+    else:
+        var x = _map_row(m, 0, p); var y = _map_row(m, 1, p); var z = _map_row(m, 2, p)
+        var phi = _atan2f(y, x)
+        if kind == GpuTexture.MAP_CYLINDRICAL:
+            s = (Float32(pi) + phi) * Float32(0.5 / pi); t = z
+        else:
+            var r = sqrt(x * x + y * y + z * z)
+            s = acos(min(max(z / max(r, Float32(1e-20)), Float32(-1)), Float32(1))) * Float32(1 / pi)
+            t = (phi + Float32(2 * pi) if phi < Float32(0) else phi) * Float32(0.5 / pi)
+    return _sample_tex(tex, s, Float32(1) - t, _footprint_lod(tex, w))

@@ -247,9 +247,23 @@ def test_imagemap_uv_mapping_is_recorded() raises:
     var s = _state()
     _tex(s, '"a" "spectrum" "imagemap" "string filename" [ "a.png" ]')
     _tex(s, '"b" "spectrum" "imagemap" "float uscale" 4 "float vscale" 2 "float vdelta" .5 "string filename" [ "b.png" ]')
-    assert_true(len(s[unsafe_offset=0].uv_tex_idx) == 1 and s[unsafe_offset=0].uv_tex_idx[0] == 1)
-    var m = s[unsafe_offset=0].uv_tex_map.copy()
+    assert_true(len(s[unsafe_offset=0].map_tex_idx) == 1 and s[unsafe_offset=0].map_tex_idx[0] == 1)
+    var m = s[unsafe_offset=0].map_tex_map.copy()
     assert_true(_close(m[0], 4) and _close(m[1], 2) and _close(m[2], 0) and _close(m[3], 0.5))
+    _ = s.unsafe_take_pointee(); s.unsafe_free()
+
+
+def test_planar_mapping_follows_the_ctm() raises:
+    """pbrt's PlanarMapping reads the hit in the Texture's space: s = du + v1 . (textureFromWorld p)."""
+    var s = _state()
+    for i in range(16): s[unsafe_offset=0].ctm[i] = Float32(1) if i % 5 == 0 else Float32(0)
+    s[unsafe_offset=0].ctm[12] = 2   # texture space = world shifted by +2 in x
+    _tex(s, '"p" "spectrum" "imagemap" "string mapping" "planar" "vector3 v1" [ 0.5 0 0 ] "vector3 v2" [ 0 0 1 ]'
+            + ' "float udelta" 0.1 "string filename" [ "p.png" ]')
+    var m = s[unsafe_offset=0].map_tex_map.copy()
+    # s = 0.1 + 0.5 * (x - 2) = 0.5 x - 0.9; t = z
+    assert_true(_close(m[0], 0.5) and _close(m[1], 0) and _close(m[2], 0) and _close(m[3], -0.9))
+    assert_true(_close(m[4], 0) and _close(m[6], 1) and _close(m[7], 0) and _close(m[15], 1))
     _ = s.unsafe_take_pointee(); s.unsafe_free()
 
 
