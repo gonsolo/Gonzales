@@ -597,6 +597,13 @@ def intersect_displaced(tri: DisplacedTri, rm: Rmip, o: Vec3f, d: Vec3f, tmax: F
             mu = x if along_u else y; mv = y if along_u else x
             tm = _ray_t(tri, o, d, mu, mv)
             if not (tm >= at and tm <= bt): tm = (at + bt) * Float32(0.5)   # NaN or off the piece
+        # a halving shrinks (du + dv) by a quarter; a split that does not (failed inversion) would recurse 2^STACK times
+        var lim = Float32(0.9) * ((u1 - u0) + (v1 - v0))
+        if not (abs(mu - au) + abs(mv - av) <= lim and abs(bu - mu) + abs(bv - mv) <= lim):
+            _march(tri, rm, o, d, u0, u1, v0, v1, best)
+            if best.hit and best.t <= bt:
+                return best
+            continue
         if sp + 2 <= STACK:   # the back half below, the front half on top
             st[unsafe_offset=6 * sp] = mu; st[unsafe_offset=6 * sp + 1] = mv; st[unsafe_offset=6 * sp + 2] = tm
             st[unsafe_offset=6 * sp + 3] = bu; st[unsafe_offset=6 * sp + 4] = bv; st[unsafe_offset=6 * sp + 5] = bt
