@@ -217,6 +217,9 @@ def _nee_infinite_light[enqueue_shadow: Bool, defer_only: Bool = False](
         pdf_light = _env_s[1]
         env_rgb = ilight.scale
 
+    if not ilight.portal_admits(point3f(hit_point), env_dir):   # as the escape side gates it
+        return
+
     # ── MIS + shadow ray ──────────────────────────────────────────────────
     var cos_env = dot(normal, env_dir)
     if cos_env > Float32(0.0) and not env_rgb.is_black() and pdf_light > Float32(0.0):
