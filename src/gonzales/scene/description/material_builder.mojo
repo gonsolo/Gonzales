@@ -6,6 +6,8 @@ from gonzales.scene.description.lexer import (PbrtScanner, scanner_parse_quoted_
 from gonzales.scene.description.parse_types import NamedMaterial, SceneParseState, PSC_NAME_MAX, scene_path
 from gonzales.core.geometry import RGB
 from gonzales.scene.appearance.materials import MatKind, reflectance_f0
+from gonzales.scene.appearance.shader import ShaderOp, MathOp, SHADER_REGS, shader_texture_name
+from std.memory import bitcast
 from gonzales.scene.appearance.measured_bsdf import load_measured_bsdf_reflectance
 from gonzales.core.spd import load_spd_rgb, named_metal_rgb, named_glass_ior
 from gonzales.core.rng import PCG32
@@ -175,6 +177,90 @@ def _resolve_affine_rgb(s: Pointer[SceneParseState, MutUntrackedOrigin],
             return _AffineTex(True, ra.tex_idx, ra.scale * d, bias2)
 
     return _affine_fail()
+
+
+def _emit(mut w: List[Int32], op: Int32, dst: Int, a: Int = 0, b: Int = 0, c: Int = 0, i0: Int = 0):
+    w.append(op); w.append(Int32(dst)); w.append(Int32(a)); w.append(Int32(b)); w.append(Int32(c))
+    w.append(Int32(0)); w.append(Int32(i0)); w.append(Int32(0))
+
+
+def _emit_const(mut w: List[Int32], mut nreg: Int, c: RGB) -> Int:
+    var r = nreg; nreg += 1
+    w.append(ShaderOp.const); w.append(Int32(r))
+    for f in [c.r, c.g, c.b, Float32(1)]:
+        w.append(bitcast[DType.int32](f))
+    w.append(Int32(0)); w.append(Int32(0))
+    return r
+
+
+def _compile_graph(s: Pointer[SceneParseState, MutUntrackedOrigin], name: String, depth: Int,
+                   mut w: List[Int32], mut nreg: Int) -> Int:
+    """Emit a pbrt scale/mix graph into a shader program (uv in register 0); its result register, -1 if unsupported."""
+    if depth > 8:
+        return -1
+    for ti in range(len(s[unsafe_offset=0].tex_names)):
+        if s[unsafe_offset=0].tex_names[ti] == name:
+            var r = nreg; nreg += 1
+            _emit(w, ShaderOp.image, r, 0, i0=ti)
+            var img = _imagemap_affine(s, ti)
+            if img.scale.r != Float32(1) or img.bias.r != Float32(0):
+                var k = _emit_const(w, nreg, img.scale)
+                var b = _emit_const(w, nreg, img.bias)
+                _emit(w, ShaderOp.math, r, r, k, b, i0=MathOp.mul_add)
+            return r
+    for ci in range(len(s[unsafe_offset=0].const_tex_names)):
+        if s[unsafe_offset=0].const_tex_names[ci] == name:
+            return _emit_const(w, nreg, RGB(s[unsafe_offset=0].const_tex_rgb[ci*3+0], s[unsafe_offset=0].const_tex_rgb[ci*3+1],
+                                            s[unsafe_offset=0].const_tex_rgb[ci*3+2]))
+    for si in range(len(s[unsafe_offset=0].scale_tex_names)):
+        if s[unsafe_offset=0].scale_tex_names[si] == name:
+            var bn = s[unsafe_offset=0].scale_tex_base[si]
+            var base = _compile_graph(s, bn, depth + 1, w, nreg) if bn != "" else _emit_const(w, nreg,
+                RGB(s[unsafe_offset=0].scale_tex_base_rgb[si*3+0], s[unsafe_offset=0].scale_tex_base_rgb[si*3+1],
+                    s[unsafe_offset=0].scale_tex_base_rgb[si*3+2]))
+            var sn = s[unsafe_offset=0].scale_tex_scale_name[si]
+            var k = _compile_graph(s, sn, depth + 1, w, nreg) if sn != "" else _emit_const(w, nreg,
+                RGB(s[unsafe_offset=0].scale_tex_scale[si]))
+            if base < 0 or k < 0:
+                return -1
+            var r = nreg; nreg += 1
+            _emit(w, ShaderOp.math, r, base, k, 0, i0=MathOp.mul)
+            return r
+    for mi in range(len(s[unsafe_offset=0].mix_tex_names)):
+        if s[unsafe_offset=0].mix_tex_names[mi] == name:
+            var n1 = s[unsafe_offset=0].mix_tex1_name[mi]
+            var n2 = s[unsafe_offset=0].mix_tex2_name[mi]
+            var na = s[unsafe_offset=0].mix_amount_name[mi]
+            var r1 = _compile_graph(s, n1, depth + 1, w, nreg) if n1 != "" else _emit_const(w, nreg,
+                RGB(s[unsafe_offset=0].mix_tex1_rgb[mi*3+0], s[unsafe_offset=0].mix_tex1_rgb[mi*3+1], s[unsafe_offset=0].mix_tex1_rgb[mi*3+2]))
+            var r2 = _compile_graph(s, n2, depth + 1, w, nreg) if n2 != "" else _emit_const(w, nreg,
+                RGB(s[unsafe_offset=0].mix_tex2_rgb[mi*3+0], s[unsafe_offset=0].mix_tex2_rgb[mi*3+1], s[unsafe_offset=0].mix_tex2_rgb[mi*3+2]))
+            var ra = _compile_graph(s, na, depth + 1, w, nreg) if na != "" else _emit_const(w, nreg,
+                RGB(s[unsafe_offset=0].mix_amount_val[mi]))
+            if r1 < 0 or r2 < 0 or ra < 0:
+                return -1
+            var r = nreg; nreg += 1
+            _emit(w, ShaderOp.mix, r, r1, r2, ra)   # pbrt's (1 - amount) * tex1 + amount * tex2
+            return r
+    return -1
+
+
+def _graph_texture(s: Pointer[SceneParseState, MutUntrackedOrigin], name: String) -> Int:
+    """A texture table entry running the graph `name` as a shader program, shared by its users; -1 if unsupported."""
+    var key = "#graph:" + name
+    for ti in range(len(s[unsafe_offset=0].tex_names)):
+        if s[unsafe_offset=0].tex_names[ti] == key:
+            return ti
+    var w: List[Int32] = [Int32(0)]
+    _emit(w, ShaderOp.uv, 0)
+    var nreg = 1
+    var out = _compile_graph(s, name, 0, w, nreg)
+    if out < 0 or nreg > SHADER_REGS:
+        return -1
+    w[0] = Int32(out)
+    s[unsafe_offset=0].tex_names.append(key)
+    s[unsafe_offset=0].tex_files.append(shader_texture_name(w))
+    return len(s[unsafe_offset=0].tex_names) - 1
 
 
 def _sss_walk_reflectance(alpha: Float32, eta: Float32, g: Float32, n_walks: Int) -> Float32:
@@ -671,6 +757,11 @@ def _psc_handle_make_named_material(handle: Pointer[PbrtScanner, MutUntrackedOri
                             # Collapsed to a constant (e.g. a mix of two
                             # constants by a constant amount).
                             rgb = aff.bias
+                        matched_tex = True
+                if not matched_tex:
+                    var gi = _graph_texture(s, tex_name)
+                    if gi >= 0:
+                        tex_idx_for_mat = Int32(gi)
                         matched_tex = True
                 if not matched_tex:
                     var is_known = False

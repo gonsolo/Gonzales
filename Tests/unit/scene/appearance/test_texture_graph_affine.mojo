@@ -4,8 +4,7 @@ Every shape here is taken from a real corpus scene -- the comments name which.
 The property under test is always the same: a graph over ONE imagemap must
 resolve to `albedo = tex_bias + tex_scale * texel`, reproducing pbrt's
 (1-amount)*tex1 + amount*tex2, while a graph multiplying two DIFFERENT
-imagemaps must refuse to resolve (it would need a second lookup per shading
-point) and fall back to flat albedo rather than rendering something wrong.
+imagemaps runs as a shader program instead.
 """
 from std.math import abs
 from std.memory.alloc import unsafe_alloc
@@ -14,6 +13,8 @@ from gonzales.scene.description.lexer import PbrtScanner, scanner_free
 from gonzales.scene.description.parse_types import SceneParseState
 from gonzales.scene.description.pbrt_parser import handle_texture
 from gonzales.scene.description.material_builder import _psc_handle_make_named_material
+from gonzales.scene.appearance.materials import GpuTexture
+from gonzales.scene.appearance.shader import F4, eval_shader, shader_words
 
 comptime _EPS = Float32(1e-5)
 
@@ -168,32 +169,50 @@ def test_nested_scale_of_mix_composes() raises:
     _ = s.unsafe_take_pointee(); s.unsafe_free()
 
 
-def test_product_of_two_textures_refuses_to_resolve() raises:
-    """Kroken's Brick_Color-muddled multiplies two independent imagemaps.
-    One lookup cannot express that, so the graph must NOT resolve -- the
-    material falls back to flat albedo (and warns) instead of silently
-    rendering one of the two maps as if it were the product."""
+def _run_graph(s: Pointer[SceneParseState, MutUntrackedOrigin], ti: Int, a: Float32, b: Float32) raises -> F4:
+    """Evaluate texture entry `ti`'s program with textures 0 and 1 flat a and b."""
+    var f = s[unsafe_offset=0].tex_files[ti]
+    var cs = unsafe_alloc[UInt8](f.byte_length() + 1)
+    for k in range(f.byte_length()): cs[unsafe_offset=k] = f.unsafe_ptr()[unsafe_offset=k]
+    cs[unsafe_offset=f.byte_length()] = UInt8(0)
+    var words = shader_words(cs)
+    cs.unsafe_free()
+    var data = unsafe_alloc[Float32](6)
+    for k in range(3):
+        data[unsafe_offset=k] = a; data[unsafe_offset=3 + k] = b
+    var tex = unsafe_alloc[GpuTexture](2)
+    for t in range(2):
+        tex[unsafe_offset=t] = GpuTexture(data.unsafe_offset(3 * t).unsafe_bitcast[UInt8](), Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+            Pointer[UInt8, MutUntrackedOrigin].unsafe_dangling(), 1, 1, 1, 3, Int32(GpuTexture.FORMAT_F32), GpuTexture.UV_IDENTITY)
+    var r = eval_shader(words.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin](), len(words), 0.3, 0.6, 0, tex, 2)
+    _ = words^   # the program must outlive the call
+    tex.unsafe_free(); data.unsafe_free()
+    return r
+
+
+def test_product_of_two_textures_runs_as_a_program() raises:
+    """Kroken's Brick_Color-muddled and watercolor's floor multiply two imagemaps: one lookup cannot, a program can."""
     var s = _state()
     _tex(s, '"a" "spectrum" "imagemap" "string filename" [ "a.png" ]')
-    _tex(s, '"b" "float" "imagemap" "string filename" [ "b.png" ]')
+    _tex(s, '"b" "float" "imagemap" "float scale" 2 "string filename" [ "b.png" ]')
     _tex(s, '"prod" "spectrum" "scale" "texture tex" [ "a" ] "texture scale" [ "b" ]')
     _mat(s, '"m" "string type" [ "diffuse" ] "texture reflectance" [ "prod" ]')
-    var nm = s[unsafe_offset=0].named_materials[0]
-    assert_true(nm.tex_idx == Int32(-1))
+    _mat(s, '"m2" "string type" [ "diffuse" ] "texture reflectance" [ "prod" ]')
+    assert_true(s[unsafe_offset=0].named_materials[0].tex_idx == Int32(2))
+    assert_true(s[unsafe_offset=0].named_materials[1].tex_idx == Int32(2))
+    assert_true(abs(_run_graph(s, 2, 0.5, 0.2)[1] - Float32(0.2)) < _EPS)
     _ = s.unsafe_take_pointee(); s.unsafe_free()
 
 
-def test_mix_over_two_different_textures_refuses_to_resolve() raises:
-    """The mix twin of the case above: blending two different imagemaps by a
-    constant still needs both lookups."""
+def test_mix_over_two_different_textures_runs_as_a_program() raises:
     var s = _state()
     _tex(s, '"a" "spectrum" "imagemap" "string filename" [ "a.png" ]')
     _tex(s, '"b" "spectrum" "imagemap" "string filename" [ "b.png" ]')
     _tex(s, '"mx" "spectrum" "mix" "texture tex1" [ "a" ]'
-            + ' "texture tex2" [ "b" ] "float amount" [ 0.5 ]')
+            + ' "texture tex2" [ "b" ] "float amount" [ 0.25 ]')
     _mat(s, '"m" "string type" [ "diffuse" ] "texture reflectance" [ "mx" ]')
-    var nm = s[unsafe_offset=0].named_materials[0]
-    assert_true(nm.tex_idx == Int32(-1))
+    assert_true(s[unsafe_offset=0].named_materials[0].tex_idx == Int32(2))
+    assert_true(abs(_run_graph(s, 2, 0.8, 0.4)[0] - Float32(0.7)) < _EPS)
     _ = s.unsafe_take_pointee(); s.unsafe_free()
 
 
