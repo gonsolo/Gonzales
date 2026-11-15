@@ -14,6 +14,7 @@ from gonzales.transport.surface import sss_entry_tint
 from gonzales.core.spectrum import SampledWavelengths, SpectralHandle, SpectralSample, spec_refl_unbounded
 from std.collections import Array
 from std.math import abs, cos, exp, log, pow, sin, sqrt
+from gonzales.scene.shapes.primitives import PrimKind
 
 
 @always_inline
@@ -279,7 +280,7 @@ def _sss_walk_step[steps: Int, T: WalkTracer](
         var w = (tr if hit else al * st * tr) / max((p * pdf).reduce_add(), Float32(1e-30))
         path_ptr[].throughput *= SpectralSample(w[0], w[1], w[2], w[3])
         if hit:
-            var at_exit = inter.primId.type == Int8(0) and Int32(inter.primId.id1) == walk.mesh and inter.primId.instanceIdx == walk.instance
+            var at_exit = inter.primId.type == PrimKind.triangle and Int32(inter.primId.id1) == walk.mesh and inter.primId.instanceIdx == walk.instance
             var emat = sd.materials[unsafe_offset=Int(inter.primId.materialIndex)]
             if at_exit and emat.sss_walk_interior() and walk.instance < Int32(0):   # object-space positions otherwise
                 # pbrt's subsurface boundary is a dielectric: from inside, a share F of the walk is reflected back in.
@@ -368,7 +369,7 @@ def _sss_walk_step[steps: Int, T: WalkTracer](
 @always_inline
 def sss_walks_below(mat: Material, inter: Intersection, med_before: Int32) -> Bool:
     """Would a refraction at this hit start a walk? It then carries no eta^2: the walk leaves into the medium it came from."""
-    return mat.sss_walk_interior() and inter.primId.type == Int8(0) and Int(med_before) < 0
+    return mat.sss_walk_interior() and inter.primId.type == PrimKind.triangle and Int(med_before) < 0
 
 
 @always_inline

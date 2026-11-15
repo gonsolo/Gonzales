@@ -11,6 +11,7 @@ from gonzales.scene.accel.bvh import BVH2Node, traverse_bvh2_core, test_spheres
 from gonzales.scene.shapes.geom_normal import _geom_normal
 from gonzales.core.rng import PCG32
 from gonzales.core.spectrum import SpectralHandle, SampledWavelengths, SpectralSample
+from gonzales.scene.shapes.primitives import PrimKind
 
 
 @always_inline
@@ -45,7 +46,7 @@ def shadow_transmittance(
     var o = org
     var remaining = tmax
     var _local = Array[Intersection, 1](fill=Intersection(
-        PrimId(Int64(-1), Int64(-1), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0)),
+        PrimId(Int64(-1), Int64(-1), Int64(0), Int32(-1), PrimKind.triangle, Int8(0), Int8(0), Int8(0)),
         Float32(0), Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0)))
     var inter_mem = _local.unsafe_ptr()   # tracked: keeps _local alive while read
     for _ in range(8):
@@ -59,9 +60,9 @@ def shadow_transmittance(
         if not had_bvh_hit:
             inter_mem[unsafe_offset=0].hit = Int8(1)
             inter_mem[unsafe_offset=0].tHit = remaining
-            inter_mem[unsafe_offset=0].primId.type = Int8(0)
+            inter_mem[unsafe_offset=0].primId.type = PrimKind.triangle
         test_spheres(spheres, n_spheres, ray, inter_mem)
-        if not had_bvh_hit and inter_mem[unsafe_offset=0].primId.type != Int8(4):
+        if not had_bvh_hit and inter_mem[unsafe_offset=0].primId.type != PrimKind.sphere:
             inter_mem[unsafe_offset=0].hit = Int8(0)
         var hit = inter_mem[unsafe_offset=0].hit != Int8(0)
         var t_seg = inter_mem[unsafe_offset=0].tHit if hit else remaining

@@ -16,6 +16,7 @@ from gonzales.transport.shade_context import ShadeContext
 from gonzales.transport.shadow_media import segment_transmittance
 from gonzales.scene.shapes.geom_normal import _geom_normal
 from gonzales.core.spectrum import SampledWavelengths, SpectralSample
+from gonzales.scene.shapes.primitives import PrimKind
 
 
 # Orient an emitter triangle's WINDING normal to agree with the mesh's own
@@ -379,7 +380,7 @@ def _sms_vertex_geom_from_hit(
     safety)."""
     var mat = ctx.materials[unsafe_offset=Int(inter.primId.materialIndex)]
     var ior = mat.albedo.r
-    if inter.primId.type == Int8(4):
+    if inter.primId.type == PrimKind.sphere:
         var sph = ctx.lights.spheres[unsafe_offset=Int(inter.primId.id1)]
         var hit_pt = ray_org + shadow_dir * inter.tHit
         var center = Vec3f(sph.center.x, sph.center.y, sph.center.z)
@@ -401,7 +402,7 @@ def _sms_vertex_geom_from_hit(
         if mat.normal_tex_idx >= Int32(0) and _is_real_ptr(ctx.nmaps):
             nmap = ctx.nmaps[unsafe_offset=Int(mat.normal_tex_idx)]
         return (sms_vertex_sphere(hit_pt, center, sph.radius, eta, nmap, ior), True)
-    elif inter.primId.type == Int8(0):
+    elif inter.primId.type == PrimKind.triangle:
         var (mesh, v0, v1, v2, _) = _get_tri_verts(inter, ctx.meshes)
         if _is_real_ptr(mesh.normals) and inter.primId.instanceIdx < Int32(0):
             # A smooth mesh: curved, walked on its interpolated normal (sms.mojo's sms_mesh_frame).
@@ -467,7 +468,7 @@ def _sms_probe_glass_chain(
     alone, but an analytic sphere hit's cannot (it carries no
     barycentrics), so the caller needs this to reconstruct it via
     origins[k] + shadow_dir*hits[k].tHit."""
-    var dummy_prim = PrimId(Int64(-1), Int64(-1), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
+    var dummy_prim = PrimId(Int64(-1), Int64(-1), Int64(0), Int32(-1), PrimKind.triangle, Int8(0), Int8(0), Int8(0))
     var dummy_inter = Intersection(dummy_prim, Float32(0), Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0))
     var hits = Array[Intersection, MAX_SMS_VERTICES](fill=dummy_inter)
     var origins = Array[Vec3f, MAX_SMS_VERTICES](fill=Vec3f(Float32(0.0)))
@@ -485,7 +486,7 @@ def _sms_probe_glass_chain(
                            ctx.blasNodesArr, ctx.blasPrimIdsArr, ctx.instances,
                            ctx.lights.spheres, ctx.lights.sphere_count)
         var pk_inter = pk_store[0]
-        if pk_inter.hit == Int8(0) or (pk_inter.primId.type != Int8(0) and pk_inter.primId.type != Int8(4)):
+        if pk_inter.hit == Int8(0) or (pk_inter.primId.type != PrimKind.triangle and pk_inter.primId.type != PrimKind.sphere):
             break
         var pk_mat = ctx.materials[unsafe_offset=Int(pk_inter.primId.materialIndex)]
         if not pk_mat.is_specular_glass():
@@ -494,7 +495,7 @@ def _sms_probe_glass_chain(
         origins[count] = pk_org
         count += 1
         var gk_point: Vec3f
-        if pk_inter.primId.type == Int8(4):
+        if pk_inter.primId.type == PrimKind.sphere:
             gk_point = pk_org + shadow_dir * pk_inter.tHit
         else:
             var (gk_mesh, gk_v0, gk_v1, gk_v2, _) = _get_tri_verts(pk_inter, ctx.meshes)
@@ -518,7 +519,7 @@ def _mnee_first_probe(
         Point3f(probe_org[0], probe_org[1], probe_org[2]),
         Vec3f(shadow_dir[0], shadow_dir[1], shadow_dir[2]))
     var probe_tmax = dist * Float32(0.9995)
-    var dummy_prim = PrimId(Int64(-1), Int64(-1), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
+    var dummy_prim = PrimId(Int64(-1), Int64(-1), Int64(0), Int32(-1), PrimKind.triangle, Int8(0), Int8(0), Int8(0))
     var dummy_inter = Intersection(dummy_prim, probe_tmax, Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0))
     var probe_store = Array[Intersection, 1](fill=dummy_inter)
     traverse_dispatch(ctx.bvh4, ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves, probe_ray, probe_tmax, probe_store.unsafe_ptr(),
@@ -527,7 +528,7 @@ def _mnee_first_probe(
     var probe_inter = probe_store[0]
     # A solid sphere is not MNEE's: one refraction misses the exit surface and the exact BSDF path is no
     # longer suppressed at the emitter hit, so plain sampling covers it (PT read 1.4-1.9% under pbrt otherwise).
-    if probe_inter.hit == Int8(0) or probe_inter.primId.type != Int8(0):
+    if probe_inter.hit == Int8(0) or probe_inter.primId.type != PrimKind.triangle:
         return (False, probe_inter)
     var probe_mat = ctx.materials[unsafe_offset=Int(probe_inter.primId.materialIndex)]
     return (probe_mat.is_specular_glass(), probe_inter)
@@ -569,7 +570,7 @@ def _sms_solve_from_probe(
     # MNEE: probe for up to 2 glass surfaces between hit_point and light.
     # For each probe hit we detect entering/exiting from dot(n_raw, probe_dir).
     var probe_org = hit_point + shadow_dir * Float32(0.0002)
-    var dummy_prim = PrimId(Int64(-1), Int64(-1), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
+    var dummy_prim = PrimId(Int64(-1), Int64(-1), Int64(0), Int32(-1), PrimKind.triangle, Int8(0), Int8(0), Int8(0))
     var dummy_inter = Intersection(dummy_prim, dist * Float32(0.9995), Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0))
 
     # --- Extract x1 geometry (triangle or analytic sphere) ---
@@ -602,7 +603,7 @@ def _sms_solve_from_probe(
                    ctx.lights.spheres, ctx.lights.sphere_count)
         probe2_inter = probe2_store[0]
     var has_second_glass = False
-    if probe2_inter.hit != Int8(0) and (probe2_inter.primId.type == Int8(0) or probe2_inter.primId.type == Int8(4)):
+    if probe2_inter.hit != Int8(0) and (probe2_inter.primId.type == PrimKind.triangle or probe2_inter.primId.type == PrimKind.sphere):
         var probe2_mat_c = ctx.materials[unsafe_offset=Int(probe2_inter.primId.materialIndex)]
         has_second_glass = probe2_mat_c.is_specular_glass()
 

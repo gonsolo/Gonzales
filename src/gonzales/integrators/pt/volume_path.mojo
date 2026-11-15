@@ -18,6 +18,7 @@ from std.collections import Array
 from std.math import exp, log, sqrt
 from gonzales.transport.medium_interface import medium_after
 from gonzales.transport.sss_walk import _sss_walk_step
+from gonzales.scene.shapes.primitives import PrimKind
 
 
 @always_inline
@@ -26,7 +27,7 @@ def path_medium_after_shading(path_ptr: Pointer[PathState, MutUntrackedOrigin], 
     if inter.hit == 0 or inter.primId.materialIndex < Int64(0):
         return
     var mat = sd.materials[unsafe_offset=Int(inter.primId.materialIndex)]
-    if mat.sss_walk_interior() and inter.primId.type == Int8(0):   # walked, not entered
+    if mat.sss_walk_interior() and inter.primId.type == PrimKind.triangle:   # walked, not entered
         return
     var r = path_ptr[].ray
     path_ptr[].current_medium_idx = medium_after(Vec3f(r.direction.x, r.direction.y, r.direction.z), path_ptr[].current_medium_idx,
@@ -409,7 +410,7 @@ def _volume_area_light_nee(
                     # Both medium kinds attenuate only up to the medium's own boundary, the first interface surface.
                     var t_med = dist
                     var _exit_inter = Array[Intersection, 1](fill=Intersection(
-                        PrimId(Int64(-1), Int64(-1), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0)),
+                        PrimId(Int64(-1), Int64(-1), Int64(0), Int32(-1), PrimKind.triangle, Int8(0), Int8(0), Int8(0)),
                         Float32(0), Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0)))
                     var exit_ptr = _exit_inter.unsafe_ptr()   # tracked: keeps _exit_inter alive while read
                     exit_ptr[unsafe_offset=0].hit = Int8(0)

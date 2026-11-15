@@ -17,6 +17,7 @@ from gonzales.scene.accel.bvh import (
 from gonzales.core.rng import PCG32
 from gonzales.scene.shapes.geom_normal import _geom_normal
 from gonzales.core.spectrum import SampledWavelengths, SpectralSample
+from gonzales.scene.shapes.primitives import PrimKind
 
 @always_inline
 # ── Visibility with transmittance ─────────────────────────────────────────────
@@ -48,7 +49,7 @@ def _visible_transmittance(
     # is simultaneously live in the enclosing traversal that called us, and
     # writing through both aliases is what the GPU build faults on.
     var _local_inter = Array[Intersection, 1](fill=Intersection(
-        PrimId(Int64(-1), Int64(-1), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0)),
+        PrimId(Int64(-1), Int64(-1), Int64(0), Int32(-1), PrimKind.triangle, Int8(0), Int8(0), Int8(0)),
         Float32(0), Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0)))
     var inter_mem = _local_inter.unsafe_ptr()   # tracked: keeps _local_inter alive while read
     for _ in range(8):
@@ -65,9 +66,9 @@ def _visible_transmittance(
             inter_mem[unsafe_offset=0].tHit = remaining * Float32(0.9995)
             # Clear the primId along with the sentinel. `scratch` is a
             # caller-owned slot reused across bounces, samples and (on GPU)
-            inter_mem[unsafe_offset=0].primId.type = Int8(0)
+            inter_mem[unsafe_offset=0].primId.type = PrimKind.triangle
         test_spheres(sd.spheres, Int(sd.sphereCount), ray, inter_mem)
-        if not had_bvh_hit and inter_mem[unsafe_offset=0].primId.type != Int8(4):
+        if not had_bvh_hit and inter_mem[unsafe_offset=0].primId.type != PrimKind.sphere:
             inter_mem[unsafe_offset=0].hit = Int8(0)
         if inter_mem[unsafe_offset=0].hit == Int8(0):
             # Nothing between here and destination: apply remaining Beer-Lambert

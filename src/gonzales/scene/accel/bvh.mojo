@@ -25,6 +25,7 @@ from gonzales.scene.shapes.curves import Curve, curve_at, CurveBvh, intersect_cu
 from gonzales.core.rng import PCG32
 from gonzales.scene.appearance.footprint import CameraFootprint
 from gonzales.core.spectrum import SpectralHandle
+from gonzales.scene.shapes.primitives import PrimKind
 
 # ── BVH2 Compact Nodes (32 bytes per node, 1 cache line) ──────────────────────
 # Layout: Point3f min (12 B) + Point3f max (12 B) + Int32 offset (4 B) + Int32 count (4 B) = 32 B
@@ -1248,7 +1249,7 @@ def test_spheres[O: Origin[mut=True]](
             t_max = t
             result[unsafe_offset=0].hit = Int8(1)
             result[unsafe_offset=0].tHit = t
-            result[unsafe_offset=0].primId.type = Int8(4)
+            result[unsafe_offset=0].primId.type = PrimKind.sphere
             result[unsafe_offset=0].primId.id1 = Int64(i)
             result[unsafe_offset=0].primId.materialIndex = Int64(spheres[unsafe_offset=i].materialIndex)
             result[unsafe_offset=0].primId.instanceIdx = Int32(-1)  # spheres are never instanced; clear any stale value
@@ -1418,7 +1419,7 @@ def _traverse_blas_triangles[wide_on: Bool = True](
     var nearZIsMin = rdir.z >= Float32(0.0)
 
     var hasHit = False
-    var hitPrim = PrimId(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
+    var hitPrim = PrimId(Int64(0), Int64(0), Int64(0), Int32(-1), PrimKind.triangle, Int8(0), Int8(0), Int8(0))
     var localTHit = tMax
     var bestU: Float32 = 0.0
     var bestV: Float32 = 0.0
@@ -1431,7 +1432,7 @@ def _traverse_blas_triangles[wide_on: Bool = True](
     # A merged template (type 7) has one record naming its single mesh, whose triangles are stored in
     # leaf order: a leaf's (offset, count) is a triangle range and no per-triangle record exists.
     var first = blasPrimIds[unsafe_offset=0]
-    var merged = first.type == Int8(7)
+    var merged = first.type == PrimKind.merged_blas
     var hitTri = 0
     if merged and first.id1 < Int64(0):
         return (False, tMax, Float32(0), Float32(0), hitPrim)   # a template of curves only
@@ -1443,7 +1444,7 @@ def _traverse_blas_triangles[wide_on: Bool = True](
         var w = _traverse_blas_wide(blasNodes, meshes, Int(first.id1), per_leaf, ray_org, ray_dir, tMax, cnt, first_hit)
         if w[0]:
             hitPrim = PrimId(first.id1, Int64(w[4] * 3), Int64(mesh_material(meshes[unsafe_offset=Int(first.id1)], w[4])),
-                             Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
+                             Int32(-1), PrimKind.triangle, Int8(0), Int8(0), Int8(0))
         return (w[0], w[1], w[2], w[3], hitPrim)
 
     while True:
@@ -1457,12 +1458,12 @@ def _traverse_blas_triangles[wide_on: Bool = True](
                 var base_vidx = (offset * per_leaf + j) * 3
                 if not merged:
                     prim = blasPrimIds[unsafe_offset=offset + j]
-                    if prim.type != Int8(0) and prim.type != Int8(9):
+                    if prim.type != PrimKind.triangle and prim.type != PrimKind.displaced:
                         continue
                     mesh_idx = Int(prim.id1)
                     base_vidx = Int(prim.id2)
                 if _is_real_ptr(cnt): cnt[unsafe_offset=5] += Int32(1)
-                var h = _displaced_tri_hit(meshes[unsafe_offset=mesh_idx], base_vidx, ray_org, ray_dir, localTHit) if prim.type == Int8(9) \
+                var h = _displaced_tri_hit(meshes[unsafe_offset=mesh_idx], base_vidx, ray_org, ray_dir, localTHit) if prim.type == PrimKind.displaced \
                     else _mesh_tri_hit(meshes[unsafe_offset=mesh_idx], mesh_idx, base_vidx, ray_org, ray_dir, localTHit)
                 if h[0]:
                     localTHit = h[1]
@@ -1515,7 +1516,7 @@ def _traverse_blas_triangles[wide_on: Bool = True](
 
     if merged and hasHit:
         hitPrim = PrimId(first.id1, Int64(hitTri * 3), Int64(mesh_material(meshes[unsafe_offset=Int(first.id1)], hitTri)),
-                         Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
+                         Int32(-1), PrimKind.triangle, Int8(0), Int8(0), Int8(0))
     return (hasHit, localTHit, bestU, bestV, hitPrim)
 
 
@@ -1546,7 +1547,7 @@ def _traverse_instance[wide_on: Bool = True](
     var t = sub[1]; var u = sub[2]; var v = sub[3]
     var hit_prim = sub[4]
     var rec = blas_prim_ids[unsafe_offset=0]
-    if rec.type == Int8(7) and rec.id2 > Int64(0) and _is_real_ptr(curves) and not (first_hit and hit):
+    if rec.type == PrimKind.merged_blas and rec.id2 > Int64(0) and _is_real_ptr(curves) and not (first_hit and hit):
         var cs = _traverse_blas_curves(blasNodesArr[unsafe_offset=Int(rec.id2)], blasPrimIdsArr[unsafe_offset=Int(rec.id2)],
                                        curves, o_org, o_dir, t)
         if cs[0]:
@@ -1570,7 +1571,7 @@ def _traverse_blas_curves(
     """A template's curve BVH, for a ray already in its object space: leaves hold PrimId.type 5 records
     (curve, first piece * 8 + piece count) as the top level does. The object-space direction is not unit
     length, so the curve test runs on the normalized ray and its distance is scaled back."""
-    var hitPrim = PrimId(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
+    var hitPrim = PrimId(Int64(0), Int64(0), Int64(0), Int32(-1), PrimKind.triangle, Int8(0), Int8(0), Int8(0))
     var len2 = ray_dir[0] * ray_dir[0] + ray_dir[1] * ray_dir[1] + ray_dir[2] * ray_dir[2]
     if len2 <= Float32(0):
         return (False, tMax, Float32(0), Float32(0), hitPrim)
@@ -1646,7 +1647,7 @@ def _traverse_instances[wide_on: Bool = True](
     (blasNodesArr[prim.id1]; the instances are stored in its leaf order, so a leaf is an instance range) and
     each one's BLAS. Returns the nearest (hit, tHit, u, v, primId). Shared by every top-level traversal.
     Returns hit=False without dereferencing anything if a caller passed no instance data."""
-    var hitPrim = PrimId(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
+    var hitPrim = PrimId(Int64(0), Int64(0), Int64(0), Int32(-1), PrimKind.triangle, Int8(0), Int8(0), Int8(0))
     if not _is_real_ptr(instances) or not _is_real_ptr(blasNodesArr) or not _is_real_ptr(blasPrimIdsArr):
         return (False, tMax, Float32(0), Float32(0), hitPrim)
     var nodes = blasNodesArr[unsafe_offset=Int(prim.id1)]
@@ -1801,7 +1802,7 @@ def traverse_bvh2_core[Or: Origin[mut=True]](
     var bestU: Float32 = 0.0
     var bestV: Float32 = 0.0
     var instHit = False
-    var instHitPrim = PrimId(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
+    var instHitPrim = PrimId(Int64(0), Int64(0), Int64(0), Int32(-1), PrimKind.triangle, Int8(0), Int8(0), Int8(0))
 
     # Only slots below toVisit are ever read, so nothing needs zeroing.
     var stack = Array[Int32, 64](uninitialized=True)
@@ -1825,15 +1826,15 @@ def traverse_bvh2_core[Or: Origin[mut=True]](
                 var mesh_idx: Int
                 var base_vidx: Int
 
-                if prim.type == 0 or prim.type == 9:
+                if prim.type == PrimKind.triangle or prim.type == PrimKind.displaced:
                     mesh_idx = Int(prim.id1)
                     base_vidx = Int(prim.id2)
-                elif prim.type == 1 or prim.type == 2 or prim.type == 3:
+                elif prim.type == PrimKind.emitter:
                     if prim.id2 == -1:
                         continue # GPU cannot intersect non-triangle shapes directly yet
                     mesh_idx = Int(prim.id2 >> 32)
                     base_vidx = Int(prim.id2 & 0xFFFFFFFF) * 3
-                elif prim.type == 5:
+                elif prim.type == PrimKind.curve:
                     var curve = curve_at(curves, Int(prim.id1))
                     var curve_hit = intersect_curve(ray_org, ray_dir, curve, Int(prim.id2) // 8, Int(prim.id2) % 8, localTHit)
                     if curve_hit[0]:
@@ -1843,7 +1844,7 @@ def traverse_bvh2_core[Or: Origin[mut=True]](
                         hitIndex = offset + j
                         instHit = False
                     continue
-                elif prim.type == 8:
+                elif prim.type == PrimKind.instances:
                     var sub = _traverse_instances[True](prim, meshes, blasNodesArr, blasPrimIdsArr, instances, ray_org, ray_dir, localTHit, False, curves)
                     if sub[0]:
                         localTHit = sub[1]
@@ -1864,7 +1865,7 @@ def traverse_bvh2_core[Or: Origin[mut=True]](
                 var p1 = mesh_pos(mesh, v1_idx)
                 var p2 = mesh_pos(mesh, v2_idx)
 
-                var hit_res = _displaced_tri_hit(meshes[unsafe_offset=mesh_idx], base_vidx, ray_org, ray_dir, localTHit) if prim.type == 9 else intersect_triangle(ray_org, ray_dir, p0, p1, p2, localTHit)
+                var hit_res = _displaced_tri_hit(meshes[unsafe_offset=mesh_idx], base_vidx, ray_org, ray_dir, localTHit) if prim.type == PrimKind.displaced else intersect_triangle(ray_org, ray_dir, p0, p1, p2, localTHit)
                 if hit_res[0] and not alpha_killed(mesh, v0_idx, v1_idx, v2_idx, hit_res[2], hit_res[3],
                                                    ray_org, ray_dir, (mesh_idx << 32) | base_vidx):
                     localTHit = hit_res[1]
@@ -1939,7 +1940,7 @@ def traverse_bvh2_core[Or: Origin[mut=True]](
             sphereIdx = i
 
     if sphereHit:
-        var spId = PrimId(Int64(sphereIdx), Int64(-1), Int64(spheres[unsafe_offset=sphereIdx].materialIndex), Int32(-1), Int8(4), Int8(0), Int8(0), Int8(0))
+        var spId = PrimId(Int64(sphereIdx), Int64(-1), Int64(spheres[unsafe_offset=sphereIdx].materialIndex), Int32(-1), PrimKind.sphere, Int8(0), Int8(0), Int8(0))
         resultPtr[unsafe_offset=0] = Intersection(spId, localTHit, Float32(0), Float32(0), Int8(1), 0, 0, 0)
     elif instHit:
         resultPtr[unsafe_offset=0] = Intersection(surface_prim(instHitPrim), localTHit, bestU, bestV, Int8(1), 0, 0, 0)
@@ -1990,7 +1991,7 @@ def traverse_bvh2_core_defer_curves[curves_on: Bool = True, inst_on: Bool = True
     var bestU: Float32 = 0.0
     var bestV: Float32 = 0.0
     var instHit = False
-    var instHitPrim = PrimId(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
+    var instHitPrim = PrimId(Int64(0), Int64(0), Int64(0), Int32(-1), PrimKind.triangle, Int8(0), Int8(0), Int8(0))
 
     # Only slots below toVisit are ever read, so nothing needs zeroing.
     var stack = Array[Int32, 64](uninitialized=True)
@@ -2004,7 +2005,7 @@ def traverse_bvh2_core_defer_curves[curves_on: Bool = True, inst_on: Bool = True
     var ray_dir = Vec3f(ray.direction.x, ray.direction.y, ray.direction.z)
 
     var has_nodes = _bvh_has_nodes(cur_oc)
-    var inst_leaf = PrimId(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
+    var inst_leaf = PrimId(Int64(0), Int64(0), Int64(0), Int32(-1), PrimKind.triangle, Int8(0), Int8(0), Int8(0))
     # Counting: the result slot itself holds the counters (twelve Int32), so nothing lives on the kernel stack.
     var cnt = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling()
     comptime if count_on:
@@ -2020,15 +2021,15 @@ def traverse_bvh2_core_defer_curves[curves_on: Bool = True, inst_on: Bool = True
                 var mesh_idx: Int
                 var base_vidx: Int
 
-                if prim.type == 0 or prim.type == 9:
+                if prim.type == PrimKind.triangle or prim.type == PrimKind.displaced:
                     mesh_idx = Int(prim.id1)
                     base_vidx = Int(prim.id2)
-                elif prim.type == 1 or prim.type == 2 or prim.type == 3:
+                elif prim.type == PrimKind.emitter:
                     if prim.id2 == -1:
                         continue # GPU cannot intersect non-triangle shapes directly yet
                     mesh_idx = Int(prim.id2 >> 32)
                     base_vidx = Int(prim.id2 & 0xFFFFFFFF) * 3
-                elif curves_on and prim.type == 5:
+                elif curves_on and prim.type == PrimKind.curve:
                     comptime if count_on: cnt[unsafe_offset=6] += Int32(1)
                     var slot = curve_cand_count[unsafe_offset=0]
                     if slot < Int32(CURVE_DEFER_K):
@@ -2044,7 +2045,7 @@ def traverse_bvh2_core_defer_curves[curves_on: Bool = True, inst_on: Bool = True
                             hitIndex = offset + j
                             instHit = False
                     continue
-                elif inst_on and prim.type == 8:
+                elif inst_on and prim.type == PrimKind.instances:
                     inst_leaf = prim      # walked after this loop, so a warp's threads walk the instances together
                     continue
                 else:
@@ -2060,7 +2061,7 @@ def traverse_bvh2_core_defer_curves[curves_on: Bool = True, inst_on: Bool = True
                 var p1 = mesh_pos(mesh, v1_idx)
                 var p2 = mesh_pos(mesh, v2_idx)
 
-                var hit_res = _displaced_tri_hit(meshes[unsafe_offset=mesh_idx], base_vidx, ray_org, ray_dir, localTHit) if prim.type == 9 else intersect_triangle(ray_org, ray_dir, p0, p1, p2, localTHit)
+                var hit_res = _displaced_tri_hit(meshes[unsafe_offset=mesh_idx], base_vidx, ray_org, ray_dir, localTHit) if prim.type == PrimKind.displaced else intersect_triangle(ray_org, ray_dir, p0, p1, p2, localTHit)
                 if hit_res[0] and (not alpha_on or not alpha_killed(mesh, v0_idx, v1_idx, v2_idx, hit_res[2], hit_res[3],
                                                    ray_org, ray_dir, (mesh_idx << 32) | base_vidx)):
                     localTHit = hit_res[1]
@@ -2127,7 +2128,7 @@ def traverse_bvh2_core_defer_curves[curves_on: Bool = True, inst_on: Bool = True
                 cur_oc = _node_oc(_node_hi(nodes_f, current))
 
     comptime if inst_on:
-        if inst_leaf.type == Int8(8):
+        if inst_leaf.type == PrimKind.instances:
             var sub = _traverse_instances[True](inst_leaf, meshes, blasNodesArr, blasPrimIdsArr, instances, ray_org, ray_dir, localTHit, False, curves, cnt)
             if sub[0]:
                 localTHit = sub[1]
@@ -2226,7 +2227,7 @@ def any_hit_bvh2_core[wide_on: Bool = True](
     var nearYIsMin = rdir.y >= Float32(0.0)
     var nearZIsMin = rdir.z >= Float32(0.0)
     # Only slots below toVisit are ever read, so nothing needs zeroing.
-    var inst_leaf = PrimId(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
+    var inst_leaf = PrimId(Int64(0), Int64(0), Int64(0), Int32(-1), PrimKind.triangle, Int8(0), Int8(0), Int8(0))
     var stack = Array[Int32, 64](uninitialized=True)
     var stack_ptr = stack.unsafe_ptr()
     var toVisit = 0
@@ -2244,15 +2245,15 @@ def any_hit_bvh2_core[wide_on: Bool = True](
                 var prim = primIds[unsafe_offset=offset + j]
                 var mesh_idx: Int
                 var base_vidx: Int
-                if prim.type == 0 or prim.type == 9:
+                if prim.type == PrimKind.triangle or prim.type == PrimKind.displaced:
                     mesh_idx = Int(prim.id1)
                     base_vidx = Int(prim.id2)
-                elif prim.type == 1 or prim.type == 2 or prim.type == 3:
+                elif prim.type == PrimKind.emitter:
                     if prim.id2 == -1:
                         continue
                     mesh_idx = Int(prim.id2 >> 32)
                     base_vidx = Int(prim.id2 & 0xFFFFFFFF) * 3
-                elif prim.type == 5:
+                elif prim.type == PrimKind.curve:
                     # pbrt "interface" (null) material: no BSDF, medium boundary
                     # only -- must not occlude. See _shadow_is_null_material.
                     if _shadow_is_null_material(materials, prim.materialIndex):
@@ -2261,7 +2262,7 @@ def any_hit_bvh2_core[wide_on: Bool = True](
                     if intersect_curve(ray_org, ray_dir, curve, Int(prim.id2) // 8, Int(prim.id2) % 8, tMax)[0]:
                         return True
                     continue
-                elif prim.type == 8:
+                elif prim.type == PrimKind.instances:
                     if _shadow_is_null_material(materials, prim.materialIndex):
                         continue
                     inst_leaf = prim      # walked after this loop, so a warp's threads walk the instances together
@@ -2274,7 +2275,7 @@ def any_hit_bvh2_core[wide_on: Bool = True](
                 var p0 = mesh_pos(meshes[unsafe_offset=mesh_idx], v0)
                 var p1 = mesh_pos(meshes[unsafe_offset=mesh_idx], v1)
                 var p2 = mesh_pos(meshes[unsafe_offset=mesh_idx], v2)
-                var hit_res = _displaced_tri_hit(meshes[unsafe_offset=mesh_idx], base_vidx, ray_org, ray_dir, tMax) if prim.type == 9 else intersect_triangle(ray_org, ray_dir, p0, p1, p2, tMax)
+                var hit_res = _displaced_tri_hit(meshes[unsafe_offset=mesh_idx], base_vidx, ray_org, ray_dir, tMax) if prim.type == PrimKind.displaced else intersect_triangle(ray_org, ray_dir, p0, p1, p2, tMax)
                 if hit_res[0]:
                     # Tested after the hit, not before: the null-material and
                     # alpha lookups only matter for a primitive that is
@@ -2323,7 +2324,7 @@ def any_hit_bvh2_core[wide_on: Bool = True](
                 toVisit -= 1
                 current = Int(stack_ptr[unsafe_offset=toVisit])
                 cur_oc = _node_oc(_node_hi(nodes_f, current))
-    if inst_leaf.type == Int8(8):
+    if inst_leaf.type == PrimKind.instances:
         return _traverse_instances[wide_on](inst_leaf, meshes, blasNodesArr, blasPrimIdsArr, instances, ray_org, ray_dir, tMax, True, curves)[0]
     return False
 
@@ -2484,15 +2485,8 @@ def _bvh4_tris(
             var t = tris.unsafe_offset(k * _BVH4_TRI_STRIDE)
             for c in range(_BVH4_TRI_STRIDE):
                 t[unsafe_offset=c] = Float32(0.0)
-            var mesh_idx = -1
-            var base_vidx = 0
-            if prim.type == 0:
-                mesh_idx = Int(prim.id1)
-                base_vidx = Int(prim.id2)
-            elif (prim.type == 1 or prim.type == 2 or prim.type == 3) and prim.id2 != -1:
-                mesh_idx = Int(prim.id2 >> 32)
-                base_vidx = Int(prim.id2 & 0xFFFFFFFF) * 3
-            if mesh_idx < 0:
+            var (mesh_idx, base_vidx) = prim.triangle()
+            if mesh_idx < 0 or prim.type == PrimKind.displaced:   # resolved through the PrimId
                 t[unsafe_offset=3] = Float32(2.0)
                 continue
             var mesh = meshes[unsafe_offset=mesh_idx]
@@ -2656,7 +2650,7 @@ def traverse_bvh4_core[Or: Origin[mut=True]](
     var bestU: Float32 = 0.0
     var bestV: Float32 = 0.0
     var instHit = False
-    var instHitPrim = PrimId(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
+    var instHitPrim = PrimId(Int64(0), Int64(0), Int64(0), Int32(-1), PrimKind.triangle, Int8(0), Int8(0), Int8(0))
 
     # Stack entry: entry distance's float bits (>= 0, so they order as integers) << 32 | child ref.
     var sK = Array[UInt64, _BVH4_STACK](uninitialized=True)
@@ -2687,11 +2681,7 @@ def traverse_bvh4_core[Or: Origin[mut=True]](
                             instHit = False
                         else:
                             var tprim = primIds[unsafe_offset=slot]
-                            var t_mesh_idx = Int(tprim.id1)
-                            var t_base_vidx = Int(tprim.id2)
-                            if tprim.type != 0:
-                                t_mesh_idx = Int(tprim.id2 >> 32)
-                                t_base_vidx = Int(tprim.id2 & 0xFFFFFFFF) * 3
+                            var (t_mesh_idx, t_base_vidx) = tprim.triangle()
                             var t_mesh = meshes[unsafe_offset=t_mesh_idx]
                             var tv0 = Int(mesh_vi(t_mesh, t_base_vidx))
                             var tv1 = Int(mesh_vi(t_mesh, t_base_vidx + 1))
@@ -2705,7 +2695,7 @@ def traverse_bvh4_core[Or: Origin[mut=True]](
                                 instHit = False
                     continue
                 var prim = primIds[unsafe_offset=slot]
-                if prim.type == 5:
+                if prim.type == PrimKind.curve:
                     var curve = curve_at(curves, Int(prim.id1))
                     var curve_hit = intersect_curve(ray_org, ray_dir, curve, Int(prim.id2) // 8, Int(prim.id2) % 8, localTHit)
                     if curve_hit[0]:
@@ -2714,7 +2704,7 @@ def traverse_bvh4_core[Or: Origin[mut=True]](
                         bestV = curve_hit[3]
                         hitIndex = slot
                         instHit = False
-                elif prim.type == 9:
+                elif prim.type == PrimKind.displaced:
                     var dh = _displaced_tri_hit(meshes[unsafe_offset=Int(prim.id1)], Int(prim.id2), ray_org, ray_dir, localTHit)
                     if dh[0]:
                         localTHit = dh[1]
@@ -2722,7 +2712,7 @@ def traverse_bvh4_core[Or: Origin[mut=True]](
                         bestV = dh[3]
                         hitIndex = slot
                         instHit = False
-                elif prim.type == 8:
+                elif prim.type == PrimKind.instances:
                     var sub = _traverse_instances[True](prim, meshes, blasNodesArr, blasPrimIdsArr, instances, ray_org, ray_dir, localTHit, False, curves)
                     if sub[0]:
                         localTHit = sub[1]
@@ -2790,7 +2780,7 @@ def traverse_bvh4_core[Or: Origin[mut=True]](
             sphereIdx = i
 
     if sphereHit:
-        var spId = PrimId(Int64(sphereIdx), Int64(-1), Int64(spheres[unsafe_offset=sphereIdx].materialIndex), Int32(-1), Int8(4), Int8(0), Int8(0), Int8(0))
+        var spId = PrimId(Int64(sphereIdx), Int64(-1), Int64(spheres[unsafe_offset=sphereIdx].materialIndex), Int32(-1), PrimKind.sphere, Int8(0), Int8(0), Int8(0))
         resultPtr[unsafe_offset=0] = Intersection(spId, localTHit, Float32(0), Float32(0), Int8(1), 0, 0, 0)
     elif instHit:
         resultPtr[unsafe_offset=0] = Intersection(surface_prim(instHitPrim), localTHit, bestU, bestV, Int8(1), 0, 0, 0)
@@ -2864,11 +2854,7 @@ def any_hit_bvh4_core(
                             continue
                         if th[4] == Float32(0.0):
                             return True
-                        var t_mesh_idx = Int(tprim.id1)
-                        var t_base_vidx = Int(tprim.id2)
-                        if tprim.type != 0:
-                            t_mesh_idx = Int(tprim.id2 >> 32)
-                            t_base_vidx = Int(tprim.id2 & 0xFFFFFFFF) * 3
+                        var (t_mesh_idx, t_base_vidx) = tprim.triangle()
                         var t_mesh = meshes[unsafe_offset=t_mesh_idx]
                         var tv0 = Int(mesh_vi(t_mesh, t_base_vidx))
                         var tv1 = Int(mesh_vi(t_mesh, t_base_vidx + 1))
@@ -2878,18 +2864,18 @@ def any_hit_bvh4_core(
                             return True
                     continue
                 var prim = primIds[unsafe_offset=slot]
-                if prim.type == 5:
+                if prim.type == PrimKind.curve:
                     if _shadow_is_null_material(materials, prim.materialIndex):
                         continue
                     var curve = curve_at(curves, Int(prim.id1))
                     if intersect_curve(ray_org, ray_dir, curve, Int(prim.id2) // 8, Int(prim.id2) % 8, tMax)[0]:
                         return True
-                elif prim.type == 9:
+                elif prim.type == PrimKind.displaced:
                     if _shadow_is_null_material(materials, prim.materialIndex):
                         continue
                     if _displaced_tri_hit(meshes[unsafe_offset=Int(prim.id1)], Int(prim.id2), ray_org, ray_dir, tMax)[0]:
                         return True
-                elif prim.type == 8:
+                elif prim.type == PrimKind.instances:
                     if _shadow_is_null_material(materials, prim.materialIndex):
                         continue
                     if _traverse_instances[True](prim, meshes, blasNodesArr, blasPrimIdsArr, instances, ray_org, ray_dir, tMax, True, curves)[0]:
@@ -3446,12 +3432,12 @@ def render_aux_buffers[Osc: Origin[mut=True], Onm: Origin[mut=True], Oc2w: Origi
         if isects[unsafe_offset=i].hit != Int8(0):
             d = isects[unsafe_offset=i].tHit
             var typ = Int(isects[unsafe_offset=i].primId.type)
-            if typ == 4:
+            if typ == Int(PrimKind.sphere):
                 # Sphere: normal = normalize(hit_point - center)
                 var si  = Int(isects[unsafe_offset=i].primId.id1)
                 if si >= 0 and si < Int(sd.sphereCount):
                     normal = sphere_outward_normal(org + dir*d, sd.spheres[unsafe_offset=si].center)
-            elif typ == 5:
+            elif typ == Int(PrimKind.curve):
                 # Native curve: reconstruct the geometric normal the same way
                 # shade_hair does (shading.mojo) — h/v come straight from
                 # intersect_curve via Intersection.u/.v, no tessellated mesh.
@@ -3472,16 +3458,9 @@ def render_aux_buffers[Osc: Origin[mut=True], Onm: Origin[mut=True], Oc2w: Origi
                     var gl = sqrt(dot(geo, geo))
                     if gl > Float32(0):
                         normal = Vec3f(geo[0] / gl, geo[1] / gl, geo[2] / gl)
-            elif typ == 0 or typ == 1 or typ == 2 or typ == 3:
+            elif isects[unsafe_offset=i].primId.triangle()[0] >= 0:
                 # Triangle: geometric normal from edge cross product
-                var mesh_idx: Int
-                var base_vidx: Int
-                if typ == 0:
-                    mesh_idx  = Int(isects[unsafe_offset=i].primId.id1)
-                    base_vidx = Int(isects[unsafe_offset=i].primId.id2)
-                else:
-                    mesh_idx  = Int(isects[unsafe_offset=i].primId.id2 >> 32)
-                    base_vidx = Int(isects[unsafe_offset=i].primId.id2 & 0xFFFFFFFF) * 3
+                var (mesh_idx, base_vidx) = isects[unsafe_offset=i].primId.triangle()
                 # Bounds-check before dereferencing sd.meshes -- defensive,
                 # same as the sphere/curve branches above: fail open (leave
                 # `normal` at its background default) rather than trust an

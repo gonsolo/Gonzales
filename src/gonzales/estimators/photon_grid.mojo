@@ -7,6 +7,7 @@ from gonzales.core.geometry import Point3f, Vec3f, Ray, dot, PI
 from gonzales.scene.shapes.primitives import Intersection, PrimId
 from gonzales.scene.shapes.geom_normal import _geom_normal
 from gonzales.scene.accel.bvh import SceneView, traverse_dispatch
+from gonzales.scene.shapes.primitives import PrimKind
 
 
 comptime _HSIZE  = 1048576   # 2^20 hash buckets
@@ -178,7 +179,7 @@ def gather_ball_reach[probes: Int = GATHER_BALL_PROBES](ref sd: SceneView, p: Po
     cancels. `probes` rays out of p on a spherical Fibonacci set that a hash of `salt` and p rotates at random
     (uniform axis, uniform spin); 16 overshoot a plane's distance by under 4%."""
     var _local = Array[Intersection, 1](fill=Intersection(
-        PrimId(Int64(-1), Int64(-1), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0)),
+        PrimId(Int64(-1), Int64(-1), Int64(0), Int32(-1), PrimKind.triangle, Int8(0), Int8(0), Int8(0)),
         Float32(0), Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0)))
     var mem = _local.unsafe_ptr()   # tracked: keeps _local alive while read
     var rot = Float32(grid_coin_bits(salt, p)) * Float32(2.3283064e-10) * Float32(6.2831853)
@@ -202,7 +203,7 @@ def gather_ball_reach[probes: Int = GATHER_BALL_PROBES](ref sd: SceneView, p: Po
         mem[unsafe_offset=0].hit = Int8(0)
         traverse_dispatch(sd.bvh4, sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, reach, mem,
                            sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances)
-        if mem[unsafe_offset=0].hit != Int8(0) and mem[unsafe_offset=0].primId.type != Int8(5):
+        if mem[unsafe_offset=0].hit != Int8(0) and mem[unsafe_offset=0].primId.type != PrimKind.curve:
             reach = min(reach, mem[unsafe_offset=0].tHit)
     return reach
 
@@ -262,7 +263,7 @@ def gather_disk_coverage[probes: Int = GATHER_COVERAGE_PROBES](
     # A private slot, as _visible_transmittance: the caller's scratch may be
     # live in an enclosing traversal.
     var _local = Array[Intersection, 1](fill=Intersection(
-        PrimId(Int64(-1), Int64(-1), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0)),
+        PrimId(Int64(-1), Int64(-1), Int64(0), Int32(-1), PrimKind.triangle, Int8(0), Int8(0), Int8(0)),
         Float32(0), Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0)))
     var mem = _local.unsafe_ptr()   # tracked: keeps _local alive while read
     var rot = Float32(grid_coin_bits(salt, p)) * Float32(2.3283064e-10) * Float32(6.2831853)
@@ -280,7 +281,7 @@ def gather_disk_coverage[probes: Int = GATHER_COVERAGE_PROBES](
         mem[unsafe_offset=0].hit = Int8(0)
         traverse_dispatch(sd.bvh4, sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, Float32(2) * lift, mem,
                            sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances)
-        if mem[unsafe_offset=0].hit != Int8(0) and mem[unsafe_offset=0].primId.type != Int8(4):
+        if mem[unsafe_offset=0].hit != Int8(0) and mem[unsafe_offset=0].primId.type != PrimKind.sphere:
             var ng = _geom_normal(mem[unsafe_offset=0], sd.meshes, sd.instances)
             if abs(dot(ng, n)) > Float32(0.7):
                 hits += 1

@@ -11,6 +11,7 @@ from gonzales.scene.accel.bvh import SceneView, traverse_dispatch
 from gonzales.scene.appearance.materials import MatKind
 from gonzales.transport.sss_walk import sss_relative_eta
 from gonzales.estimators.dipole import Dipole
+from gonzales.scene.shapes.primitives import PrimKind
 
 comptime _LEAF = 8
 comptime _MAX_POINTS = 4_000_000
@@ -19,7 +20,7 @@ comptime _MAX_POINTS = 4_000_000
 @always_inline
 def is_translucent(ref sd: SceneView, p: PrimId) -> Bool:
     """A triangle of a pbrt subsurface object, the surfaces the cache samples."""
-    return p.type == Int8(0) and p.instanceIdx < Int32(0) and sd.materials[unsafe_offset=Int(p.materialIndex)].sss_walk_interior()
+    return p.type == PrimKind.triangle and p.instanceIdx < Int32(0) and sd.materials[unsafe_offset=Int(p.materialIndex)].sss_walk_interior()
 
 
 @fieldwise_init

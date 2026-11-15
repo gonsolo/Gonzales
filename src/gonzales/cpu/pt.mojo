@@ -23,6 +23,7 @@ from gonzales.transport.restir_di import ReservoirIO, reservoir_io_null
 from gonzales.transport.restir_gi import GIReservoirIO, gi_reservoir_io_null
 from gonzales.integrators.pt.restir_sms import SMSReservoirIO, sms_reservoir_io_null
 from gonzales.integrators.pt.restir_vol import VolReservoirIO, vol_reservoir_io_null
+from gonzales.scene.shapes.primitives import PrimKind
 
 
 @always_inline
@@ -30,11 +31,7 @@ def _tri_slot(inter: Intersection) -> Tuple[Int, Int]:
     """(mesh index, base vertex-index offset) of a triangle hit, or (-1, 0)."""
     if inter.hit == Int8(0):
         return (-1, 0)
-    if inter.primId.type == 0:
-        return (Int(inter.primId.id1), Int(inter.primId.id2))
-    if inter.primId.type == 1 or inter.primId.type == 2 or inter.primId.type == 3:
-        return (Int(inter.primId.id2 >> 32), Int(inter.primId.id2 & 0xFFFFFFFF) * 3)
-    return (-1, 0)
+    return inter.primId.triangle()
 
 
 @always_inline

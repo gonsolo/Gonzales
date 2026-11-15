@@ -56,6 +56,7 @@ from gonzales.core.spectrum import (
     rgb_illuminant_to_spectral_sample, spectral_sample_to_rgb,
     spec_refl, spec_refl_unbounded, spec_illum, pass_wavelengths,
 )
+from gonzales.scene.shapes.primitives import PrimKind
 
 
 comptime _ALPHA  = Float32(2.0) / Float32(3.0)  # pbrt-v4's own value (integrators.cpp's SPPM radius-update `gamma`, Hachisuka/Jensen progressive photon mapping); was 0.7, a real but small (~5% asymptotic shrinkage-rate) mismatch
@@ -852,7 +853,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
         # surface that separately does its own NEE — mutually exclusive per
         # sample, same reasoning as the infinite-light miss-escape case
         # below, so there's no competing strategy to double-count against.
-        if inter.primId.type == Int8(4):
+        if inter.primId.type == PrimKind.sphere:
             var sph_hit = sd.spheres[unsafe_offset=Int(inter.primId.id1)]
             if sph_hit.isAreaLight != Int8(0):
                 if glossy_pdf < Float32(0):
@@ -879,7 +880,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
             # median there was 0. For a curve, id1 is the curve index, not an
             # AreaLight index, and the curve's emission lives in its own
             # material slot; a closed tube is always hit on its outside.
-            if inter.primId.type == Int8(5):
+            if inter.primId.type == PrimKind.curve:
                 if glossy_pdf < Float32(0):
                     vp.env += vp.beta * _film_rgb(mat.emission, vp.wavelengths, sd)
             else:
@@ -1443,7 +1444,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
             if not mat.is_mirror() and n_events - n_null > 1:
                 _sppm_store_photon[use_gpu](
                     SPPMPhoton(pos=hit, flux=flux, nxt=Int32(-1), is_volume=PhotonKind.surface, dir_in=rd, wavelengths=ph_wavelengths,
-                               curve=Int32(inter.primId.id1) if inter.primId.type == Int8(5) else Int32(-1)),
+                               curve=Int32(inter.primId.id1) if inter.primId.type == PrimKind.curve else Int32(-1)),
                     photons, max_photons, counter)
             var sh = surface_hit[tex_gpu](sd, inter, mat, hit, ray_dir, Float32(-1.0))
             var s_l = sh.bsdf(mat, mat_idx, adjoint=True).sample(pcg.next_float(), pcg.next_float(), pcg.next_float(),

@@ -27,6 +27,7 @@ from gonzales.integrators.pt.common import _shading_normal, _curve_extra_offset,
 from gonzales.transport.glossy_sms import glossy_sms_lobe, glossy_sms_live
 from gonzales.integrators.pt.nee import _glossy_sms_nee, _nee_simple_light_count, _nee_sample_simple_light, _nee_loop_simple, _lobe_nee, _lobe_nee_with, _nee_infinite_light, _sample_area_light_nee_u, _mnee_at_walk_exit, _nee_area_lights
 from gonzales.integrators.pt.restir import _gi_generate_recon_candidate, gi_resolve, di_temporal_step
+from gonzales.scene.shapes.primitives import PrimKind
 
 
 # ── DiffuseTransmission branch ────────────────────────────────────────────────
@@ -548,7 +549,7 @@ def shade_dielectric[use_gpu: Bool, enqueue_shadow: Bool](
             geom_normal = _apply_normal_map_sphere[use_gpu](mat, center, hit_point_raw, geom_normal, ctx.tex_filenames, ctx.textures, ctx.n_textures)
 
     var ior = mat.albedo.r
-    var walks = mat.sss_walk_interior() and inter.primId.type == Int8(0)
+    var walks = mat.sss_walk_interior() and inter.primId.type == PrimKind.triangle
     if mat.is_rough_dielectric() and (mat.sss_boundary == Int8(0) or walks):
         # A real BSDF, not a delta: pbrt's rough DielectricBxDF, with NEE. Below skin, what it transmits starts the walk.
         var tint = SpectralSample(Float32(1))
@@ -586,7 +587,7 @@ def shade_dielectric[use_gpu: Bool, enqueue_shadow: Bool](
             var a_pt = _tex_lookup[use_gpu](mat, inter, v0, v1, v2, mesh,
                                             ctx.tex_filenames, ctx.textures, ctx.n_textures)
             path_ptr[].throughput *= sss_texel_tint(a_pt, mat.sss_mean_refl, path_ptr[].wavelengths)
-    if mat.sss_walk_interior() and not is_reflect and inter.primId.type == Int8(0) and \
+    if mat.sss_walk_interior() and not is_reflect and inter.primId.type == PrimKind.triangle and \
        (force_entering or dot(ray_dir, geom_normal) < Float32(0.0)):
         var wi_lobe = sss_entry_lobe(face_toward(geom_normal, bs.wi), sss_relative_eta(mat, path_ptr[].current_dielectric_ior), pcg)
         _sss_walk_enter_interior(path_ptr, mat, inter, ray_org + ray_dir * inter.tHit, geom_normal, wi_lobe, ctx.spectral)
@@ -893,7 +894,7 @@ def shade_hair[use_gpu: Bool, enqueue_shadow: Bool](
     mat: Material,
 ):
     """Hair (Marschner R/TT/TRT) through its BSDF, with the Sobol dimensions for light and scatter."""
-    if inter.primId.type != 5:
+    if inter.primId.type != PrimKind.curve:
         path_ptr[].active = 0
         return
     var curve_idx = Int(inter.primId.id1)

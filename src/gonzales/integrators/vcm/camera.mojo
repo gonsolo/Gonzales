@@ -47,6 +47,7 @@ from gonzales.paths.vcm.strategy import VcmStrategies, _vcm_keep, _vcm_eta_scale
 from gonzales.paths.vcm.connect import _bdpt_connect_to_cache, _bdpt_connect_to_cache_deferred
 from gonzales.paths.vcm.merge import _bdpt_merge_from_cache
 from gonzales.transport.surface import surface_hit
+from gonzales.scene.shapes.primitives import PrimKind
 
 def _bdpt_trace_camera_and_connect[use_gpu: Bool](
     r2c:     Pointer[Float32, MutUntrackedOrigin],
@@ -252,7 +253,7 @@ def _area_light_hit(ref sd: SceneView, inter: Intersection, mat: Material,
                     ray_dir: Vec3f) -> Tuple[RGB, Float32, Int, Float32]:
     """What a ray that hit an area-light triangle or curve reached:
     (emission, total area, its pick slot -- area lights come first, in index"""
-    if inter.primId.type == Int8(5):
+    if inter.primId.type == PrimKind.curve:
         var (al_ci, cos_c) = curve_light_hit(inter, sd.curves, sd.areaLights,
                                              Int(sd.areaLightCount), ray_dir)
         var area = Float32(0)
@@ -639,7 +640,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool, defer_walk: Bool = False](
 
         # Direct hit on an emissive analytic sphere — checked BEFORE material
         # dispatch since the sphere's own material is often an inert
-        if inter.primId.type == Int8(4):
+        if inter.primId.type == PrimKind.sphere:
             var sph_hit = sd.spheres[unsafe_offset=Int(inter.primId.id1)]
             if sph_hit.isAreaLight != Int8(0):
                 var mis_w_sph_hit = Float32(1)
@@ -681,7 +682,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool, defer_walk: Bool = False](
         if mat.type == MatKind.area_light or mat.type == MatKind.lamp:
             # Direct hit on a triangle/curve area light — same MIS-against-
             # last_bsdf_pdf treatment as the sphere case above. id1 is the
-            var is_curve = inter.primId.type == Int8(5)
+            var is_curve = inter.primId.type == PrimKind.curve
             var (al_emission, al_area, al_slot, cos_l_hit) = _area_light_hit(sd, inter, mat, ray_dir)
             # A curve is a closed tube, so an unweighted (primary/delta) hit is
             # always on its outside -- credited regardless of the reconstructed

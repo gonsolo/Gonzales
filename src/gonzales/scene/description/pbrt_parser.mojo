@@ -40,6 +40,7 @@ from gonzales.scene.description.material_builder import _psc_handle_make_named_m
 from gonzales.scene.appearance.measured_bsdf import load_measured_brdf_full
 from gonzales.scene.description.light_builder import _psc_handle_area_light_source, handle_light_source
 from gonzales.scene.description.scene_builder import store_mesh
+from gonzales.scene.shapes.primitives import PrimKind
 
 # ── Output struct ─────────────────────────────────────────────────────────────
 
@@ -3217,7 +3218,7 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
                 var og = Int(c_order[unsafe_offset=k])
                 var cmat = Int(s[unsafe_offset=0].curves_mat[Int(c_curve[unsafe_offset=og])])
                 c_prims[unsafe_offset=k] = PrimId(Int64(c_curve[unsafe_offset=og]), Int64(c_id2[unsafe_offset=og]),
-                    Int64(cmat) if cmat >= 0 else Int64(default_mat_idx), Int32(-1), Int8(5), Int8(0), Int8(0), Int8(0))
+                    Int64(cmat) if cmat >= 0 else Int64(default_mat_idx), Int32(-1), PrimKind.curve, Int8(0), Int8(0), Int8(0))
             c_bounds.unsafe_free(); c_curve.unsafe_free(); c_id2.unsafe_free(); c_order.unsafe_free()
             if c_node_count > Int32(0):
                 curve_blas = blas_total
@@ -3367,7 +3368,7 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
             t_nodes[unsafe_offset=0] = BVH2Node(Point3f(Float32(0)), Point3f(Float32(0)), Int32(0), Int32(0))
             t_mesh.unsafe_free(); t_local.unsafe_free(); t_order.unsafe_free()
             var none_rec = unsafe_alloc[PrimId](1)
-            none_rec[unsafe_offset=0] = PrimId(Int64(-1), Int64(curve_blas), Int64(0), Int32(-1), Int8(7), Int8(0), Int8(0), Int8(0))
+            none_rec[unsafe_offset=0] = PrimId(Int64(-1), Int64(curve_blas), Int64(0), Int32(-1), PrimKind.merged_blas, Int8(0), Int8(0), Int8(0))
             blas_nodes_arr[unsafe_offset=tmpl]   = t_nodes
             blas_primids_arr[unsafe_offset=tmpl] = none_rec
             blas_node_counts[unsafe_offset=tmpl]   = Int32(1)
@@ -3393,7 +3394,7 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
             tmp.unsafe_free()
             t_mesh.unsafe_free(); t_local.unsafe_free(); t_order.unsafe_free()
             var one = unsafe_alloc[PrimId](1)
-            one[unsafe_offset=0] = PrimId(Int64(mstart), Int64(curve_blas), Int64(0), Int32(-1), Int8(7), Int8(0), Int8(0), Int8(0))
+            one[unsafe_offset=0] = PrimId(Int64(mstart), Int64(curve_blas), Int64(0), Int32(-1), PrimKind.merged_blas, Int8(0), Int8(0), Int8(0))
             blas_nodes_arr[unsafe_offset=tmpl]   = t_nodes
             blas_primids_arr[unsafe_offset=tmpl] = one
             blas_node_counts[unsafe_offset=tmpl]   = t_node_count
@@ -3409,7 +3410,7 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
             var mat_idx = Int(s[unsafe_offset=0].meshes[mi].mat_idx)
             var mat_idx_r = mat_idx if mat_idx >= 0 else Int(default_mat_idx)
             t_prim_ids[unsafe_offset=k] = PrimId(Int64(mi), Int64(ti * 3), Int64(mat_idx_r), Int32(-1),
-                                                 Int8(9) if _is_displaced(s, mi, ti) else Int8(0), Int8(0), Int8(0), Int8(0))
+                                                 PrimKind.displaced if _is_displaced(s, mi, ti) else PrimKind.triangle, Int8(0), Int8(0), Int8(0))
         t_mesh.unsafe_free(); t_local.unsafe_free(); t_order.unsafe_free()
         blas_nodes_arr[unsafe_offset=tmpl]   = t_nodes
         blas_primids_arr[unsafe_offset=tmpl] = t_prim_ids
@@ -3604,13 +3605,13 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
                 var ti = Int(tri_local[unsafe_offset=orig])
                 if s[unsafe_offset=0].meshes[mi].is_area_light:
                     var al_idx = Int(mesh_al_idx[unsafe_offset=mi])
-                    prim_ids_gpu[unsafe_offset=k].type          = Int8(3)
+                    prim_ids_gpu[unsafe_offset=k].type          = PrimKind.emitter
                     prim_ids_gpu[unsafe_offset=k].id1           = Int64(al_idx)
                     prim_ids_gpu[unsafe_offset=k].id2           = (Int64(mi) << 32) | Int64(ti)
                     prim_ids_gpu[unsafe_offset=k].materialIndex = Int64(al_mat_base + al_idx)
                 else:
                     var mat_idx = Int(s[unsafe_offset=0].meshes[mi].mat_idx)
-                    prim_ids_gpu[unsafe_offset=k].type          = Int8(9) if _is_displaced(s, mi, ti) else Int8(0)
+                    prim_ids_gpu[unsafe_offset=k].type          = PrimKind.displaced if _is_displaced(s, mi, ti) else Int8(0)
                     prim_ids_gpu[unsafe_offset=k].id1           = Int64(mi)
                     prim_ids_gpu[unsafe_offset=k].id2           = Int64(ti * 3)
                     prim_ids_gpu[unsafe_offset=k].materialIndex = Int64(mat_idx) if mat_idx >= 0 else Int64(default_mat_idx)
@@ -3618,7 +3619,7 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
                 var gidx = orig - Int(total_tris)
                 var ci = Int(group_curve_idx[unsafe_offset=gidx])
                 var curve_mat_idx = Int(s[unsafe_offset=0].curves_mat[ci])
-                prim_ids_gpu[unsafe_offset=k].type          = Int8(5)
+                prim_ids_gpu[unsafe_offset=k].type          = PrimKind.curve
                 prim_ids_gpu[unsafe_offset=k].id1           = Int64(ci)
                 prim_ids_gpu[unsafe_offset=k].id2           = Int64(group_id2[unsafe_offset=gidx])
                 prim_ids_gpu[unsafe_offset=k].materialIndex = Int64(curve_al_mat_idx[unsafe_offset=ci]) if s[unsafe_offset=0].curves_al[ci] else (Int64(curve_mat_idx) if curve_mat_idx >= 0 else Int64(default_mat_idx))
@@ -3634,13 +3635,13 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
             var ti   = Int(tri_local[unsafe_offset=orig])
             if s[unsafe_offset=0].meshes[mi].is_area_light:
                 var al_idx = Int(mesh_al_idx[unsafe_offset=mi])
-                prim_ids[unsafe_offset=k].type          = Int8(3)
+                prim_ids[unsafe_offset=k].type          = PrimKind.emitter
                 prim_ids[unsafe_offset=k].id1           = Int64(al_idx)
                 prim_ids[unsafe_offset=k].id2           = (Int64(mi) << 32) | Int64(ti)
                 prim_ids[unsafe_offset=k].materialIndex = Int64(al_mat_base + al_idx)
             else:
                 var mat_idx = Int(s[unsafe_offset=0].meshes[mi].mat_idx)
-                prim_ids[unsafe_offset=k].type          = Int8(9) if _is_displaced(s, mi, ti) else Int8(0)
+                prim_ids[unsafe_offset=k].type          = PrimKind.displaced if _is_displaced(s, mi, ti) else Int8(0)
                 prim_ids[unsafe_offset=k].id1           = Int64(mi)
                 prim_ids[unsafe_offset=k].id2           = Int64(ti * 3)
                 prim_ids[unsafe_offset=k].materialIndex = Int64(mat_idx) if mat_idx >= 0 else Int64(default_mat_idx)
@@ -3648,12 +3649,12 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
             var gidx = orig - Int(total_tris)
             var ci = Int(group_curve_idx[unsafe_offset=gidx])
             var curve_mat_idx = Int(s[unsafe_offset=0].curves_mat[ci])
-            prim_ids[unsafe_offset=k].type          = Int8(5)
+            prim_ids[unsafe_offset=k].type          = PrimKind.curve
             prim_ids[unsafe_offset=k].id1           = Int64(ci)
             prim_ids[unsafe_offset=k].id2           = Int64(group_id2[unsafe_offset=gidx])
             prim_ids[unsafe_offset=k].materialIndex = Int64(curve_al_mat_idx[unsafe_offset=ci]) if s[unsafe_offset=0].curves_al[ci] else (Int64(curve_mat_idx) if curve_mat_idx >= 0 else Int64(default_mat_idx))
         else:
-            prim_ids[unsafe_offset=k].type          = Int8(8)
+            prim_ids[unsafe_offset=k].type          = PrimKind.instances
             prim_ids[unsafe_offset=k].id1           = Int64(n_templates)
             prim_ids[unsafe_offset=k].id2           = Int64(0)
             prim_ids[unsafe_offset=k].materialIndex = Int64(0)
@@ -3664,7 +3665,7 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
         prim_ids[unsafe_offset=k].instanceIdx = Int32(-1)
         prim_ids[unsafe_offset=k]._pad0 = Int8(0); prim_ids[unsafe_offset=k]._pad1 = Int8(0)
         prim_ids[unsafe_offset=k]._pad2 = Int8(0)
-        if prim_ids[unsafe_offset=k].type == Int8(8):
+        if prim_ids[unsafe_offset=k].type == PrimKind.instances:
             prim_ids[unsafe_offset=k]._pad0 = inst_wide
 
     for mi in range(n_extra):
@@ -3674,13 +3675,13 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
         prim_ids[unsafe_offset=k]._pad0 = Int8(0); prim_ids[unsafe_offset=k]._pad1 = Int8(0); prim_ids[unsafe_offset=k]._pad2 = Int8(0)
         if s[unsafe_offset=0].meshes[mi].is_area_light:
             var al_idx = Int(mesh_al_idx[unsafe_offset=mi])
-            prim_ids[unsafe_offset=k].type = Int8(3)
+            prim_ids[unsafe_offset=k].type = PrimKind.emitter
             prim_ids[unsafe_offset=k].id1 = Int64(al_idx)
             prim_ids[unsafe_offset=k].id2 = Int64(mi) << 32
             prim_ids[unsafe_offset=k].materialIndex = Int64(al_mat_base + al_idx)
         else:
             var mat_idx = Int(s[unsafe_offset=0].meshes[mi].mat_idx)
-            prim_ids[unsafe_offset=k].type = Int8(0)
+            prim_ids[unsafe_offset=k].type = PrimKind.triangle
             prim_ids[unsafe_offset=k].id1 = Int64(-1 if merged_mesh else mi)
             prim_ids[unsafe_offset=k].id2 = Int64(0)
             prim_ids[unsafe_offset=k].materialIndex = Int64(mat_idx) if mat_idx >= 0 else Int64(default_mat_idx)

@@ -9,6 +9,7 @@ from gonzales.scene.shapes.geom_normal import _geom_normal, _shading_normal_at
 from gonzales.transport.texturing import _tex_lookup, _get_tri_verts, apply_surface_maps_at_hit, uv_footprint_at_hit, resolve_rough_texture
 from gonzales.transport.bxdf import BSDF
 from gonzales.core.spectrum import SampledWavelengths, SpectralSample, rgb_bands_to_spectral_sample
+from gonzales.scene.shapes.primitives import PrimKind
 
 
 @fieldwise_init
@@ -70,7 +71,7 @@ def surface_hit[use_gpu: Bool](ref sd: SceneView, inter: Intersection, mut mat: 
     """The hit at a lobe material, whose textured roughness it resolves into `mat`. `cone_w` is the camera ray's
     footprint width for texture filtering, -1 for none."""
     # Geometry, not material: a curve hit has its own normal and spawn offset, and no texture or bump map.
-    var on_curve = inter.primId.type == Int8(5)
+    var on_curve = inter.primId.type == PrimKind.curve
     var spawn_eps = offset_eps(hit.x, hit.y, hit.z)
     var gn: Vec3f
     if on_curve:

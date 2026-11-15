@@ -38,6 +38,7 @@ from std.math import ceildiv, sqrt
 from std.sys import has_accelerator
 from gonzales.gpu.scene import GpuSceneHandle
 from gonzales.transport.sss_walk import _sss_walk_step, WalkTracer
+from gonzales.scene.shapes.primitives import PrimKind
 
 @__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
 @__llvm_metadata(`nvvm.minctasm`=SIMDLength(1))    # NVIDIA keeps its old register budget; AMD ignores this
@@ -695,13 +696,13 @@ def _unpack_rt_result(
         if al >= Int32(0):
             inter[unsafe_offset=ot] = Intersection(
                 PrimId(Int64(al), (Int64(mi) << 32) | Int64(tri), mat_idx, Int32(-1),
-                         Int8(3), Int8(0), Int8(0), Int8(0)),
+                         PrimKind.emitter, Int8(0), Int8(0), Int8(0)),
                 hitT, u, v, Int8(1), Int8(0), Int8(0), Int8(0),
             )
         else:
             inter[unsafe_offset=ot] = Intersection(
                 PrimId(Int64(mi), Int64(tri) * 3, mat_idx, instance_idx,
-                         Int8(0), Int8(0), Int8(0), Int8(0)),
+                         PrimKind.triangle, Int8(0), Int8(0), Int8(0)),
                 hitT, u, v, Int8(1), Int8(0), Int8(0), Int8(0),
             )
     elif hitFlag == Int32(2) or hitFlag == Int32(4):
@@ -721,7 +722,7 @@ def _unpack_rt_result(
         var h = results[unsafe_offset=idx + 1]
         var v = results[unsafe_offset=idx + 2]
         inter[unsafe_offset=ot] = Intersection(
-            PrimId(curve_idx, piece_info, mat_idx, curve_instance, Int8(5), Int8(0), Int8(0), Int8(0)),
+            PrimId(curve_idx, piece_info, mat_idx, curve_instance, PrimKind.curve, Int8(0), Int8(0), Int8(0)),
             hitT, h, v, Int8(1), Int8(0), Int8(0), Int8(0),
         )
     else:
@@ -732,7 +733,7 @@ def _unpack_rt_result(
         # whatever inter_buf held from an earlier bounce would silently
         # reject a real closer sphere hit as "farther than the (stale)
         # current best".
-        var dummy_id = PrimId(Int64(-1), Int64(-1), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
+        var dummy_id = PrimId(Int64(-1), Int64(-1), Int64(0), Int32(-1), PrimKind.triangle, Int8(0), Int8(0), Int8(0))
         inter[unsafe_offset=ot] = Intersection(dummy_id, Float32(1.0e38), Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0))
     if _is_real_ptr(paths) and hitFlag != Int32(3):
         _grow_cone(paths, inter, ot)
@@ -1147,7 +1148,7 @@ def rtcore_curve_clip_gpu[clusters: Bool](
         tmax = results[unsafe_offset=idx + 0]
     var ray = Ray(Point3f(rays[unsafe_offset=idx], rays[unsafe_offset=idx + 1], rays[unsafe_offset=idx + 2]),
                   Vec3f(rays[unsafe_offset=idx + 4], rays[unsafe_offset=idx + 5], rays[unsafe_offset=idx + 6]))
-    var tmp = Intersection(PrimId(-1, -1, 0, -1, 0, 0, 0, 0), tmax, Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0))
+    var tmp = Intersection(PrimId(-1, -1, 0, -1, 0, 0, 0, 0), tmax, Float32(0), Float32(0), PrimKind.triangle, Int8(0), Int8(0), Int8(0))
     comptime if clusters:
         var h = curve_bvh_closest(sd.curveBvh, sd.curves, ray, tmax)
         if h[0] < 0:
@@ -1156,7 +1157,7 @@ def rtcore_curve_clip_gpu[clusters: Bool](
     else:
         traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, tmax, Pointer(to=tmp),
                            sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances, root=max(Int(sd.curveRoot), 0))
-    if tmp.hit == Int8(0) or tmp.primId.type != Int8(5):
+    if tmp.hit == Int8(0) or tmp.primId.type != PrimKind.curve:
         return
     results[unsafe_offset=idx + 0] = tmp.tHit
     results[unsafe_offset=idx + 1] = tmp.u
@@ -1451,7 +1452,7 @@ def any_hit_bvh2_gpu[curves_on: Bool, inst_on: Bool, alpha_on: Bool](
     var nearXIsMin = rdir.x >= Float32(0.0)
     var nearYIsMin = rdir.y >= Float32(0.0)
     var nearZIsMin = rdir.z >= Float32(0.0)
-    var inst_leaf = PrimId(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
+    var inst_leaf = PrimId(Int64(0), Int64(0), Int64(0), Int32(-1), PrimKind.triangle, Int8(0), Int8(0), Int8(0))
     var stack = Array[Int32, 64](uninitialized=True)
     var stack_ptr = stack.unsafe_ptr()
     var toVisit = 0
@@ -1469,22 +1470,22 @@ def any_hit_bvh2_gpu[curves_on: Bool, inst_on: Bool, alpha_on: Bool](
                 var prim = sd.primIds[unsafe_offset=offset + j]
                 var mesh_idx: Int
                 var base_vidx: Int
-                if prim.type == 0 or prim.type == 9:
+                if prim.type == PrimKind.triangle or prim.type == PrimKind.displaced:
                     mesh_idx = Int(prim.id1)
                     base_vidx = Int(prim.id2)
-                elif prim.type == 1 or prim.type == 2 or prim.type == 3:
+                elif prim.type == PrimKind.emitter:
                     if prim.id2 == -1:
                         continue
                     mesh_idx = Int(prim.id2 >> 32)
                     base_vidx = Int(prim.id2 & 0xFFFFFFFF) * 3
-                elif curves_on and prim.type == 5:
+                elif curves_on and prim.type == PrimKind.curve:
                     if _shadow_is_null_material(sd.materials, prim.materialIndex):
                         continue
                     var curve = curve_at(sd.curves, Int(prim.id1))
                     if intersect_curve(ray_org, ray_dir, curve, Int(prim.id2) // 8, Int(prim.id2) % 8, tMax)[0]:
                         return True
                     continue
-                elif inst_on and prim.type == 8:
+                elif inst_on and prim.type == PrimKind.instances:
                     if not _shadow_is_null_material(sd.materials, prim.materialIndex):
                         inst_leaf = prim      # walked after this loop, so a warp's threads walk the instances together
                     continue
@@ -1496,7 +1497,7 @@ def any_hit_bvh2_gpu[curves_on: Bool, inst_on: Bool, alpha_on: Bool](
                 var p0 = mesh_pos(sd.meshes[unsafe_offset=mesh_idx], v0)
                 var p1 = mesh_pos(sd.meshes[unsafe_offset=mesh_idx], v1)
                 var p2 = mesh_pos(sd.meshes[unsafe_offset=mesh_idx], v2)
-                var hit_res = _displaced_tri_hit(sd.meshes[unsafe_offset=mesh_idx], base_vidx, ray_org, ray_dir, tMax) if prim.type == 9 else intersect_triangle(ray_org, ray_dir, p0, p1, p2, tMax)
+                var hit_res = _displaced_tri_hit(sd.meshes[unsafe_offset=mesh_idx], base_vidx, ray_org, ray_dir, tMax) if prim.type == PrimKind.displaced else intersect_triangle(ray_org, ray_dir, p0, p1, p2, tMax)
                 if hit_res[0]:
                     if _shadow_is_null_material(sd.materials, prim.materialIndex):
                         continue
@@ -1544,7 +1545,7 @@ def any_hit_bvh2_gpu[curves_on: Bool, inst_on: Bool, alpha_on: Bool](
                 current = Int(stack_ptr[unsafe_offset=toVisit])
                 cur_oc = _node_oc(_node_hi(nodes_f, current))
     comptime if inst_on:
-        if inst_leaf.type == Int8(8):
+        if inst_leaf.type == PrimKind.instances:
             return _traverse_instances[True](inst_leaf, sd.meshes, sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances, ray_org, ray_dir, tMax, True, sd.curves)[0]
     return False
 
@@ -1843,12 +1844,7 @@ def vk_alpha_retrace_gpu(
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
     if tid >= Int(count_dp) or paths[unsafe_offset=tid].active == Int8(0) or inter[unsafe_offset=tid].hit == Int8(0):
         return
-    var prim = inter[unsafe_offset=tid].primId
-    var mi = -1
-    if prim.type == Int8(0):
-        mi = Int(prim.id1)
-    elif prim.type == Int8(3):
-        mi = Int(prim.id2 >> 32)
+    var mi = inter[unsafe_offset=tid].primId.triangle()[0]
     if mi < 0:
         return
     var mesh = sd.meshes[unsafe_offset=mi]
@@ -2192,7 +2188,7 @@ def gen_aux_buffers_gpu(
 
     var ray = Ray(org, dir)
     if hits_traced == Int32(0):
-        var dummy_id = PrimId(Int64(-1), Int64(-1), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
+        var dummy_id = PrimId(Int64(-1), Int64(-1), Int64(0), Int32(-1), PrimKind.triangle, Int8(0), Int8(0), Int8(0))
         isects_tmp[unsafe_offset=tid] = Intersection(dummy_id, Float32(1e38), Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0))
         traverse_bvh2_core(bvh2Nodes, primIds, meshes, curves, ray, Float32(1e38), isects_tmp.unsafe_offset(tid), blasNodesArr, blasPrimIdsArr, instances)
     test_spheres(spheres, n_spheres, ray, isects_tmp.unsafe_offset(tid))
@@ -2203,10 +2199,10 @@ def gen_aux_buffers_gpu(
     if isects_tmp[unsafe_offset=tid].hit != Int8(0):
         d = isects_tmp[unsafe_offset=tid].tHit
         var typ = Int(isects_tmp[unsafe_offset=tid].primId.type)
-        if typ == 4:
+        if typ == Int(PrimKind.sphere):
             var si = Int(isects_tmp[unsafe_offset=tid].primId.id1)
             normal = sphere_outward_normal(org + dir*d, spheres[unsafe_offset=si].center)
-        elif typ == 5:
+        elif typ == Int(PrimKind.curve):
             # Approximate outward normal for the denoiser G-buffer: h alone
             # (stored in isects_tmp.u) doesn't uniquely fix the azimuthal sign,
             # so this picks one consistent side — fine for denoising, not used
@@ -2220,15 +2216,8 @@ def gen_aux_buffers_gpu(
                 var ctangent = caxis * (Float32(1.0) / calen)
                 var cn = curve_hit_normal(ctangent, -dir, isects_tmp[unsafe_offset=tid].u)
                 normal = vec3f(cn)
-        elif typ == 0 or typ == 1 or typ == 2 or typ == 3:
-            var mesh_idx: Int
-            var base_vidx: Int
-            if typ == 0:
-                mesh_idx  = Int(isects_tmp[unsafe_offset=tid].primId.id1)
-                base_vidx = Int(isects_tmp[unsafe_offset=tid].primId.id2)
-            else:
-                mesh_idx  = Int(isects_tmp[unsafe_offset=tid].primId.id2 >> 32)
-                base_vidx = Int(isects_tmp[unsafe_offset=tid].primId.id2 & 0xFFFFFFFF) * 3
+        elif isects_tmp[unsafe_offset=tid].primId.triangle()[0] >= 0:
+            var (mesh_idx, base_vidx) = isects_tmp[unsafe_offset=tid].primId.triangle()
             var mesh = meshes[unsafe_offset=mesh_idx]
             var vi0 = Int(mesh_vi(mesh, base_vidx))
             var vi1 = Int(mesh_vi(mesh, base_vidx + 1))

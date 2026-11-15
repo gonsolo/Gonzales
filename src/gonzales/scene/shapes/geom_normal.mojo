@@ -6,6 +6,7 @@ from gonzales.scene.shapes.primitives import mesh_normal, mesh_pos
 from gonzales.scene.shapes.displacement import displaced_hit_normal
 from gonzales.core.transform import transform_normal, Mat4
 from std.math import sqrt
+from gonzales.scene.shapes.primitives import PrimKind
 
 @always_inline
 def _geom_normal(
@@ -23,7 +24,7 @@ def _geom_normal(
     ray_org + ray_dir*tHit, needs no such fixup — see transform.mojo's
     transform_normal for why).
 
-    `spheres`/`hit` give analytic spheres (primId.type == 4) their exact
+    `spheres`/`hit` give analytic spheres (primId.type == PrimKind.sphere their exact
     outward normal, mirroring `_shading_normal_at` right below (which this
     function predates and was never given the same treatment). Without
     them, every caller either had to special-case type==4 itself before
@@ -35,14 +36,10 @@ def _geom_normal(
     photon-bounce normal identically to how a dielectric sphere corrupted
     refraction before _shading_normal_at's own fix). See
     project_mesh_only_geometry_assumption memory."""
-    var mi: Int; var bv: Int
-    if inter.primId.type == 0:
-        mi = Int(inter.primId.id1); bv = Int(inter.primId.id2)
-    elif inter.primId.type == 1 or inter.primId.type == 2 or inter.primId.type == 3:
-        mi = Int(inter.primId.id2 >> 32); bv = Int(inter.primId.id2 & 0xFFFFFFFF) * 3
-    elif inter.primId.type == Int8(4) and _is_real_ptr[Sphere](spheres):
+    if inter.primId.type == PrimKind.sphere and _is_real_ptr[Sphere](spheres):
         return sphere_outward_normal(Point3f(hit[0], hit[1], hit[2]), spheres[unsafe_offset=Int(inter.primId.id1)].center)
-    else:
+    var (mi, bv) = inter.primId.triangle()
+    if mi < 0:
         return Vec3f(Float32(0), Float32(1), Float32(0))
     var m = meshes[unsafe_offset=mi]
     var v0 = Int(mesh_vi(m, bv))
@@ -81,19 +78,15 @@ def _shading_normal_at(
     gonzales's own main path tracer via shading.mojo::_shading_normal) does;
     SPPM previously used only _geom_normal here, which was the discrepancy.
 
-    `spheres`/`hit` give analytic spheres (primId.type == 4) their exact
+    `spheres`/`hit` give analytic spheres (primId.type == PrimKind.sphere their exact
     outward normal. Without them this returned the +Y placeholder below for
     every sphere hit, so a dielectric sphere refracted every ray identically
     regardless of where it was struck -- silently destroying any caustic it
     should cast."""
-    var mi: Int; var bv: Int
-    if inter.primId.type == 0:
-        mi = Int(inter.primId.id1); bv = Int(inter.primId.id2)
-    elif inter.primId.type == 1 or inter.primId.type == 2 or inter.primId.type == 3:
-        mi = Int(inter.primId.id2 >> 32); bv = Int(inter.primId.id2 & 0xFFFFFFFF) * 3
-    elif inter.primId.type == Int8(4) and _is_real_ptr[Sphere](spheres):
+    if inter.primId.type == PrimKind.sphere and _is_real_ptr[Sphere](spheres):
         return sphere_outward_normal(hit, spheres[unsafe_offset=Int(inter.primId.id1)].center)
-    else:
+    var (mi, bv) = inter.primId.triangle()
+    if mi < 0:
         return Vec3f(Float32(0), Float32(1), Float32(0))
     var m = meshes[unsafe_offset=mi]
     var v0 = Int(mesh_vi(m, bv))

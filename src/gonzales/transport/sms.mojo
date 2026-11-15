@@ -42,6 +42,7 @@ from gonzales.core.geometry import Ray
 from gonzales.scene.shapes.curves import Curve
 from gonzales.core.rng import PCG32
 from gonzales.scene.accel.bvh import ray_sphere_hit, traverse_bvh2_core, BVH2Node
+from gonzales.scene.shapes.primitives import PrimKind
 
 comptime MAX_SMS_VERTICES: Int = 6
 # Cap on the Bernoulli estimator's trial count. For a chain whose manifold
@@ -613,7 +614,7 @@ def _sms_reproject_onto_sphere_anchored(
         var occl_tmax = (t - occl_eps) + radius * Float32(1e-3)
         if occl_tmax > Float32(0.0):
             var occl_ray = Ray(Point3f(occl_org[0], occl_org[1], occl_org[2]), Vec3f(dir[0], dir[1], dir[2]))
-            var dummy_prim = PrimId(Int64(-1), Int64(-1), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
+            var dummy_prim = PrimId(Int64(-1), Int64(-1), Int64(0), Int32(-1), PrimKind.triangle, Int8(0), Int8(0), Int8(0))
             var dummy_inter = Intersection(dummy_prim, occl_tmax, Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0))
             var store = Array[Intersection, 1](fill=dummy_inter)
             traverse_bvh2_core(bvh2Nodes, primIds, meshes, curves, occl_ray, occl_tmax, store.unsafe_ptr(),
@@ -725,12 +726,12 @@ def sms_mesh_hit_from(
     var z = Vec3f(Float32(0.0))
     var org = anchor + dir * (Float32(2e-4) if skip_own_surface else Float32(1e-5))
     var ray = Ray(Point3f(org[0], org[1], org[2]), Vec3f(dir[0], dir[1], dir[2]))
-    var dummy_prim = PrimId(Int64(-1), Int64(-1), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
+    var dummy_prim = PrimId(Int64(-1), Int64(-1), Int64(0), Int32(-1), PrimKind.triangle, Int8(0), Int8(0), Int8(0))
     var store = Array[Intersection, 1](fill=Intersection(dummy_prim, Float32(1e30), Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0)))
     traverse_bvh2_core(bvh2Nodes, primIds, meshes, curves, ray, Float32(1e30), store.unsafe_ptr(),
                        blasNodesArr, blasPrimIdsArr, instances)
     var h = store[0]
-    if h.hit == Int8(0) or h.primId.type != Int8(0) or h.primId.instanceIdx >= Int32(0) or Int32(h.primId.id1) != mesh_idx:
+    if h.hit == Int8(0) or h.primId.type != PrimKind.triangle or h.primId.instanceIdx >= Int32(0) or Int32(h.primId.id1) != mesh_idx:
         return (z, z, z, z, z, z, False, Int32(-1))
     return sms_mesh_frame(meshes, Int(h.primId.id1), Int(h.primId.id2), h.u, h.v)
 

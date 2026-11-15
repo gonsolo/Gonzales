@@ -64,6 +64,7 @@ from gonzales.scene.accel.vulkaninterop import (
     vulkaninterop_rt_destroy_scene, vulkaninterop_rt_debug_read_as,
     vulkaninterop_rt_set_merge_ordinary, vulkaninterop_rt_chunk_info,
 )
+from gonzales.scene.shapes.primitives import PrimKind
 
 # Fraction of the scene's bounding-sphere radius used as SPPM's initial gather
 # radius when nothing explicit is given. Calibrated on classroom, whose black
@@ -1006,17 +1007,12 @@ def _build_mesh_light_info(
     var first_curve = Int(psc[unsafe_offset=0].curve_first)
     for i in range(first_curve if first_curve >= 0 else Int(psc[unsafe_offset=0].prim_count)):    # curves apart: none after
         var p = psc[unsafe_offset=0].prim_ids[unsafe_offset=i]
-        if p.type == Int8(0):
-            var mi = Int(p.id1)
-            if mi >= 0 and mi < n_meshes and seen[unsafe_offset=mi] == UInt8(0):
-                mat_idx[unsafe_offset=mi] = p.materialIndex
-                seen[unsafe_offset=mi] = UInt8(1)
-        elif p.type == Int8(3):
-            var mi = Int(p.id2 >> 32)
-            if mi >= 0 and mi < n_meshes and seen[unsafe_offset=mi] == UInt8(0):
-                mat_idx[unsafe_offset=mi] = p.materialIndex
+        var mi = p.triangle()[0]
+        if mi >= 0 and mi < n_meshes and seen[unsafe_offset=mi] == UInt8(0):
+            mat_idx[unsafe_offset=mi] = p.materialIndex
+            if p.type == PrimKind.emitter:
                 al_idx[unsafe_offset=mi] = Int32(p.id1)
-                seen[unsafe_offset=mi] = UInt8(1)
+            seen[unsafe_offset=mi] = UInt8(1)
     # Object-instancing templates: their mesh triangles live ONLY in each
     # template's own BLAS (psc[0].prim_ids above is the ordinary top-level
     # TLAS, which explicitly excludes template meshes -- see finalize_scene),
@@ -1029,7 +1025,7 @@ def _build_mesh_light_info(
         var tprims = psc[unsafe_offset=0].blas_primids_arr[unsafe_offset=tmpl]
         for i in range(Int(psc[unsafe_offset=0].blas_primid_counts[unsafe_offset=tmpl])):
             var p = tprims[unsafe_offset=i]
-            if p.type == Int8(7):
+            if p.type == PrimKind.merged_blas:
                 continue   # a merged template has a material per triangle; main() keeps them unmerged for Vulkan
             var mi = Int(p.id1)
             if mi >= 0 and mi < n_meshes and seen[unsafe_offset=mi] == UInt8(0):
@@ -1193,7 +1189,7 @@ def _xert_attach(ctx: DeviceContext, psc: Pointer[ParsedScene_Mojo, MutUntracked
             ord.append(Int32(i))
     var ord_curves = List[PrimId]()
     for j in range(Int(psc[unsafe_offset=0].prim_count)):
-        if psc[unsafe_offset=0].prim_ids[unsafe_offset=j].type == Int8(5):
+        if psc[unsafe_offset=0].prim_ids[unsafe_offset=j].type == PrimKind.curve:
             ord_curves.append(psc[unsafe_offset=0].prim_ids[unsafe_offset=j])
     var n_ord = len(ord) + Int(len(ord_curves) > 0)
     var pieces = XertPieces(psc[])
@@ -1217,7 +1213,7 @@ def _xert_attach(ctx: DeviceContext, psc: Pointer[ParsedScene_Mojo, MutUntracked
         leaf_base.append(Int32(len(leaves)))
         if b < nt:
             var rec = psc[unsafe_offset=0].blas_primids_arr[unsafe_offset=b][unsafe_offset=0]
-            if Int(psc[unsafe_offset=0].blas_primid_counts[unsafe_offset=b]) > 0 and rec.type == Int8(7) and rec.id2 > Int64(0):
+            if Int(psc[unsafe_offset=0].blas_primid_counts[unsafe_offset=b]) > 0 and rec.type == PrimKind.merged_blas and rec.id2 > Int64(0):
                 var cb = Int(rec.id2)
                 for j in range(Int(psc[unsafe_offset=0].blas_primid_counts[unsafe_offset=cb])):
                     leaves.append(psc[unsafe_offset=0].blas_primids_arr[unsafe_offset=cb][unsafe_offset=j])
@@ -1584,11 +1580,7 @@ def debug_trace_pixel(
         # Geometry via the SAME resolver the renderer uses (spheres,
         # instance transforms and all) -- this used to re-derive the
         # triangle normal inline, which is how it went stale twice.
-        var mesh_idx: Int = -1
-        if inter[unsafe_offset=0].primId.type == Int8(0):
-            mesh_idx = Int(inter[unsafe_offset=0].primId.id1)
-        elif inter[unsafe_offset=0].primId.type != Int8(4):
-            mesh_idx = Int(inter[unsafe_offset=0].primId.id2 >> 32)
+        var mesh_idx = inter[unsafe_offset=0].primId.triangle()[0]
         var gn_v = _geom_normal(inter[unsafe_offset=0], psc[unsafe_offset=0].meshes, psc[unsafe_offset=0].instances, psc[unsafe_offset=0].spheres,
                                Vec3f(hx, hy, hz))
         var gnx = gn_v.x; var gny = gn_v.y; var gnz = gn_v.z
@@ -2672,7 +2664,7 @@ def parse_and_render(
             # how many leaves reference it).
             var n_curve_leaves_vk = 0
             for i in range(Int(psc[unsafe_offset=0].prim_count)):
-                if psc[unsafe_offset=0].prim_ids[unsafe_offset=i].type == Int8(5):
+                if psc[unsafe_offset=0].prim_ids[unsafe_offset=i].type == PrimKind.curve:
                     n_curve_leaves_vk += 1
             var curve_leaf_aabbs_vk = unsafe_alloc[Float32](max(n_curve_leaves_vk, 1) * 6)
             var curve_leaf_curve_idx_vk = unsafe_alloc[Int32](max(n_curve_leaves_vk, 1))
@@ -2681,7 +2673,7 @@ def parse_and_render(
             var curve_leaf_write = 0
             for i in range(Int(psc[unsafe_offset=0].prim_count)):
                 var p = psc[unsafe_offset=0].prim_ids[unsafe_offset=i]
-                if p.type != Int8(5):
+                if p.type != PrimKind.curve:
                     continue
                 var curve = psc[unsafe_offset=0].curves[unsafe_offset=Int(p.id1)]
                 var first_piece = Int(p.id2) // 8

@@ -11,6 +11,7 @@ from gonzales.scene.shapes.primitives import Intersection, TriangleMesh, Instanc
 from gonzales.scene.appearance.footprint import CameraFootprint, UVFootprint, TriWorld, tri_world, hit_uv_footprint
 from gonzales.scene.appearance.image_sample import _srgb_to_linear, sample_image
 from gonzales.scene.appearance.shader import sample_shader, is_shader_name
+from gonzales.scene.shapes.primitives import PrimKind
 
 
 # ── Packed Ptex (GpuTexture.FORMAT_PTEX; layout in oiio.cc) ─────────────────
@@ -48,7 +49,7 @@ def _ptex_need(fp_width: Float32) -> Int:
 
 @always_inline
 def _ptex_tri(inter: Intersection) -> Int:
-    if inter.primId.type == 0:
+    if inter.primId.type == PrimKind.triangle:
         return Int(inter.primId.id2) // 3
     return Int(inter.primId.id2 & 0xFFFFFFFF)
 
@@ -329,7 +330,7 @@ def emission_at_hit[use_gpu: Bool](
 ) -> RGB:
     """A material's emitted radiance (Material.emit_tex_idx) at a mesh hit. No light samples it, so every integrator
     counts it in full where a camera path lands on it."""
-    if mat.emit_tex_idx < Int32(0) or inter.primId.type != Int8(0):
+    if mat.emit_tex_idx < Int32(0) or inter.primId.type != PrimKind.triangle:
         return RGB(Float32(0.0))
     var (mesh, v0, v1, v2, ok) = _get_tri_verts(inter, meshes)
     if not ok or not mesh_has_uvs(mesh):
@@ -350,15 +351,8 @@ def _get_tri_verts(
     inter: Intersection,
     meshes: Pointer[TriangleMesh, MutUntrackedOrigin],
 ) -> Tuple[TriangleMesh, Int, Int, Int, Bool]:
-    var mi: Int
-    var bv: Int
-    if inter.primId.type == 0:
-        mi = Int(inter.primId.id1)
-        bv = Int(inter.primId.id2)
-    elif inter.primId.type == 1 or inter.primId.type == 2 or inter.primId.type == 3:
-        mi = Int(inter.primId.id2 >> 32)
-        bv = Int(inter.primId.id2 & 0xFFFFFFFF) * 3
-    else:
+    var (mi, bv) = inter.primId.triangle()
+    if mi < 0:
         return (meshes[unsafe_offset=0], 0, 0, 0, False)
     var m = meshes[unsafe_offset=mi]
     return (m, Int(mesh_vi(m, bv)), Int(mesh_vi(m, bv+1)), Int(mesh_vi(m, bv+2)), True)
@@ -511,7 +505,7 @@ def _apply_bump_map[use_gpu: Bool](
     var bump_face = 0
     if Int(mat.bump_tex_idx) < n_textures and Int(textures[unsafe_offset=Int(mat.bump_tex_idx)].format) == GpuTexture.FORMAT_PTEX:
         var btri = Int(inter.primId.id2 & 0xFFFFFFFF)
-        if inter.primId.type == 0:
+        if inter.primId.type == PrimKind.triangle:
             btri = Int(inter.primId.id2) // 3
         bump_face = Int(mesh_face(mesh, btri))
     var h0 = sample_texture[use_gpu](Int(mat.bump_tex_idx), uv_u, uv_v, False, fp.width, tex_filenames, textures, n_textures, found, bump_face).r
@@ -697,7 +691,7 @@ def mix_amount_at[use_gpu: Bool](
     n_textures: Int,
 ) -> Float32:
     """A mix material's amount at a hit: its texture (kept in the rough_* slot, unused by a mix) or roughU."""
-    if mat.type != MatKind.mix or mat.rough_tex_idx < Int32(0) or inter.primId.type != Int8(0):
+    if mat.type != MatKind.mix or mat.rough_tex_idx < Int32(0) or inter.primId.type != PrimKind.triangle:
         return mat.roughU
     var (mesh, v0, v1, v2, ok) = _get_tri_verts(inter, meshes)
     if not ok:

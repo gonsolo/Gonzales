@@ -17,6 +17,7 @@ from gonzales.transport.texturing import _get_tri_verts
 from gonzales.transport.sms import (MAX_SMS_VERTICES, SMSVertex, sms_vertex_init, sms_walk, sms_chain_eval,
     sms_refresh_solved_frames, sms_refresh_mesh_frames, mnee_orthonormal_basis, SMS_UNIQUENESS_COS_EPS)
 from gonzales.transport.manifold import _sms_vertex_from_hit, _mnee_chain_g, _mnee_chain_t_eta, _mnee_bsdf_over_light
+from gonzales.scene.shapes.primitives import PrimKind
 
 # Glossy lobes up to this GGX alpha start SMS; MIS keeps any threshold unbiased, a wider lobe just gains little.
 comptime GLOSSY_SMS_MAX_ALPHA: Float32 = Float32(0.2)
@@ -61,7 +62,7 @@ def _chain_kind(mat: Material) -> Int:
 @always_inline
 def _first_hit(ctx: ShadeContext, org: Vec3f, dir: Vec3f, tmax: Float32) -> Intersection:
     var o = org + dir * _OFF
-    var dummy_prim = PrimId(Int64(-1), Int64(-1), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
+    var dummy_prim = PrimId(Int64(-1), Int64(-1), Int64(0), Int32(-1), PrimKind.triangle, Int8(0), Int8(0), Int8(0))
     var store = Array[Intersection, 1](fill=Intersection(dummy_prim, tmax, Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0)))
     traverse_dispatch(ctx.bvh4, ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves,
                       Ray(Point3f(o[0], o[1], o[2]), Vec3f(dir[0], dir[1], dir[2])), tmax, store.unsafe_ptr(),
@@ -85,7 +86,7 @@ def sms_trace_chain(ctx: ShadeContext, org: Vec3f, dir_in: Vec3f, mut verts: SMS
         if hit.hit == Int8(0):
             return (-1, hit, o, d)
         var kind = 0
-        if hit.primId.type == Int8(0) or hit.primId.type == Int8(4):
+        if hit.primId.type == PrimKind.triangle or hit.primId.type == PrimKind.sphere:
             kind = _chain_kind(ctx.materials[unsafe_offset=Int(hit.primId.materialIndex)])
         if kind == 0:
             return (n, hit, o, d)
@@ -127,7 +128,7 @@ def sms_chain_lands(
     the BSDF side) would refract instead."""
     var tr = sms_trace_chain(ctx, x0, dir, verts)
     var n = tr[0]
-    var ok = n >= 1 and n == n_spec and tr[1].primId.type == Int8(3)
+    var ok = n >= 1 and n == n_spec and tr[1].primId.type == PrimKind.emitter
     if ok:
         var d = tr[2] + tr[3] * (tr[1].tHit + _OFF) - y
         var r = y - x0

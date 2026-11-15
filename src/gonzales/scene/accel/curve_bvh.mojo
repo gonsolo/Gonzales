@@ -21,6 +21,7 @@ from gonzales.scene.accel.gpu_bvh import TPB, MaskT, _buf, _p, _tid, _seg_of, _o
 from gonzales.scene.appearance.materials import Material
 from gonzales.scene.shapes.primitives import PrimId
 from gonzales.core.geometry import Ray
+from gonzales.scene.shapes.primitives import PrimKind
 
 comptime CURVE_CLUSTER = 4096       # pieces a cluster covers at most
 
@@ -90,7 +91,7 @@ def curve_bvh_closest(cb: CurveBvh, curves: Pointer[Curve, MutUntrackedOrigin],
 def curve_bvh_prim(cb: CurveBvh, slot: Int) -> PrimId:
     """The type-5 PrimId of a leaf slot curve_bvh_closest returned."""
     var r = cb.refs.unsafe_offset(3 * slot)
-    return PrimId(Int64(r[unsafe_offset=0]), Int64(r[unsafe_offset=1]), Int64(r[unsafe_offset=2]), Int32(-1), Int8(5), Int8(0), Int8(0), Int8(0))
+    return PrimId(Int64(r[unsafe_offset=0]), Int64(r[unsafe_offset=1]), Int64(r[unsafe_offset=2]), Int32(-1), PrimKind.curve, Int8(0), Int8(0), Int8(0))
 
 
 comptime FS = 16                    # floats a cluster's frame takes

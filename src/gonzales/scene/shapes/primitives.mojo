@@ -12,6 +12,17 @@ from gonzales.scene.shapes.displacement import DisplacedMesh
 
 # ── Scene primitives ───────────────────────────────────────────────────────────
 
+struct PrimKind:
+    """What a PrimId names (its `type`)."""
+    comptime triangle = Int8(0)      # id1 = mesh, id2 = its first vertex index (3 a triangle)
+    comptime emitter = Int8(3)       # an area light's triangle: id1 = light, id2 = mesh << 32 | triangle
+    comptime sphere = Int8(4)        # id1 = sphere
+    comptime curve = Int8(5)         # id1 = curve, id2 = first piece * 8 + pieces
+    comptime merged_blas = Int8(7)   # a merged object template's record (bvh._traverse_blas_triangles)
+    comptime instances = Int8(8)     # the instance BVH's leaf
+    comptime displaced = Int8(9)     # a triangle under shape displacement, ids as a triangle's
+
+
 @fieldwise_init
 struct PrimId(TrivialRegisterPassable):
     var id1: Int64
@@ -23,6 +34,15 @@ struct PrimId(TrivialRegisterPassable):
     var _pad1: Int8
     var _pad2: Int8
 
+    @always_inline
+    def triangle(self) -> Tuple[Int, Int]:
+        """(mesh, first vertex index) of a mesh triangle, displaced or emitting; (-1, 0) for anything else."""
+        if self.type == PrimKind.triangle or self.type == PrimKind.displaced:
+            return (Int(self.id1), Int(self.id2))
+        if self.type == PrimKind.emitter and self.id2 != Int64(-1):
+            return (Int(self.id2 >> 32), Int(self.id2 & 0xFFFFFFFF) * 3)
+        return (-1, 0)
+
 # ── Object instancing (two-level BVH: BLAS per template, TLAS instance leaves) ─
 
 struct Instance(TrivialRegisterPassable):
@@ -30,7 +50,6 @@ struct Instance(TrivialRegisterPassable):
     that a pruned RT scene shades straight from its TLAS. Holds the world-to-object transform as the top three rows of
     a row-major matrix (it is affine, so the fourth row is 0 0 0 1); the object-to-world one is inverted from it where
     needed, which is once a shaded hit and never during traversal. cNr is row r of column n.
-    A TLAS leaf of PrimId.type == 6 has id1 = index into SceneView.instances.
     `blasIdx` indexes SceneView.blasNodesArr/blasPrimIdsArr. The words `id`, `ptr0` and `ptr1` belong to the RT cores."""
     var id: Int32
     var blasIdx: Int32
@@ -144,8 +163,8 @@ struct TriangleMesh(TrivialRegisterPassable):
 def surface_prim(p: PrimId) -> PrimId:
     """A displaced triangle's hit (type 9) is shaded as its base triangle's (type 0)."""
     var q = p
-    if q.type == Int8(9):
-        q.type = Int8(0)
+    if q.type == PrimKind.displaced:
+        q.type = PrimKind.triangle
     return q
 
 # ── Intersection ──────────────────────────────────────────────────────────────

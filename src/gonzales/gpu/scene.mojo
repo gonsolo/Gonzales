@@ -35,6 +35,7 @@ from std.builtin.sort import sort
 from std.memory.alloc import unsafe_alloc
 from std.sys import has_accelerator, get_defined_int
 from std.sys.info import size_of
+from gonzales.scene.shapes.primitives import PrimKind
 
 
 # Concurrent samples a pixel; build with -D WAVEFRONT_BATCH=2 where the per-pixel buffers must shrink (the whole island).
@@ -208,7 +209,7 @@ struct WalkBvhBuffers(Movable):
         var groups = List[List[PrimId]]()
         for k in range(Int(s.prim_count_cpu)):
             var p = s.prim_ids_cpu[unsafe_offset=k]
-            if p.type != Int8(0) or p.instanceIdx >= Int32(0) or s.materials[unsafe_offset=Int(p.materialIndex)].sss_walk == Int8(0):
+            if p.type != PrimKind.triangle or p.instanceIdx >= Int32(0) or s.materials[unsafe_offset=Int(p.materialIndex)].sss_walk == Int8(0):
                 continue
             var mi = Int(p.id1)
             if of_mesh[unsafe_offset=mi] < Int32(0):
@@ -1193,7 +1194,7 @@ struct XertPieces(Movable):
             for i in range(m0, m1):
                 tris += Int(s.mesh_n_tris[unsafe_offset=i])
             var rec = s.blas_primids_arr[unsafe_offset=t][unsafe_offset=0]
-            var curves = Int(s.blas_primid_counts[unsafe_offset=t]) > 0 and rec.type == Int8(7) and rec.id2 > Int64(0)
+            var curves = Int(s.blas_primid_counts[unsafe_offset=t]) > 0 and rec.type == PrimKind.merged_blas and rec.id2 > Int64(0)
             if n_inst[t] == 0 or n_inst[t] > 4 or tris <= 16 * XERT_PIECE_TRIS or curves:
                 continue
             var rest = 0
@@ -1289,7 +1290,7 @@ def xert_mesh_blas(ref s: ParsedScene_Mojo, ref pieces: XertPieces, mut of: List
             of[i] = n_blas
             n_blas += 1
     for j in range(Int(s.prim_count)):
-        if s.prim_ids[unsafe_offset=j].type == Int8(5):
+        if s.prim_ids[unsafe_offset=j].type == PrimKind.curve:
             n_blas += 1
             break
     for i in range(nm):

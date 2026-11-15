@@ -32,6 +32,7 @@ from gonzales.integrators.pt.nee import _mnee_bsdf_weight, _glossy_sms_bsdf_weig
 from gonzales.transport.glossy_sms import glossy_sms_live, GSMS_DEBUG, GLOSSY_SMS_MIN_PDF
 from gonzales.transport.manifold import _mnee_first_probe
 from gonzales.integrators.pt.materials import shade_diffuse_transmission, _shade_sss_exit, shade_coated_diffuse, shade_dielectric, shade_thin_dielectric, shade_conductor, shade_measured, shade_hair, shade_diffuse, shade_interface
+from gonzales.scene.shapes.primitives import PrimKind
 
 
 @always_inline
@@ -360,7 +361,7 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
     # regardless of isAreaLight, silently killing every ray that hit any
     # non-light sphere (e.g. smoke-plume's medium-bounding sphere never got
     # to run its "interface" material's pass-through logic).
-    if inter.primId.type == Int8(4) and ctx.lights.sphere_count > 0:
+    if inter.primId.type == PrimKind.sphere and ctx.lights.sphere_count > 0:
         var sph_idx = Int(inter.primId.id1)
         var sph = ctx.lights.spheres[unsafe_offset=sph_idx]
         if sph.isAreaLight == Int8(1):
@@ -386,7 +387,7 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
             path_ptr[].active = 0
             return
 
-    if inter.primId.type == Int8(3):
+    if inter.primId.type == PrimKind.emitter:
         # Area light triangle hit — use emission from AreaLight directly so
         # NamedMaterial area lights (mat.type == 1) also emit correctly.
         var al_idx = Int(inter.primId.id1)
@@ -450,7 +451,7 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
         # emitted radiance, where pbrt shows dark structure between its bars.
         # "bool twosided" is honoured: area_light_hit_cos returns |cos| for a two-sided mesh.
         var e_front = True
-        if inter.primId.type == Int8(3):
+        if inter.primId.type == PrimKind.emitter:
             var edir = Vec3f(path_ptr[].ray.direction.x, path_ptr[].ray.direction.y, path_ptr[].ray.direction.z)
             e_front = area_light_hit_cos(inter, ctx.meshes, ctx.instances, edir) > Float32(0.0)
         if path_ptr[].bounce == 0 or path_ptr[].specularBounce == Int8(1):
@@ -498,7 +499,7 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
         path_ptr[].active = 0
         return
 
-    if inter.primId.type == Int8(5) and mat.type == MatKind.area_light:
+    if inter.primId.type == PrimKind.curve and mat.type == MatKind.area_light:
         # Emissive curve hit directly by the camera/bounce ray. Curves are
         # now explicitly NEE-sampled too (AreaLight.kind==1, see al_list
         # in finalize_scene) — symmetric with the type==3 triangle case

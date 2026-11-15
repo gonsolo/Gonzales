@@ -24,6 +24,7 @@ from gonzales.transport.texturing import _apply_surface_maps, _decode_tangent_no
 from gonzales.transport.shade_context import GIPendingX1, ShadeContext
 from gonzales.transport.glossy_sms import GSMS_DEBUG
 from gonzales.transport.manifold import _emitter_face_normal, _interp_vertex_normal
+from gonzales.scene.shapes.primitives import PrimKind
 
 
 @always_inline
@@ -268,7 +269,7 @@ def _curve_geom_normal_and_ray(
 def _curve_extra_offset(inter: Intersection, curves: Pointer[Curve, MutUntrackedOrigin],
                         instances: Pointer[Instance, MutUntrackedOrigin] = Pointer[Instance, MutUntrackedOrigin].unsafe_dangling()) -> Float32:
     """Radius-scaled origin offset for a ray leaving a curve hit (same rule as shade_hair); 0 for other primitives."""
-    if inter.primId.type != Int8(5) or not _is_real_ptr(curves):
+    if inter.primId.type != PrimKind.curve or not _is_real_ptr(curves):
         return Float32(0.0)
     var curve = _hit_curve(inter, curves, instances)
     return curve_offset_eps(Float32(0.5) * (curve.width0 + (curve.width1 - curve.width0) * inter.v))
@@ -297,10 +298,10 @@ def _hit_geom(
     curves: Pointer[Curve, MutUntrackedOrigin] = Pointer[Curve, MutUntrackedOrigin].unsafe_dangling(),
 ) -> Tuple[Bool, Bool, Vec3f, Vec3f, Vec3f, TriangleMesh, Int, Int, Int]:
     """Returns (ok, is_sphere, geo_normal, ray_dir, ray_org, mesh, v0, v1, v2). A curve hit (non-hair material) counts as is_sphere: no mesh, no UVs."""
-    if inter.primId.type == Int8(5) and _is_real_ptr(curves):
+    if inter.primId.type == PrimKind.curve and _is_real_ptr(curves):
         var crv = _curve_geom_normal_and_ray(path_ptr, inter, curves, instances)
         return (True, True, crv[0], crv[1], crv[2], meshes[unsafe_offset=0], 0, 0, 0)
-    if inter.primId.type == Int8(4):
+    if inter.primId.type == PrimKind.sphere:
         var sph_r = _sphere_geom_normal_and_ray(path_ptr, inter, spheres)
         return (True, True, sph_r[0], sph_r[1], sph_r[2], meshes[unsafe_offset=0], 0, 0, 0)
     var (mesh, v0, v1, v2, ok) = _get_tri_verts(inter, meshes)
@@ -311,7 +312,7 @@ def _hit_geom(
     var p1 = mesh_pos(mesh, v1)
     var p2 = mesh_pos(mesh, v2)
     var dn = Vec3f(0, 0, 0)
-    if _is_real_ptr(mesh.disp) and inter.primId.type == Int8(0):
+    if _is_real_ptr(mesh.disp) and inter.primId.type == PrimKind.triangle:
         dn = displaced_hit_normal(mesh.disp, Int(inter.primId.id2), inter.u, inter.v)
     var gnr = _geom_normal_and_ray(path_ptr, p0, p1, p2, instance_idx, instances, dn)
     return (True, False, gnr[0], gnr[1], gnr[2], mesh, v0, v1, v2)
