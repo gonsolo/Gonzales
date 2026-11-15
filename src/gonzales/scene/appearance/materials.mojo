@@ -343,6 +343,18 @@ struct MeasuredBRDF(TrivialRegisterPassable):
 # <<listing: schlick_fresnel>>
 
 @always_inline
+def _reflectance_f0(r: Float32, ie: Float32) -> Float32:
+    var k2 = Float32(4) * max(r, Float32(0)) / max(Float32(1) - r, Float32(1e-6))
+    return ((Float32(1) - ie) * (Float32(1) - ie) + k2) / ((Float32(1) + ie) * (Float32(1) + ie) + k2)
+
+
+@always_inline
+def reflectance_f0(r: RGB, ie: Float32) -> RGB:
+    """pbrt's conductor "reflectance" (eta 1, k = 2 sqrt(r) / sqrt(1 - r)) as normal-incidence Fresnel under a coat of index ie."""
+    return RGB(_reflectance_f0(r.r, ie), _reflectance_f0(r.g, ie), _reflectance_f0(r.b, ie))
+
+
+@always_inline
 def schlick_fresnel(cos_theta: Float32, f0: Float32) -> Float32:
     """Schlick (1994) approximation to the Fresnel reflectance.
     f0 = ((η−1)/(η+1))² is the normal-incidence reflectance.

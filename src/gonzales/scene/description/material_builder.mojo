@@ -5,7 +5,7 @@ from gonzales.core.diagnostics import warn_unsupported
 from gonzales.scene.description.lexer import (PbrtScanner, scanner_parse_quoted_string, _psc_collect_params, ParameterDictionary)
 from gonzales.scene.description.parse_types import NamedMaterial, SceneParseState, PSC_NAME_MAX, scene_path
 from gonzales.core.geometry import RGB
-from gonzales.scene.appearance.materials import MatKind
+from gonzales.scene.appearance.materials import MatKind, reflectance_f0
 from gonzales.scene.appearance.measured_bsdf import load_measured_bsdf_reflectance
 from gonzales.core.spd import load_spd_rgb, named_metal_rgb, named_glass_ior
 from gonzales.core.rng import PCG32
@@ -16,11 +16,6 @@ from std.math import log, sqrt, cos
 def _conductor_f0(eta: Float32, k: Float32, ie: Float32) -> Float32:
     """Normal-incidence Fresnel of a conductor (eta, k) seen from a medium of index `ie`."""
     return ((eta - ie) * (eta - ie) + k * k) / ((eta + ie) * (eta + ie) + k * k)
-
-
-@always_inline
-def _reflectance_k(r: Float32) -> Float32:
-    return Float32(2) * sqrt(max(r, Float32(0))) / sqrt(max(Float32(1) - r, Float32(1e-6)))
 
 
 @always_inline
@@ -988,8 +983,7 @@ def _psc_handle_make_named_material(handle: Pointer[PbrtScanner, MutUntrackedOri
                         _conductor_f0(metal_eta.b, metal_k.b, f0_ie))
     elif mat_type == MatKind.coated_conductor:
         # pbrt's "reflectance" form: eta 1 and k = 2 sqrt(r) / sqrt(1 - r).
-        var kr = _reflectance_k(rgb.r); var kg = _reflectance_k(rgb.g); var kb = _reflectance_k(rgb.b)
-        nm.albedo = RGB(_conductor_f0(Float32(1), kr, f0_ie), _conductor_f0(Float32(1), kg, f0_ie), _conductor_f0(Float32(1), kb, f0_ie))
+        nm.albedo = reflectance_f0(rgb, f0_ie)
     elif mat_type == MatKind.hair:
         if not has_eta:
             mat_ior = Float32(1.55)  # pbrt's hair eta

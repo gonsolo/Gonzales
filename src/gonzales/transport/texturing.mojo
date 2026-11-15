@@ -5,7 +5,7 @@ from std.math import sqrt, floor, log2, ceil, abs
 from std.ffi import external_call
 from std.memory.alloc import unsafe_alloc
 from gonzales.core.geometry import RGB, Vec3f, dot, cross, Frame, _is_real_ptr
-from gonzales.scene.appearance.materials import Material, MatKind
+from gonzales.scene.appearance.materials import Material, MatKind, reflectance_f0
 from gonzales.scene.appearance.materials import GpuTexture
 from gonzales.scene.shapes.primitives import Intersection, TriangleMesh, Instance, mesh_uv, mesh_has_uvs, mesh_vi, mesh_face
 from gonzales.scene.appearance.footprint import CameraFootprint, UVFootprint, TriWorld, tri_world, hit_uv_footprint
@@ -178,8 +178,9 @@ def sample_texture[use_gpu: Bool](
 @always_inline
 @always_inline
 def _albedo_affine(mat: Material, t: RGB) -> RGB:
-    """tex_bias + tex_scale * texel, clamped to [0, 1] as pbrt clamps an albedo texture."""
-    return (mat.tex_bias + mat.tex_scale * t).clamp(Float32(0), Float32(1))
+    """tex_bias + tex_scale * texel, clamped to [0, 1] as pbrt clamps an albedo texture; a coated metal's is its F0."""
+    var a = (mat.tex_bias + mat.tex_scale * t).clamp(Float32(0), Float32(1))
+    return reflectance_f0(a, mat.emission.r) if mat.type == MatKind.coated_conductor else a
 
 
 def _tex_lookup[use_gpu: Bool](

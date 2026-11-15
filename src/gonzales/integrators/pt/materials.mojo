@@ -741,6 +741,8 @@ def shade_conductor[use_gpu: Bool, enqueue_shadow: Bool](
                 mat_eff.roughV = r
         normal = _shading_normal(mesh, v0, v1, v2, inter.u, inter.v, geo_normal)
         var (tri_co, fp_co) = _pt_hit_footprint(path_ptr, mat, ctx.cam_fp, ctx.instances, mesh, v0, v1, v2, inter, ray_org, ray_dir, ctx.textures, ctx.n_textures)
+        if mat_eff.tex_idx != Int32(-1):   # pbrt "reflectance" texture
+            mat_eff.albedo = _tex_lookup[use_gpu](mat_eff, inter, v0, v1, v2, mesh, ctx.tex_filenames, ctx.textures, ctx.n_textures, fp_co.width)
         normal = _apply_surface_maps[use_gpu](mat_eff, v0, v1, v2, mesh, inter, normal, geo_normal,
             tri_co, fp_co, ctx.tex_filenames, ctx.textures, ctx.n_textures)
         normal = face_toward(normal, -ray_dir)
