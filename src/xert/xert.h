@@ -40,15 +40,16 @@ int64_t xert_scene_n_meshes(void);
 int32_t xert_shadow_slots(void);
 int32_t xert_alpha(void);
 
-// The curves of the active scene, device addresses: the Curve array, the curve leaves (PrimId, type 5) of every bottom-level
-// structure one after the other, the first leaf of each structure, the structure of each instance and the materials (shadow
-// rays pass interface curves). All 0: no curves.
-void xert_set_curves(uint64_t curves, uint64_t leaves, uint64_t leaf_base, uint64_t inst_blas, uint64_t materials);
+// The procedural primitives of the active scene, device addresses: the Curve array, the leaves (curve or displaced-triangle
+// PrimIds) of every bottom-level structure one after the other, the first leaf of each structure, the structure of each
+// instance, the materials (shadow rays pass interface curves) and the meshes (displaced triangles). All 0: none.
+void xert_set_procs(uint64_t curves, uint64_t leaves, uint64_t leaf_base, uint64_t inst_blas, uint64_t materials,
+                    uint64_t meshes);
 // Instances from user id base on are pieces of a split template: records[2 * (id - base)] is the instance record, the next
 // int32 the piece's first triangle.
 void xert_set_pieces(uint64_t records, int64_t base);
-// 0-4: the tables of xert_set_curves, 5-6: those of xert_set_pieces.
-uint64_t xert_curve_table(int32_t which);
+// 0-4 and 7: the tables of xert_set_procs, 5-6: those of xert_set_pieces.
+uint64_t xert_proc_table(int32_t which);
 
 // Hit counts while profiling, n device words, one per instance (the ordinary geometry's last); 0 = off.
 void xert_set_heat(uint64_t counts, int64_t n);

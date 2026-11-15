@@ -1195,7 +1195,10 @@ struct XertPieces(Movable):
                 tris += Int(s.mesh_n_tris[unsafe_offset=i])
             var rec = s.blas_primids_arr[unsafe_offset=t][unsafe_offset=0]
             var curves = Int(s.blas_primid_counts[unsafe_offset=t]) > 0 and rec.type == PrimKind.merged_blas and rec.id2 > Int64(0)
-            if n_inst[t] == 0 or n_inst[t] > 4 or tris <= 16 * XERT_PIECE_TRIS or curves:
+            var disp = False
+            for i in range(m0, m1):
+                disp = disp or _is_real_ptr(s.meshes[unsafe_offset=i].disp)
+            if n_inst[t] == 0 or n_inst[t] > 4 or tris <= 16 * XERT_PIECE_TRIS or curves or disp:   # pieces hold no procedural leaves
                 continue
             var rest = 0
             for i in range(m0, m1):

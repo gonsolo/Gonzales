@@ -5,7 +5,7 @@ from std.testing import assert_equal, assert_true, TestSuite
 from max.gpu.host import DeviceContext
 from gonzales.scene.shapes.curves import Curve
 from gonzales.scene.appearance.materials import Material
-from gonzales.scene.shapes.primitives import PrimId
+from gonzales.scene.shapes.primitives import PrimId, TriangleMesh
 from gonzales.scene.accel.xert import (
     xert_build_blas, xert_build_blas_geoms, xert_build_tlas, xert_alignment, xert_free, xert_trace_rays_gpu,
     xert_trace_interop_gpu, XERT_MISS,
@@ -166,7 +166,7 @@ def test_xert_instances() raises:
                                                  Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(), Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
                                                  Pointer[Material, MutUntrackedOrigin].unsafe_dangling(),
                                                  Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(), Int32.MAX,
-                                                 heat.unsafe_ptr(),
+                                                 Pointer[TriangleMesh, MutUntrackedOrigin].unsafe_dangling(), heat.unsafe_ptr(),
                                                  grid_dim=(NX * NY + 63) // 64, block_dim=64)
     var hits = 0; var expected = 0; var bad = 0
     with results.map_to_host() as h:

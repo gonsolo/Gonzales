@@ -46,7 +46,7 @@ from gonzales.scene.accel.vulkanrt import vulkanrt_build_scene, vulkanrt_destroy
 from gonzales.scene.accel.curve_bvh import CurveBvhDev, gpu_build_curve_bvh, _leaf_range
 from gonzales.scene.accel.optixcurves import gpu_build_optix_curves, oxc_active, oxc_bytes, oxc_destroy, oxc_set_active
 from gonzales.scene.accel.rt_build import rt_build_blas, rt_build_tlas, rt_patch_ids, RtTlas, _fbits
-from gonzales.scene.accel.xert import xert_alignment, xert_build_blas_geoms, xert_build_tlas, xert_curve_table, xert_free, xert_heat_path, xert_heat_save, xert_set_curves, xert_set_heat, xert_set_pieces, xert_set_scene
+from gonzales.scene.accel.xert import xert_alignment, xert_build_blas_geoms, xert_build_tlas, xert_proc_table, xert_free, xert_heat_path, xert_heat_save, xert_set_procs, xert_set_heat, xert_set_pieces, xert_set_scene
 from gonzales.scene.description.rt_cache import rt_cache_load, rt_cache_save, RtCacheTlas
 from gonzales.scene.description.scene_cache import scene_cache_variant
 from max.algorithm import parallelize
@@ -1171,8 +1171,8 @@ def _xert_in_piece(ref pieces: XertPieces, p: Int, mesh: Int) -> Bool:
 # indexed mesh and one of procedural primitives for the curve leaves, and one per piece of a split template (XertPieces);
 # then the TLAS over the instances (user id = instance), the identity instances of the ordinary BLASes and, last, the piece
 # instances. Returns the TLAS's device address (0 on failure), the first
-# ordinary instance and the device table of their meshes; the curve tables go to xert_set_curves.
-def _xert_attach(ctx: DeviceContext, psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin], curves: Int, materials: Int, mesh_host_kb: Int,
+# ordinary instance and the device table of their meshes; the curve tables go to xert_set_procs.
+def _xert_attach(ctx: DeviceContext, psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin], curves: Int, materials: Int, meshes: Int, mesh_host_kb: Int,
                  mut move_mesh: List[Bool], mut bufs: List[DeviceBuffer[DType.uint8]], mut host_bufs: List[HostBuffer[DType.uint8]]) raises -> Tuple[UInt64, Int64, UInt64]:
     var fail = (UInt64(0), Int64(-1), UInt64(0))
     var align = Int(xert_alignment())
@@ -1220,16 +1220,26 @@ def _xert_attach(ctx: DeviceContext, psc: Pointer[ParsedScene_Mojo, MutUntracked
         elif b - nt == len(ord) and b < n_base:
             for c in ord_curves:
                 leaves.append(c)
+        if b < n_base:   # displaced triangles are boxes the trace loop intersects (scene/accel/xert.mojo)
+            for g in range(len(ms)):
+                if _is_real_ptr(psc[unsafe_offset=0].meshes[unsafe_offset=ms[g]].disp):
+                    for k in range(Int(psc[unsafe_offset=0].mesh_n_tris[unsafe_offset=ms[g]])):
+                        if psc[unsafe_offset=0].meshes[unsafe_offset=ms[g]].disp[unsafe_offset=0].tris[unsafe_offset=k].ok():
+                            leaves.append(PrimId(Int64(ms[g]), Int64(3 * k), Int64(g), Int32(-1), PrimKind.displaced, Int8(0), Int8(0), Int8(0)))
         var n_procs = len(leaves) - Int(leaf_base[b])
         var proc_bounds = unsafe_alloc[Float32](6 * max(n_procs, 1))
         for j in range(n_procs):
             var leaf = leaves[Int(leaf_base[b]) + j]
-            var curve = curve_at(psc[unsafe_offset=0].curves, Int(leaf.id1))
             var box = SIMD[DType.float32, 8](1e38, 1e38, 1e38, -1e38, -1e38, -1e38, 0, 0)
-            for piece in range(Int(leaf.id2) // 8, Int(leaf.id2) // 8 + Int(leaf.id2) % 8):
-                var pb = curve_piece_bounds(curve, piece)
-                box[0] = min(box[0], pb[0]); box[1] = min(box[1], pb[1]); box[2] = min(box[2], pb[2])
-                box[3] = max(box[3], pb[3]); box[4] = max(box[4], pb[4]); box[5] = max(box[5], pb[5])
+            if leaf.type == PrimKind.displaced:
+                var pb = psc[unsafe_offset=0].meshes[unsafe_offset=Int(leaf.id1)].disp[unsafe_offset=0].tris[unsafe_offset=Int(leaf.id2) // 3].bounds()
+                box = SIMD[DType.float32, 8](pb[0].x, pb[0].y, pb[0].z, pb[1].x, pb[1].y, pb[1].z, 0, 0)
+            else:
+                var curve = curve_at(psc[unsafe_offset=0].curves, Int(leaf.id1))
+                for piece in range(Int(leaf.id2) // 8, Int(leaf.id2) // 8 + Int(leaf.id2) % 8):
+                    var pb = curve_piece_bounds(curve, piece)
+                    box[0] = min(box[0], pb[0]); box[1] = min(box[1], pb[1]); box[2] = min(box[2], pb[2])
+                    box[3] = max(box[3], pb[3]); box[4] = max(box[4], pb[4]); box[5] = max(box[5], pb[5])
             for q in range(6):
                 proc_bounds[unsafe_offset=6 * j + q] = box[q]
         if len(ms) == 0 and n_procs == 0:
@@ -1260,6 +1270,10 @@ def _xert_attach(ctx: DeviceContext, psc: Pointer[ParsedScene_Mojo, MutUntracked
             var t = unsafe_alloc[UInt32](3 * max(n, 1))
             for k in range(3 * n):
                 t[unsafe_offset=k] = UInt32(mesh_vi(mesh, 3 * t0 + k))
+            if _is_real_ptr(mesh.disp):   # a displaced triangle is a point here: its procedural box answers for it
+                for k in range(n):
+                    if mesh.disp[unsafe_offset=0].tris[unsafe_offset=t0 + k].ok():
+                        t[unsafe_offset=3 * k + 1] = t[unsafe_offset=3 * k]; t[unsafe_offset=3 * k + 2] = t[unsafe_offset=3 * k]
             verts[unsafe_offset=g] = v; tris[unsafe_offset=g] = t
             n_verts[unsafe_offset=g] = Int64(nv); n_tris[unsafe_offset=g] = Int64(n)
         var size = Int64(0)
@@ -1345,12 +1359,12 @@ def _xert_attach(ctx: DeviceContext, psc: Pointer[ParsedScene_Mojo, MutUntracked
         var inst_buf = ctx.enqueue_create_buffer[DType.uint8](4 * max(n_inst, 1))
         ctx.enqueue_copy(inst_buf, blas_of.unsafe_bitcast[UInt8]())
         ctx.synchronize()
-        xert_set_curves(UInt64(curves), UInt64(Int(leaf_buf.unsafe_ptr())), UInt64(Int(base_buf.unsafe_ptr())), UInt64(Int(inst_buf.unsafe_ptr())),
-                        UInt64(materials))
-        print("RT hardware (Intel): curves in the structures,", len(leaves), "leaves")
+        xert_set_procs(UInt64(curves), UInt64(Int(leaf_buf.unsafe_ptr())), UInt64(Int(base_buf.unsafe_ptr())), UInt64(Int(inst_buf.unsafe_ptr())),
+                        UInt64(materials), UInt64(meshes))
+        print("RT hardware (Intel): procedural primitives in the structures,", len(leaves), "leaves")
         bufs.append(leaf_buf^); bufs.append(base_buf^); bufs.append(inst_buf^)
     else:
-        xert_set_curves(0, 0, 0, 0, 0)
+        xert_set_procs(0, 0, 0, 0, 0, 0)
     blas_of.unsafe_free()
     var piece_tab = List[Int32]()
     for j in range(len(pieces.entry_rec)):
@@ -1398,15 +1412,15 @@ def _has_displacement(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin]) -> Boo
 
 def _rt_wavefront_setup(handle: Pointer[GpuSceneHandle, MutUntrackedOrigin], psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin], max_rays: Int) raises -> _RtBufs:
     var b = _RtBufs()
-    if _has_displacement(psc):   # the RT hardware holds the undisplaced triangles: trace in software
+    var xe = xert_alignment() > 0
+    if not xe and _has_displacement(psc):   # only the Intel structures hold displaced triangles (as procedural boxes)
         print("RT hardware: off, the scene has displaced shapes")
         return b^
-    var xe = xert_alignment() > 0
     var xe_scene = (UInt64(0), Int64(-1), UInt64(0))
     if xe:
         var sd = handle[].scene_descriptor()
         var move_mesh = List[Bool]()
-        xe_scene = _xert_attach(handle[].ctx, psc, Int(sd.curves), Int(sd.materials), handle[].meshes.host_kb, move_mesh, b.xert, b.xert_host)
+        xe_scene = _xert_attach(handle[].ctx, psc, Int(sd.curves), Int(sd.materials), Int(sd.meshes), handle[].meshes.host_kb, move_mesh, b.xert, b.xert_host)
         if xe_scene[0] == 0:
             return b^
         var moved = handle[].meshes.move_to_device(handle[].ctx, psc[], move_mesh)
@@ -1423,7 +1437,7 @@ def _rt_wavefront_setup(handle: Pointer[GpuSceneHandle, MutUntrackedOrigin], psc
             return b^
         _share_instances(handle, rt_hw, psc)
         rtcore_set_active(rt_hw)
-    if not (xe and xert_curve_table(1) != UInt64(0)):     # Intel traces the curves in its structures
+    if not (xe and xert_proc_table(1) != UInt64(0)):     # Intel traces the curves in its structures
         _rt_curve_clusters(handle, psc)
     var light_kinds = Int(psc[unsafe_offset=0].area_light_count > Int32(0)) + Int(psc[unsafe_offset=0].infinite_count > Int32(0)) + Int(psc[unsafe_offset=0].distant_count > Int32(0)) + Int(psc[unsafe_offset=0].point_count > Int32(0))
     var rt_pruned = env_on["GONZALES_RT_PRUNE"]() and psc[unsafe_offset=0].instance_count > Int32(0)

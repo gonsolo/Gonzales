@@ -10,7 +10,8 @@ from gonzales.scene.shapes.curves import Curve, curve_at, intersect_curve
 from gonzales.core.geometry import Vec3f
 from gonzales.scene.accel.bvh import _shadow_is_null_material
 from gonzales.scene.appearance.materials import Material
-from gonzales.scene.shapes.primitives import PrimId
+from gonzales.scene.shapes.primitives import PrimId, PrimKind, TriangleMesh
+from gonzales.scene.shapes.displacement import displaced_hit
 
 # Hardware ray tracing on Intel Xe2 (src/xert): the driver builds the acceleration structures, kernels trace them with
 # IGC's ray-query built-ins (opencl-c-intel.h, cl_intel_rt_production), linked by name from IGC's built-in library.
@@ -47,14 +48,15 @@ def xert_set_scene(accel: UInt64, ord_inst: Int64, ord_mesh: UInt64, n_meshes: I
     external_call["xert_set_scene", NoneType, UInt64, Int64, UInt64, Int64, Int32, Int32](
         accel, ord_inst, ord_mesh, n_meshes, shadow_slots, alpha)
 
-def xert_set_curves(curves: UInt64, leaves: UInt64, leaf_base: UInt64, inst_blas: UInt64, materials: UInt64):
-    external_call["xert_set_curves", NoneType, UInt64, UInt64, UInt64, UInt64, UInt64](curves, leaves, leaf_base, inst_blas, materials)
+def xert_set_procs(curves: UInt64, leaves: UInt64, leaf_base: UInt64, inst_blas: UInt64, materials: UInt64, meshes: UInt64):
+    external_call["xert_set_procs", NoneType, UInt64, UInt64, UInt64, UInt64, UInt64, UInt64](
+        curves, leaves, leaf_base, inst_blas, materials, meshes)
 
 def xert_set_pieces(records: UInt64, base: Int64):
     external_call["xert_set_pieces", NoneType, UInt64, Int64](records, base)
 
-def xert_curve_table(which: Int32) -> UInt64:
-    return external_call["xert_curve_table", UInt64, Int32](which)
+def xert_proc_table(which: Int32) -> UInt64:
+    return external_call["xert_proc_table", UInt64, Int32](which)
 
 def xert_set_heat(counts: UInt64, n: Int64):
     external_call["xert_set_heat", NoneType, UInt64, Int64](counts, n)
@@ -106,7 +108,7 @@ struct XeRayDesc(TrivialRegisterPassable):
 
 # One hit of xert_trace: t = -1 and prim = -1 on a miss; u, v weight the triangle's second and third vertex; geom is the
 # geometry within the bottom-level structure, inst the instance record when tracing a top-level structure and slot its user id
-# (a piece's own). A curve hit has curve = its leaf in XeCurves.leaves (else -1) and u, v = intersect_curve's h, v.
+# (a piece's own). A curve hit has curve = its leaf in XeProcs.leaves (else -1) and u, v = intersect_curve's h, v.
 @fieldwise_init
 struct XeHit(TrivialRegisterPassable):
     var t: Float32
@@ -118,11 +120,12 @@ struct XeHit(TrivialRegisterPassable):
     var curve: Int32
     var slot: Int32
 
-# The tables of xert_set_curves: the procedural primitive p of the structure of instance k is leaf
-# leaf_base[inst_blas[k]] + p, a curve PrimId (curve, first piece * 8 + piece count). leaves null: no curves. User ids from
+# The tables of xert_set_procs: the procedural primitive p of the structure of instance k is leaf
+# leaf_base[inst_blas[k]] + p, a curve PrimId (curve, first piece * 8 + piece count) or a displaced triangle's (mesh, first
+# vertex index, materialIndex: its geometry; hits report that triangle). leaves null: none. User ids from
 # piece_base on are template pieces: piece_rec[2 * (id - piece_base)] is the instance record, the next its first triangle.
 @fieldwise_init
-struct XeCurves(TrivialRegisterPassable):
+struct XeProcs(TrivialRegisterPassable):
     var curves: Pointer[Curve, MutUntrackedOrigin]
     var leaves: Pointer[PrimId, MutUntrackedOrigin]
     var leaf_base: Pointer[Int32, MutUntrackedOrigin]
@@ -130,11 +133,12 @@ struct XeCurves(TrivialRegisterPassable):
     var materials: Pointer[Material, MutUntrackedOrigin]
     var piece_rec: Pointer[Int32, MutUntrackedOrigin]
     var piece_base: Int32
+    var meshes: Pointer[TriangleMesh, MutUntrackedOrigin]
 
 # The closest (or with XERT_ANY_HIT any) hit in [tmin, tmax]. The hardware commits triangles itself; every curve box it
 # reports is tested here in the instance's object space and committed when closer.
 @always_inline
-def xert_trace(accel: MutPointer[UInt8, MutAnyOrigin], ray: XeRayDesc, cv: XeCurves) -> XeHit:
+def xert_trace(accel: MutPointer[UInt8, MutAnyOrigin], ray: XeRayDesc, cv: XeProcs) -> XeHit:
     comptime if is_gpu() and not is_nvidia_gpu() and not is_amd_gpu() and not is_apple_gpu():   # Intel: no is_intel_gpu in released Mojo
         var desc = ray
         var q = external_call["intel_ray_query_init", OpaquePointer[MutAnyOrigin]](
@@ -155,15 +159,21 @@ def xert_trace(accel: MutPointer[UInt8, MutAnyOrigin], ray: XeRayDesc, cv: XeCur
                 external_call["intel_get_hit_primitive_id", UInt32](q, UInt32(1)))
             var p = cv.leaves[unsafe_offset=leaf]
             var any_hit = (ray.flags & XERT_ANY_HIT) != 0
-            if any_hit and _shadow_is_null_material(cv.materials, p.materialIndex):   # as the software curve walk
+            var is_curve = p.type == PrimKind.curve
+            if any_hit and is_curve and _shadow_is_null_material(cv.materials, p.materialIndex):   # as the software curve walk
                 external_call["intel_ray_query_start_traversal", NoneType](q)
                 external_call["intel_ray_query_sync", NoneType](q)
                 continue
             var t_max = min(ray.tmax, external_call["intel_get_hit_distance", Float32](q, UInt32(0)))
             var dlen = sqrt(dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2])
             var unit = Vec3f(dir[0], dir[1], dir[2]) * (Float32(1) / dlen)
-            var h = intersect_curve(Vec3f(org[0], org[1], org[2]), unit, curve_at(cv.curves, Int(p.id1)), Int(p.id2) // 8,
-                                    Int(p.id2) % 8, t_max * dlen)
+            var o3 = Vec3f(org[0], org[1], org[2])
+            var h: Tuple[Bool, Float32, Float32, Float32]
+            if is_curve:
+                h = intersect_curve(o3, unit, curve_at(cv.curves, Int(p.id1)), Int(p.id2) // 8, Int(p.id2) % 8, t_max * dlen)
+            else:   # a displaced triangle: id1 its mesh, id2 its first vertex index
+                var dh = displaced_hit(cv.meshes[unsafe_offset=Int(p.id1)].disp, Int(p.id2) // 3, o3, unit, t_max * dlen)
+                h = (dh[0] != Float32(0), dh[1], dh[2], dh[3])
             var t = h[1] / dlen
             if h[0] and t >= ray.tmin and t < t_max:
                 var uv = SIMD[DType.float32, 2](h[2], h[3])
@@ -185,7 +195,12 @@ def xert_trace(accel: MutPointer[UInt8, MutAnyOrigin], ray: XeRayDesc, cv: XeCur
                 hit.inst = cv.piece_rec[unsafe_offset=e]
                 hit.prim += cv.piece_rec[unsafe_offset=e + 1]
             if external_call["intel_get_hit_candidate", UInt32](q, UInt32(0)) == 1:   # intel_candidate_type_procedural
-                hit.curve = curve; hit.u = ch_u; hit.v = ch_v
+                hit.u = ch_u; hit.v = ch_v
+                var p = cv.leaves[unsafe_offset=Int(curve)]
+                if p.type == PrimKind.displaced:   # reported as its base triangle; materialIndex holds its geometry
+                    hit.prim = Int32(Int(p.id2) // 3); hit.geom = Int32(Int(p.materialIndex))
+                else:
+                    hit.curve = curve
             else:
                 var uv = SIMD[DType.float32, 2](0)
                 external_call["intel_get_hit_barycentrics", NoneType](Pointer(to=uv), q, UInt32(0))   # struct return: sret first
@@ -206,10 +221,10 @@ def xert_trace_rays_gpu(accel: MutPointer[UInt8, MutAnyOrigin], rays: MutPointer
     if i >= Int(n):
         return
     var r = rays.unsafe_load[width=8](8 * i)
-    var none = XeCurves(Pointer[Curve, MutUntrackedOrigin].unsafe_dangling(), Pointer[PrimId, MutUntrackedOrigin].unsafe_dangling(),
+    var none = XeProcs(Pointer[Curve, MutUntrackedOrigin].unsafe_dangling(), Pointer[PrimId, MutUntrackedOrigin].unsafe_dangling(),
                         Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(), Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
                         Pointer[Material, MutUntrackedOrigin].unsafe_dangling(), Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
-                        Int32.MAX)
+                        Int32.MAX, Pointer[TriangleMesh, MutUntrackedOrigin].unsafe_dangling())
     var hit = xert_trace(accel, XeRayDesc(r[0], r[1], r[2], r[4], r[5], r[6], r[3], r[7], 0xFF, flags), none)
     var o = results.unsafe_offset(8 * i)
     o[unsafe_offset=0] = bitcast[DType.uint32](hit.t)
@@ -227,12 +242,13 @@ def xert_trace_interop_gpu(accel: MutPointer[UInt8, MutAnyOrigin], rays: MutPoin
                            ord_inst: Int64, ord_mesh: MutPointer[Int32, MutAnyOrigin], curves: Pointer[Curve, MutUntrackedOrigin],
                            leaves: Pointer[PrimId, MutUntrackedOrigin], leaf_base: Pointer[Int32, MutUntrackedOrigin],
                            inst_blas: Pointer[Int32, MutUntrackedOrigin], materials: Pointer[Material, MutUntrackedOrigin],
-                           piece_rec: Pointer[Int32, MutUntrackedOrigin], piece_base: Int32, heat: MutPointer[UInt32, MutAnyOrigin]):
+                           piece_rec: Pointer[Int32, MutUntrackedOrigin], piece_base: Int32,
+                           meshes: Pointer[TriangleMesh, MutUntrackedOrigin], heat: MutPointer[UInt32, MutAnyOrigin]):
     var i = global_idx.x
     if i >= Int(n):
         return
     var sc = XeScene(accel.unsafe_origin_cast[MutUntrackedOrigin](), n_meshes, ord_inst, ord_mesh.unsafe_origin_cast[MutUntrackedOrigin](),
-                     XeCurves(curves, leaves, leaf_base, inst_blas, materials, piece_rec, piece_base),
+                     XeProcs(curves, leaves, leaf_base, inst_blas, materials, piece_rec, piece_base, meshes),
                      heat.unsafe_origin_cast[MutUntrackedOrigin]())
     results.unsafe_store(8 * i, xert_trace_interop_one(sc, rays.unsafe_load[width=8](8 * i), flags))
 
@@ -243,7 +259,7 @@ struct XeScene(TrivialRegisterPassable):
     var n_meshes: Int64
     var ord_inst: Int64
     var ord_mesh: Pointer[Int32, MutUntrackedOrigin]
-    var cv: XeCurves
+    var cv: XeProcs
     var heat: Pointer[UInt32, MutUntrackedOrigin]
 
 def xert_scene() -> XeScene:
@@ -251,12 +267,13 @@ def xert_scene() -> XeScene:
         Pointer[UInt8, MutUntrackedOrigin](unsafe_from_address=Int(external_call["xert_scene_accel", UInt64]())),
         external_call["xert_scene_n_meshes", Int64](), external_call["xert_scene_ord_inst", Int64](),
         Pointer[Int32, MutUntrackedOrigin](unsafe_from_address=Int(external_call["xert_scene_ord_mesh", UInt64]())),
-        XeCurves(Pointer[Curve, MutUntrackedOrigin](unsafe_from_address=Int(xert_curve_table(0))),
-                 Pointer[PrimId, MutUntrackedOrigin](unsafe_from_address=Int(xert_curve_table(1))),
-                 Pointer[Int32, MutUntrackedOrigin](unsafe_from_address=Int(xert_curve_table(2))),
-                 Pointer[Int32, MutUntrackedOrigin](unsafe_from_address=Int(xert_curve_table(3))),
-                 Pointer[Material, MutUntrackedOrigin](unsafe_from_address=Int(xert_curve_table(4))),
-                 Pointer[Int32, MutUntrackedOrigin](unsafe_from_address=Int(xert_curve_table(5))), Int32(Int(xert_curve_table(6)))),
+        XeProcs(Pointer[Curve, MutUntrackedOrigin](unsafe_from_address=Int(xert_proc_table(0))),
+                 Pointer[PrimId, MutUntrackedOrigin](unsafe_from_address=Int(xert_proc_table(1))),
+                 Pointer[Int32, MutUntrackedOrigin](unsafe_from_address=Int(xert_proc_table(2))),
+                 Pointer[Int32, MutUntrackedOrigin](unsafe_from_address=Int(xert_proc_table(3))),
+                 Pointer[Material, MutUntrackedOrigin](unsafe_from_address=Int(xert_proc_table(4))),
+                 Pointer[Int32, MutUntrackedOrigin](unsafe_from_address=Int(xert_proc_table(5))), Int32(Int(xert_proc_table(6))),
+                 Pointer[TriangleMesh, MutUntrackedOrigin](unsafe_from_address=Int(xert_proc_table(7)))),
         Pointer[UInt32, MutUntrackedOrigin](unsafe_from_address=Int(external_call["xert_heat", UInt64]())))
 
 # One ray r (interop layout) traced into its 8 result words.
@@ -295,11 +312,12 @@ def xert_trace_interop(ctx: DeviceContext, rays: Int, results: Int, m: Int, any_
         Int64(m), XERT_ANY_HIT if any_hit else UInt32(0), external_call["xert_scene_n_meshes", Int64](),
         external_call["xert_scene_ord_inst", Int64](),
         MutPointer[Int32, MutAnyOrigin](unsafe_from_address=Int(external_call["xert_scene_ord_mesh", UInt64]())),
-        Pointer[Curve, MutUntrackedOrigin](unsafe_from_address=Int(xert_curve_table(0))),
-        Pointer[PrimId, MutUntrackedOrigin](unsafe_from_address=Int(xert_curve_table(1))),
-        Pointer[Int32, MutUntrackedOrigin](unsafe_from_address=Int(xert_curve_table(2))),
-        Pointer[Int32, MutUntrackedOrigin](unsafe_from_address=Int(xert_curve_table(3))),
-        Pointer[Material, MutUntrackedOrigin](unsafe_from_address=Int(xert_curve_table(4))),
-        Pointer[Int32, MutUntrackedOrigin](unsafe_from_address=Int(xert_curve_table(5))), Int32(Int(xert_curve_table(6))),
+        Pointer[Curve, MutUntrackedOrigin](unsafe_from_address=Int(xert_proc_table(0))),
+        Pointer[PrimId, MutUntrackedOrigin](unsafe_from_address=Int(xert_proc_table(1))),
+        Pointer[Int32, MutUntrackedOrigin](unsafe_from_address=Int(xert_proc_table(2))),
+        Pointer[Int32, MutUntrackedOrigin](unsafe_from_address=Int(xert_proc_table(3))),
+        Pointer[Material, MutUntrackedOrigin](unsafe_from_address=Int(xert_proc_table(4))),
+        Pointer[Int32, MutUntrackedOrigin](unsafe_from_address=Int(xert_proc_table(5))), Int32(Int(xert_proc_table(6))),
+        Pointer[TriangleMesh, MutUntrackedOrigin](unsafe_from_address=Int(xert_proc_table(7))),
         MutPointer[UInt32, MutAnyOrigin](unsafe_from_address=Int(external_call["xert_heat", UInt64]())),
         grid_dim=ceildiv(m, 256), block_dim=256)
