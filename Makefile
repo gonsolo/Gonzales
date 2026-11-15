@@ -306,13 +306,15 @@ MOJO_BUILD_FLAGS = --target-accelerator sm_89 --target-cpu x86-64-v3
 else
 MOJO_BUILD_FLAGS = --target-accelerator sm_86
 endif
+RELEASE_SRC = src
 MOJO_LINK_FLAGS = -Xlinker -L$(BUILD_DIR) -Xlinker -loiiobridge -Xlinker -lvulkanviewer \
                   -Xlinker -lvulkanrt -Xlinker -lvulkaninterop -Xlinker -lrtcore -Xlinker -lxert -Xlinker -loptixcurves -Xlinker -lnvdbbridge \
                   -Xlinker -rpath -Xlinker $(BUILD_DIR) -Xlinker -lm
 
 $(GONZALES): $(MOJO_SRCS) pyproject.toml $(OIIO_BRIDGE_LIB) $(VIEWER_LIB) $(VULKANRT_LIB) $(VULKANINTEROP_LIB) $(RTCORE_LIB) $(XERT_LIB) $(OPTIXCURVES_LIB) $(NVDB_BRIDGE_LIB)
 	@mkdir -p $(BUILD_DIR)
-	uv run mojo build src/gonzales/__init__.mojo -I src -o $(GONZALES) $(MOJO_BUILD_FLAGS) $(MOJO_LINK_FLAGS)
+	$(RELEASE_PREP)
+	$(RELEASE_ENV) uv run mojo build $(RELEASE_SRC)/gonzales/__init__.mojo -I $(RELEASE_SRC) -o $(GONZALES) $(MOJO_BUILD_FLAGS) $(MOJO_LINK_FLAGS)
 
 # Standalone clean-room port of the reference renderer's single-scatter SMS
 # estimator (Tools/sms_mitsuba_ref.mojo) -- a self-contained cross-check for
@@ -404,6 +406,10 @@ ifdef INTEL
 UNIT_TEST_SRCS := $(filter-out Tests/unit/scene/accel/test_vulkaninterop.mojo Tests/unit/scene/accel/test_vulkaninterop_rt.mojo \
                                Tests/unit/scene/accel/test_rtcore.mojo,$(UNIT_TEST_SRCS))
 UNIT_TEST_DEPS := unittest-intel-src
+RELEASE_PREP = @$(MAKE) --no-print-directory unittest-intel-src
+RELEASE_ENV = . $(HAL_ROOT)/env.sh &&
+RELEASE_SRC = $(BUILD_DIR)/intel-src
+MOJO_BUILD_FLAGS = --target-accelerator intel:xe2
 UNIT_TEST_RUN = . $(HAL_ROOT)/env.sh && \
     MODULAR_DRIVER_PLUGINS="level_zero@$(HAL_ROOT)/lib/plugins/LevelZeroPlugin.so;cpu@$(HAL_ROOT)/lib/plugins/CPUPlugin.so" \
     LD_LIBRARY_PATH=$(IGC_FIX_LIB):$$LD_LIBRARY_PATH \
