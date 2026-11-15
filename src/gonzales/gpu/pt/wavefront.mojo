@@ -4,7 +4,7 @@ from std.time import perf_counter_ns
 from std.utils import StaticTuple
 from gonzales.core.gpu_tuning import MINCTA_TRAVERSE
 from std.sys import get_defined_int
-from gonzales.scene.accel.bvh import _node_box_hit, _node_hi, _node_lo, _node_oc, _bvh_has_nodes, _shadow_is_null_material, _traverse_instances, BVH2Node, any_hit_bvh2_core, ray_sphere_hit, test_spheres, traverse_bvh2_core, traverse_bvh2_core_defer_curves, SceneView
+from gonzales.scene.accel.bvh import _node_box_hit, _node_hi, _node_lo, _node_oc, _bvh_has_nodes, _shadow_is_null_material, _traverse_instances, BVH2Node, any_hit_bvh2_core, ray_sphere_hit, test_spheres, traverse_bvh2_core, traverse_bvh2_core_defer_curves, SceneView, _displaced_tri_hit
 from gonzales.scene.accel.curve_bvh import curve_bvh_occluded, curve_bvh_closest, curve_bvh_prim
 from gonzales.scene.shapes.curves import CURVE_DEFER_K, Curve, curve_at, curve_piece_endpoints, intersect_curve, curve_hit_normal
 from gonzales.core.geometry import INV_FOUR_PI, Point3f, RGB, Vec3f, _is_real_ptr, dot, store_vec3, vec3f
@@ -1469,7 +1469,7 @@ def any_hit_bvh2_gpu[curves_on: Bool, inst_on: Bool, alpha_on: Bool](
                 var prim = sd.primIds[unsafe_offset=offset + j]
                 var mesh_idx: Int
                 var base_vidx: Int
-                if prim.type == 0:
+                if prim.type == 0 or prim.type == 9:
                     mesh_idx = Int(prim.id1)
                     base_vidx = Int(prim.id2)
                 elif prim.type == 1 or prim.type == 2 or prim.type == 3:
@@ -1496,7 +1496,7 @@ def any_hit_bvh2_gpu[curves_on: Bool, inst_on: Bool, alpha_on: Bool](
                 var p0 = mesh_pos(sd.meshes[unsafe_offset=mesh_idx], v0)
                 var p1 = mesh_pos(sd.meshes[unsafe_offset=mesh_idx], v1)
                 var p2 = mesh_pos(sd.meshes[unsafe_offset=mesh_idx], v2)
-                var hit_res = intersect_triangle(ray_org, ray_dir, p0, p1, p2, tMax)
+                var hit_res = _displaced_tri_hit(sd.meshes[unsafe_offset=mesh_idx], base_vidx, ray_org, ray_dir, tMax) if prim.type == 9 else intersect_triangle(ray_org, ray_dir, p0, p1, p2, tMax)
                 if hit_res[0]:
                     if _shadow_is_null_material(sd.materials, prim.materialIndex):
                         continue

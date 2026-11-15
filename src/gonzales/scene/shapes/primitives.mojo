@@ -8,6 +8,7 @@ scan of each block with comments and docstrings stripped before moving it."""
 from std.math import floor, sqrt, abs, fma
 from std.memory import bitcast
 from gonzales.core.geometry import Point3f, Vec3f, RGB, _is_real_ptr, cross, dot
+from gonzales.scene.shapes.displacement import DisplacedMesh
 
 # ── Scene primitives ───────────────────────────────────────────────────────────
 
@@ -109,6 +110,8 @@ struct TriangleMesh(TrivialRegisterPassable):
     # and 2q+1 = (0, 2, 3) of them. There is then no vertexIndices array, and faceIndices and materials hold
     # one entry a quad. Read through mesh_vi, mesh_face and mesh_material.
     var quads: Int32
+    # Shape-level displacement (scene/shapes/displacement.mojo): its triangles are PrimId.type 9; dangling if none.
+    var disp: Pointer[DisplacedMesh, MutUntrackedOrigin]
 
     def __init__(
         out self,
@@ -135,6 +138,15 @@ struct TriangleMesh(TrivialRegisterPassable):
         self.uv_corners = Int32(0)
         self.quads = Int32(0)
         self.emit_two_sided = 0
+        self.disp = Pointer[DisplacedMesh, MutUntrackedOrigin].unsafe_dangling()
+
+@always_inline
+def surface_prim(p: PrimId) -> PrimId:
+    """A displaced triangle's hit (type 9) is shaded as its base triangle's (type 0)."""
+    var q = p
+    if q.type == Int8(9):
+        q.type = Int8(0)
+    return q
 
 # ── Intersection ──────────────────────────────────────────────────────────────
 

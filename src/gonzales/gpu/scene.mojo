@@ -22,6 +22,7 @@ from gonzales.scene.accel.rtcore import rtcore_device_free, rtcore_host_register
 from gonzales.scene.accel.xert import xert_alignment, xert_heat_path
 from gonzales.scene.description.pbrt_parser import ParsedScene_Mojo
 from gonzales.scene.appearance.host_textures import decode_host_textures, set_tex_maps
+from gonzales.scene.shapes.displacement import DisplacedMesh, DisplacedTri, Rmip
 from gonzales.scene.appearance.ptex_cache import PtexCache, PTEX_QUEUE_CAP
 from gonzales.transport.restir_di import DIReservoir
 from gonzales.integrators.pt.restir_vol import VolReservoir
@@ -312,6 +313,10 @@ struct MeshBuffers(Movable):
         var alpha_dev_ptrs = List[Pointer[UInt8, MutUntrackedOrigin]]()
 
         var mesh_structs_host = unsafe_alloc[TriangleMesh](max(Int(s.mesh_count), 1))
+        # Displacement: height maps shared between meshes on the host, keyed like the alpha masks
+        var disp_host_keys = List[Int]()
+        var disp_dev = List[Rmip]()
+        var disp_temps = List[Pointer[DisplacedMesh, MutUntrackedOrigin]]()
         var has_alpha = False
         var keep = _meshes_on_device(s, host_kb)
 
@@ -370,11 +375,31 @@ struct MeshBuffers(Movable):
             if _is_real_ptr(host_mesh.materials):
                 mesh_structs_host[unsafe_offset=i].materials = _gpu_place[Int32](
                     ctx, face_bufs, host_bufs, host_mesh.materials, n_per_face, kb)
+            if _is_real_ptr(host_mesh.disp):
+                var dm = host_mesh.disp[unsafe_offset=0]
+                var key = Int(dm.rm.h)
+                var found = -1
+                for di in range(len(disp_host_keys)):
+                    if disp_host_keys[di] == key:
+                        found = di
+                if found < 0:
+                    found = len(disp_host_keys)
+                    disp_host_keys.append(key)
+                    var r = dm.rm
+                    r.h = _gpu_upload_owned[Float32](ctx, alpha_bufs, dm.rm.h, Int(r.w) * Int(r.hh))
+                    r.tab = _gpu_upload_owned[Float32](ctx, alpha_bufs, dm.rm.tab, 2 * Int(r.rx) * Int(r.ry) * Int(r.lx) * Int(r.ly))
+                    disp_dev.append(r)
+                var tmp = unsafe_alloc[DisplacedMesh](1)
+                tmp[unsafe_offset=0] = DisplacedMesh(
+                    _gpu_upload_owned[DisplacedTri](ctx, alpha_bufs, dm.tris, Int(s.mesh_n_tris[unsafe_offset=i])), disp_dev[found])
+                disp_temps.append(tmp)
+                mesh_structs_host[unsafe_offset=i].disp = _gpu_upload_owned[DisplacedMesh](ctx, alpha_bufs, tmp, 1)
 
         # Upload mesh struct array
         var meshes_buf = _gpu_upload_array[TriangleMesh](ctx, mesh_structs_host, Int(s.mesh_count))
         ctx.synchronize()   # mesh_structs_host is freed next
         mesh_structs_host.unsafe_free()
+        for t in disp_temps: t.unsafe_free()
         return Self(meshes_buf=meshes_buf^, mesh_count=Int(s.mesh_count), points_bufs=points_bufs^,
                     faceIndices_bufs=face_bufs^, vertexIndices_bufs=vert_bufs^, uv_bufs=uv_bufs^,
                     nrm_bufs=nrm_bufs^, alpha_bufs=alpha_bufs^, host_bufs=host_bufs^, has_alpha=has_alpha, host_kb=host_kb)

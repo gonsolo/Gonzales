@@ -5,6 +5,7 @@ from gonzales.core.geometry import offset_point, RGB, Point3f, Vec3f, dot, face_
 from gonzales.scene.appearance.materials import Material
 from gonzales.transport.render_state import PathState, ShadowTask, SHADOW_SLOTS
 from gonzales.scene.appearance.materials import GpuTexture
+from gonzales.scene.shapes.displacement import displaced_hit_normal
 from gonzales.scene.shapes.primitives import Intersection, TriangleMesh, Sphere, Instance, mesh_uv, mesh_has_uvs, mesh_face
 from gonzales.core.geometry import Ray
 from gonzales.scene.shapes.primitives import mesh_pos
@@ -115,6 +116,8 @@ def _shading_normal(
     hit came from an instanced BLAS (instance_idx >= 0), transformed to world
     space — mesh.normals are per-vertex OBJECT-space data in that case, so
     the interpolated result is transformed the same way before comparison."""
+    if _is_real_ptr(mesh.disp):   # _hit_geom's geo_normal is the displaced surface's already
+        return geo_normal
     var sn = _interp_vertex_normal(mesh, v0, v1, v2, bu, bv, instance_idx, instances)
     if dot(sn, sn) == Float32(0.0):
         return geo_normal
@@ -158,6 +161,7 @@ def _geom_normal_and_ray(
     p2: Vec3f,
     instance_idx: Int32 = Int32(-1),
     instances: Pointer[Instance, MutUntrackedOrigin] = Pointer[Instance, MutUntrackedOrigin].unsafe_dangling(),
+    n_obj: Vec3f = Vec3f(0, 0, 0),   # nonzero: this object-space normal instead of the triangle's (a displaced hit)
 ) -> Tuple[Vec3f, Vec3f, Vec3f]:
     """p0/p1/p2 come straight from `mesh.points` — object-space if this hit
     came from an instanced BLAS (instance_idx >= 0), so the resulting normal
@@ -166,7 +170,7 @@ def _geom_normal_and_ray(
     caller combines with tHit) needs no such fixup — tHit is preserved 1:1
     between object/world parameterizations, see bvh.mojo's
     _transform_ray_to_instance_space."""
-    var gn = cross(p1 - p0, p2 - p0)
+    var gn = n_obj if dot(n_obj, n_obj) > Float32(0) else cross(p1 - p0, p2 - p0)
     if instance_idx >= Int32(0):
         gn = transform_normal(Mat4(instances[unsafe_offset=Int(instance_idx)].world_to_obj()), gn)
     var nlen = dot(gn, gn)
@@ -306,7 +310,10 @@ def _hit_geom(
     var p0 = mesh_pos(mesh, v0)
     var p1 = mesh_pos(mesh, v1)
     var p2 = mesh_pos(mesh, v2)
-    var gnr = _geom_normal_and_ray(path_ptr, p0, p1, p2, instance_idx, instances)
+    var dn = Vec3f(0, 0, 0)
+    if _is_real_ptr(mesh.disp) and inter.primId.type == Int8(0):
+        dn = displaced_hit_normal(mesh.disp, Int(inter.primId.id2), inter.u, inter.v)
+    var gnr = _geom_normal_and_ray(path_ptr, p0, p1, p2, instance_idx, instances, dn)
     return (True, False, gnr[0], gnr[1], gnr[2], mesh, v0, v1, v2)
 
 

@@ -1,5 +1,6 @@
 from std.collections import Array
 from gonzales.core.geometry import RGB
+from gonzales.scene.shapes.displacement import DisplacedMesh, Rmip
 from std.os.path import exists
 from gonzales.scene.shapes.ply_prefetch import PlyPrefetch
 
@@ -198,6 +199,7 @@ struct MeshAccum(Copyable, Movable):
     # SceneParseState.alpha_mask_* (-1 = none), else the constant alpha.
     var alpha_mask:  Int32
     var alpha_const: Float32
+    var disp_idx:    Int32   # index into SceneParseState.disp_meshes, -1 = not displaced
 
     def __init__(out self, mat_idx: Int32, inside_medium: Int32, outside_medium: Int32):
         self.points        = List[Float32]()
@@ -217,6 +219,7 @@ struct MeshAccum(Copyable, Movable):
         self.tri_mats      = List[Int32]()
         self.alpha_mask    = -1
         self.alpha_const   = 1.0
+        self.disp_idx      = -1
 
 struct SceneParseState(Movable):
     # Current transform matrix and stack
@@ -340,6 +343,10 @@ struct SceneParseState(Movable):
     # Alpha cut-out masks (see TriangleMesh.alpha), one per distinct file,
     # loaded once however many shapes name it. MeshAccum.alpha_mask indexes
     # these; the byte buffers are owned by the parsed scene for its lifetime.
+    # Shape-level displacement: per displaced mesh, and the height maps by (file, scale, bias)
+    var disp_meshes: List[DisplacedMesh]
+    var disp_map_keys: List[String]
+    var disp_maps: List[Rmip]
     var alpha_mask_files: List[String]
     var alpha_mask_data:  List[Pointer[UInt8, MutUntrackedOrigin]]
     var alpha_mask_w:     List[Int32]
@@ -533,6 +540,9 @@ struct SceneParseState(Movable):
         self.img_tex_bias = List[Float32]()
         self.map_tex_idx = List[Int]()
         self.map_tex_map = List[Float32]()
+        self.disp_meshes = List[DisplacedMesh]()
+        self.disp_map_keys = List[String]()
+        self.disp_maps = List[Rmip]()
         self.alpha_mask_files = List[String]()
         self.alpha_mask_data  = List[Pointer[UInt8, MutUntrackedOrigin]]()
         self.alpha_mask_w     = List[Int32]()

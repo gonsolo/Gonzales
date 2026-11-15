@@ -1393,8 +1393,18 @@ def _xert_attach(ctx: DeviceContext, psc: Pointer[ParsedScene_Mojo, MutUntracked
     return (UInt64(tbase), Int64(ni) if n_ord > 0 else Int64(-1), ord_addr)
 
 
+def _has_displacement(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin]) -> Bool:
+    for mi in range(Int(psc[unsafe_offset=0].mesh_count)):
+        if _is_real_ptr(psc[unsafe_offset=0].meshes[unsafe_offset=mi].disp):
+            return True
+    return False
+
+
 def _rt_wavefront_setup(handle: Pointer[GpuSceneHandle, MutUntrackedOrigin], psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin], max_rays: Int) raises -> _RtBufs:
     var b = _RtBufs()
+    if _has_displacement(psc):   # the RT hardware holds the undisplaced triangles: trace in software
+        print("RT hardware: off, the scene has displaced shapes")
+        return b^
     var xe = xert_alignment() > 0
     var xe_scene = (UInt64(0), Int64(-1), UInt64(0))
     if xe:
@@ -2378,7 +2388,7 @@ def parse_and_render(
             # reused sequentially across BOTH the light pass and the
             # camera pass every sample (n_light_paths_merge is always
             # >= n_pix, so one scene sized for it covers both).
-            var use_vk_vcm = use_vulkan_rt_shade
+            var use_vk_vcm = use_vulkan_rt_shade and not _has_displacement(psc)
             var interop_scene_vcm = Pointer[UInt8, MutUntrackedOrigin].unsafe_dangling()
             var interop_rays_buf_vcm: Optional[DeviceBuffer[DType.float32]] = None
             var interop_results_buf_vcm: Optional[DeviceBuffer[DType.float32]] = None
@@ -2578,7 +2588,7 @@ def parse_and_render(
         # unpack kernel runs on the GPU, not a Mojo host loop) and wraps
         # the interop rays/results CUDA pointers as Mojo DeviceBuffers
         # once, reused unchanged across every bounce.
-        var use_vk = use_vulkan_rt_shade and not use_restir
+        var use_vk = use_vulkan_rt_shade and not use_restir and not _has_displacement(psc)
         if use_vulkan_rt_shade and use_restir:
             print("Note: --restir batch mode does not support --vulkan-rt-shade yet "
                   "(gpu_render_sample has no Vulkan RT interop path) -- using CUDA intersection.")

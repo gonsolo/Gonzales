@@ -52,7 +52,8 @@ struct Rmip(TrivialRegisterPassable):
         """Min-max of h over samples [i0, i1] x [j0, j1], any integers: the map repeats."""
         var w = Int(self.w); var hh = Int(self.hh)
         var i0 = i0_in; var i1 = i1_in; var j0 = j0_in; var j1 = j1_in
-        if i1 - i0 + 1 >= w: i0 = 0; i1 = w - 1
+        if i1 < i0 or i1 - i0 + 1 >= w: i0 = 0; i1 = w - 1
+        if j1 < j0: j0 = 0; j1 = hh - 1
         if j1 - j0 + 1 >= hh: j0 = 0; j1 = hh - 1
         var si = (i0 % w + w) % w - i0; i0 += si; i1 += si
         var sj = (j0 % hh + hh) % hh - j0; j0 += sj; j1 += sj
@@ -144,6 +145,13 @@ def load_height_map(filename: String, scale: Float32, bias: Float32) -> Rmip:
 # ── A displaced base triangle ────────────────────────────────────────────────
 
 @fieldwise_init
+struct DisplacedMesh(TrivialRegisterPassable):
+    """A mesh's displaced triangles, one per triangle in order, and its height map."""
+    var tris: Pointer[DisplacedTri, MutUntrackedOrigin]
+    var rm: Rmip
+
+
+@fieldwise_init
 struct DisplacedTri(TrivialRegisterPassable):
     """P and N are linear in texel coordinates (u, v) taken relative to the texture-space centroid tc."""
     var pc: Vec3f
@@ -165,8 +173,35 @@ struct DisplacedTri(TrivialRegisterPassable):
         return self.pc + self.pu * u + self.pv * v
 
     @always_inline
+    def ok(self) -> Bool:
+        """False for a triangle without area in texture space: it stays a plain triangle."""
+        var d = self.binv[0] * self.binv[3] - self.binv[1] * self.binv[2]   # 1 / (twice the texel area)
+        return d != Float32(0) and abs(d) < Float32(1e10)
+
+    def bounds(self) -> Tuple[Vec3f, Vec3f]:
+        """The prism's AABB."""
+        var lo = Vec3f(3.0e38); var hi = Vec3f(-3.0e38)
+        for k in range(3):
+            var p = self.p(self.t[2 * k], self.t[2 * k + 1]); var n = self.n(self.t[2 * k], self.t[2 * k + 1])
+            for s in range(2):
+                var q = p + n * (self.smin if s == 0 else self.smax)
+                lo = Vec3f(min(lo.x, q.x), min(lo.y, q.y), min(lo.z, q.z)); hi = Vec3f(max(hi.x, q.x), max(hi.y, q.y), max(hi.z, q.z))
+        return (lo, hi)
+
+    @always_inline
     def n(self, u: Float32, v: Float32) -> Vec3f:
         return self.nc + self.nu * u + self.nv * v
+
+    @always_inline
+    def clamp_uv(self, uv: SIMD[DType.float32, 2]) -> SIMD[DType.float32, 2]:
+        """Into the triangle's texel box, padded a texel: the ray's projection inside the prism never leaves it."""
+        var lo = SIMD[DType.float32, 2](min(min(self.t[0], self.t[2]), self.t[4]), min(min(self.t[1], self.t[3]), self.t[5])) - Float32(1)
+        var hi = SIMD[DType.float32, 2](max(max(self.t[0], self.t[2]), self.t[4]), max(max(self.t[1], self.t[3]), self.t[5])) + Float32(1)
+        var r = uv
+        for k in range(2):
+            if not (r[k] >= lo[k]): r[k] = lo[k]   # NaN too
+            if not (r[k] <= hi[k]): r[k] = hi[k]
+        return r
 
     @always_inline
     def bary(self, u: Float32, v: Float32) -> SIMD[DType.float32, 2]:
@@ -462,8 +497,9 @@ def _surface_box(tri: DisplacedTri, rm: Rmip, u0: Float32, u1: Float32, v0: Floa
 def _march(tri: DisplacedTri, rm: Rmip, o: Vec3f, d: Vec3f, u0: Float32, u1: Float32, v0: Float32, v1: Float32,
            mut best: DisplacedHit):
     """Intersect the micro-triangles of the texel cells under a local rectangle; keep hits inside the base triangle."""
-    var i0 = Int(floor(u0 + tri.tc[0])); var i1 = Int(floor(u1 + tri.tc[0]))
-    var j0 = Int(floor(v0 + tri.tc[1])); var j1 = Int(floor(v1 + tri.tc[1]))
+    var lo = tri.clamp_uv(SIMD[DType.float32, 2](u0, v0)); var hi = tri.clamp_uv(SIMD[DType.float32, 2](u1, v1))
+    var i0 = Int(floor(lo[0] + tri.tc[0])); var i1 = Int(floor(hi[0] + tri.tc[0]))
+    var j0 = Int(floor(lo[1] + tri.tc[1])); var j1 = Int(floor(hi[1] + tri.tc[1]))
     for j in range(j0, j1 + 1):
         for i in range(i0, i1 + 1):
             var s00 = tri.surface(rm, i, j); var s10 = tri.surface(rm, i + 1, j)
@@ -511,7 +547,7 @@ def intersect_displaced(tri: DisplacedTri, rm: Rmip, o: Vec3f, d: Vec3f, tmax: F
         iv -= 1
         if ta >= best.t: continue
         tb = min(tb, best.t)
-        var ua = invert(tri, o + d * ta); var ub = invert(tri, o + d * tb)
+        var ua = tri.clamp_uv(invert(tri, o + d * ta)); var ub = tri.clamp_uv(invert(tri, o + d * tb))
         # split at the turning points (psi_u = 0 or psi_v = 0 on the curve), keeping each piece monotone
         var cut = SIMD[DType.float32, 8](3.0e38)
         var nc = 0
@@ -538,7 +574,7 @@ def intersect_displaced(tri: DisplacedTri, rm: Rmip, o: Vec3f, d: Vec3f, tmax: F
         var pts = Array[SIMD[DType.float32, 4], 6](fill=SIMD[DType.float32, 4](0))
         pts[0] = SIMD[DType.float32, 4](ua[0], ua[1], ta, 0)
         for m in range(nc):
-            var uv = invert(tri, o + d * cut[m])
+            var uv = tri.clamp_uv(invert(tri, o + d * cut[m]))
             pts[m + 1] = SIMD[DType.float32, 4](uv[0], uv[1], cut[m], 0)
         pts[nc + 1] = SIMD[DType.float32, 4](ub[0], ub[1], tb, 0)
         var m = nc
@@ -567,11 +603,13 @@ def intersect_displaced(tri: DisplacedTri, rm: Rmip, o: Vec3f, d: Vec3f, tmax: F
         var mid: SIMD[DType.float32, 4]
         if y == Float32(3.0e38):   # numerically missed: split the distance instead
             var tm = (bd.a[2] + bd.b[2]) * Float32(0.5)
-            var uv = invert(tri, o + d * tm)
+            var uv = tri.clamp_uv(invert(tri, o + d * tm))
             mid = SIMD[DType.float32, 4](uv[0], uv[1], tm, 0)
         else:
             var mu = x if along_u else y; var mv = y if along_u else x
-            mid = SIMD[DType.float32, 4](mu, mv, _ray_t(tri, o, d, mu, mv), 0)
+            var tm = _ray_t(tri, o, d, mu, mv)
+            if not (tm >= bd.a[2] and tm <= bd.b[2]): tm = (bd.a[2] + bd.b[2]) * Float32(0.5)   # NaN or off the piece
+            mid = SIMD[DType.float32, 4](mu, mv, tm, 0)
         if sp + 2 <= STACK:
             stack[sp] = _Bound(mid, bd.b); stack[sp + 1] = _Bound(bd.a, mid); sp += 2
         else:
@@ -606,3 +644,18 @@ def displaced_normal(tri: DisplacedTri, rm: Rmip, u: Float32, v: Float32) -> Vec
           + _corner_normal(tri, rm, i, j + 1).normalize() * ((Float32(1) - fx) * fy) \
           + _corner_normal(tri, rm, i + 1, j + 1).normalize() * (fx * fy)
     return n.normalize()
+
+
+def displaced_hit_normal(disp: Pointer[DisplacedMesh, MutUntrackedOrigin], base_vidx: Int, b1: Float32, b2: Float32) -> Vec3f:
+    """The smooth normal of a displaced triangle's hit at base barycentrics (b1, b2), on its winding's side;
+    zero for a triangle that stayed plain. It serves as geometric and shading normal alike."""
+    var dm = disp[unsafe_offset=0]
+    var tri = dm.tris[unsafe_offset=base_vidx // 3]
+    if not tri.ok():
+        return Vec3f(0)
+    var u = tri.t[0] + b1 * (tri.t[2] - tri.t[0]) + b2 * (tri.t[4] - tri.t[0])
+    var v = tri.t[1] + b1 * (tri.t[3] - tri.t[1]) + b2 * (tri.t[5] - tri.t[1])
+    var ns = displaced_normal(tri, dm.rm, u, v)
+    var p0 = tri.p(tri.t[0], tri.t[1])
+    var w = cross(tri.p(tri.t[2], tri.t[3]) - p0, tri.p(tri.t[4], tri.t[5]) - p0)
+    return ns if dot(ns, w) >= Float32(0) else -ns

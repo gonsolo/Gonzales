@@ -34,6 +34,8 @@ from gonzales.core.spectrum import SpectralHandle
 from gonzales.core.sampling import gaussian_norm, ThinLens
 from gonzales.scene.shapes.ply import load_ply
 from gonzales.scene.shapes.ply_prefetch import PlyPrefetch, scan_plys, load_all_plys
+from gonzales.scene.description.displacement_builder import apply_shape_displacement
+from gonzales.scene.shapes.displacement import DisplacedMesh, DisplacedTri
 from gonzales.scene.description.material_builder import _psc_handle_make_named_material, _psc_handle_named_material, _imagemap_affine
 from gonzales.scene.appearance.measured_bsdf import load_measured_brdf_full
 from gonzales.scene.description.light_builder import _psc_handle_area_light_source, handle_light_source
@@ -1459,6 +1461,7 @@ def handle_shape(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
             nrm_world.unsafe_free(); ctm_inv.unsafe_free()
             if cache_i < 0:
                 nrm_ptr.unsafe_free()
+        apply_shape_displacement(s, params)
         if cache_i >= 0:
             s[unsafe_offset=0].ply_cache[unsafe_offset=0].release(cache_i)
         else:
@@ -1527,6 +1530,7 @@ def handle_shape(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
             nm.normals.append(ny)
             nm.normals.append(nz)
         nrm_world.unsafe_free(); ctm_inv.unsafe_free()
+    apply_shape_displacement(s, params)
 
 # ── Texture handler ───────────────────────────────────────────────────────────
 
@@ -1772,6 +1776,24 @@ def _texture_mapping(s: Pointer[SceneParseState, MutUntrackedOrigin], params: Pa
 # placement contributes a small TLAS leaf (transform + BLAS reference) rather
 # than a duplicated copy of the geometry.
 
+def _displaced_bounds(s: Pointer[SceneParseState, MutUntrackedOrigin], mi: Int, ti: Int, b: Pointer[Float32, MutUntrackedOrigin]):
+    """A displaced triangle's BVH box is its prism's."""
+    var di = Int(s[unsafe_offset=0].meshes[mi].disp_idx)
+    if di < 0:
+        return
+    var tri = s[unsafe_offset=0].disp_meshes[di].tris[unsafe_offset=ti]
+    if not tri.ok():
+        return
+    var bb = tri.bounds()
+    b[unsafe_offset=0] = bb[0].x; b[unsafe_offset=1] = bb[0].y; b[unsafe_offset=2] = bb[0].z
+    b[unsafe_offset=3] = bb[1].x; b[unsafe_offset=4] = bb[1].y; b[unsafe_offset=5] = bb[1].z
+
+
+def _is_displaced(s: Pointer[SceneParseState, MutUntrackedOrigin], mi: Int, ti: Int) -> Bool:
+    var di = Int(s[unsafe_offset=0].meshes[mi].disp_idx)
+    return di >= 0 and s[unsafe_offset=0].disp_meshes[di].tris[unsafe_offset=ti].ok()
+
+
 def _is_quad_soup(vis: Pointer[Int32, MutUntrackedOrigin], n_verts: Int, n_tris: Int) -> Bool:
     """Whether a mesh is quads with four vertices of their own each, split as (0, 1, 2) and (0, 2, 3)."""
     if n_tris == 0 or n_tris % 2 != 0 or n_verts != n_tris * 2:
@@ -1801,7 +1823,8 @@ def _wrap_world_meshes(s: Pointer[SceneParseState, MutUntrackedOrigin]):
             ref m = s[unsafe_offset=0].meshes[j]
             var nv = len(m.points) // 4
             if (m.is_object_template or m.is_area_light or m.alpha_mask >= Int32(0) or m.alpha_const < Float32(1.0)
-                    or m.inside_medium >= Int32(0) or m.outside_medium >= Int32(0) or nv == 0 or len(m.face_idxs) == 0):
+                    or m.inside_medium >= Int32(0) or m.outside_medium >= Int32(0) or nv == 0 or len(m.face_idxs) == 0
+                    or m.disp_idx >= Int32(0)):
                 break
             var uv = len(m.uvs) >= nv * 2; var nrm = len(m.normals) >= nv * 3
             if j == i:
@@ -1848,7 +1871,7 @@ def _merge_template_meshes(s: Pointer[SceneParseState, MutUntrackedOrigin], defa
             ref m = s[unsafe_offset=0].meshes[mi]
             var nv = len(m.points) // 4
             if (m.is_area_light or m.alpha_mask >= Int32(0) or m.alpha_const < Float32(1.0)
-                    or m.inside_medium >= Int32(0) or m.outside_medium >= Int32(0)
+                    or m.inside_medium >= Int32(0) or m.outside_medium >= Int32(0) or m.disp_idx >= Int32(0)
                     or (len(m.uvs) >= nv * 2 and nv > 0) != has_uv or (len(m.normals) >= nv * 3 and nv > 0) != has_nrm):
                 ok = False
                 break
@@ -2751,6 +2774,11 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
             meshes[unsafe_offset=i].alpha   = Pointer[UInt8, MutUntrackedOrigin].unsafe_dangling()
             meshes[unsafe_offset=i].alpha_w = Int32(0)
             meshes[unsafe_offset=i].alpha_h = Int32(0)
+        meshes[unsafe_offset=i].disp = Pointer[DisplacedMesh, MutUntrackedOrigin].unsafe_dangling()
+        if ma.disp_idx >= Int32(0):
+            var dm = unsafe_alloc[DisplacedMesh](1)
+            dm[unsafe_offset=0] = s[unsafe_offset=0].disp_meshes[Int(ma.disp_idx)]
+            meshes[unsafe_offset=i].disp = dm
         if len(ma.normals) >= nv * 3:
             var nrm_c = unsafe_alloc[Float32](nv)   # one encoded word a vertex, see TriangleMesh.normals
             var nrm_w = nrm_c.unsafe_bitcast[UInt32]()
@@ -3067,6 +3095,7 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
             prim_bounds[unsafe_offset=b+3] = max(x0, max(x1, x2))
             prim_bounds[unsafe_offset=b+4] = max(y0, max(y1, y2))
             prim_bounds[unsafe_offset=b+5] = max(z0, max(z1, z2))
+            _displaced_bounds(s, mi, ti, prim_bounds.unsafe_offset(b))
             tri_mesh[unsafe_offset=Int(flat_idx)]  = Int32(mi)
             tri_local[unsafe_offset=Int(flat_idx)] = Int32(ti)
             flat_idx += 1
@@ -3313,6 +3342,7 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
                 t_bounds[unsafe_offset=tb+3] = max(x0, max(x1, x2))
                 t_bounds[unsafe_offset=tb+4] = max(y0, max(y1, y2))
                 t_bounds[unsafe_offset=tb+5] = max(z0, max(z1, z2))
+                _displaced_bounds(s, mi, ti, t_bounds.unsafe_offset(tb))
                 for bk in range(3):
                     tmpl_bounds[unsafe_offset=tmpl * 6 + bk] = min(tmpl_bounds[unsafe_offset=tmpl * 6 + bk], t_bounds[unsafe_offset=tb + bk])
                     tmpl_bounds[unsafe_offset=tmpl * 6 + 3 + bk] = max(tmpl_bounds[unsafe_offset=tmpl * 6 + 3 + bk], t_bounds[unsafe_offset=tb + 3 + bk])
@@ -3378,7 +3408,8 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
             var ti = Int(t_local[unsafe_offset=orig])
             var mat_idx = Int(s[unsafe_offset=0].meshes[mi].mat_idx)
             var mat_idx_r = mat_idx if mat_idx >= 0 else Int(default_mat_idx)
-            t_prim_ids[unsafe_offset=k] = PrimId(Int64(mi), Int64(ti * 3), Int64(mat_idx_r), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
+            t_prim_ids[unsafe_offset=k] = PrimId(Int64(mi), Int64(ti * 3), Int64(mat_idx_r), Int32(-1),
+                                                 Int8(9) if _is_displaced(s, mi, ti) else Int8(0), Int8(0), Int8(0), Int8(0))
         t_mesh.unsafe_free(); t_local.unsafe_free(); t_order.unsafe_free()
         blas_nodes_arr[unsafe_offset=tmpl]   = t_nodes
         blas_primids_arr[unsafe_offset=tmpl] = t_prim_ids
@@ -3579,7 +3610,7 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
                     prim_ids_gpu[unsafe_offset=k].materialIndex = Int64(al_mat_base + al_idx)
                 else:
                     var mat_idx = Int(s[unsafe_offset=0].meshes[mi].mat_idx)
-                    prim_ids_gpu[unsafe_offset=k].type          = Int8(0)
+                    prim_ids_gpu[unsafe_offset=k].type          = Int8(9) if _is_displaced(s, mi, ti) else Int8(0)
                     prim_ids_gpu[unsafe_offset=k].id1           = Int64(mi)
                     prim_ids_gpu[unsafe_offset=k].id2           = Int64(ti * 3)
                     prim_ids_gpu[unsafe_offset=k].materialIndex = Int64(mat_idx) if mat_idx >= 0 else Int64(default_mat_idx)
@@ -3609,7 +3640,7 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
                 prim_ids[unsafe_offset=k].materialIndex = Int64(al_mat_base + al_idx)
             else:
                 var mat_idx = Int(s[unsafe_offset=0].meshes[mi].mat_idx)
-                prim_ids[unsafe_offset=k].type          = Int8(0)
+                prim_ids[unsafe_offset=k].type          = Int8(9) if _is_displaced(s, mi, ti) else Int8(0)
                 prim_ids[unsafe_offset=k].id1           = Int64(mi)
                 prim_ids[unsafe_offset=k].id2           = Int64(ti * 3)
                 prim_ids[unsafe_offset=k].materialIndex = Int64(mat_idx) if mat_idx >= 0 else Int64(default_mat_idx)

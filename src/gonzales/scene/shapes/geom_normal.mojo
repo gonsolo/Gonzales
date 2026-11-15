@@ -3,6 +3,7 @@
 from gonzales.core.geometry import Point3f, Vec3f, cross, dot, _is_real_ptr
 from gonzales.scene.shapes.primitives import Intersection, TriangleMesh, Instance, Sphere, sphere_outward_normal, mesh_vi
 from gonzales.scene.shapes.primitives import mesh_normal, mesh_pos
+from gonzales.scene.shapes.displacement import displaced_hit_normal
 from gonzales.core.transform import transform_normal, Mat4
 from std.math import sqrt
 
@@ -51,6 +52,9 @@ def _geom_normal(
     var p1 = mesh_pos(m, v1)
     var p2 = mesh_pos(m, v2)
     var n = cross(p1 - p0, p2 - p0)
+    if _is_real_ptr(m.disp):
+        var dn = displaced_hit_normal(m.disp, bv, inter.u, inter.v)
+        if dot(dn, dn) > Float32(0): n = dn
     if inter.primId.instanceIdx >= Int32(0):
         n = transform_normal(Mat4(instances[unsafe_offset=Int(inter.primId.instanceIdx)].world_to_obj()), n)
     var l = dot(n, n)
@@ -99,12 +103,16 @@ def _shading_normal_at(
     var p1 = mesh_pos(m, v1)
     var p2 = mesh_pos(m, v2)
     var gn = cross(p1 - p0, p2 - p0)
+    var displaced = False
+    if _is_real_ptr(m.disp):
+        var dn = displaced_hit_normal(m.disp, bv, inter.u, inter.v)
+        if dot(dn, dn) > Float32(0): gn = dn; displaced = True
     if inter.primId.instanceIdx >= Int32(0):
         gn = transform_normal(Mat4(instances[unsafe_offset=Int(inter.primId.instanceIdx)].world_to_obj()), gn)
     var gl = dot(gn, gn)
     if gl > Float32(0.0): gn = gn * (Float32(1.0) / sqrt(gl))
     # No per-vertex normals → flat normal (sentinel addr <= 4, see GPU-nullable convention).
-    if not _is_real_ptr(m.normals):
+    if not _is_real_ptr(m.normals) or displaced:
         return gn
     var w0 = Float32(1.0) - inter.u - inter.v
     var n0 = mesh_normal(m, v0)
