@@ -38,6 +38,7 @@ struct Rmip(TrivialRegisterPassable):
         var k = 2 * (((q * Int(self.lx) + p) * Int(self.ry) + y) * Int(self.rx) + x)
         return (self.tab[unsafe_offset=k], self.tab[unsafe_offset=k + 1])
 
+    @always_inline
     def _blocks(self, i0: Int, i1: Int, j0: Int, j1: Int) -> Tuple[Float32, Float32]:
         """Min-max over samples [i0, i1] x [j0, j1], inside the map."""
         var b = Int(self.b)
@@ -48,6 +49,7 @@ struct Rmip(TrivialRegisterPassable):
         var e2 = self._entry(p, q, bx0, yb); var e3 = self._entry(p, q, xb, yb)
         return (min(min(e0[0], e1[0]), min(e2[0], e3[0])), max(max(e0[1], e1[1]), max(e2[1], e3[1])))
 
+    @always_inline
     def query(self, i0_in: Int, i1_in: Int, j0_in: Int, j1_in: Int) -> Tuple[Float32, Float32]:
         """Min-max of h over samples [i0, i1] x [j0, j1], any integers: the map repeats."""
         var w = Int(self.w); var hh = Int(self.hh)
@@ -178,6 +180,7 @@ struct DisplacedTri(TrivialRegisterPassable):
         var d = self.binv[0] * self.binv[3] - self.binv[1] * self.binv[2]   # 1 / (twice the texel area)
         return d != Float32(0) and abs(d) < Float32(1e10)
 
+    @always_inline
     def bounds(self) -> Tuple[Vec3f, Vec3f]:
         """The prism's AABB."""
         var lo = Vec3f(3.0e38); var hi = Vec3f(-3.0e38)
@@ -198,7 +201,7 @@ struct DisplacedTri(TrivialRegisterPassable):
         var lo = SIMD[DType.float32, 2](min(min(self.t[0], self.t[2]), self.t[4]), min(min(self.t[1], self.t[3]), self.t[5])) - Float32(1)
         var hi = SIMD[DType.float32, 2](max(max(self.t[0], self.t[2]), self.t[4]), max(max(self.t[1], self.t[3]), self.t[5])) + Float32(1)
         var r = uv
-        for k in range(2):
+        comptime for k in range(2):
             if not (r[k] >= lo[k]): r[k] = lo[k]   # NaN too
             if not (r[k] <= hi[k]): r[k] = hi[k]
         return r
@@ -292,55 +295,21 @@ def _patch_t(o: Vec3f, d: Vec3f, q00: Vec3f, q10: Vec3f, q11: Vec3f, q01: Vec3f)
         u1 = (-b - (disc if b >= Float32(0) else -disc)) * Float32(0.5)
         u2 = a / u1 if u1 != Float32(0) else Float32(-1)
         u1 /= c
-    for k in range(2):
+    comptime for k in range(2):
         var u = u1 if k == 0 else u2
-        if u < Float32(0) or u > Float32(1): continue
-        var pa = a0 + (a1 - a0) * u; var pb = e00 + (e11 - e00) * u
-        var n = cross(d, pb); var dd = dot(n, n)
-        if dd == Float32(0): continue
-        n = cross(n, pa)
-        var v = dot(n, d)
-        if v >= Float32(0) and v <= dd: out[k] = dot(n, pb) / dd
+        if u >= Float32(0) and u <= Float32(1):
+            var pa = a0 + (a1 - a0) * u; var pb = e00 + (e11 - e00) * u
+            var n = cross(d, pb); var dd = dot(n, n)
+            if dd != Float32(0):
+                n = cross(n, pa)
+                var v = dot(n, d)
+                if v >= Float32(0) and v <= dd: out[k] = dot(n, pb) / dd
     return out
-
-
-def prism_hits(tri: DisplacedTri, o: Vec3f, d: Vec3f) -> Tuple[SIMD[DType.float32, 8], Int]:
-    """The distances where the ray crosses the prism's surface, sorted; the count."""
-    var lo = Array[Vec3f, 3](fill=Vec3f(0)); var hi = Array[Vec3f, 3](fill=Vec3f(0))
-    for k in range(3):
-        var u = tri.t[2 * k]; var v = tri.t[2 * k + 1]
-        var p = tri.p(u, v); var n = tri.n(u, v)
-        lo[k] = p + n * tri.smin; hi[k] = p + n * tri.smax
-    var ts = SIMD[DType.float32, 8](3.0e38)
-    var cnt = 0
-    _add_t(ts, cnt, _tri_t(o, d, lo[0], lo[1], lo[2]))
-    _add_t(ts, cnt, _tri_t(o, d, hi[0], hi[1], hi[2]))
-    for k in range(3):
-        var k1 = (k + 1) % 3
-        var pt = _patch_t(o, d, lo[k], lo[k1], hi[k1], hi[k])
-        _add_t(ts, cnt, pt[0]); _add_t(ts, cnt, pt[1])
-    return (_sort8(ts), cnt)
-
-
-@always_inline
-def _add_t(mut ts: SIMD[DType.float32, 8], mut cnt: Int, t: Float32):
-    if t > Float32(0) and cnt < 8:
-        ts[cnt] = t; cnt += 1
-
-
-@always_inline
-def _sort8(v: SIMD[DType.float32, 8]) -> SIMD[DType.float32, 8]:
-    var s = v
-    for i in range(1, 8):
-        var x = s[i]; var j = i - 1
-        while j >= 0 and s[j] > x:
-            s[j + 1] = s[j]; j -= 1
-        s[j + 1] = x
-    return s
 
 
 # ── Texture space: inversion and the projected ray ───────────────────────────
 
+@always_inline
 def invert(tri: DisplacedTri, x: Vec3f) -> SIMD[DType.float32, 2]:
     """The local (u, v) whose displacement line passes through x: (P - x) x N = 0, Gauss-Newton."""
     # start from x projected onto the base plane
@@ -354,6 +323,7 @@ def invert(tri: DisplacedTri, x: Vec3f) -> SIMD[DType.float32, 2]:
     return invert_from(tri, x, u, v)
 
 
+@always_inline
 def invert_from(tri: DisplacedTri, x: Vec3f, u_in: Float32, v_in: Float32) -> SIMD[DType.float32, 2]:
     """invert, starting from a nearby (u, v)."""
     var u = u_in; var v = v_in
@@ -387,6 +357,7 @@ def _det(a: Vec3f, b: Vec3f, c: Vec3f) -> Float32:
     return dot(a, cross(b, c))
 
 
+@always_inline
 def _psi(tri: DisplacedTri, o: Vec3f, d: Vec3f) -> _Psi:
     var a0 = tri.pc - o
     return _Psi(SIMD[DType.float32, 8](
@@ -420,6 +391,7 @@ def _quad_roots(a: Float32, b: Float32, c: Float32) -> SIMD[DType.float32, 2]:
     return SIMD[DType.float32, 2](q / a, c / q if q != Float32(0) else none)
 
 
+@always_inline
 def _cross_line(ps: _Psi, along_u: Bool, x: Float32, lo: Float32, hi: Float32) -> Float32:
     """Where psi = 0 crosses u = x (along_u) or v = x, the other coordinate in [lo, hi]; 3e38 if nowhere."""
     var a: Float32; var b: Float32; var c: Float32
@@ -430,17 +402,10 @@ def _cross_line(ps: _Psi, along_u: Bool, x: Float32, lo: Float32, hi: Float32) -
     var r = _quad_roots(a, b, c)
     var eps = (hi - lo) * Float32(1e-3) + Float32(1e-6)
     var best = Float32(3.0e38)
-    for k in range(2):
+    comptime for k in range(2):
         if r[k] >= lo - eps and r[k] <= hi + eps:
             best = r[k] if best == Float32(3.0e38) else best
     return best
-
-
-@fieldwise_init
-struct _Bound(TrivialRegisterPassable):
-    """A monotone piece of the projected ray: local (u, v) and distance at both ends."""
-    var a: SIMD[DType.float32, 4]   # u, v, t, _
-    var b: SIMD[DType.float32, 4]
 
 
 # ── The intersection ─────────────────────────────────────────────────────────
@@ -472,13 +437,14 @@ def _interval_mul(a0: Float32, a1: Float32, b0: Float32, b1: Float32) -> SIMD[DT
     return SIMD[DType.float32, 2](p.reduce_min(), p.reduce_max())
 
 
+@always_inline
 def _surface_box(tri: DisplacedTri, rm: Rmip, u0: Float32, u1: Float32, v0: Float32, v1: Float32) -> Tuple[Vec3f, Vec3f]:
     """An AABB of the displaced surface over the local rectangle (affine arithmetic, h from the RMIP)."""
     var hb = rm.query(Int(floor(u0 + tri.tc[0])), Int(ceil(u1 + tri.tc[0])), Int(floor(v0 + tri.tc[1])), Int(ceil(v1 + tri.tc[1])))
     var s0 = min(hb[0] / tri.nlo, hb[0] / tri.nhi); var s1 = max(hb[1] / tri.nlo, hb[1] / tri.nhi)
     var lo = SIMD[DType.float32, 4](0); var hi = SIMD[DType.float32, 4](0)
     var pc = tri.pc; var pu = tri.pu; var pv = tri.pv; var nc = tri.nc; var nu = tri.nu; var nv = tri.nv
-    for k in range(3):
+    comptime for k in range(3):
         var pck = pc.x if k == 0 else (pc.y if k == 1 else pc.z)
         var puk = pu.x if k == 0 else (pu.y if k == 1 else pu.z)
         var pvk = pv.x if k == 0 else (pv.y if k == 1 else pv.z)
@@ -494,6 +460,7 @@ def _surface_box(tri: DisplacedTri, rm: Rmip, u0: Float32, u1: Float32, v0: Floa
     return (Vec3f(lo[0] - pad, lo[1] - pad, lo[2] - pad), Vec3f(hi[0] + pad, hi[1] + pad, hi[2] + pad))
 
 
+@always_inline
 def _march(tri: DisplacedTri, rm: Rmip, o: Vec3f, d: Vec3f, u0: Float32, u1: Float32, v0: Float32, v1: Float32,
            mut best: DisplacedHit):
     """Intersect the micro-triangles of the texel cells under a local rectangle; keep hits inside the base triangle."""
@@ -527,96 +494,121 @@ def _march(tri: DisplacedTri, rm: Rmip, o: Vec3f, d: Vec3f, u0: Float32, u1: Flo
                 best = DisplacedHit(True, t, bc[0], bc[1], cross(e1, e2), uv[0], uv[1])
 
 
+@always_inline
 def intersect_displaced(tri: DisplacedTri, rm: Rmip, o: Vec3f, d: Vec3f, tmax: Float32) -> DisplacedHit:
-    """The nearest hit of the displaced triangle in (0, tmax): RMIP's traversal (its Algorithm 1)."""
+    """The nearest hit of the displaced triangle in (0, tmax): RMIP's traversal (its Algorithm 1).
+    Its lists live in scalar arrays read through pointers, as the BVH stacks do: a runtime index into a SIMD value
+    or an array of structs miscompiles on the Intel GPU (wrong prism distances, then faults)."""
     var best = DisplacedHit(False, tmax, 0, 0, Vec3f(0), 0, 0)
-    var ph = prism_hits(tri, o, d)
-    var ts = ph[0]; var cnt = ph[1]
+    # the prism: two triangles and three bilinear patches, every crossing in front of the origin
+    var lo0 = tri.p(tri.t[0], tri.t[1]) + tri.n(tri.t[0], tri.t[1]) * tri.smin
+    var lo1 = tri.p(tri.t[2], tri.t[3]) + tri.n(tri.t[2], tri.t[3]) * tri.smin
+    var lo2 = tri.p(tri.t[4], tri.t[5]) + tri.n(tri.t[4], tri.t[5]) * tri.smin
+    var hi0 = tri.p(tri.t[0], tri.t[1]) + tri.n(tri.t[0], tri.t[1]) * tri.smax
+    var hi1 = tri.p(tri.t[2], tri.t[3]) + tri.n(tri.t[2], tri.t[3]) * tri.smax
+    var hi2 = tri.p(tri.t[4], tri.t[5]) + tri.n(tri.t[4], tri.t[5]) * tri.smax
+    var c01 = _patch_t(o, d, lo0, lo1, hi1, hi0); var c12 = _patch_t(o, d, lo1, lo2, hi2, hi1); var c20 = _patch_t(o, d, lo2, lo0, hi0, hi2)
+    var cand = SIMD[DType.float32, 8](_tri_t(o, d, lo0, lo1, lo2), _tri_t(o, d, hi0, hi1, hi2), c01[0], c01[1], c12[0], c12[1], c20[0], c20[1])
+    var tsa = Array[Float32, 8](fill=Float32(3.0e38)); var ts = tsa.unsafe_ptr()
+    var cnt = 0
+    comptime for k in range(8):
+        if cand[k] > Float32(0):
+            ts[unsafe_offset=cnt] = cand[k]; cnt += 1
     if cnt == 0: return best
+    for i in range(1, cnt):   # insertion sort
+        var x = ts[unsafe_offset=i]; var j = i - 1
+        while j >= 0 and ts[unsafe_offset=j] > x:
+            ts[unsafe_offset=j + 1] = ts[unsafe_offset=j]; j -= 1
+        ts[unsafe_offset=j + 1] = x
     var ps = _psi(tri, o, d)
     var inv_d = Vec3f(Float32(1) / d.x, Float32(1) / d.y, Float32(1) / d.z)
-    var stack = Array[_Bound, STACK](fill=_Bound(SIMD[DType.float32, 4](0), SIMD[DType.float32, 4](0)))
+    # the stack: a bound is (u, v, t) at both ends of a monotone piece of the projected ray
+    var sta = Array[Float32, 6 * STACK](uninitialized=True); var st = sta.unsafe_ptr()
     var sp = 0
+    var pta = Array[Float32, 18](uninitialized=True); var pt = pta.unsafe_ptr()   # a piece's split points
+    var cta = Array[Float32, 4](uninitialized=True); var cut = cta.unsafe_ptr()
     # intervals inside the prism, front to back; an odd count means the ray starts inside
     var k0 = cnt % 2
-    var n_iv = (cnt + k0) // 2
-    var iv = n_iv - 1
+    var iv = (cnt + k0) // 2 - 1
     while iv >= 0:   # push back to front so the front pops first
-        var ta = Float32(0) if (k0 == 1 and iv == 0) else ts[2 * iv - k0]
-        var tb = ts[2 * iv + 1 - k0]
+        var ta = Float32(0) if (k0 == 1 and iv == 0) else ts[unsafe_offset=2 * iv - k0]
+        var tb = ts[unsafe_offset=2 * iv + 1 - k0]
         iv -= 1
         if ta >= best.t: continue
         tb = min(tb, best.t)
-        var ua = tri.clamp_uv(invert(tri, o + d * ta)); var ub = tri.clamp_uv(invert(tri, o + d * tb))
         # split at the turning points (psi_u = 0 or psi_v = 0 on the curve), keeping each piece monotone
-        var cut = SIMD[DType.float32, 8](3.0e38)
         var nc = 0
-        for axis in range(2):
+        comptime for axis in range(2):
             # grad psi component: psi_u = c1 + 2 c3 u + c4 v, psi_v = c2 + c4 u + 2 c5 v; a line in (u, v)
             var g0 = ps.c[1] if axis == 0 else ps.c[2]
             var gu = Float32(2) * ps.c[3] if axis == 0 else ps.c[4]
             var gv = ps.c[4] if axis == 0 else Float32(2) * ps.c[5]
             # parametrize the line g0 + gu u + gv v = 0 as q + r * (-gv, gu)
             var gg = gu * gu + gv * gv
-            if gg < Float32(1e-30): continue
-            var qu = -g0 * gu / gg; var qv = -g0 * gv / gg
-            var ru = -gv; var rv = gu
-            var a = ps.c[3] * ru * ru + ps.c[4] * ru * rv + ps.c[5] * rv * rv
-            var b = ps.c[1] * ru + ps.c[2] * rv + Float32(2) * ps.c[3] * qu * ru + ps.c[4] * (qu * rv + qv * ru) + Float32(2) * ps.c[5] * qv * rv
-            var c = ps.at(qu, qv)
-            var r = _quad_roots(a, b, c)
-            for m in range(2):
-                if r[m] == Float32(3.0e38): continue
-                var t = _ray_t(tri, o, d, qu + r[m] * ru, qv + r[m] * rv)
-                if t > ta and t < tb and nc < 4:
-                    cut[nc] = t; nc += 1
-        cut = _sort8(cut)
-        var pts = Array[SIMD[DType.float32, 4], 6](fill=SIMD[DType.float32, 4](0))
-        pts[0] = SIMD[DType.float32, 4](ua[0], ua[1], ta, 0)
-        for m in range(nc):
-            var uv = tri.clamp_uv(invert(tri, o + d * cut[m]))
-            pts[m + 1] = SIMD[DType.float32, 4](uv[0], uv[1], cut[m], 0)
-        pts[nc + 1] = SIMD[DType.float32, 4](ub[0], ub[1], tb, 0)
+            if gg >= Float32(1e-30):
+                var qu = -g0 * gu / gg; var qv = -g0 * gv / gg
+                var ru = -gv; var rv = gu
+                var a = ps.c[3] * ru * ru + ps.c[4] * ru * rv + ps.c[5] * rv * rv
+                var b = ps.c[1] * ru + ps.c[2] * rv + Float32(2) * ps.c[3] * qu * ru + ps.c[4] * (qu * rv + qv * ru) + Float32(2) * ps.c[5] * qv * rv
+                var r = _quad_roots(a, b, ps.at(qu, qv))
+                comptime for m in range(2):
+                    if r[m] != Float32(3.0e38):
+                        var t = _ray_t(tri, o, d, qu + r[m] * ru, qv + r[m] * rv)
+                        if t > ta and t < tb and nc < 4:
+                            cut[unsafe_offset=nc] = t; nc += 1
+        for i in range(1, nc):
+            var x = cut[unsafe_offset=i]; var j = i - 1
+            while j >= 0 and cut[unsafe_offset=j] > x:
+                cut[unsafe_offset=j + 1] = cut[unsafe_offset=j]; j -= 1
+            cut[unsafe_offset=j + 1] = x
+        for m in range(nc + 2):
+            var t = ta if m == 0 else (tb if m == nc + 1 else cut[unsafe_offset=m - 1])
+            var uv = tri.clamp_uv(invert(tri, o + d * t))
+            pt[unsafe_offset=3 * m] = uv[0]; pt[unsafe_offset=3 * m + 1] = uv[1]; pt[unsafe_offset=3 * m + 2] = t
         var m = nc
-        while m >= 0:
-            if sp < STACK:
-                stack[sp] = _Bound(pts[m], pts[m + 1]); sp += 1
-            m -= 1
+        while m >= 0 and sp < STACK:
+            for c in range(6): st[unsafe_offset=6 * sp + c] = pt[unsafe_offset=3 * m + c]
+            sp += 1; m -= 1
     while sp > 0:
         sp -= 1
-        var bd = stack[sp]
-        if bd.a[2] >= best.t: continue
-        var u0 = min(bd.a[0], bd.b[0]); var u1 = max(bd.a[0], bd.b[0])
-        var v0 = min(bd.a[1], bd.b[1]); var v1 = max(bd.a[1], bd.b[1])
+        var au = st[unsafe_offset=6 * sp]; var av = st[unsafe_offset=6 * sp + 1]; var at = st[unsafe_offset=6 * sp + 2]
+        var bu = st[unsafe_offset=6 * sp + 3]; var bv = st[unsafe_offset=6 * sp + 4]; var bt = st[unsafe_offset=6 * sp + 5]
+        if at >= best.t: continue
+        var u0 = min(au, bu); var u1 = max(au, bu)
+        var v0 = min(av, bv); var v1 = max(av, bv)
         if u1 - u0 <= Float32(MARCH) and v1 - v0 <= Float32(MARCH):
             _march(tri, rm, o, d, u0, u1, v0, v1, best)
-            if best.hit and best.t <= bd.b[2]:   # front to back: nothing later is nearer
+            if best.hit and best.t <= bt:   # front to back: nothing later is nearer
                 return best
             continue
         var box = _surface_box(tri, rm, u0, u1, v0, v1)
-        if not _box_hit(o, inv_d, box[0], box[1], bd.a[2], min(bd.b[2], best.t)):
+        if not _box_hit(o, inv_d, box[0], box[1], at, min(bt, best.t)):
             continue
         # split the longer side in the middle where the projected ray crosses it
         var along_u = (u1 - u0) >= (v1 - v0)
         var x = (u0 + u1) * Float32(0.5) if along_u else (v0 + v1) * Float32(0.5)
         var y = _cross_line(ps, along_u, x, v0 if along_u else u0, v1 if along_u else u1)
-        var mid: SIMD[DType.float32, 4]
+        var mu: Float32; var mv: Float32; var tm: Float32
         if y == Float32(3.0e38):   # numerically missed: split the distance instead
-            var tm = (bd.a[2] + bd.b[2]) * Float32(0.5)
+            tm = (at + bt) * Float32(0.5)
             var uv = tri.clamp_uv(invert(tri, o + d * tm))
-            mid = SIMD[DType.float32, 4](uv[0], uv[1], tm, 0)
+            mu = uv[0]; mv = uv[1]
         else:
-            var mu = x if along_u else y; var mv = y if along_u else x
-            var tm = _ray_t(tri, o, d, mu, mv)
-            if not (tm >= bd.a[2] and tm <= bd.b[2]): tm = (bd.a[2] + bd.b[2]) * Float32(0.5)   # NaN or off the piece
-            mid = SIMD[DType.float32, 4](mu, mv, tm, 0)
-        if sp + 2 <= STACK:
-            stack[sp] = _Bound(mid, bd.b); stack[sp + 1] = _Bound(bd.a, mid); sp += 2
+            mu = x if along_u else y; mv = y if along_u else x
+            tm = _ray_t(tri, o, d, mu, mv)
+            if not (tm >= at and tm <= bt): tm = (at + bt) * Float32(0.5)   # NaN or off the piece
+        if sp + 2 <= STACK:   # the back half below, the front half on top
+            st[unsafe_offset=6 * sp] = mu; st[unsafe_offset=6 * sp + 1] = mv; st[unsafe_offset=6 * sp + 2] = tm
+            st[unsafe_offset=6 * sp + 3] = bu; st[unsafe_offset=6 * sp + 4] = bv; st[unsafe_offset=6 * sp + 5] = bt
+            st[unsafe_offset=6 * sp + 6] = au; st[unsafe_offset=6 * sp + 7] = av; st[unsafe_offset=6 * sp + 8] = at
+            st[unsafe_offset=6 * sp + 9] = mu; st[unsafe_offset=6 * sp + 10] = mv; st[unsafe_offset=6 * sp + 11] = tm
+            sp += 2
         else:
             _march(tri, rm, o, d, u0, u1, v0, v1, best)
     return best
 
 
+@always_inline
 def intersect_displaced_brute(tri: DisplacedTri, rm: Rmip, o: Vec3f, d: Vec3f, tmax: Float32) -> DisplacedHit:
     """The same micro-triangles, all of them: the reference the traversal must reproduce."""
     var best = DisplacedHit(False, tmax, 0, 0, Vec3f(0), 0, 0)
@@ -626,6 +618,7 @@ def intersect_displaced_brute(tri: DisplacedTri, rm: Rmip, o: Vec3f, d: Vec3f, t
     return best
 
 
+@always_inline
 def _corner_normal(tri: DisplacedTri, rm: Rmip, i: Int, j: Int) -> Vec3f:
     var su = tri.surface(rm, i + 1, j) - tri.surface(rm, i - 1, j)
     var sv = tri.surface(rm, i, j + 1) - tri.surface(rm, i, j - 1)
@@ -633,6 +626,7 @@ def _corner_normal(tri: DisplacedTri, rm: Rmip, i: Int, j: Int) -> Vec3f:
     return n if dot(n, tri.n(Float32(i) - tri.tc[0], Float32(j) - tri.tc[1])) >= Float32(0) else -n
 
 
+@always_inline
 def displaced_normal(tri: DisplacedTri, rm: Rmip, u: Float32, v: Float32) -> Vec3f:
     """The smooth shading normal at local (u, v): central-difference normals at the texel's corners, interpolated,
     as pbrt recomputes vertex normals after displacing; unit, on the side of N."""
@@ -646,6 +640,7 @@ def displaced_normal(tri: DisplacedTri, rm: Rmip, u: Float32, v: Float32) -> Vec
     return n.normalize()
 
 
+@always_inline
 def displaced_hit_normal(disp: Pointer[DisplacedMesh, MutUntrackedOrigin], base_vidx: Int, b1: Float32, b2: Float32) -> Vec3f:
     """The smooth normal of a displaced triangle's hit at base barycentrics (b1, b2), on its winding's side;
     zero for a triangle that stayed plain. It serves as geometric and shading normal alike."""
