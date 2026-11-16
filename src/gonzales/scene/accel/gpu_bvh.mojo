@@ -13,6 +13,7 @@ from max.gpu.sync import barrier, syncwarp
 from max.gpu.memory import AddressSpace
 from max.gpu.primitives.warp import shuffle_idx, vote
 from max.gpu.host import DeviceContext, DeviceBuffer
+from gonzales.scene.accel.dev_buf import dev_buf
 from gonzales.scene.accel.bvh import BVH2Node
 from gonzales.core.geometry import Point3f
 
@@ -40,7 +41,7 @@ struct GpuBvh(Movable):
 
 
 def _buf[T: AnyType](ctx: DeviceContext, n: Int) raises -> DeviceBuffer[DType.uint8]:
-    return ctx.enqueue_create_buffer[DType.uint8](max(n, 1) * size_of[T]())
+    return dev_buf(ctx, max(n, 1) * size_of[T]())
 
 
 @always_inline

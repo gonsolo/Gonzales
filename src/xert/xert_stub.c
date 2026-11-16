@@ -69,3 +69,7 @@ void xert_set_heat(uint64_t counts, int64_t n) {
 
 uint64_t xert_heat(void) { return heat.counts; }
 int64_t xert_heat_n(void) { return heat.n; }
+
+static uint64_t acct_bytes;
+void gz_acct_add(uint64_t n) { acct_bytes += n; }
+uint64_t gz_acct_bytes(void) { return acct_bytes; }

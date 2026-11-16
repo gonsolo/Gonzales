@@ -10,6 +10,7 @@ from std.memory.alloc import unsafe_alloc
 from std.sys.info import is_gpu
 from max.gpu import block_idx, thread_idx, lane_id, WARP_SIZE
 from max.gpu.host import DeviceContext, DeviceBuffer
+from gonzales.scene.accel.dev_buf import dev_buf
 from max.gpu.memory import AddressSpace
 from max.gpu.primitives import warp
 from max.gpu.primitives.warp import match_any, shuffle_idx, vote
@@ -680,7 +681,7 @@ def _dev_ints(ctx: DeviceContext, values: List[Int]) raises -> DeviceBuffer[DTyp
     var h = unsafe_alloc[Int32](max(len(values), 1))
     for i in range(len(values)):
         h[unsafe_offset=i] = Int32(values[i])
-    var b = ctx.enqueue_create_buffer[DType.uint8](4 * max(len(values), 1))
+    var b = dev_buf(ctx, 4 * max(len(values), 1))
     ctx.enqueue_copy(b, h.unsafe_bitcast[UInt8]())
     ctx.synchronize()
     h.unsafe_free()
@@ -711,7 +712,7 @@ def _floats(ctx: DeviceContext, values: List[Float32]) raises -> DeviceBuffer[DT
     var h = unsafe_alloc[Float32](max(len(values), 1))
     for i in range(len(values)):
         h[unsafe_offset=i] = values[i]
-    var b = ctx.enqueue_create_buffer[DType.uint8](4 * max(len(values), 1))
+    var b = dev_buf(ctx, 4 * max(len(values), 1))
     ctx.enqueue_copy(b, h.unsafe_bitcast[UInt8]())
     ctx.synchronize()
     h.unsafe_free()

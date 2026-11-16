@@ -28,6 +28,7 @@ from gonzales.transport.restir_di import DIReservoir
 from gonzales.integrators.pt.restir_vol import VolReservoir
 from max.gpu import block_dim, block_idx, thread_idx
 from max.gpu.host import DeviceBuffer, DeviceContext, HostBuffer
+from gonzales.scene.accel.dev_buf import dev_buf, dev_requested
 from std.ffi import external_call
 from std.math import ceildiv
 from std.memory import bitcast, unsafe_memcpy
@@ -436,7 +437,7 @@ struct TextureBuffers(Movable):
         var lut_dev = lut_buf.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
 
         var pool_bytes = Int(external_call["ptex_pool_size", Int64]())
-        var ptex_pool_buf = ctx.enqueue_create_buffer[DType.uint8](max(pool_bytes, 1))
+        var ptex_pool_buf = dev_buf(ctx, max(pool_bytes, 1))
         var pool_dev = ptex_pool_buf.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
         var ptex_cache = PtexCache(pool_bytes)
         var ptex_bufs = List[Int]()
@@ -698,7 +699,7 @@ struct CurveBuffers(Movable):
             curve_buf = _gpu_upload_array[Curve](ctx, s.curves, n)
         var c = Self(curves_buf=curve_buf^, n_curves=n, segs=one_piece, cand_prim_buf=_gpu_placeholder(ctx),
                      cand_count_buf=_gpu_placeholder(ctx), cand_offset_buf=_gpu_placeholder(ctx),
-                     compact_path_buf=_gpu_placeholder(ctx), compact_counter_buf=ctx.enqueue_create_buffer[DType.uint8](4))
+                     compact_path_buf=_gpu_placeholder(ctx), compact_counter_buf=dev_buf(ctx, 4))
         c.alloc_paths(ctx, n_pix * WAVEFRONT_BATCH)
         return c^
 
@@ -718,16 +719,16 @@ struct CurveBuffers(Movable):
         # touched by compact_curve_paths_gpu/resolve_curve_candidates_gpu,
         # both gated behind `if handle[].curves.n_curves > 0` at the dispatch site,
         # so those two are still safe to leave dummy-sized.
-        self.cand_prim_buf   = ctx.enqueue_create_buffer[DType.uint8](n_curve_paths * CURVE_DEFER_K * 4)
-        self.cand_count_buf  = ctx.enqueue_create_buffer[DType.uint8](n_curve_paths * 4)
-        self.cand_offset_buf = ctx.enqueue_create_buffer[DType.uint8](n_curve_paths * 4)
+        self.cand_prim_buf   = dev_buf(ctx, n_curve_paths * CURVE_DEFER_K * 4)
+        self.cand_count_buf  = dev_buf(ctx, n_curve_paths * 4)
+        self.cand_offset_buf = dev_buf(ctx, n_curve_paths * 4)
         ctx.enqueue_function[init_curve_cand_offset_gpu](
             self.cand_offset_buf.unsafe_ptr().unsafe_bitcast[Int32]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
             Int64(n_curve_paths),
             grid_dim=ceildiv(n_curve_paths, 256), block_dim=256,
         )
         var n_curve_compact_paths = n_curve_paths if self.n_curves > 0 else 1
-        self.compact_path_buf = ctx.enqueue_create_buffer[DType.uint8](n_curve_compact_paths * 4)
+        self.compact_path_buf = dev_buf(ctx, n_curve_compact_paths * 4)
 
 @fieldwise_init
 struct MediaBuffers(Movable):
@@ -1064,6 +1065,7 @@ def _bench_counters() -> Pointer[Int, MutUntrackedOrigin]:
 def _gpu_free_log(tag: String):
     if env_on["GONZALES_GPU_LOG"]():
         print("GPU free after " + tag + ": " + String(Int(rtcore_device_free()) // (1024 * 1024)) + " MB")
+        print("GPU requested after " + tag + ": " + String(dev_requested()) + " B")
 
 # Uploads count elements of T from a host array into a fresh device buffer
 # (>= 1 elem so a zero-count scene never creates a 0-byte device buffer,
@@ -1080,7 +1082,7 @@ def _gpu_upload_array[T: AnyType](
     var nbytes = max(count, 1) * size_of[T]()
     if nbytes >= (8 if env_on["GONZALES_GPU_LOG"]() else 128) * 1024 * 1024:
         print("GPU: uploading " + String(nbytes // (1024 * 1024)) + " MB (" + String(count) + " x " + String(size_of[T]()) + " B)")
-    var buf = ctx.enqueue_create_buffer[DType.uint8](nbytes)
+    var buf = dev_buf(ctx, nbytes)
     if count > 0:
         ctx.enqueue_copy(buf, src.unsafe_bitcast[UInt8]())
     return buf^
@@ -1439,7 +1441,7 @@ def _gpu_zeros_owned[T: AnyType](
     mut bufs: List[DeviceBuffer[DType.uint8]],
     count: Int,
 ) raises -> Pointer[T, MutUntrackedOrigin]:
-    var buf = ctx.enqueue_create_buffer[DType.uint8](max(count, 1) * size_of[T]())
+    var buf = dev_buf(ctx, max(count, 1) * size_of[T]())
     ctx.enqueue_memset(buf, UInt8(0))
     var dptr = typed_ptr[T](buf)
     bufs.append(buf^)
@@ -1556,17 +1558,17 @@ def gpu_upload_scene(
             var nee_candidates = (1 if s.area_light_count > 0 else 0) + Int(s.distant_count) + Int(s.point_count) + Int(s.sphere_count) + Int(s.infinite_count)
             var sw_defer = Int(s.medium_count) == 0 and nee_candidates <= SHADOW_SLOTS and not env_on["GONZALES_NO_SW_SHADOW"]()
             var r_shadow_slots = SHADOW_SLOTS if env_on["GONZALES_RTCORE"]() or sw_defer else 1
-            var r_prev_c2w_buf = ctx.enqueue_create_buffer[DType.uint8](64)
+            var r_prev_c2w_buf = dev_buf(ctx, 64)
             ctx.enqueue_memset(r_prev_c2w_buf, UInt8(0))
-            var r_shade_ctx_buf = ctx.enqueue_create_buffer[DType.uint8](1024)
-            var r_filter_lut_buf = ctx.enqueue_create_buffer[DType.uint8](2 * FILTER_LUT_N * 4)
+            var r_shade_ctx_buf = dev_buf(ctx, 1024)
+            var r_filter_lut_buf = dev_buf(ctx, 2 * FILTER_LUT_N * 4)
             if s.filter_type == Int32(0):
                 var lut_host = unsafe_alloc[Float32](2 * FILTER_LUT_N)
                 fill_filter_lut(lut_host, s.filter_sigma, s.filter_support_x, s.filter_support_y)
                 ctx.enqueue_copy(r_filter_lut_buf, lut_host.unsafe_bitcast[UInt8]())
                 ctx.synchronize()
                 lut_host.unsafe_free()
-            var r_active_count_buf = ctx.enqueue_create_buffer[DType.uint8](128)
+            var r_active_count_buf = dev_buf(ctx, 128)
             var curves = CurveBuffers.upload(ctx, s, 1)
             var textures = TextureBuffers.upload(ctx, s)
             ctx.synchronize()
@@ -1691,7 +1693,7 @@ def gpu_upload_scene(
 
 
 def _gpu_placeholder(ctx: DeviceContext) raises -> DeviceBuffer[DType.uint8]:
-    return ctx.enqueue_create_buffer[DType.uint8](32)
+    return dev_buf(ctx, 32)
 
 # The buffers sized by the pixel count, (re)allocated for n_pixels; the film and the denoiser's history start at zero.
 def gpu_alloc_pixel_buffers(handle: Pointer[GpuSceneHandle, MutUntrackedOrigin], n_pixels: Int,
@@ -1700,46 +1702,47 @@ def gpu_alloc_pixel_buffers(handle: Pointer[GpuSceneHandle, MutUntrackedOrigin],
     ref h = handle[]
     var n_pix = max(n_pixels, 1)
     var n_paths = n_pix * batch
-    h.suppress_buf = ctx.enqueue_create_buffer[DType.uint8](n_paths * 32 if h.has_glass_material else 32)
+    h.suppress_buf = dev_buf(ctx, n_paths * 32 if h.has_glass_material else 32)
     ctx.enqueue_memset(h.suppress_buf, UInt8(0))
     h.gsms_cap = min(2 * n_paths, 1 << 17) if h.has_glass_material else 0
-    h.gsms_buf = ctx.enqueue_create_buffer[DType.uint8](gsms_queue_bytes(h.gsms_cap))
-    h.path_buf = ctx.enqueue_create_buffer[DType.uint8](n_paths * size_of[PathState]())
-    h.inter_buf = ctx.enqueue_create_buffer[DType.uint8](n_paths * size_of[Intersection]())
-    h.film_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 12)
-    h.albedo_film_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 12)
-    h.film_sq_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 4)
-    h.aux_film_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 12)
-    h.px_active_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix)
-    h.px_active_tmp_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix)
-    h.hist_color_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 12)
-    h.hist_len_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 4)
-    h.hist_len_tmp_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 4)
-    h.prev_depth_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 4)
-    h.atrous_ping_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 12)
-    h.atrous_pong_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 12)
-    h.atrous_albedo_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 12)
-    h.atrous_variance_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 4)
-    h.atrous_normals_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 12)
-    h.atrous_depth_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 4)
-    h.atrous_curve_mask_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 4)
-    h.gbuf_worldpos_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 12)
-    h.gbuf_material_id_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 4)
+    h.gsms_buf = dev_buf(ctx, gsms_queue_bytes(h.gsms_cap))
+    h.path_buf = dev_buf(ctx, n_paths * size_of[PathState]())
+    h.inter_buf = dev_buf(ctx, n_paths * size_of[Intersection]())
+    h.film_buf = dev_buf(ctx, n_pix * 12)
+    h.albedo_film_buf = dev_buf(ctx, n_pix * 12)
+    h.film_sq_buf = dev_buf(ctx, n_pix * 4)
+    h.aux_film_buf = dev_buf(ctx, n_pix * 12)
+    h.px_active_buf = dev_buf(ctx, n_pix)
+    h.px_active_tmp_buf = dev_buf(ctx, n_pix)
+    h.hist_color_buf = dev_buf(ctx, n_pix * 12)
+    h.hist_len_buf = dev_buf(ctx, n_pix * 4)
+    h.hist_len_tmp_buf = dev_buf(ctx, n_pix * 4)
+    h.prev_depth_buf = dev_buf(ctx, n_pix * 4)
+    h.atrous_ping_buf = dev_buf(ctx, n_pix * 12)
+    h.atrous_pong_buf = dev_buf(ctx, n_pix * 12)
+    h.atrous_albedo_buf = dev_buf(ctx, n_pix * 12)
+    h.atrous_variance_buf = dev_buf(ctx, n_pix * 4)
+    h.atrous_normals_buf = dev_buf(ctx, n_pix * 12)
+    h.atrous_depth_buf = dev_buf(ctx, n_pix * 4)
+    h.atrous_curve_mask_buf = dev_buf(ctx, n_pix * 4)
+    h.gbuf_worldpos_buf = dev_buf(ctx, n_pix * 12)
+    h.gbuf_material_id_buf = dev_buf(ctx, n_pix * 4)
     var n_di = n_pix if restir_di else 1
     var n_vol = n_pix if restir_vol else 1
-    h.restir_a_buf = ctx.enqueue_create_buffer[DType.uint8](n_di * size_of[DIReservoir]())
-    h.restir_b_buf = ctx.enqueue_create_buffer[DType.uint8](n_di * size_of[DIReservoir]())
-    h.restir_vol_a_buf = ctx.enqueue_create_buffer[DType.uint8](n_vol * size_of[VolReservoir]())
-    h.restir_vol_b_buf = ctx.enqueue_create_buffer[DType.uint8](n_vol * size_of[VolReservoir]())
-    h.restir_vol_used_buf = ctx.enqueue_create_buffer[DType.uint8](n_vol * size_of[Int8]())
-    h.rt_scratch_buf = ctx.enqueue_create_buffer[DType.uint8](n_paths * 32 if env_on["GONZALES_RTCORE"]() and h.meshes.has_alpha else 32)
-    h.shadow_buf = ctx.enqueue_create_buffer[DType.uint8](n_paths * size_of[ShadowTask]() * h.shadow_slots)
+    h.restir_a_buf = dev_buf(ctx, n_di * size_of[DIReservoir]())
+    h.restir_b_buf = dev_buf(ctx, n_di * size_of[DIReservoir]())
+    h.restir_vol_a_buf = dev_buf(ctx, n_vol * size_of[VolReservoir]())
+    h.restir_vol_b_buf = dev_buf(ctx, n_vol * size_of[VolReservoir]())
+    h.restir_vol_used_buf = dev_buf(ctx, n_vol * size_of[Int8]())
+    h.rt_scratch_buf = dev_buf(ctx, n_paths * 32 if env_on["GONZALES_RTCORE"]() and h.meshes.has_alpha else 32)
+    h.shadow_buf = dev_buf(ctx, n_paths * size_of[ShadowTask]() * h.shadow_slots)
     ctx.synchronize()
     _gpu_free_log("per-pixel buffers")
     if env_on["GONZALES_GPU_LOG"]():
         print("GPU per-pixel: n_pix", n_pix, "glass", h.has_glass_material, "alpha", h.meshes.has_alpha, "shadow slots", h.shadow_slots, "restir_di", restir_di, "restir_vol", restir_vol, "path B", size_of[PathState](), "inter B", size_of[Intersection](), "shadow B", size_of[ShadowTask]())
     ctx.enqueue_memset(h.shadow_buf, UInt8(0))      # every slot free (active == 0)
-    h.active_idx_buf = ctx.enqueue_create_buffer[DType.uint8](n_paths * 4 * 4)
+    h.active_idx_buf = dev_buf(ctx, n_paths * 4 * 4)
+    _gpu_free_log("path index")
     h.curves.alloc_paths(ctx, n_paths)
     ctx.synchronize()
     _gpu_free_log("curves")
@@ -1752,9 +1755,10 @@ def gpu_alloc_pixel_buffers(handle: Pointer[GpuSceneHandle, MutUntrackedOrigin],
     ctx.enqueue_memset(h.hist_len_buf, UInt8(0))
     ctx.enqueue_memset(h.prev_depth_buf, UInt8(0))
     var ptex = len(h.textures.ptex_bufs) > 0
-    h.ptex_redo_buf = ctx.enqueue_create_buffer[DType.uint8](n_paths if ptex else 1)
-    h.ptex_redo_si_buf = ctx.enqueue_create_buffer[DType.uint8](n_paths * 4 if ptex else 4)
+    h.ptex_redo_buf = dev_buf(ctx, n_paths if ptex else 1)
+    h.ptex_redo_si_buf = dev_buf(ctx, n_paths * 4 if ptex else 4)
     ctx.synchronize()
+    _gpu_free_log("ptex redo")
     h.n_pixels = n_pix
     h.batch = batch
 

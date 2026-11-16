@@ -61,6 +61,10 @@ int64_t xert_alignment(void);
 
 void xert_free(void* p);
 
+// Device bytes requested by the renderer, for the memory accounting (GONZALES_GPU_LOG).
+void gz_acct_add(uint64_t n);
+uint64_t gz_acct_bytes(void);
+
 #ifdef __cplusplus
 }
 #endif

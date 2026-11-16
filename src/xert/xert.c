@@ -244,3 +244,7 @@ void* xert_build_tlas(int64_t n_inst, const float* xf, const int32_t* blas_of, c
   free(inst);
   return rtas;
 }
+
+static uint64_t acct_bytes;
+void gz_acct_add(uint64_t n) { acct_bytes += n; }
+uint64_t gz_acct_bytes(void) { return acct_bytes; }
