@@ -364,8 +364,9 @@ def main() raises:
         print("Usage: gonzales [--interactive] [--gpu] [--fullscreen] [--no-denoise] [--verbose] [--spp N] [--seed N] [--resolution WxH] [--width W] [--height H] scene.pbrt")
         return
 
-    if not scene_path.endswith(".pbrt") and not scene_path.endswith(".xml"):
-        print("Error: expected a .pbrt or .xml (Mitsuba) scene file, got:", scene_path)
+    var usd = scene_path.endswith(".usd") or scene_path.endswith(".usda") or scene_path.endswith(".usdc") or scene_path.endswith(".usdz")
+    if not scene_path.endswith(".pbrt") and not scene_path.endswith(".xml") and not usd:
+        print("Error: expected a .pbrt, .xml (Mitsuba) or USD scene file, got:", scene_path)
         return
 
     if ckpt.active():

@@ -1,6 +1,7 @@
 from gonzales.scene.description.pbrt_parser import ParsedScene_Mojo, mojo_parse_scene, resize_film
 from gonzales.scene.shapes.ply_prefetch import PlyPrefetch
 from gonzales.scene.description.mitsuba_parser import mojo_parse_mitsuba_scene
+from gonzales.scene.description.usd_reader import mojo_parse_usd_scene
 from gonzales.scene.description.scene_cache import scene_cache_load, scene_cache_save
 from gonzales.core.env import env_str
 from gonzales.core.geometry import _is_real_ptr
@@ -42,6 +43,9 @@ def mojo_parse_scene_any(path: Pointer[UInt8, MutUntrackedOrigin],
                   and path[unsafe_offset=pi - 2] == UInt8(109) and path[unsafe_offset=pi - 1] == UInt8(108))
     if is_xml:
         return mojo_parse_mitsuba_scene(path, verbose)
+    var path_s = String(unsafe_from_utf8_ptr=path.as_imm())
+    if path_s.endswith(".usd") or path_s.endswith(".usda") or path_s.endswith(".usdc") or path_s.endswith(".usdz"):
+        return mojo_parse_usd_scene(path, verbose)
     var cache_env = env_str["GONZALES_SCENE_CACHE"]()
     if cache_env.byte_length() == 0:
         return mojo_parse_scene(path, verbose, plys)
