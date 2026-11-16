@@ -96,7 +96,10 @@ void xert_set_pieces(uint64_t records, int64_t base) {
   proc_tables[6] = (uint64_t)base;
 }
 
-uint64_t xert_proc_table(int32_t which) { return which >= 0 && which < 8 ? proc_tables[which] : 0; }
+uint64_t xert_proc_table(int32_t which) {   // 8: the builder keeps 64-byte instance leaves with the user id in their first half
+  if (which == 8) return getenv("RTBUILD_INSTANCE_LEAF64") != NULL;
+  return which >= 0 && which < 8 ? proc_tables[which] : 0;
+}
 
 static struct {
   uint64_t counts;

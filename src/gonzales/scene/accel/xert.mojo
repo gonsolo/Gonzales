@@ -134,6 +134,18 @@ struct XeProcs(TrivialRegisterPassable):
     var piece_rec: Pointer[Int32, MutUntrackedOrigin]
     var piece_base: Int32
     var meshes: Pointer[TriangleMesh, MutUntrackedOrigin]
+    var leaf_ids: Int32   # 1: 64-byte instance leaves, the user id in their first two words
+
+# The instance user id of the hit at level; 0xFFFFFFFF without an instance.
+@always_inline
+def _xe_instance(q: OpaquePointer[MutAnyOrigin], level: UInt32, leaf_ids: Int32) -> UInt32:
+    if leaf_ids == 0:
+        return external_call["intel_get_hit_instance_user_id", UInt32](q, level)
+    var a = external_call["intel_get_hit_instance_leaf_address", UInt64](q, level)
+    if a == 0:
+        return UInt32(0xFFFFFFFF)
+    var w = Pointer[UInt32, MutUntrackedOrigin](unsafe_from_address=Int(a))
+    return (w[unsafe_offset=0] & 0xFFFFFF) | ((w[unsafe_offset=1] & 0xFF) << 24)
 
 # The closest (or with XERT_ANY_HIT any) hit in [tmin, tmax]. The hardware commits triangles itself; every curve box it
 # reports is tested here in the instance's object space and committed when closer.
@@ -154,7 +166,7 @@ def xert_trace(accel: MutPointer[UInt8, MutAnyOrigin], ray: XeRayDesc, cv: XePro
             var dir = SIMD[DType.float32, 4](0)
             external_call["intel_get_ray_origin", NoneType](Pointer(to=org), q, level)   # struct return: sret first
             external_call["intel_get_ray_direction", NoneType](Pointer(to=dir), q, level)
-            var k = Int(external_call["intel_get_hit_instance_user_id", UInt32](q, UInt32(1)))
+            var k = Int(_xe_instance(q, UInt32(1), cv.leaf_ids))
             var leaf = Int(cv.leaf_base[unsafe_offset=Int(cv.inst_blas[unsafe_offset=k])]) + Int(
                 external_call["intel_get_hit_primitive_id", UInt32](q, UInt32(1)))
             var p = cv.leaves[unsafe_offset=leaf]
@@ -188,7 +200,7 @@ def xert_trace(accel: MutPointer[UInt8, MutAnyOrigin], ray: XeRayDesc, cv: XePro
             hit.t = external_call["intel_get_hit_distance", Float32](q, UInt32(0))
             hit.prim = Int32(external_call["intel_get_hit_primitive_id", UInt32](q, UInt32(0)))
             hit.geom = Int32(external_call["intel_get_hit_geometry_id", UInt32](q, UInt32(0)))
-            hit.inst = Int32(external_call["intel_get_hit_instance_user_id", UInt32](q, UInt32(0)))
+            hit.inst = Int32(_xe_instance(q, UInt32(0), cv.leaf_ids))
             hit.slot = hit.inst
             if hit.inst >= cv.piece_base:
                 var e = 2 * Int(hit.inst - cv.piece_base)
@@ -224,7 +236,7 @@ def xert_trace_rays_gpu(accel: MutPointer[UInt8, MutAnyOrigin], rays: MutPointer
     var none = XeProcs(Pointer[Curve, MutUntrackedOrigin].unsafe_dangling(), Pointer[PrimId, MutUntrackedOrigin].unsafe_dangling(),
                         Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(), Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
                         Pointer[Material, MutUntrackedOrigin].unsafe_dangling(), Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
-                        Int32.MAX, Pointer[TriangleMesh, MutUntrackedOrigin].unsafe_dangling())
+                        Int32.MAX, Pointer[TriangleMesh, MutUntrackedOrigin].unsafe_dangling(), Int32(Int(xert_proc_table(8))))
     var hit = xert_trace(accel, XeRayDesc(r[0], r[1], r[2], r[4], r[5], r[6], r[3], r[7], 0xFF, flags), none)
     var o = results.unsafe_offset(8 * i)
     o[unsafe_offset=0] = bitcast[DType.uint32](hit.t)
@@ -243,12 +255,12 @@ def xert_trace_interop_gpu(accel: MutPointer[UInt8, MutAnyOrigin], rays: MutPoin
                            leaves: Pointer[PrimId, MutUntrackedOrigin], leaf_base: Pointer[Int32, MutUntrackedOrigin],
                            inst_blas: Pointer[Int32, MutUntrackedOrigin], materials: Pointer[Material, MutUntrackedOrigin],
                            piece_rec: Pointer[Int32, MutUntrackedOrigin], piece_base: Int32,
-                           meshes: Pointer[TriangleMesh, MutUntrackedOrigin], heat: MutPointer[UInt32, MutAnyOrigin]):
+                           meshes: Pointer[TriangleMesh, MutUntrackedOrigin], leaf_ids: Int32, heat: MutPointer[UInt32, MutAnyOrigin]):
     var i = global_idx.x
     if i >= Int(n):
         return
     var sc = XeScene(accel.unsafe_origin_cast[MutUntrackedOrigin](), n_meshes, ord_inst, ord_mesh.unsafe_origin_cast[MutUntrackedOrigin](),
-                     XeProcs(curves, leaves, leaf_base, inst_blas, materials, piece_rec, piece_base, meshes),
+                     XeProcs(curves, leaves, leaf_base, inst_blas, materials, piece_rec, piece_base, meshes, leaf_ids),
                      heat.unsafe_origin_cast[MutUntrackedOrigin]())
     results.unsafe_store(8 * i, xert_trace_interop_one(sc, rays.unsafe_load[width=8](8 * i), flags))
 
@@ -273,7 +285,7 @@ def xert_scene() -> XeScene:
                  Pointer[Int32, MutUntrackedOrigin](unsafe_from_address=Int(xert_proc_table(3))),
                  Pointer[Material, MutUntrackedOrigin](unsafe_from_address=Int(xert_proc_table(4))),
                  Pointer[Int32, MutUntrackedOrigin](unsafe_from_address=Int(xert_proc_table(5))), Int32(Int(xert_proc_table(6))),
-                 Pointer[TriangleMesh, MutUntrackedOrigin](unsafe_from_address=Int(xert_proc_table(7)))),
+                 Pointer[TriangleMesh, MutUntrackedOrigin](unsafe_from_address=Int(xert_proc_table(7))), Int32(Int(xert_proc_table(8)))),
         Pointer[UInt32, MutUntrackedOrigin](unsafe_from_address=Int(external_call["xert_heat", UInt64]())))
 
 # One ray r (interop layout) traced into its 8 result words.
@@ -318,6 +330,6 @@ def xert_trace_interop(ctx: DeviceContext, rays: Int, results: Int, m: Int, any_
         Pointer[Int32, MutUntrackedOrigin](unsafe_from_address=Int(xert_proc_table(3))),
         Pointer[Material, MutUntrackedOrigin](unsafe_from_address=Int(xert_proc_table(4))),
         Pointer[Int32, MutUntrackedOrigin](unsafe_from_address=Int(xert_proc_table(5))), Int32(Int(xert_proc_table(6))),
-        Pointer[TriangleMesh, MutUntrackedOrigin](unsafe_from_address=Int(xert_proc_table(7))),
+        Pointer[TriangleMesh, MutUntrackedOrigin](unsafe_from_address=Int(xert_proc_table(7))), Int32(Int(xert_proc_table(8))),
         MutPointer[UInt32, MutAnyOrigin](unsafe_from_address=Int(external_call["xert_heat", UInt64]())),
         grid_dim=ceildiv(m, 256), block_dim=256)
