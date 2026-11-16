@@ -1,0 +1,36 @@
+# test_shadow_media_gpu: a displaced quad as an instance plus a medium box (ri_m2 repro of the release media-shadow bias).
+LookAt 0 -3.5 1.2  0 0 0.5  0 0 1
+Camera "perspective" "float fov" 55
+Film "rgb" "integer xresolution" 200 "integer yresolution" 150 "string filename" "shadow_media_scene.exr"
+Integrator "volpath" "integer maxdepth" 2
+WorldBegin
+MakeNamedMedium "fog" "string type" "homogeneous" "rgb sigma_a" [0.5 0.5 0.5] "rgb sigma_s" [0.1 0.1 0.1] "float scale" 1
+AttributeBegin
+Translate 3 -4 4
+Material "diffuse" "rgb reflectance" [0 0 0]
+AreaLightSource "diffuse" "rgb L" [20 20 20]
+Shape "sphere" "float radius" 0.7 "float alpha" 0
+AttributeEnd
+Texture "h" "float" "imagemap" "float scale" 0.15 "float uscale" 2 "float vscale" 2
+  "string filename" "../../../Scenes/wood.tga"
+Material "diffuse" "rgb reflectance" [0.7 0.7 0.7]
+# floor, back wall, left wall, ceiling (front and right open)
+Shape "trianglemesh" "point3 P" [-2 -2 0  2 -2 0  2 2 0  -2 2 0] "integer indices" [0 1 2 0 2 3]
+Shape "trianglemesh" "point3 P" [-2 2 0  2 2 0  2 2 2.5  -2 2 2.5] "integer indices" [0 2 1 0 3 2]
+Shape "trianglemesh" "point3 P" [-2 -2 0  -2 2 0  -2 2 2.5  -2 -2 2.5] "integer indices" [0 1 2 0 2 3]
+Shape "trianglemesh" "point3 P" [-2 -2 2.5  2 -2 2.5  2 2 2.5  -2 2 2.5] "integer indices" [0 2 1 0 3 2]
+Material "diffuse" "rgb reflectance" [0.6 0.5 0.4]
+AttributeBegin
+ObjectBegin "dq"
+Shape "trianglemesh" "point3 P" [-1 -1 0.3  1 -1 0.3  1 1 0.3  -1 1 0.3] "integer indices" [0 1 2 0 2 3]
+  "point2 uv" [0 0 1 0 1 1 0 1] "normal N" [0 0 1 0 0 1 0 0 1 0 0 1] "texture displacement" "h"
+ObjectEnd
+Identity
+ObjectInstance "dq"
+AttributeEnd
+AttributeBegin
+MediumInterface "fog" ""
+Material "interface"
+Translate 1.5 1.5 0.2
+Shape "trianglemesh" "point3 P" [0 0 0 0.3 0 0 0.3 0.3 0 0 0.3 0 0 0 0.3 0.3 0 0.3 0.3 0.3 0.3 0 0.3 0.3] "integer indices" [0 2 1 0 3 2 4 5 6 4 6 7 0 1 5 0 5 4 1 2 6 1 6 5 2 3 7 2 7 6 3 0 4 3 4 7]
+AttributeEnd
