@@ -2262,8 +2262,6 @@ def any_hit_bvh2_core[wide_on: Bool = True](
                         return True
                     continue
                 elif prim.type == PrimKind.instances:
-                    if _shadow_is_null_material(materials, prim.materialIndex):
-                        continue
                     inst_leaf = prim      # walked after this loop, so a warp's threads walk the instances together
                     continue
                 else:
@@ -2875,8 +2873,6 @@ def any_hit_bvh4_core(
                     if _displaced_tri_hit(meshes[unsafe_offset=Int(prim.id1)], Int(prim.id2), ray_org, ray_dir, tMax)[0]:
                         return True
                 elif prim.type == PrimKind.instances:
-                    if _shadow_is_null_material(materials, prim.materialIndex):
-                        continue
                     if _traverse_instances[True](prim, meshes, blasNodesArr, blasPrimIdsArr, instances, ray_org, ray_dir, tMax, True, curves)[0]:
                         return True
         else:
