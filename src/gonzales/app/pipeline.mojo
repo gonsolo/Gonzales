@@ -564,7 +564,8 @@ def _rtcore_attach_native(interop_scene: VulkanInteropRtSceneHandle, psc: Pointe
 # A fully pruned scene shades from the RT-core TLAS records instead of its own instance array (the software structures only
 # reach the first instance_prefix instances, whose places do not change): the instances are reordered into record order.
 def _instances_in_tlas(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin]) -> Bool:
-    return env_str["GONZALES_RT_PRUNE"]() == "1" and not env_on["GONZALES_RTCORE_VULKAN"]() and _rtcore_native_wanted(psc)
+    return env_str["GONZALES_RT_PRUNE"]() == "1" and not env_on["GONZALES_RTCORE_VULKAN"]() and _rtcore_native_wanted(psc) \
+        and xert_alignment() == 0   # Intel's structures hold no records shading can read
 
 def _share_instances(handle: Pointer[GpuSceneHandle, MutUntrackedOrigin], rt_hw: RtCoreHandle, psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin]):
     if _instances_in_tlas(psc) and Int(rt_hw) != 0:
