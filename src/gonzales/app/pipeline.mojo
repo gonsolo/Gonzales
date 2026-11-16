@@ -37,7 +37,8 @@ from gonzales.transport.restir_gi import GIReservoir, gi_reservoir_init, GIReser
 from gonzales.integrators.pt.restir_sms import SMSReservoir, sms_reservoir_init, SMSReservoirIO, sms_reservoir_io_null
 from gonzales.integrators.pt.restir_vol import VolReservoir, vol_reservoir_init, vol_reservoir_io_null
 from gonzales.gpu.pt.driver import gpu_render_sample, gpu_render_wavefront, gpu_adaptive_update, gpu_download_albedo, gpu_clear_film, gpu_clear_restir, gpu_clear_restir_vol
-from gonzales.gpu.scene import GpuSceneHandle, XertPieces, heat_fill, mesh_host_bytes, xert_heat, xert_mesh_blas, WAVEFRONT_BATCH, gpu_available, gpu_upload_scene, gpu_alloc_pixel_buffers, gpu_free_scene, gpu_ptex_begin, gpu_ptex_finish, gpu_ptex_withhold, gpu_ptex_withheld, gpu_ptex_redo_upload, gpu_ptex_stream_start, gpu_ptex_poll, gpu_ptex_stream_finish, gpu_ptex_make_room, gpu_set_curve_bvh_dev, typed_ptr
+from gonzales.scene.accel.dev_buf import dev_buf
+from gonzales.gpu.scene import _gpu_free_log, GpuSceneHandle, XertPieces, heat_fill, mesh_host_bytes, xert_heat, xert_mesh_blas, WAVEFRONT_BATCH, gpu_available, gpu_upload_scene, gpu_alloc_pixel_buffers, gpu_free_scene, gpu_ptex_begin, gpu_ptex_finish, gpu_ptex_withhold, gpu_ptex_withheld, gpu_ptex_redo_upload, gpu_ptex_stream_start, gpu_ptex_poll, gpu_ptex_stream_finish, gpu_ptex_make_room, gpu_set_curve_bvh_dev, typed_ptr
 from gonzales.gpu.denoise import gpu_atrous_denoise
 from gonzales.gpu.pt.wavefront import gpu_gen_aux_buffers
 from gonzales.app.viewer import CameraState, viewer_create, viewer_update_framebuffer, viewer_should_close, viewer_poll_events, viewer_get_camera_state, viewer_set_camera_state, viewer_destroy, viewer_denoise_enabled, viewer_monitor_size, build_camera_to_world
@@ -1068,10 +1069,10 @@ def _rt_curve_clusters(handle: Pointer[GpuSceneHandle, MutUntrackedOrigin], psc:
     var timing = env_on["GONZALES_TIMING"]()
     if first >= 0:                                   # the device has no curve PrimIds: upload them for the build
         var n = Int(psc[unsafe_offset=0].prim_count) - first
-        var ids = handle[].ctx.enqueue_create_buffer[DType.uint8](n * size_of[PrimId]())
+        var ids = dev_buf(handle[].ctx, n * size_of[PrimId]())
         handle[].ctx.enqueue_copy(ids, psc[unsafe_offset=0].prim_ids_cpu.unsafe_offset(first).unsafe_bitcast[UInt8]())
         if env_str["GONZALES_OPTIX_CURVES"]() != "0" and not _scene_has_alpha(psc):   # the alpha retrace walks clusters
-            var refs = handle[].ctx.enqueue_create_buffer[DType.uint8](1)
+            var refs = dev_buf(handle[].ctx, 1)
             var ox = gpu_build_optix_curves(handle[].ctx, typed_ptr[PrimId](ids), handle[].curves.curves_ptr(),
                                             handle[].scene_descriptor().materials, n, refs)
             if ox[1]:
@@ -1300,7 +1301,7 @@ def _xert_attach(ctx: DeviceContext, psc: Pointer[ParsedScene_Mojo, MutUntracked
             offsets[b] = dev_total; dev_total += aligned
         else:
             offsets[b] = host_total; host_total += aligned
-    var blas_buf = ctx.enqueue_create_buffer[DType.uint8](dev_total + align)
+    var blas_buf = dev_buf(ctx, dev_total + align)
     var blas_host = ctx.enqueue_create_host_buffer[DType.uint8](host_total + align)
     ctx.synchronize()
     var base = Int(UInt(Int(blas_buf.unsafe_ptr())) + UInt(align - 1)) & -align
@@ -1352,11 +1353,11 @@ def _xert_attach(ctx: DeviceContext, psc: Pointer[ParsedScene_Mojo, MutUntracked
     var tlas = xert_build_tlas(Int64(n_inst), xf, blas_of, addr, bounds, Pointer(to=tlas_size).unsafe_origin_cast[MutUntrackedOrigin]())
     xf.unsafe_free(); addr.unsafe_free(); bounds.unsafe_free()
     if len(leaves) > 0:
-        var leaf_buf = ctx.enqueue_create_buffer[DType.uint8](len(leaves) * size_of[PrimId]())
+        var leaf_buf = dev_buf(ctx, len(leaves) * size_of[PrimId]())
         ctx.enqueue_copy(leaf_buf, leaves.unsafe_ptr().unsafe_bitcast[UInt8]())
-        var base_buf = ctx.enqueue_create_buffer[DType.uint8](4 * len(leaf_base))
+        var base_buf = dev_buf(ctx, 4 * len(leaf_base))
         ctx.enqueue_copy(base_buf, leaf_base.unsafe_ptr().unsafe_bitcast[UInt8]())
-        var inst_buf = ctx.enqueue_create_buffer[DType.uint8](4 * max(n_inst, 1))
+        var inst_buf = dev_buf(ctx, 4 * max(n_inst, 1))
         ctx.enqueue_copy(inst_buf, blas_of.unsafe_bitcast[UInt8]())
         ctx.synchronize()
         xert_set_procs(UInt64(curves), UInt64(Int(leaf_buf.unsafe_ptr())), UInt64(Int(base_buf.unsafe_ptr())), UInt64(Int(inst_buf.unsafe_ptr())),
@@ -1369,7 +1370,7 @@ def _xert_attach(ctx: DeviceContext, psc: Pointer[ParsedScene_Mojo, MutUntracked
     var piece_tab = List[Int32]()
     for j in range(len(pieces.entry_rec)):
         piece_tab.append(pieces.entry_rec[j]); piece_tab.append(Int32(pieces.lo[pieces.entry_piece[j]]))
-    var piece_buf = ctx.enqueue_create_buffer[DType.uint8](4 * max(len(piece_tab), 1))
+    var piece_buf = dev_buf(ctx, 4 * max(len(piece_tab), 1))
     if len(piece_tab) > 0:
         ctx.enqueue_copy(piece_buf, piece_tab.unsafe_ptr().unsafe_bitcast[UInt8]())
         ctx.synchronize()
@@ -1378,12 +1379,12 @@ def _xert_attach(ctx: DeviceContext, psc: Pointer[ParsedScene_Mojo, MutUntracked
     if Int(tlas) == 0:
         print("RT hardware: the Intel builder failed on the instances")
         return fail
-    var tlas_buf = ctx.enqueue_create_buffer[DType.uint8](Int(tlas_size) + align)
+    var tlas_buf = dev_buf(ctx, Int(tlas_size) + align)
     var tbase = Int(UInt(Int(tlas_buf.unsafe_ptr())) + UInt(align - 1)) & -align
     ctx.enqueue_copy(tlas_buf.create_sub_buffer[DType.uint8](tbase - Int(tlas_buf.unsafe_ptr()), Int(tlas_size)), tlas)
     if len(ord_curves) > 0:
         ord.append(Int32(-1))
-    var ord_buf = ctx.enqueue_create_buffer[DType.uint8](4 * max(n_ord, 1))
+    var ord_buf = dev_buf(ctx, 4 * max(n_ord, 1))
     if n_ord > 0:
         ctx.enqueue_copy(ord_buf, ord.unsafe_ptr().unsafe_bitcast[UInt8]())
     ctx.synchronize()
@@ -1392,7 +1393,7 @@ def _xert_attach(ctx: DeviceContext, psc: Pointer[ParsedScene_Mojo, MutUntracked
           Int(tlas_size) // 1048576, "MiB")
     var heat_path = xert_heat_path()
     if heat_path != "" and (not exists(heat_path) or getsize(heat_path) != 4 * n_inst):    # none yet, or another scene's
-        var heat_buf = ctx.enqueue_create_buffer[DType.uint8](4 * n_inst)
+        var heat_buf = dev_buf(ctx, 4 * n_inst)
         ctx.enqueue_memset(heat_buf, UInt8(0))
         ctx.synchronize()
         xert_set_heat(UInt64(Int(heat_buf.unsafe_ptr())), Int64(n_inst))
@@ -1426,6 +1427,7 @@ def _rt_wavefront_setup(handle: Pointer[GpuSceneHandle, MutUntrackedOrigin], psc
         var moved = handle[].meshes.move_to_device(handle[].ctx, psc[], move_mesh)
         if moved > 0:
             print("RT hardware (Intel): mesh arrays moved to the card,", moved // 1048576, "MiB")
+        _gpu_free_log("RT attach")
     else:
         var rt_merged = _rtcore_merge(psc)
         if not (rt_merged.valid or _rtcore_native_wanted(psc)):
@@ -1450,12 +1452,12 @@ def _rt_wavefront_setup(handle: Pointer[GpuSceneHandle, MutUntrackedOrigin], psc
         rtcore_set_shadow(shadow)
         rtcore_set_alpha(alpha)
     var n_meshes = Int(psc[unsafe_offset=0].mesh_count)
-    b.rays = handle[].ctx.enqueue_create_buffer[DType.float32](max_rays * 8)
-    b.results = handle[].ctx.enqueue_create_buffer[DType.float32](max_rays * 8)
+    b.rays = dev_buf[DType.float32](handle[].ctx, max_rays * 8)
+    b.results = dev_buf[DType.float32](handle[].ctx, max_rays * 8)
     var light_info = _build_mesh_light_info(psc)
-    var mmi_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](max(n_meshes, 1) * size_of[Int64]())
+    var mmi_buf = dev_buf(handle[].ctx, max(n_meshes, 1) * size_of[Int64]())
     handle[].ctx.enqueue_copy(mmi_buf, light_info[0].unsafe_bitcast[UInt8]())
-    var mai_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](max(n_meshes, 1) * size_of[Int32]())
+    var mai_buf = dev_buf(handle[].ctx, max(n_meshes, 1) * size_of[Int32]())
     handle[].ctx.enqueue_copy(mai_buf, light_info[1].unsafe_bitcast[UInt8]())
     handle[].ctx.synchronize()
     b.mesh_material_idx = mmi_buf^
@@ -1463,7 +1465,7 @@ def _rt_wavefront_setup(handle: Pointer[GpuSceneHandle, MutUntrackedOrigin], psc
     light_info[0].unsafe_free(); light_info[1].unsafe_free()
     var n_inst = Int(psc[unsafe_offset=0].instance_count)
     if n_inst > 0:
-        var ibm_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](n_inst * size_of[Int32]())
+        var ibm_buf = dev_buf(handle[].ctx, n_inst * size_of[Int32]())
         with ibm_buf.map_to_host() as h3:
             var dst3 = h3.unsafe_ptr().unsafe_bitcast[Int32]()
             for k in range(n_inst):
@@ -1472,6 +1474,7 @@ def _rt_wavefront_setup(handle: Pointer[GpuSceneHandle, MutUntrackedOrigin], psc
         b.instance_base_mesh = ibm_buf^
     b.n_meshes = n_meshes
     b.on = True
+    _gpu_free_log("RT wavefront")
     return b^
 
 
@@ -2502,14 +2505,14 @@ def parse_and_render(
                         var mesh_al_idx_vcm = light_info_vcm[1]
                         var n_meshes_alloc_vcm = max(n_meshes_vk_vcm, 1)
 
-                        var mmi_buf_vcm = handle[].ctx.enqueue_create_buffer[DType.uint8](n_meshes_alloc_vcm * size_of[Int64]())
+                        var mmi_buf_vcm = dev_buf(handle[].ctx, n_meshes_alloc_vcm * size_of[Int64]())
                         with mmi_buf_vcm.map_to_host() as h:
                             var dst = h.unsafe_ptr().unsafe_bitcast[Int64]()
                             for i in range(n_meshes_vk_vcm):
                                 dst[unsafe_offset=i] = mesh_material_idx_vcm[unsafe_offset=i]
                         mesh_material_idx_buf_vcm = mmi_buf_vcm^
 
-                        var mai_buf_vcm = handle[].ctx.enqueue_create_buffer[DType.uint8](n_meshes_alloc_vcm * size_of[Int32]())
+                        var mai_buf_vcm = dev_buf(handle[].ctx, n_meshes_alloc_vcm * size_of[Int32]())
                         with mai_buf_vcm.map_to_host() as h2:
                             var dst2 = h2.unsafe_ptr().unsafe_bitcast[Int32]()
                             for i in range(n_meshes_vk_vcm):
@@ -2520,14 +2523,14 @@ def parse_and_render(
                         mesh_al_idx_vcm.unsafe_free()
 
                         if n_instances_vcm > 0:
-                            var ibm_buf_vcm = handle[].ctx.enqueue_create_buffer[DType.uint8](n_instances_vcm * size_of[Int32]())
+                            var ibm_buf_vcm = dev_buf(handle[].ctx, n_instances_vcm * size_of[Int32]())
                             with ibm_buf_vcm.map_to_host() as h3v:
                                 var dst3v = h3v.unsafe_ptr().unsafe_bitcast[Int32]()
                                 for k in range(n_instances_vcm):
                                     dst3v[unsafe_offset=k] = inst_base_host_vcm[unsafe_offset=k]
                             instance_base_mesh_buf_vcm = ibm_buf_vcm^
                         if Int(rtcore_active()) != 0:
-                            rt_scratch_buf_vcm = handle[].ctx.enqueue_create_buffer[DType.uint8](max_rays_vk_vcm * 32)
+                            rt_scratch_buf_vcm = dev_buf(handle[].ctx, max_rays_vk_vcm * 32)
                     inst_base_host_vcm.unsafe_free()
 
             var rt_vcm = VcmRt()
@@ -2787,8 +2790,8 @@ def parse_and_render(
                 instance_base_mesh_host.unsafe_free()
             else:
                 if own_rt:
-                    interop_rays_buf_opt = handle[].ctx.enqueue_create_buffer[DType.float32](Int(max_rays_vk) * 8)
-                    interop_results_buf_opt = handle[].ctx.enqueue_create_buffer[DType.float32](Int(max_rays_vk) * 8)
+                    interop_rays_buf_opt = dev_buf[DType.float32](handle[].ctx, Int(max_rays_vk) * 8)
+                    interop_results_buf_opt = dev_buf[DType.float32](handle[].ctx, Int(max_rays_vk) * 8)
                 else:
                     var raysPtr = vulkaninterop_rt_get_rays_ptr(interop_scene)
                     var resultsPtr = vulkaninterop_rt_get_results_ptr(interop_scene)
@@ -2800,14 +2803,14 @@ def parse_and_render(
                 var mesh_al_idx = light_info[1]
                 var n_meshes_alloc = max(n_meshes_vk, 1)
 
-                var mmi_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](n_meshes_alloc * size_of[Int64]())
+                var mmi_buf = dev_buf(handle[].ctx, n_meshes_alloc * size_of[Int64]())
                 with mmi_buf.map_to_host() as h:
                     var dst = h.unsafe_ptr().unsafe_bitcast[Int64]()
                     for i in range(n_meshes_vk):
                         dst[unsafe_offset=i] = mesh_material_idx[unsafe_offset=i]
                 mesh_material_idx_buf_opt = mmi_buf^
 
-                var mai_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](n_meshes_alloc * size_of[Int32]())
+                var mai_buf = dev_buf(handle[].ctx, n_meshes_alloc * size_of[Int32]())
                 with mai_buf.map_to_host() as h2:
                     var dst2 = h2.unsafe_ptr().unsafe_bitcast[Int32]()
                     for i in range(n_meshes_vk):
@@ -2818,7 +2821,7 @@ def parse_and_render(
                 mesh_al_idx.unsafe_free()
 
                 if n_instances_vk > 0:
-                    var ibm_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](n_instances_vk * size_of[Int32]())
+                    var ibm_buf = dev_buf(handle[].ctx, n_instances_vk * size_of[Int32]())
                     with ibm_buf.map_to_host() as h3:
                         var dst3 = h3.unsafe_ptr().unsafe_bitcast[Int32]()
                         for k in range(n_instances_vk):
