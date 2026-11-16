@@ -1434,7 +1434,7 @@ def _host_plan(ctx: DeviceContext, ref s: ParsedScene_Mojo, n_pixels: Int) raise
     if forced_mesh < 0 and need > budget:
         mesh_kb = 1024
         need -= mesh_bytes
-        print("GPU: mesh arrays stay in host memory (the scene needs about", (need + mesh_bytes) // (1024 * 1024), "MB of", total // (1024 * 1024), "MB)")
+        print("GPU: mesh arrays (", mesh_bytes // (1024 * 1024), "MiB) stay in host memory (the scene needs about", (need + mesh_bytes) // (1024 * 1024), "MB of", total // (1024 * 1024), "MB)")
     if forced_env < 0 and need > budget and env_bytes > 0 and not env_on["GONZALES_ENV_DOWN"]():
         env_down = True
         need -= env_bytes * 5 // 4       # pixels 6 B and table 4 B a texel, three quarters gone
