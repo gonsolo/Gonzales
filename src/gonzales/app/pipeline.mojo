@@ -47,7 +47,7 @@ from gonzales.scene.accel.vulkanrt import vulkanrt_build_scene, vulkanrt_destroy
 from gonzales.scene.accel.curve_bvh import CurveBvhDev, gpu_build_curve_bvh, _leaf_range
 from gonzales.scene.accel.optixcurves import gpu_build_optix_curves, oxc_active, oxc_bytes, oxc_destroy, oxc_set_active
 from gonzales.scene.accel.rt_build import rt_build_blas, rt_build_tlas, rt_patch_ids, RtTlas, _fbits
-from gonzales.scene.accel.xert import xert_alignment, xert_build_blas_geoms, xert_build_tlas, xert_proc_table, xert_free, xert_heat_path, xert_heat_save, xert_set_procs, xert_set_heat, xert_set_pieces, xert_set_scene
+from gonzales.scene.accel.xert import xert_alignment, xert_instance_bytes, xert_build_blas_geoms, xert_build_tlas, xert_proc_table, xert_free, xert_heat_path, xert_heat_save, xert_set_procs, xert_set_heat, xert_set_pieces, xert_set_scene
 from gonzales.scene.description.rt_cache import rt_cache_load, rt_cache_save, RtCacheTlas
 from gonzales.scene.description.scene_cache import scene_cache_variant
 from max.algorithm import parallelize
@@ -1116,7 +1116,7 @@ def _xert_placement(ctx: DeviceContext, psc: Pointer[ParsedScene_Mojo, MutUntrac
     var budget = 0
     if auto:
         var reserve = env_int["GONZALES_XERT_RESERVE_MB"](2800)
-        budget = Int(ctx.get_memory_info()[0]) - 145 * n_inst - reserve * 1048576
+        budget = Int(ctx.get_memory_info()[0]) - xert_instance_bytes() * n_inst - reserve * 1048576
         for b in range(n_blas):     # the mesh arrays of BLAS b are item n_blas + b
             heat.append(heat[b]); bytes.append(0)
         var n_base = n_blas - len(pieces.tmpl)

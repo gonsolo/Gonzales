@@ -38,6 +38,10 @@ def xert_build_tlas(n_inst: Int64, xf: Pointer[Float32, MutUntrackedOrigin], bla
         Pointer[Int32, MutUntrackedOrigin], Pointer[UInt64, MutUntrackedOrigin], Pointer[Float32, MutUntrackedOrigin],
         Pointer[Int64, MutUntrackedOrigin]](n_inst, xf, blas_of, blas_addr, blas_bounds, out_size)
 
+# Device bytes per top-level instance on Xe2: a 128-byte leaf, or 64 with RTBUILD_INSTANCE_LEAF64, plus the nodes.
+def xert_instance_bytes() -> Int:
+    return 81 if xert_proc_table(8) != 0 else 145
+
 def xert_alignment() -> Int64:
     return external_call["xert_alignment", Int64]()
 

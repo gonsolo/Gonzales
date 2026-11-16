@@ -19,7 +19,7 @@ from gonzales.core.env import env_str, env_on
 from std.os.path import exists, getsize
 from gonzales.core.spectrum import SpectralHandle
 from gonzales.scene.accel.rtcore import rtcore_device_free, rtcore_host_register, rtcore_device_total
-from gonzales.scene.accel.xert import xert_alignment, xert_heat_path
+from gonzales.scene.accel.xert import xert_alignment, xert_heat_path, xert_instance_bytes
 from gonzales.scene.description.pbrt_parser import ParsedScene_Mojo
 from gonzales.scene.appearance.host_textures import decode_host_textures, set_tex_maps
 from gonzales.scene.shapes.displacement import DisplacedMesh, DisplacedTri, Rmip
@@ -1419,7 +1419,7 @@ def _host_plan(ctx: DeviceContext, ref s: ParsedScene_Mojo, n_pixels: Int) raise
         var tris = 0
         for i in range(Int(s.mesh_count)):
             tris += Int(s.mesh_n_tris[unsafe_offset=i])
-        rt_bytes = 41 * tris + 145 * Int(s.instance_count) if intel else 30 * tris + 90 * Int(s.instance_count)
+        rt_bytes = 41 * tris + xert_instance_bytes() * Int(s.instance_count) if intel else 30 * tris + 90 * Int(s.instance_count)
     var mesh_bytes = 0
     for i in range(Int(s.mesh_count)):
         mesh_bytes += _mesh_bytes(s, i)
