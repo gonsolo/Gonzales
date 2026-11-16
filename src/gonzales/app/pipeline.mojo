@@ -2594,7 +2594,7 @@ def parse_and_render(
         # unpack kernel runs on the GPU, not a Mojo host loop) and wraps
         # the interop rays/results CUDA pointers as Mojo DeviceBuffers
         # once, reused unchanged across every bounce.
-        var use_vk = use_vulkan_rt_shade and not use_restir and not _has_displacement(psc)
+        var use_vk = use_vulkan_rt_shade and not use_restir and (xert_alignment() > 0 or not _has_displacement(psc))   # Xe2 holds displaced triangles
         if use_vulkan_rt_shade and use_restir:
             print("Note: --restir batch mode does not support --vulkan-rt-shade yet "
                   "(gpu_render_sample has no Vulkan RT interop path) -- using CUDA intersection.")
