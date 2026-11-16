@@ -442,13 +442,23 @@ struct TextureBuffers(Movable):
         var ptex_cache = PtexCache(pool_bytes)
         var ptex_bufs = List[Int]()
 
+        # The GPU reads an environment light's own pixels, never its texture: no upload unless a material shares it.
+        var env_only = List[Bool](length=n_textures_int, fill=False)
+        for li in range(Int(s.infinite_count)):
+            var t = Int(s.infinite_lights[unsafe_offset=li].tex_idx)
+            if t >= 0 and t < n_textures_int:
+                env_only[t] = True
+        for ti in range(n_textures_int):
+            if dup_of[unsafe_offset=ti] != Int32(-1):
+                env_only[Int(dup_of[unsafe_offset=ti])] = False
+
         var tex_bytes = 0
         for ti in range(n_textures_int):
             if dup_of[unsafe_offset=ti] != Int32(-1):
                 gpu_textures_host[unsafe_offset=ti] = gpu_textures_host[unsafe_offset=Int(dup_of[unsafe_offset=ti])]
                 continue
             var ht = host_tex[unsafe_offset=ti]
-            if ht.n_bytes == 0:
+            if ht.n_bytes == 0 or env_only[ti]:
                 gpu_textures_host[unsafe_offset=ti] = GpuTexture(Pointer[UInt8, MutUntrackedOrigin].unsafe_dangling(),
                     Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(), pool_dev,
                     Int32(0), Int32(0), Int32(0), Int32(0), Int32(GpuTexture.FORMAT_F32), GpuTexture.UV_IDENTITY)
