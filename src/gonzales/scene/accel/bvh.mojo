@@ -1217,8 +1217,14 @@ def ray_sphere_hit(center: Point3f, radius: Float32,
     # Use half-b form to avoid catastrophic cancellation
     var a = ray.direction.x*ray.direction.x + ray.direction.y*ray.direction.y + ray.direction.z*ray.direction.z
     var half_b = ocx*ray.direction.x + ocy*ray.direction.y + ocz*ray.direction.z
-    var c = ocx*ocx + ocy*ocy + ocz*ocz - radius * radius
-    var disc = half_b * half_b - a * c
+    # pbrt-v4's discriminant a(r - |f|)(r + |f|), f the ray's closest point to the centre: half_b^2 - a*c cancels
+    # for a distant origin, and the hit then lies inside the sphere far enough to shadow itself.
+    var s = half_b / a
+    var fx = ocx - s * ray.direction.x
+    var fy = ocy - s * ray.direction.y
+    var fz = ocz - s * ray.direction.z
+    var lf = sqrt(fx*fx + fy*fy + fz*fz)
+    var disc = a * (radius - lf) * (radius + lf)
     if disc < Float32(0.0):
         return Float32(-1.0)
     var sqrtd = sqrt(disc)
