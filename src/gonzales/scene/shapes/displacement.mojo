@@ -462,7 +462,7 @@ def _surface_box(tri: DisplacedTri, rm: Rmip, u0: Float32, u1: Float32, v0: Floa
 
 @always_inline
 def _march(tri: DisplacedTri, rm: Rmip, o: Vec3f, d: Vec3f, u0: Float32, u1: Float32, v0: Float32, v1: Float32,
-           mut best: DisplacedHit):
+           tmin: Float32, mut best: DisplacedHit):
     """Intersect the micro-triangles of the texel cells under a local rectangle; keep hits inside the base triangle."""
     var lo = tri.clamp_uv(SIMD[DType.float32, 2](u0, v0)); var hi = tri.clamp_uv(SIMD[DType.float32, 2](u1, v1))
     var i0 = Int(floor(lo[0] + tri.tc[0])); var i1 = Int(floor(hi[0] + tri.tc[0]))
@@ -483,7 +483,7 @@ def _march(tri: DisplacedTri, rm: Rmip, o: Vec3f, d: Vec3f, u0: Float32, u1: Flo
                 var qv = cross(tv, e1); var bb = dot(d, qv) * inv
                 if bb < Float32(0) or a + bb > Float32(1): continue
                 var t = dot(e2, qv) * inv
-                if t <= Float32(0) or t >= best.t: continue
+                if t <= tmin or t >= best.t: continue
                 # the triangle owns the points whose displacement line starts in it, as its prism does
                 var hu = Float32(i) + (a + bb if k == 0 else a) - tri.tc[0]
                 var hv = Float32(j) + (a if k == 0 else a + bb) - tri.tc[1]
@@ -495,8 +495,8 @@ def _march(tri: DisplacedTri, rm: Rmip, o: Vec3f, d: Vec3f, u0: Float32, u1: Flo
 
 
 @always_inline
-def intersect_displaced(tri: DisplacedTri, rm: Rmip, o: Vec3f, d: Vec3f, tmax: Float32) -> DisplacedHit:
-    """The nearest hit of the displaced triangle in (0, tmax): RMIP's traversal (its Algorithm 1).
+def intersect_displaced(tri: DisplacedTri, rm: Rmip, o: Vec3f, d: Vec3f, tmax: Float32, tmin: Float32 = 0) -> DisplacedHit:
+    """The nearest hit of the displaced triangle in (tmin, tmax): RMIP's traversal (its Algorithm 1).
     Its lists live in scalar arrays read through pointers, as the BVH stacks do: a runtime index into a SIMD value
     or an array of structs miscompiles on the Intel GPU (wrong prism distances, then faults)."""
     var best = DisplacedHit(False, tmax, 0, 0, Vec3f(0), 0, 0)
@@ -577,7 +577,7 @@ def intersect_displaced(tri: DisplacedTri, rm: Rmip, o: Vec3f, d: Vec3f, tmax: F
         var u0 = min(au, bu); var u1 = max(au, bu)
         var v0 = min(av, bv); var v1 = max(av, bv)
         if u1 - u0 <= Float32(MARCH) and v1 - v0 <= Float32(MARCH):
-            _march(tri, rm, o, d, u0, u1, v0, v1, best)
+            _march(tri, rm, o, d, u0, u1, v0, v1, tmin, best)
             if best.hit and best.t <= bt:   # front to back: nothing later is nearer
                 return best
             continue
@@ -600,7 +600,7 @@ def intersect_displaced(tri: DisplacedTri, rm: Rmip, o: Vec3f, d: Vec3f, tmax: F
         # a halving shrinks (du + dv) by a quarter; a split that does not (failed inversion) would recurse 2^STACK times
         var lim = Float32(0.9) * ((u1 - u0) + (v1 - v0))
         if not (abs(mu - au) + abs(mv - av) <= lim and abs(bu - mu) + abs(bv - mv) <= lim):
-            _march(tri, rm, o, d, u0, u1, v0, v1, best)
+            _march(tri, rm, o, d, u0, u1, v0, v1, tmin, best)
             if best.hit and best.t <= bt:
                 return best
             continue
@@ -611,17 +611,17 @@ def intersect_displaced(tri: DisplacedTri, rm: Rmip, o: Vec3f, d: Vec3f, tmax: F
             st[unsafe_offset=6 * sp + 9] = mu; st[unsafe_offset=6 * sp + 10] = mv; st[unsafe_offset=6 * sp + 11] = tm
             sp += 2
         else:
-            _march(tri, rm, o, d, u0, u1, v0, v1, best)
+            _march(tri, rm, o, d, u0, u1, v0, v1, tmin, best)
     return best
 
 
 @always_inline
-def intersect_displaced_brute(tri: DisplacedTri, rm: Rmip, o: Vec3f, d: Vec3f, tmax: Float32) -> DisplacedHit:
+def intersect_displaced_brute(tri: DisplacedTri, rm: Rmip, o: Vec3f, d: Vec3f, tmax: Float32, tmin: Float32 = 0) -> DisplacedHit:
     """The same micro-triangles, all of them: the reference the traversal must reproduce."""
     var best = DisplacedHit(False, tmax, 0, 0, Vec3f(0), 0, 0)
     var u0 = min(min(tri.t[0], tri.t[2]), tri.t[4]); var u1 = max(max(tri.t[0], tri.t[2]), tri.t[4])
     var v0 = min(min(tri.t[1], tri.t[3]), tri.t[5]); var v1 = max(max(tri.t[1], tri.t[3]), tri.t[5])
-    _march(tri, rm, o, d, u0 - Float32(1), u1, v0 - Float32(1), v1, best)
+    _march(tri, rm, o, d, u0 - Float32(1), u1, v0 - Float32(1), v1, tmin, best)
     return best
 
 
@@ -664,7 +664,7 @@ def displaced_hit_normal(disp: Pointer[DisplacedMesh, MutUntrackedOrigin], base_
 
 
 @no_inline   # one copy per kernel, not one per traversal loop
-def displaced_hit(dm: Pointer[DisplacedMesh, MutUntrackedOrigin], tri: Int, o: Vec3f, d: Vec3f, tmax: Float32) -> SIMD[DType.float32, 4]:
+def displaced_hit(dm: Pointer[DisplacedMesh, MutUntrackedOrigin], tri: Int, o: Vec3f, d: Vec3f, tmax: Float32, tmin: Float32 = 0) -> SIMD[DType.float32, 4]:
     """Triangle tri of dm as (hit, t, b1, b2); hit is 1 or 0."""
-    var h = intersect_displaced(dm[unsafe_offset=0].tris[unsafe_offset=tri], dm[unsafe_offset=0].rm, o, d, tmax)
+    var h = intersect_displaced(dm[unsafe_offset=0].tris[unsafe_offset=tri], dm[unsafe_offset=0].rm, o, d, tmax, tmin)
     return SIMD[DType.float32, 4](Float32(1) if h.hit else Float32(0), h.t, h.b1, h.b2)

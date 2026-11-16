@@ -172,7 +172,7 @@ def xert_trace(accel: MutPointer[UInt8, MutAnyOrigin], ray: XeRayDesc, cv: XePro
             if is_curve:
                 h = intersect_curve(o3, unit, curve_at(cv.curves, Int(p.id1)), Int(p.id2) // 8, Int(p.id2) % 8, t_max * dlen)
             else:   # a displaced triangle: id1 its mesh, id2 its first vertex index
-                var dh = displaced_hit(cv.meshes[unsafe_offset=Int(p.id1)].disp, Int(p.id2) // 3, o3, unit, t_max * dlen)
+                var dh = displaced_hit(cv.meshes[unsafe_offset=Int(p.id1)].disp, Int(p.id2) // 3, o3, unit, t_max * dlen, ray.tmin * dlen)
                 h = (dh[0] != Float32(0), dh[1], dh[2], dh[3])
             var t = h[1] / dlen
             if h[0] and t >= ray.tmin and t < t_max:
