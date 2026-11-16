@@ -1,7 +1,7 @@
 """What the path tracer's material shaders share: hit geometry, spectra, shadow rays, Russian roulette."""
 from std.sys import size_of
 from std.math import sqrt, abs
-from gonzales.core.geometry import offset_point, RGB, Point3f, Vec3f, dot, face_toward, cross, Frame, INV_PI, _is_real_ptr, _atan2f
+from gonzales.core.geometry import offset_point, offset_eps, RGB, Point3f, Vec3f, dot, face_toward, cross, Frame, INV_PI, _is_real_ptr, _atan2f
 from gonzales.scene.appearance.materials import Material
 from gonzales.transport.render_state import PathState, ShadowTask, SHADOW_SLOTS
 from gonzales.scene.appearance.materials import GpuTexture
@@ -555,7 +555,7 @@ def spawn_origin(hit_point: Vec3f, geo_n: Vec3f, dir: Vec3f) -> Vec3f:
     """Origin for a ray leaving a surface along `dir`, pbrt's SpawnRay rule:
     offset to whichever side of the GEOMETRIC surface `dir` points to.
 
-    `hit_point` is the usual front-side point (surface + geo_n * 1e-4). A bump
+    `hit_point` is the usual front-side point (surface + geo_n * offset_eps). A bump
     or normal map tilts the shading normal, so a direction sampled around it
     can point below the geometric surface. Launched from the front-side point,
     such a ray re-hit the same surface from above and re-scattered upward,
@@ -563,7 +563,7 @@ def spawn_origin(hit_point: Vec3f, geo_n: Vec3f, dir: Vec3f) -> Vec3f:
     barcelona-pavilion-day's bump-mapped deck and water read 4-10% bright in
     every indirect bounce (exact once the bump maps were removed)."""
     if dot(dir, geo_n) < Float32(0.0):
-        return hit_point - geo_n * Float32(0.0002)
+        return hit_point - geo_n * (Float32(2) * offset_eps(hit_point.x, hit_point.y, hit_point.z))
     return hit_point
 
 
