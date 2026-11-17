@@ -11,6 +11,7 @@ _ACESCG_TO_REC709 = np.array([[1.70505, -0.62179, -0.08326], [-0.13026, 1.14080,
 _LIGHT_FILTER = [t for t in os.environ.get("USD_EXTRACT_LIGHTS", "").split(",") if t]   # debugging: only these light types
 TEX_CACHE = os.environ.get("GONZALES_USD_TEX_CACHE", "/tmp/gonzales_usd_tex")
 TEX_RES = int(os.environ.get("GONZALES_USD_TEX_RES", "64"))   # texels per UDIM tile side of the resident level
+CURVE_COLOURS = 16      # materials per curve prim, from its quantized displayColor
 
 
 def _udim_tiles(pattern):
@@ -108,6 +109,37 @@ def _metal_ior(metal, ior):
     return (float(mv.mean()) if len(mv) else None), (float(np.median(iv)) if len(iv) else None)
 
 
+def oiio_buf(path):
+    import OpenImageIO as oiio
+    return oiio.ImageBuf(path).get_pixels(oiio.FLOAT)[:, :, :3].astype(np.float32)
+
+
+def _sample_atlas(path, uv, cols, rows):
+    """Nearest texels of an atlas of cols x rows UDIM tiles (as _atlas writes it) at UDIM uvs."""
+    img = oiio_buf(path)
+    r = img.shape[0] // rows
+    t = np.clip(np.floor(uv).astype(np.int64), 0, [cols - 1, rows - 1])
+    f = np.clip(uv - t, 0, 0.9999)
+    x = t[:, 0] * r + (f[:, 0] * r).astype(np.int64)
+    y = (rows - 1 - t[:, 1]) * r + ((1 - f[:, 1]) * r).astype(np.int64).clip(0, r - 1)
+    return img[y, x, :3].astype(np.float32)
+
+
+def _quantize(col, k, iters=8):
+    """k-means of colours: (centres, the label of each colour)."""
+    nearest = lambda c: np.argmin((c * c).sum(1)[None] - 2 * col @ c.T, 1)
+    uniq = np.unique(col[:100000].round(4), axis=0)
+    if len(uniq) <= k and len(np.unique(col.round(4), axis=0)) <= k:
+        return uniq, nearest(uniq)
+    centres = col[np.random.default_rng(1).choice(len(col), k, replace=False)].copy()
+    for _ in range(iters):
+        label = nearest(centres)
+        for j in range(k):
+            if (label == j).any():
+                centres[j] = col[label == j].mean(0)
+    return centres, nearest(centres)
+
+
 def _flat(m):
     return np.array(m, dtype=np.float32).reshape(16)
 
@@ -135,6 +167,10 @@ class _Scene:
         self.uvs = []
         self.templates = {}         # prototype path -> template id
         self.inst_tmpl, self.inst_xf = [], []
+        self.curve_cp, self.curve_w, self.curve_mat = [], [], []
+        self.curve_mats = {}        # (material, quantized colour) -> material
+        self.curve_pending = []     # per curve prim: base material, root points, displayColor per curve, segment curves
+        self.skins = {}             # colour texture file name -> [(points, UDIM uvs, xf)] of the world meshes using it
         self.n_points = self.n_indices = 0
 
     def material(self, prim):
@@ -198,6 +234,8 @@ class _Scene:
         if len(tris) == 0:
             return
         has_uv = uv is not None and len(uv) == len(pts)
+        if has_uv and template == -1 and self.mat_tex[mat]["color"]:
+            self.skins.setdefault(os.path.basename(self.mat_tex[mat]["color"]), []).append((pts, uv, xf))
         if has_uv:
             cols, rows = self.mat_tex[mat]["grid"]
             uv = uv / np.array((cols, rows), np.float32)        # into the material's atlas of UDIM tiles
@@ -259,6 +297,72 @@ class _Scene:
                 it.PruneChildren()
             elif prim.IsA(UsdGeom.Mesh):
                 self.mesh(prim, self.xc.GetLocalToWorldTransform(prim), -1)
+            elif prim.IsA(UsdGeom.BasisCurves):
+                self.curves(prim, self.xc.GetLocalToWorldTransform(prim))
+
+    def curve_material(self, base, rgb):
+        """A copy of material base with the constant colour rgb and no textures: curves have no uv."""
+        key = (base, tuple(np.round(rgb, 4)))
+        if key not in self.curve_mats:
+            self.curve_mats[key] = len(self.mat_rgb)
+            self.mat_rgb.append(tuple(float(c) for c in rgb))
+            self.mat_tex.append({"color": "", "normal": "", "opacity": "", "roughness": "", "metallic": "", "grid": (1, 1)})
+            self.mat_par.append(dict(self.mat_par[base]))
+        return self.curve_mats[key]
+
+    def curves(self, prim, xf):
+        """Cubic B-spline curves as gonzales' curve segments (one per window of 4 points), in world space. Colours come
+        from displayColor, quantized to CURVE_COLOURS materials per prim."""
+        c = UsdGeom.BasisCurves(prim)
+        if c.GetTypeAttr().Get() != "cubic" or c.GetBasisAttr().Get() != "bspline":
+            return
+        counts = np.asarray(c.GetCurveVertexCountsAttr().Get(self.time), np.int64)
+        pts = np.asarray(c.GetPointsAttr().Get(self.time), np.float32)
+        if len(counts) == 0 or len(pts) != counts.sum():
+            return
+        w = c.GetWidthsAttr().Get(self.time)
+        w = np.asarray(w, np.float32) if w is not None and len(w) else np.full(1, 0.01, np.float32)
+        wv = np.repeat(w, counts) if len(w) == len(counts) else (w if len(w) == len(pts) else np.full(len(pts), w.mean(), np.float32))
+        m = np.array(xf, np.float64)
+        pts = (pts @ m[:3, :3] + m[3, :3]).astype(np.float32)
+        wv = wv * np.float32(np.linalg.norm(m[:3, :3], axis=1).mean())
+        nseg = np.maximum(counts - 3, 0)
+        starts = np.concatenate(([0], np.cumsum(counts)[:-1]))
+        first = np.repeat(starts, nseg) + np.arange(nseg.sum()) - np.repeat(np.cumsum(nseg) - nseg, nseg)
+        seg_curve = np.repeat(np.arange(len(counts)), nseg)
+        self.curve_cp.append(np.stack([pts[first + k] for k in range(4)], 1).reshape(-1))
+        self.curve_w.append(np.stack([(wv[first] + 4 * wv[first + 1] + wv[first + 2]) / 6,
+                                      (wv[first + 1] + 4 * wv[first + 2] + wv[first + 3]) / 6], 1).reshape(-1))
+        base = self.material(prim)
+        pv = UsdGeom.PrimvarsAPI(prim).GetPrimvar("displayColor")
+        col = np.asarray(pv.Get(self.time), np.float32).reshape(-1, 3) if pv and pv.HasValue() else np.zeros((0, 3), np.float32)
+        if len(col) == len(pts):
+            col = np.add.reduceat(col, starts) / counts[:, None]
+        elif len(col) != len(counts):
+            col = np.repeat(col[:1] if len(col) else np.array([self.mat_rgb[base]], np.float32), len(counts), 0)
+        self.curve_pending.append((base, pts[starts], np.maximum(col @ _ACESCG_TO_REC709.T.astype(np.float32), 0), seg_curve))
+        self.curve_mat.append(None)
+
+    def finish_curves(self):
+        """Each curve's colour: its material's colour texture at the uv of the closest skin vertex to its root (curves have
+        no uv), else displayColor; quantized to CURVE_COLOURS materials per prim."""
+        from scipy.spatial import cKDTree
+        for k, (base, roots, col, seg_curve) in enumerate(self.curve_pending):
+            pattern, (cols, rows) = self.mat_tex[base]["color"], self.mat_tex[base]["grid"]
+            skin = self.skins.get(os.path.basename(pattern)) if pattern else None
+            if skin:
+                m = [np.array(xf, np.float64) for _, _, xf in skin]
+                world = np.concatenate([p @ x[:3, :3] + x[3, :3] for (p, _, _), x in zip(skin, m)])
+                uv = np.concatenate([u for _, u, _ in skin])[cKDTree(world).query(roots)[1]]
+                col = _sample_atlas(_atlas(pattern, cols, rows, "color"), uv, cols, rows)
+            elif pattern and _udim_tiles(pattern):      # no skin: the texture's mean colour
+                img = oiio_buf(_atlas(pattern, cols, rows, "color"))
+                px = img.reshape(-1, 3)
+                px = px[px.sum(1) > 0] if (px.sum(1) > 0).any() else px      # texels inside the uv islands
+                col = np.repeat(px.mean(0, keepdims=True), len(roots), 0)
+            centres, label = _quantize(col, CURVE_COLOURS)
+            mats = np.array([self.curve_material(base, cc) for cc in centres], np.int32)
+            self.curve_mat[k] = mats[label[seg_curve]]
 
 
 def _ring(n):
@@ -364,6 +468,7 @@ def extract(path, camera_path="", aspect=16.0 / 9.0, frame=""):
         time = Usd.TimeCode(stage.GetStartTimeCode()) if stage.HasAuthoredTimeCodeRange() else Usd.TimeCode.Default()
     sc = _Scene(stage, time)
     sc.traverse()
+    sc.finish_curves()
     cam, fov = _camera(stage, sc.xc, time, camera_path, aspect)
     lt = _lights(stage, sc.xc, time, sc.visible)
     sky = np.zeros(3)
@@ -384,6 +489,9 @@ def extract(path, camera_path="", aspect=16.0 / 9.0, frame=""):
         "mat_par": np.ascontiguousarray(np.array([[p["opacity"], p["metallic"], p["ior"], p["roughness"]] for p in sc.mat_par],
                                                  dtype=np.float32).reshape(-1, 4)),   # opacity, metallic, ior, roughness
         "materials": np.ascontiguousarray(np.array(sc.mat_rgb, dtype=np.float32).reshape(-1, 3)),
+        "curve_cp": cat(sc.curve_cp, np.float32),
+        "curve_w": cat(sc.curve_w, np.float32),
+        "curve_mat": cat(sc.curve_mat, np.int32),
         "n_templates": len(sc.templates),
         "inst_tmpl": np.ascontiguousarray(np.array(sc.inst_tmpl, dtype=np.int32)),
         "inst_xf": cat(sc.inst_xf, np.float32),

@@ -152,6 +152,21 @@ def _usd_fill(s: Pointer[SceneParseState, MutUntrackedOrigin], d: PythonObject) 
             _set_identity(s)
             _psc_finish_object_def(s)
 
+    var cmat_obj = d["curve_mat"]
+    var cmat = Pointer[Int32, MutUntrackedOrigin](unsafe_from_address=Int(py=cmat_obj.ctypes.data))
+    var ccp = _f32(d["curve_cp"])
+    var cw = _f32(d["curve_w"])
+    var n_curves = Int(py=len(cmat_obj))
+    ref ps = s[unsafe_offset=0]
+    ps.curves_cp.reserve(len(ps.curves_cp) + 12 * n_curves)
+    for k in range(12 * n_curves):
+        ps.curves_cp.append(ccp[unsafe_offset=k])
+    for i in range(n_curves):
+        ps.curves_w0.append(cw[unsafe_offset=2 * i]); ps.curves_w1.append(cw[unsafe_offset=2 * i + 1])
+        ps.curves_mat.append(cmat[unsafe_offset=i])
+        ps.curves_flat.append(Int32(0))     # round, as USD's curves without normals
+        ps.curves_al.append(False); ps.curves_al_rgb.append(RGB(Float32(0)))
+
     var inst_tmpl_obj = d["inst_tmpl"]
     var inst_tmpl = Pointer[Int32, MutUntrackedOrigin](unsafe_from_address=Int(py=inst_tmpl_obj.ctypes.data))
     var inst_xf = _f32(d["inst_xf"])
