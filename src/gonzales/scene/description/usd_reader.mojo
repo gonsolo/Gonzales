@@ -11,7 +11,7 @@ from gonzales.core.transform import matrix_invert
 from gonzales.scene.appearance.materials import MatKind
 from gonzales.scene.description.parse_types import SceneParseState, NamedMaterial
 from gonzales.scene.description.scene_builder import store_mesh
-from gonzales.scene.description.pbrt_parser import ParsedScene_Mojo, finalize_scene, _psc_finish_object_def, _psc_emit_object_instance, psc_alpha_mask
+from gonzales.scene.description.pbrt_parser import ParsedScene_Mojo, finalize_scene, _psc_finish_object_def, _psc_emit_object_instance, psc_alpha_mask, _plan_ptex_budget
 
 
 def _f32(arr: PythonObject) raises -> Pointer[Float32, MutUntrackedOrigin]:
@@ -255,6 +255,7 @@ def mojo_parse_usd_scene(path: Pointer[UInt8, MutUntrackedOrigin], verbose: Bool
         _ = s_ptr.unsafe_take_pointee()
         s_ptr.unsafe_free()
         return Pointer[ParsedScene_Mojo, MutUntrackedOrigin].unsafe_dangling()
+    _plan_ptex_budget(s_ptr[unsafe_offset=0].tex_files)    # paged UDIM textures (oiio.cc), as the pbrt parser plans Ptex
     var psc = unsafe_alloc[ParsedScene_Mojo](1)
     finalize_scene(s_ptr, psc, verbose)
     _ = s_ptr.unsafe_take_pointee()

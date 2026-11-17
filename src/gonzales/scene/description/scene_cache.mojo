@@ -433,7 +433,15 @@ def scene_cache_load(cache_path: _Ptr, scene_path: _Ptr) -> Pointer[ParsedScene_
     s.rng_seed = UInt64(perf_counter_ns())
     s.host_textures = Pointer[GpuTexture, MutUntrackedOrigin].unsafe_dangling()
     s.tex_prefetch = Pointer[TexPrefetch, MutUntrackedOrigin].unsafe_dangling()
-    _plan_ptex_budget(names)
+    var plan_names = names.copy()
+    if len(plan_names) == 0:    # USD scenes start no prefetch: plan over their texture files
+        var seen = Dict[String, Bool]()
+        for ti in range(n_tex):
+            var nm = String(unsafe_from_utf8_ptr=s.tex_filenames[unsafe_offset=ti].as_imm())
+            if nm not in seen:
+                seen[nm] = True
+                plan_names.append(nm)
+    _plan_ptex_budget(plan_names)
     var tex_pf = unsafe_alloc[TexPrefetch](1)
     tex_pf.unsafe_write(TexPrefetch())
     tex_pf[unsafe_offset=0].start(names, raws, min(12, num_performance_cores()))
