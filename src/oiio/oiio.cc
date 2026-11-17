@@ -1,6 +1,7 @@
 #include <OpenImageIO/imageio.h>
 #include <OpenImageIO/imagecache.h>
 #include <OpenImageIO/texture.h>
+#include <OpenImageIO/filesystem.h>
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -845,59 +846,234 @@ static void ptex_read_chain(PtexTexture *tex, int f, int ul, int vl, unsigned ch
         }
 }
 
+// UDIM textures paged as Ptex: each tile of a cols x rows grid is split into UDIM_SUB x UDIM_SUB faces, numbered row by row
+// over the whole (cols * UDIM_SUB) x (rows * UDIM_SUB) grid, so a lookup loads only the part of a tile it sees; a face's
+// levels are regions of the tile's EXR mip levels. Name: "udim:<kind>:<cols>:<rows>:<pattern with <UDIM>>"; kind color
+// (ACEScg to Rec.709), raw, rough (r^4, as shading takes alpha = sqrt) or metal. Borders come from the neighbouring
+// texels of the same tile; a tile's own edge is repeated.
+static const int UDIM_SUB = 8;   // texturing.mojo UDIM_SUB
+struct UdimTex {
+        int kind = 1, cols = 1, rows = 1;
+        std::vector<std::string> files;          // per tile, empty without one
+        std::vector<std::array<int, 2>> res;     // per tile, log2 width and height
+        int faces() const { return cols * rows * UDIM_SUB * UDIM_SUB; }
+        int tile(int f) const {
+                const int fc = cols * UDIM_SUB, fx = f % fc, fy = f / fc;
+                return (fy / UDIM_SUB) * cols + fx / UDIM_SUB;
+        }
+        std::array<int, 2> face_res(int f) const {
+                const std::array<int, 2> r = res[tile(f)];
+                return {std::max(r[0] - 3, 0), std::max(r[1] - 3, 0)};   // log2(UDIM_SUB) = 3
+        }
+};
+static bool is_udim(const char *name) { return std::strncmp(name, "udim:", 5) == 0; }
+static std::mutex udim_mu;
+static std::map<std::string, std::unique_ptr<UdimTex>> udim_texs;
+
+static const UdimTex *udim_get(const char *name) {
+        std::lock_guard<std::mutex> lock(udim_mu);
+        auto it = udim_texs.find(name);
+        if (it != udim_texs.end())
+                return it->second.get();
+        const std::string s(name + 5);
+        const size_t a = s.find(':'), b = s.find(':', a + 1), c = s.find(':', b + 1);
+        if (a == std::string::npos || b == std::string::npos || c == std::string::npos)
+                return nullptr;
+        auto t = std::make_unique<UdimTex>();
+        const std::string kind = s.substr(0, a);
+        t->kind = kind == "color" ? 0 : kind == "rough" ? 2 : kind == "metal" ? 3 : 1;
+        t->cols = std::max(1, std::atoi(s.substr(a + 1, b - a - 1).c_str()));
+        t->rows = std::max(1, std::atoi(s.substr(b + 1, c - b - 1).c_str()));
+        const std::string pattern = s.substr(c + 1);
+        const size_t p = pattern.find("<UDIM>");
+        const int n = t->cols * t->rows;
+        t->files.resize(n);
+        t->res.assign(n, {0, 0});
+        for (int f = 0; f < n; ++f) {
+                std::string file = pattern;
+                if (p != std::string::npos)
+                        file.replace(p, 6, std::to_string(1001 + f % t->cols + 10 * (f / t->cols)));
+                if (!OIIO::Filesystem::exists(file))
+                        continue;
+                auto in = OIIO::ImageInput::open(file);
+                if (!in)
+                        continue;
+                const int w = in->spec().width, h = in->spec().height;
+                t->files[f] = file;
+                t->res[f] = {std::min(std::max(int(std::floor(std::log2(std::max(w, 1)))), 0), 12),
+                             std::min(std::max(int(std::floor(std::log2(std::max(h, 1)))), 0), 12)};
+        }
+        const UdimTex *r = t.get();
+        udim_texs[name] = std::move(t);
+        return r;
+}
+
+static void udim_texel(int kind, const float *in, int nc, unsigned char *dst) {
+        float c[3] = {in[0], in[nc >= 3 ? 1 : 0], in[nc >= 3 ? 2 : 0]};
+        if (kind == 0) {   // ACEScg to linear Rec.709, as the USD reader's atlases
+                const float r = 1.70505f * c[0] - 0.62179f * c[1] - 0.08326f * c[2];
+                const float g = -0.13026f * c[0] + 1.14080f * c[1] - 0.01055f * c[2];
+                const float b = -0.02400f * c[0] - 0.12897f * c[1] + 1.15297f * c[2];
+                c[0] = r; c[1] = g; c[2] = b;
+        } else if (kind == 2) {
+                const float r = std::min(std::max(c[0], 0.0f), 1.0f);
+                c[0] = c[1] = c[2] = r * r * r * r;
+        } else if (kind == 3) {
+                c[1] = c[2] = c[0];
+        }
+        for (int i = 0; i < 3; ++i)
+                dst[i] = static_cast<unsigned char>(std::pow(std::min(std::max(c[i], 0.0f), 1.0f), 1.0f / 2.2f) * 255.0f + 0.5f);
+}
+
+// Face f's chain from (ul, vl) down to 1x1 with borders, as ptex_read_chain writes it; row y holds v = (y + 0.5) / h.
+static void udim_read_chain(const UdimTex &t, int f, int ul, int vl, unsigned char *dst) {
+        const int tile = t.tile(f), fc = t.cols * UDIM_SUB;
+        const int sx = (f % fc) % UDIM_SUB, sy = (f / fc) % UDIM_SUB;
+        std::unique_ptr<OIIO::ImageInput> in;
+        if (!t.files[tile].empty())
+                in = OIIO::ImageInput::open(t.files[tile]);
+        const float none[4][3] = {{0, 0, 0}, {0.5f, 0.5f, 1}, {0.0625f, 0.0625f, 0.0625f}, {0, 0, 0}};
+        std::vector<float> px;
+        for (;;) {
+                const int w = 1 << ul, h = 1 << vl, stride = w + 2;
+                auto at = [&](int x, int y) { return dst + (static_cast<size_t>(y + 1) * stride + (x + 1)) * 3; };
+                bool ok = false;
+                if (in) {
+                        // The tile's level of (w, h) * UDIM_SUB texels, else the closest finer one, subsampled.
+                        int level = -1, lw = 0, lh = 0;
+                        for (int m = 0; in->seek_subimage(0, m); ++m) {
+                                if (in->spec().width < w * UDIM_SUB || in->spec().height < h * UDIM_SUB)
+                                        break;
+                                level = m; lw = in->spec().width; lh = in->spec().height;
+                        }
+                        if (level >= 0 && in->seek_subimage(0, level)) {
+                                const OIIO::ImageSpec spec = in->spec();
+                                const int nc = std::min(spec.nchannels, 3);
+                                const int kx = lw / (w * UDIM_SUB), ky = lh / (h * UDIM_SUB);
+                                // Image rows run top down: this face's rows plus one border row on each side.
+                                const int x0 = std::max(sx * w * kx - kx, 0), x1 = std::min((sx + 1) * w * kx + kx, lw);
+                                const int top = lh - (sy + 1) * h * ky, y0 = std::max(top - ky, 0), y1 = std::min(top + h * ky + ky, lh);
+                                int ax0 = x0, ax1 = x1, ay0 = y0, ay1 = y1;
+                                if (spec.tile_width > 0) {   // tiled: whole tiles only
+                                        ax0 = x0 / spec.tile_width * spec.tile_width;
+                                        ay0 = y0 / spec.tile_height * spec.tile_height;
+                                        ax1 = std::min((x1 + spec.tile_width - 1) / spec.tile_width * spec.tile_width, lw);
+                                        ay1 = std::min((y1 + spec.tile_height - 1) / spec.tile_height * spec.tile_height, lh);
+                                }
+                                const int rw = ax1 - ax0, rh = ay1 - ay0;
+                                px.resize(static_cast<size_t>(rw) * rh * nc);
+                                const bool read = spec.tile_width > 0
+                                        ? in->read_tiles(0, level, ax0, ax1, ay0, ay1, 0, 1, 0, nc, OIIO::TypeDesc::FLOAT, px.data())
+                                        : in->read_scanlines(0, level, ay0, ay1, 0, 0, nc, OIIO::TypeDesc::FLOAT, px.data());
+                                if (read) {
+                                        const int rstride = spec.tile_width > 0 ? rw : lw, rx0 = spec.tile_width > 0 ? ax0 : 0;
+                                        // Texel (x, y) of this face, x and y from -1 to w and h: clamped to the tile.
+                                        for (int y = -1; y <= h; ++y)
+                                                for (int x = -1; x <= w; ++x) {
+                                                        const int ix = std::min(std::max((sx * w + x) * kx, 0), lw - 1);
+                                                        const int iy = std::min(std::max(lh - 1 - (sy * h + y) * ky, 0), lh - 1);
+                                                        const int cx = std::min(std::max(ix, ax0), ax1 - 1) - rx0;
+                                                        const int cy = std::min(std::max(iy, ay0), ay1 - 1) - ay0;
+                                                        udim_texel(t.kind, &px[(static_cast<size_t>(cy) * rstride + cx) * nc], nc, at(x, y));
+                                                }
+                                        ok = true;
+                                }
+                        }
+                }
+                if (!ok)
+                        for (int y = -1; y <= h; ++y)
+                                for (int x = -1; x <= w; ++x)
+                                        udim_texel(1, none[t.kind], 3, at(x, y));
+                dst += static_cast<size_t>(w + 2) * (h + 2) * 3;
+                if (ul == 0 && vl == 0)
+                        break;
+                ul = std::max(ul - 1, 0);
+                vl = std::max(vl - 1, 0);
+        }
+}
+
+// A texture the pager reads faces from: a Ptex file or a UDIM set.
+struct PagedTex {
+        PtexTexture *ptex = nullptr;
+        const UdimTex *udim = nullptr;
+        int faces() const { return udim ? udim->faces() : ptex->numFaces(); }
+        std::array<int, 2> res(int f) const {
+                if (udim)
+                        return udim->face_res(f);
+                const Ptex::Res r = ptex->getFaceInfo(f).res;
+                return {r.ulog2, r.vlog2};
+        }
+        void read(int f, int ul, int vl, unsigned char *dst) const {
+                if (udim)
+                        udim_read_chain(*udim, f, ul, vl, dst);
+                else
+                        ptex_read_chain(ptex, f, ul, vl, dst);
+        }
+};
+static PagedTex *paged_open(const char *filename) {
+        if (is_udim(filename)) {
+                const UdimTex *u = udim_get(filename);
+                return u ? new PagedTex{nullptr, u} : nullptr;
+        }
+        Ptex::String err;
+        PtexTexture *t = PtexTexture::open(filename, err);
+        return t ? new PagedTex{t, nullptr} : nullptr;
+}
+static void paged_close(PagedTex *t) {
+        if (t && t->ptex)
+                t->ptex->release();
+        delete t;
+}
+
 // bytes[c] += packed size of this file with faces capped at 2^c per side, c = 0..12.
 extern "C" int ptex_bytes_by_cap(const char *filename, long long *bytes) {
-        Ptex::String err;
-        PtexPtr<PtexTexture> tex(PtexTexture::open(filename, err));
+        PagedTex *tex = paged_open(filename);
         if (!tex)
                 return 0;
-        const int nfaces = tex->numFaces();
+        const int nfaces = tex->faces();
         for (int f = 0; f < nfaces; ++f) {
-                Ptex::Res full = tex->getFaceInfo(f).res;
+                const std::array<int, 2> full = tex->res(f);
                 for (int c = 0; c <= 12; ++c)
-                        bytes[c] += ptex_chain_texels(std::min<int>(full.ulog2, c), std::min<int>(full.vlog2, c)) * 3 + 8;
+                        bytes[c] += ptex_chain_texels(std::min<int>(full[0], c), std::min<int>(full[1], c)) * 3 + 8;
         }
+        paged_close(tex);
         return 1;
 }
 
 // Demand paging lives in ptex_cache.mojo; these are its file accessors.
 extern "C" long long ptex_pool_size() { return ptex_paging() ? ptex_pool_budget : 0; }
-extern "C" void *ptex_open(const char *filename) {
-        Ptex::String err;
-        return PtexTexture::open(filename, err);
-}
-extern "C" void ptex_close(void *tex) { static_cast<PtexTexture *>(tex)->release(); }
+extern "C" void *ptex_open(const char *filename) { return paged_open(filename); }
+extern "C" void ptex_close(void *tex) { paged_close(static_cast<PagedTex *>(tex)); }
 extern "C" void ptex_face_res(void *tex, int f, int *res) {
-        Ptex::Res full = static_cast<PtexTexture *>(tex)->getFaceInfo(f).res;
-        res[0] = full.ulog2;
-        res[1] = full.vlog2;
+        const std::array<int, 2> full = static_cast<PagedTex *>(tex)->res(f);
+        res[0] = full[0];
+        res[1] = full[1];
 }
 extern "C" void ptex_read_face(void *tex, int f, int ul, int vl, unsigned char *dst) {
-        ptex_read_chain(static_cast<PtexTexture *>(tex), f, ul, vl, dst);
+        static_cast<PagedTex *>(tex)->read(f, ul, vl, dst);
 }
 
 // Pack `filename`; *paged_id is 0 when its faces can be paged in at finer resolutions, else -1.
 extern "C" int ptex_packed_size(const char *filename, long long *nbytes, int *nfaces_out, int *paged_id) {
-        Ptex::String err;
-        PtexPtr<PtexTexture> tex(PtexTexture::open(filename, err));
+        std::unique_ptr<PagedTex, void (*)(PagedTex *)> tex(paged_open(filename), paged_close);
         if (!tex)
                 return 0;
-        const int nfaces = tex->numFaces(), nch = tex->numChannels();
-        if (nfaces <= 0 || nch <= 0)
+        const int nfaces = tex->faces();
+        if (nfaces <= 0 || (tex->ptex && tex->ptex->numChannels() <= 0))
                 return 0;
         const int cap = ptex_max_log2();
         const bool paged = ptex_paging();
         std::vector<unsigned char> blob(static_cast<size_t>(nfaces) * 8);
         size_t texels = 0;
         for (int f = 0; f < nfaces; ++f) {
-                Ptex::Res full = tex->getFaceInfo(f).res;
-                const int ul = std::min<int>(full.ulog2, cap), vl = std::min<int>(full.vlog2, cap);
+                const std::array<int, 2> full = tex->res(f);
+                const int ul = std::min<int>(full[0], cap), vl = std::min<int>(full[1], cap);
                 const uint32_t off = static_cast<uint32_t>(texels);
                 unsigned char *e = &blob[static_cast<size_t>(f) * 8];
                 std::memcpy(e, &off, 4);
                 e[4] = static_cast<unsigned char>(ul);
                 e[5] = static_cast<unsigned char>(vl);
-                e[6] = (paged && (ul < full.ulog2 || vl < full.vlog2)) ? 0 : 255;
+                e[6] = (paged && (ul < full[0] || vl < full[1])) ? 0 : 255;
                 e[7] = 0;
                 texels += ptex_chain_texels(ul, vl);
         }
@@ -906,7 +1082,7 @@ extern "C" int ptex_packed_size(const char *filename, long long *nbytes, int *nf
                 const unsigned char *e = &blob[static_cast<size_t>(f) * 8];
                 uint32_t off;
                 std::memcpy(&off, e, 4);
-                ptex_read_chain(tex, f, e[4], e[5], &blob[static_cast<size_t>(nfaces) * 8 + static_cast<size_t>(off) * 3]);
+                tex->read(f, e[4], e[5], &blob[static_cast<size_t>(nfaces) * 8 + static_cast<size_t>(off) * 3]);
         }
         *nbytes = static_cast<long long>(blob.size());
         *nfaces_out = nfaces;

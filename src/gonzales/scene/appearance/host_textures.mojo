@@ -155,6 +155,23 @@ struct _HostTexture(TrivialRegisterPassable):
 # `lut` holds both 256-entry decode tables (linear at 0, sRGB at 256) and `inv`
 # their _build_inverse_lut tables (at 0 and _INV_LUT_SIZE). Reads the tables and
 # touches only its own allocations, so it is safe to run on worker threads.
+def _udim_cols(filename: Pointer[UInt8, MutUntrackedOrigin]) -> Int:
+    """The tile columns of a "udim:<kind>:<cols>:<rows>:<pattern>" texture (oiio.cc pages it as Ptex), else 0."""
+    var prefix = "udim:"
+    for i in range(5):
+        if filename[unsafe_offset=i] != prefix.unsafe_ptr()[unsafe_offset=i]:
+            return 0
+    var k = 5
+    while filename[unsafe_offset=k] != UInt8(58) and filename[unsafe_offset=k] != UInt8(0):   # past the kind
+        k += 1
+    var cols = 0
+    k += 1
+    while filename[unsafe_offset=k] >= UInt8(48) and filename[unsafe_offset=k] <= UInt8(57):
+        cols = cols * 10 + Int(filename[unsafe_offset=k] - UInt8(48))
+        k += 1
+    return max(cols, 1)
+
+
 def _load_host_texture(
     filename: Pointer[UInt8, MutUntrackedOrigin], raw_flag: Int32,
     lut: Pointer[Float32, MutUntrackedOrigin], inv: Pointer[UInt8, MutUntrackedOrigin],
@@ -171,7 +188,8 @@ def _load_host_texture(
         return result
     var name_len = 0
     while filename[unsafe_offset=name_len] != UInt8(0): name_len += 1
-    if name_len > 4 and filename[unsafe_offset=name_len-4] == UInt8(46) and filename[unsafe_offset=name_len-3] == UInt8(112) and \
+    var udim_cols = _udim_cols(filename)
+    if udim_cols > 0 or name_len > 4 and filename[unsafe_offset=name_len-4] == UInt8(46) and filename[unsafe_offset=name_len-3] == UInt8(112) and \
        filename[unsafe_offset=name_len-2] == UInt8(116) and filename[unsafe_offset=name_len-1] == UInt8(120):   # ".ptx"
         var nb = unsafe_alloc[Int64](1); var nf = unsafe_alloc[Int32](2)
         nb[unsafe_offset=0] = Int64(0); nf[unsafe_offset=0] = Int32(0); nf[unsafe_offset=1] = Int32(-1)
@@ -183,7 +201,7 @@ def _load_host_texture(
             _ = external_call["ptex_packed_take", Int32, Pointer[UInt8, MutUntrackedOrigin],
                 Pointer[UInt8, MutUntrackedOrigin]](filename, blob)
             result = _HostTexture(blob.unsafe_origin_cast[MutUntrackedOrigin](), Int(nb[unsafe_offset=0]), nf[unsafe_offset=0], nf[unsafe_offset=1],
-                                  Int32(1), Int32(3), Int32(GpuTexture.FORMAT_PTEX), Int32(512))
+                                  Int32(-udim_cols) if udim_cols > 0 else Int32(1), Int32(3), Int32(GpuTexture.FORMAT_PTEX), Int32(512))
         else:
             print("Warning: could not read Ptex file '" + String(unsafe_from_utf8_ptr=filename.as_imm()) + "' -- it renders as a flat default instead.")
         nb.unsafe_free(); nf.unsafe_free()

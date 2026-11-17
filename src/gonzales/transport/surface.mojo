@@ -90,9 +90,9 @@ def surface_hit[use_gpu: Bool](ref sd: SceneView, inter: Intersection, mut mat: 
     var alb = mat.albedo
     var (tex_mesh, tv0, tv1, tv2, tex_ok) = _get_tri_verts(inter, sd.meshes)
     if tex_ok and not on_curve:
-        alb = _tex_lookup[use_gpu](mat, inter, tv0, tv1, tv2, tex_mesh, sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount),
-            uv_footprint_at_hit(inter, sd.meshes, sd.instances, hit.to_simd(), ray_dir, cone_w, sd.camFp).width)
-        resolve_rough_texture[use_gpu](mat, inter, tv0, tv1, tv2, tex_mesh, sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
+        var fp_w = uv_footprint_at_hit(inter, sd.meshes, sd.instances, hit.to_simd(), ray_dir, cone_w, sd.camFp).width
+        alb = _tex_lookup[use_gpu](mat, inter, tv0, tv1, tv2, tex_mesh, sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount), fp_w)
+        resolve_rough_texture[use_gpu](mat, inter, tv0, tv1, tv2, tex_mesh, sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount), fp_w)
     var gn_geo = gn
     if not on_curve:
         gn = apply_surface_maps_at_hit[use_gpu](mat, inter, sd.meshes, sd.instances,

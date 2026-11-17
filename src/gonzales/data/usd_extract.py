@@ -40,6 +40,14 @@ def _texture_input(surf, name):
     return path
 
 
+def _texture(pattern, cols, rows, kind):
+    """A UDIM texture as gonzales loads it: paged per tile at the resolution shading asks for (oiio.cc), or with
+    GONZALES_USD_TEX_ATLAS=1 one resident atlas at TEX_RES texels a tile."""
+    if os.environ.get("GONZALES_USD_TEX_ATLAS") == "1":
+        return _atlas(pattern, cols, rows, kind)
+    return f"udim:{kind}:{cols}:{rows}:{pattern}"
+
+
 def _atlas(pattern, cols, rows, kind):
     """The resident level of a UDIM texture as one image of cols x rows tiles at TEX_RES texels, cached on disk."""
     os.makedirs(TEX_CACHE, exist_ok=True)
@@ -481,11 +489,11 @@ def extract(path, camera_path="", aspect=16.0 / 9.0, frame=""):
         "mesh_xf": cat(sc.xforms, np.float32),
         "meshes": np.ascontiguousarray(np.array(sc.mesh_rows, dtype=np.int64).reshape(-1, 7)),
         "uvs": cat(sc.uvs, np.float32),
-        "mat_color": [_atlas(t["color"], *t["grid"], "color") if t["color"] else "" for t in sc.mat_tex],
-        "mat_normal": [_atlas(t["normal"], *t["grid"], "raw") if t["normal"] else "" for t in sc.mat_tex],
+        "mat_color": [_texture(t["color"], *t["grid"], "color") if t["color"] else "" for t in sc.mat_tex],
+        "mat_normal": [_texture(t["normal"], *t["grid"], "raw") if t["normal"] else "" for t in sc.mat_tex],
         "mat_opacity": [_atlas(t["opacity"], *t["grid"], "alpha") if t["opacity"] else "" for t in sc.mat_tex],
-        "mat_rough": [_atlas(t["roughness"], *t["grid"], "rough") if t["roughness"] else "" for t in sc.mat_tex],
-        "mat_metal": [_atlas(t["metallic"], *t["grid"], "metal") if t["metallic"] else "" for t in sc.mat_tex],
+        "mat_rough": [_texture(t["roughness"], *t["grid"], "rough") if t["roughness"] else "" for t in sc.mat_tex],
+        "mat_metal": [_texture(t["metallic"], *t["grid"], "metal") if t["metallic"] else "" for t in sc.mat_tex],
         "mat_par": np.ascontiguousarray(np.array([[p["opacity"], p["metallic"], p["ior"], p["roughness"]] for p in sc.mat_par],
                                                  dtype=np.float32).reshape(-1, 4)),   # opacity, metallic, ior, roughness
         "materials": np.ascontiguousarray(np.array(sc.mat_rgb, dtype=np.float32).reshape(-1, 3)),

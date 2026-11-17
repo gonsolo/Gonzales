@@ -39,6 +39,9 @@ def _ptex_level(tex: GpuTexture, texels: Pointer[UInt8, MutUntrackedOrigin], off
     return (c00 * (Float32(1.0) - wx) + c10 * wx) * (Float32(1.0) - wy) + (c01 * (Float32(1.0) - wx) + c11 * wx) * wy
 
 
+comptime UDIM_SUB = 8   # oiio.cc UDIM_SUB
+
+
 @always_inline
 def _ptex_need(fp_width: Float32) -> Int:
     """log2 of the face resolution a lookup with this footprint reads."""
@@ -82,9 +85,19 @@ def _ptex_ask(tex: GpuTexture, entry: Pointer[UInt8, MutUntrackedOrigin], face: 
 
 
 @always_inline
-def _sample_ptex(tex: GpuTexture, face_in: Int, u: Float32, v: Float32, fp_width: Float32) -> RGB:
+def _sample_ptex(tex: GpuTexture, face_in: Int, u_in: Float32, v_in: Float32, fp_width_in: Float32) -> RGB:
     var n_faces = Int(tex.width)
-    var face = face_in if (face_in >= 0 and face_in < n_faces) else 0
+    var face = face_in
+    var u = u_in; var v = v_in; var fp_width = fp_width_in
+    if tex.n_levels < Int32(0):   # UDIM tiles, UDIM_SUB x UDIM_SUB faces each (oiio.cc); (u, v) span the atlas of all tiles
+        var cols = Int(-tex.n_levels) * UDIM_SUB; var rows = max(n_faces // cols, 1)
+        var uu = u * Float32(cols); var vv = v * Float32(rows)
+        var ut = min(max(Int(floor(uu)), 0), cols - 1); var vt = min(max(Int(floor(vv)), 0), rows - 1)
+        face = vt * cols + ut
+        u = uu - Float32(ut); v = vv - Float32(vt)
+        fp_width = fp_width * Float32(max(cols, rows))
+    if face < 0 or face >= n_faces:
+        face = 0
     var entry = tex.data.unsafe_offset(face * 8)
     var off = Int(entry.unsafe_bitcast[UInt32]()[unsafe_offset=0])
     var ul = Int(entry[unsafe_offset=4]); var vl = Int(entry[unsafe_offset=5])
@@ -95,9 +108,11 @@ def _sample_ptex(tex: GpuTexture, face_in: Int, u: Float32, v: Float32, fp_width
         if (flags & 2) == 0:
             entry[unsafe_offset=7] = UInt8(3)
     var want = Int(entry[unsafe_offset=6])
-    if want != 255:
+    # A negative footprint asks for its pages but samples the finest level (normal maps); UDIM lookups without one keep
+    # what is resident.
+    if want != 255 and (fp_width != Float32(0.0) or tex.n_levels >= Int32(0)):
         # Ask the host for the resolution this footprint needs (ptex_cache.mojo).
-        var need = _ptex_need(fp_width)
+        var need = _ptex_need(abs(fp_width))
         if need > max(ul, vl) and need > want:
             _ptex_ask(tex, entry, face, need)
     var n_lev = max(ul, vl) + 1
@@ -150,6 +165,8 @@ def sample_texture[use_gpu: Bool](
             if Int(tex.format) == GpuTexture.FORMAT_PTEX:
                 # A float Ptex is the mean of its channels (pbrt's FloatPtexTexture); no V-flip.
                 var pc = _sample_ptex(tex, ptex_face, u, v, fp_width)
+                if tex.n_levels < Int32(0):
+                    return pc   # UDIM: colour, normal or roughness as stored
                 return RGB((pc.r + pc.g + pc.b) * Float32(1.0 / 3.0))
             if Int(tex.format) == GpuTexture.FORMAT_SHADER:
                 var sc = sample_shader(tex, u, v, fp_width, textures, n_textures, p)
@@ -285,6 +302,7 @@ def rough_texture_alpha[use_gpu: Bool](
     tex_filenames: Pointer[Pointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin],
     textures: Pointer[GpuTexture, MutUntrackedOrigin],
     n_textures: Int,
+    fp_width: Float32 = Float32(0.0),   # the hit's uv footprint, for filtering and paging
 ) -> Float32:
     """A roughness texture's GGX alpha here (pbrt's remaproughness: the square root of its value); 0 without one."""
     if mat.rough_tex_idx < Int32(0):
@@ -296,7 +314,7 @@ def rough_texture_alpha[use_gpu: Bool](
         su = w0*mesh_uv(mesh, v0)[0] + inter.u*mesh_uv(mesh, v1)[0] + inter.v*mesh_uv(mesh, v2)[0]
         sv = w0*mesh_uv(mesh, v0)[1] + inter.u*mesh_uv(mesh, v1)[1] + inter.v*mesh_uv(mesh, v2)[1]
     var found = False
-    var t = sample_texture[use_gpu](Int(mat.rough_tex_idx), su, sv, True, Float32(0.0), tex_filenames, textures, n_textures, found,
+    var t = sample_texture[use_gpu](Int(mat.rough_tex_idx), su, sv, True, fp_width, tex_filenames, textures, n_textures, found,
                                     p=hit_point(mesh, v0, v1, v2, inter))
     return sqrt(max(mat.rough_bias + mat.rough_scale * t.luma(), Float32(0.0))) if found else Float32(0.0)
 
@@ -310,11 +328,12 @@ def resolve_rough_texture[use_gpu: Bool](
     tex_filenames: Pointer[Pointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin],
     textures: Pointer[GpuTexture, MutUntrackedOrigin],
     n_textures: Int,
+    fp_width: Float32 = Float32(0.0),
 ):
     """rough_texture_alpha into `mat`, floored by the alpha it already has (Filter Glossy)."""
     if mat.rough_tex_idx < Int32(0):
         return
-    var a = rough_texture_alpha[use_gpu](mat, inter, v0, v1, v2, mesh, tex_filenames, textures, n_textures)
+    var a = rough_texture_alpha[use_gpu](mat, inter, v0, v1, v2, mesh, tex_filenames, textures, n_textures, fp_width)
     mat.roughU = max(mat.roughU, a)
     mat.roughV = max(mat.roughV, a)
 
@@ -614,7 +633,7 @@ def _apply_surface_maps[use_gpu: Bool](
     var n: Vec3f
     if mat.normal_tex_idx >= Int32(0):
         n = _apply_normal_map[use_gpu](mat, v0, v1, v2, mesh, inter, shading_normal, p0, p1, p2,
-            tex_filenames, textures, n_textures, Float32(0.0))
+            tex_filenames, textures, n_textures, -fp.width)   # paged textures load for the footprint, sampled at LOD 0
     else:
         n = _apply_bump_map[use_gpu](mat, v0, v1, v2, mesh, inter, shading_normal, tri,
             tex_filenames, textures, n_textures, fp)

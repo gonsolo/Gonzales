@@ -1924,7 +1924,7 @@ def _plan_ptex_budget(files: List[String]):
     for c in range(13): bytes[unsafe_offset=c] = Int64(0)
     var n_ptx = 0
     for i in range(len(files)):
-        if not files[i].endswith(".ptx"):
+        if not files[i].endswith(".ptx") and not files[i].startswith("udim:"):
             continue
         var flen = files[i].byte_length()
         var fname = unsafe_alloc[UInt8](flen + 1)

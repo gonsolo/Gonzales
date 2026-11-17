@@ -413,7 +413,7 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool, defer_only: Bool =
     else:
         var (tri_cd, fp_cd) = _pt_hit_footprint(path_ptr, mat, ctx.cam_fp, ctx.instances, mesh, v0, v1, v2, inter, ray_org, ray_dir, ctx.textures, ctx.n_textures)
         alb = _tex_lookup[use_gpu](mat, inter, v0, v1, v2, mesh, ctx.tex_filenames, ctx.textures, ctx.n_textures, fp_cd.width)
-        tex_alpha = rough_texture_alpha[use_gpu](mat, inter, v0, v1, v2, mesh, ctx.tex_filenames, ctx.textures, ctx.n_textures)
+        tex_alpha = rough_texture_alpha[use_gpu](mat, inter, v0, v1, v2, mesh, ctx.tex_filenames, ctx.textures, ctx.n_textures, fp_cd.width)
         # Use interpolated shading normal (geometric normal still drives hit-point offset)
         normal = _shading_normal(mesh, v0, v1, v2, inter.u, inter.v, geo_normal, inter.primId.instanceIdx, ctx.instances)
         normal = _apply_surface_maps[use_gpu](mat, v0, v1, v2, mesh, inter, normal, geo_normal,
