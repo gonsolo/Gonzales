@@ -611,6 +611,38 @@ def displaced_point(d: DispSurface, pi: Int, s: Float32, t: Float32) -> Vec3f:
     return e[0] + n * (face_height(d, f, u0 + s * sz, v0 + t * sz) * d.scale / ln)
 
 
+def level_height(d: DispSurface, f: Int, lvl: Int, u: Float32, v: Float32) -> Float32:
+    """The bilinear height (bytes) at (u, v) of face f's bordered level lvl (0: finest)."""
+    var ul = Int(d.hdr[unsafe_offset=3 * f + 1]); var vl = Int(d.hdr[unsafe_offset=3 * f + 2])
+    var off = Int(d.chain_off[unsafe_offset=f])
+    var l = 0; var cul = ul; var cvl = vl
+    while l < lvl and (cul > 0 or cvl > 0):
+        off += ((1 << cul) + 2) * ((1 << cvl) + 2)
+        cul = max(cul - 1, 0); cvl = max(cvl - 1, 0); l += 1
+    var w = 1 << cul; var h = 1 << cvl
+    var x = min(max(u * Float32(w) - Float32(0.5), Float32(-0.5)), Float32(w) - Float32(0.5))
+    var y = min(max(v * Float32(h) - Float32(0.5), Float32(-0.5)), Float32(h) - Float32(0.5))
+    var x0 = min(Int(floor(x)), w - 1); var y0 = min(Int(floor(y)), h - 1)
+    var fx = x - Float32(x0); var fy = y - Float32(y0)
+    var a = _chain_h(d, off, w, x0, y0) * (Float32(1) - fx) + _chain_h(d, off, w, x0 + 1, y0) * fx
+    var b = _chain_h(d, off, w, x0, y0 + 1) * (Float32(1) - fx) + _chain_h(d, off, w, x0 + 1, y0 + 1) * fx
+    return a * (Float32(1) - fy) + b * fy
+
+
+def displaced_point_n(d: DispSurface, pi: Int, s: Float32, t: Float32, n: Int) -> Vec3f:
+    """displaced_point with heights from the level whose texels match an n x n grid on the patch (a tessellation's)."""
+    var e = patch_eval(patch_at(d, pi, s, t), s, t)
+    var nn = cross(e[1], e[2])
+    var ln = sqrt(dot(nn, nn))
+    if ln <= Float32(0) or d.scale <= Float32(0):
+        return e[0]
+    var f = Int(d.face[unsafe_offset=pi]); var sz = d.sq[unsafe_offset=3 * pi + 2]
+    var ul = Int(d.hdr[unsafe_offset=3 * f + 1]); var vl = Int(d.hdr[unsafe_offset=3 * f + 2])
+    var lvl = Int(min(max(floor(log2(max(sz * Float32(1 << max(ul, vl)) / Float32(n), Float32(1e-6)))), Float32(0)), Float32(max(ul, vl))))
+    var h = level_height(d, f, lvl, d.sq[unsafe_offset=3 * pi] + s * sz, d.sq[unsafe_offset=3 * pi + 1] + t * sz)
+    return e[0] + nn * (h * d.scale / ln)
+
+
 @always_inline
 def _rgb_texel(rgb: _U8, off: Int, w: Int, x: Int, y: Int) -> Vec3f:
     var i = 3 * (off + (y + 1) * (w + 2) + x + 1)

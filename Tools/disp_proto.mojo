@@ -14,7 +14,11 @@ from std.builtin.device_passable import DevicePassable, DeviceTypeEncoder
 from std.math import ceildiv
 from gonzales.core.geometry import Vec3f, cross, dot
 from gonzales.scene.shapes.patches import BezierPatch
-from gonzales.scene.shapes.displaced_patches import DispSurface, patch_box, sub_box, sub_count, patch_at, intersect_displaced, displaced_normal, displaced_point, chain_color
+from gonzales.scene.shapes.displaced_patches import DispSurface, patch_box, sub_box, sub_count, patch_at, intersect_displaced, displaced_normal, displaced_point, displaced_point_n, chain_color
+from gonzales.scene.accel.xert import XeRayDesc, xert_alignment, xert_build_blas_geoms, xert_free
+from std.memory import OpaquePointer
+from std.sys.info import is_gpu
+from max.gpu.memory import AddressSpace
 from gonzales.app.viewer import CameraState, ViewerHandle, viewer_create, viewer_destroy, viewer_poll_events, viewer_should_close, \
     viewer_get_camera_state, viewer_set_camera_state, viewer_update_framebuffer, viewer_take_key
 from gonzales.core.geometry import Point3f
@@ -98,7 +102,8 @@ def _box_t(lo: Vec3f, hi: Vec3f, org: Vec3f, inv: Vec3f, t_max: Float32) -> Tupl
     return (t0 <= t1, t0)
 
 
-def trace_patches(d: DispSurface, nodes: Pointer[BNode, MutUntrackedOrigin], order: Pointer[Int32, MutUntrackedOrigin], org: Vec3f, dir: Vec3f) -> Hit:
+def trace_patches(d: DispSurface, nodes: Pointer[BNode, MutUntrackedOrigin], order: Pointer[Int32, MutUntrackedOrigin], org: Vec3f, dir: Vec3f,
+                  boxes_only: Bool = False) -> Hit:
     """Front to back over the sub-square BVH; the hit names the patch."""
     var inv = Vec3f(Float32(1) / dir.x, Float32(1) / dir.y, Float32(1) / dir.z)
     var h = Hit(Float32(1e30), -1, Float32(0), Float32(0), 0, Float32(0))
@@ -112,6 +117,11 @@ def trace_patches(d: DispSurface, nodes: Pointer[BNode, MutUntrackedOrigin], ord
         if nd.b < 0:
             for k in range(Int(nd.a), Int(nd.a) - Int(nd.b)):
                 var prim = Int(order[unsafe_offset=k])
+                if boxes_only:
+                    var bt = _box_t(nd.lo, nd.hi, org, inv, h.t)
+                    if bt[0] and bt[1] < h.t:
+                        h.t = bt[1]; h.prim = prim // sub_count(d); h.steps += 1
+                    continue
                 var r = intersect_displaced(d, prim, org, dir, h.t)
                 h.steps += r[4]
                 if r[0] and r[1] < h.t:
@@ -158,6 +168,8 @@ struct GCam(TrivialRegisterPassable, DevicePassable):
     var tan_h: Float32
     var w: Int32
     var h: Int32
+    var tile: Int32   # 1 (TILE=0: 0): threads walk 4 x 4 pixel tiles, a subgroup a tile
+    var prof: Int32   # PROF bits: 1 no shading, 2 the sub-square boxes only (their entry is the hit)
     comptime device_type: AnyType = Self
 
     def _to_device_type(self, mut encoder: Some[DeviceTypeEncoder], target: MutOpaquePointer[_]):
@@ -168,6 +180,14 @@ struct GCam(TrivialRegisterPassable, DevicePassable):
         return "GCam"
 
 
+@always_inline
+def _pix(i: Int, W: Int, tile: Int32) -> Tuple[Int, Int]:
+    if tile == 0:
+        return (i % W, i // W)
+    var t = i // 16; var k = i % 16; var tw = W // 4
+    return ((t % tw) * 4 + k % 4, (t // tw) * 4 + k // 4)
+
+
 def render_gpu(d: DispSurface, nodes: Pointer[BNode, MutUntrackedOrigin], order: Pointer[Int32, MutUntrackedOrigin],
                img: Pointer[Float32, MutUntrackedOrigin], steps: Pointer[Int32, MutUntrackedOrigin], cam: GCam):
     """One pixel a thread: the same traversal and shading as the CPU rows."""
@@ -175,20 +195,22 @@ def render_gpu(d: DispSurface, nodes: Pointer[BNode, MutUntrackedOrigin], order:
     var W = Int(cam.w); var H = Int(cam.h)
     if i >= W * H:
         return
-    var x = i % W; var y = i // W
+    var xy = _pix(i, W, cam.tile); var x = xy[0]; var y = xy[1]
     var px = (Float32(2) * (Float32(x) + Float32(0.5)) / Float32(W) - Float32(1)) * cam.tan_h
     var py = (Float32(1) - Float32(2) * (Float32(y) + Float32(0.5)) / Float32(H)) * cam.tan_h * Float32(H) / Float32(W)
     var dir = cam.fwd + cam.right * px + cam.up * py
     dir = dir * (Float32(1) / sqrt(dot(dir, dir)))
-    var hh = trace_patches(d, nodes, order, cam.eye, dir)
-    steps[unsafe_offset=i] = Int32(hh.steps)
+    var hh = trace_patches(d, nodes, order, cam.eye, dir, cam.prof & 2 != 0)
+    steps[unsafe_offset=y * W + x] = Int32(hh.steps)
     var shade = Float32(0)
-    if hh.prim >= 0:
+    if hh.prim >= 0 and cam.prof != 0:
+        shade = Float32(0.5)
+    elif hh.prim >= 0:
         var n = displaced_normal(d, hh.prim, hh.s, hh.u, max(hh.size, Float32(1.0 / 512.0)))
         if dot(n, dir) > Float32(0):
             n = -n
         shade = Float32(0.08) + Float32(0.75) * max(dot(n, cam.light), Float32(0))
-    img[unsafe_offset=i] = shade
+    img[unsafe_offset=y * W + x] = shade
 
 
 @always_inline
@@ -243,6 +265,185 @@ def trace_tris(pts: Pointer[Vec3f, MutUntrackedOrigin], tri: Pointer[Int32, MutU
             stack[sp] = nd.a; stack[sp + 1] = nd.b
             sp += 2
     return h
+
+
+@always_inline
+def _rq_trace(accel: MutPointer[UInt8, MutAnyOrigin], d: DispSurface, org: Vec3f, dir: Vec3f, procedural: Bool) -> Hit:
+    """Closest hit through Intel's ray queries: the hardware commits triangles; each sub-square it reports runs the
+    subdivision loop, whose hit is committed (prim: the triangle, or the patch with its s, u and leaf size)."""
+    var h = Hit(Float32(1e30), -1, Float32(0), Float32(0), 0, Float32(0))
+    comptime if is_gpu():
+        var desc = XeRayDesc(org.x, org.y, org.z, dir.x, dir.y, dir.z, Float32(0), Float32(1e30), UInt32(0xFF), UInt32(0))
+        var q = external_call["intel_ray_query_init", OpaquePointer[MutAnyOrigin]](
+            Pointer(to=desc), accel.unsafe_address_space_cast[AddressSpace.GLOBAL]())
+        external_call["intel_ray_query_start_traversal", NoneType](q)
+        external_call["intel_ray_query_sync", NoneType](q)
+        while not external_call["intel_is_traversal_done", Bool](q):
+            var prim = Int(external_call["intel_get_hit_primitive_id", UInt32](q, UInt32(1)))
+            var r = intersect_displaced(d, prim, org, dir, h.t)
+            h.steps += r[4]
+            if r[0] and r[1] < h.t:
+                h.t = r[1]; h.prim = prim // sub_count(d); h.s = r[2]; h.u = r[3]; h.size = r[5]
+                var uv = SIMD[DType.float32, 2](r[2], r[3])
+                external_call["intel_ray_query_commit_potential_hit_override", NoneType](q, r[1], Pointer(to=uv))
+            external_call["intel_ray_query_start_traversal", NoneType](q)
+            external_call["intel_ray_query_sync", NoneType](q)
+        if not procedural and external_call["intel_has_committed_hit", Bool](q):
+            h.t = external_call["intel_get_hit_distance", Float32](q, UInt32(0))
+            h.prim = Int(external_call["intel_get_hit_primitive_id", UInt32](q, UInt32(0)))
+            var uv = SIMD[DType.float32, 2](0)
+            external_call["intel_get_hit_barycentrics", NoneType](Pointer(to=uv), q, UInt32(0))   # struct return: sret first
+            h.s = uv[0]; h.u = uv[1]
+        external_call["intel_ray_query_abandon", NoneType](q)
+    return h
+
+
+def render_hw(accel: MutPointer[UInt8, MutAnyOrigin], d: DispSurface, tri_base: Pointer[Int32, MutUntrackedOrigin],
+              grid_n: Pointer[Int32, MutUntrackedOrigin], ext: Pointer[Float32, MutUntrackedOrigin], np: Int32, procedural: Int32,
+              img: Pointer[Float32, MutUntrackedOrigin], steps: Pointer[Int32, MutUntrackedOrigin], cam: GCam):
+    """render_gpu through the hardware: a hit triangle maps back to its patch and (s, t), shaded as ours."""
+    var i = global_idx.x
+    var W = Int(cam.w); var H = Int(cam.h)
+    if i >= W * H:
+        return
+    var xy = _pix(i, W, cam.tile); var x = xy[0]; var y = xy[1]
+    var px = (Float32(2) * (Float32(x) + Float32(0.5)) / Float32(W) - Float32(1)) * cam.tan_h
+    var py = (Float32(1) - Float32(2) * (Float32(y) + Float32(0.5)) / Float32(H)) * cam.tan_h * Float32(H) / Float32(W)
+    var dir = cam.fwd + cam.right * px + cam.up * py
+    dir = dir * (Float32(1) / sqrt(dot(dir, dir)))
+    var hh = _rq_trace(accel, d, cam.eye, dir, procedural != 0)
+    steps[unsafe_offset=y * W + x] = Int32(hh.steps)
+    var shade = Float32(0)
+    if hh.prim >= 0:
+        var p = hh.prim; var s = hh.s; var t = hh.u; var size = hh.size
+        if procedural == 0:
+            var lo = 0; var hi = Int(np)
+            while hi - lo > 1:
+                var mid = (lo + hi) // 2
+                if Int(tri_base[unsafe_offset=mid]) <= hh.prim:
+                    lo = mid
+                else:
+                    hi = mid
+            p = lo
+            var n = Int(grid_n[unsafe_offset=p]); var loc = hh.prim - Int(tri_base[unsafe_offset=p]); var qd = loc // 2
+            var gi = Float32(qd % n); var gj = Float32(qd // n); var inv_n = Float32(1) / Float32(n)
+            if loc % 2 == 0:   # (i, j) (i+1, j) (i+1, j+1)
+                s = (gi + hh.s + hh.u) * inv_n; t = (gj + hh.u) * inv_n
+            else:              # (i, j) (i+1, j+1) (i, j+1)
+                s = (gi + hh.s) * inv_n; t = (gj + hh.s + hh.u) * inv_n
+            size = d.pixel * hh.t / ext[unsafe_offset=p]   # the footprint in patch units
+        var n = displaced_normal(d, p, s, t, max(size, Float32(1.0 / 512.0)))
+        if dot(n, dir) > Float32(0):
+            n = -n
+        shade = Float32(0.08) + Float32(0.75) * max(dot(n, cam.light), Float32(0))
+    img[unsafe_offset=y * W + x] = shade
+
+
+def _hw_render(ctx: DeviceContext, mut bufs: List[DeviceBuffer[DType.uint8]], d: DispSurface, dd: DispSurface, np: Int, name: String,
+               gc: GCam, mut img: List[Float32], mut hitmask: List[UInt8], mut steps: List[Int], mut maxs: List[Int]) raises:
+    """Intel hardware ray tracing. REF_HW=8/16/32/64/texel: the displaced surface tessellated n x n a patch (or a quad a
+    texel), heights from the level matching n; else our sub-squares as procedural primitives (HW=1)."""
+    var rmode = getenv("REF_HW"); var procedural = rmode.byte_length() == 0
+    var W = Int(gc.w); var H = Int(gc.h)
+    var tb = unsafe_alloc[Int32](np + 1); var gn = unsafe_alloc[Int32](np); var ext = unsafe_alloc[Float32](np)
+    for p in range(np):
+        var bp = d.patches[unsafe_offset=p]
+        ext[unsafe_offset=p] = max(max(bp.x.reduce_max() - bp.x.reduce_min(), bp.y.reduce_max() - bp.y.reduce_min()), bp.z.reduce_max() - bp.z.reduce_min())
+    var size = Int64(0); var bounds = unsafe_alloc[Float32](6)
+    var rtas: Pointer[UInt8, MutUntrackedOrigin]
+    var t0 = perf_counter_ns(); var t1 = t0; var in_bytes = 0; var nprim = 0
+    if not procedural:
+        var nt = 0; var nv = 0
+        var vo = unsafe_alloc[Int](np)
+        for p in range(np):
+            var n: Int
+            if rmode == "texel":
+                var f = Int(d.face[unsafe_offset=p])
+                var res = 1 << max(Int(d.hdr[unsafe_offset=3 * f + 1]), Int(d.hdr[unsafe_offset=3 * f + 2]))
+                n = max(Int(d.sq[unsafe_offset=3 * p + 2] * Float32(res) + Float32(0.5)), 1)
+            else:
+                n = atol(rmode)
+            gn[unsafe_offset=p] = Int32(n); tb[unsafe_offset=p] = Int32(nt); vo[unsafe_offset=p] = nv
+            nt += 2 * n * n; nv += (n + 1) * (n + 1)
+        tb[unsafe_offset=np] = Int32(nt)
+        in_bytes = 12 * nv + 12 * nt; nprim = nt
+        print(name + ": tessellation", rmode, ":", nt, "triangles,", nv, "vertices,", in_bytes // (1024 * 1024), "MiB vertices + indices")
+        if nt >= (1 << 31) - 1 or in_bytes > (24 << 30):
+            print(name + ": too large to build here")
+            return
+        var vb = unsafe_alloc[Float32](3 * nv); var ib = unsafe_alloc[UInt32](3 * nt)
+        def fill(p: Int) {imm}:
+            var n = Int(gn[unsafe_offset=p]); var v0 = vo[unsafe_offset=p]; var k0 = Int(tb[unsafe_offset=p])
+            for j in range(n + 1):
+                for i in range(n + 1):
+                    var q = displaced_point_n(d, p, Float32(i) / Float32(n), Float32(j) / Float32(n), n)
+                    var o = 3 * (v0 + j * (n + 1) + i)
+                    vb[unsafe_offset=o] = q.x; vb[unsafe_offset=o + 1] = q.y; vb[unsafe_offset=o + 2] = q.z
+            for j in range(n):
+                for i in range(n):
+                    var a = UInt32(v0 + j * (n + 1) + i); var k = 3 * (k0 + 2 * (j * n + i))
+                    ib[unsafe_offset=k] = a; ib[unsafe_offset=k + 1] = a + 1; ib[unsafe_offset=k + 2] = a + UInt32(n + 2)
+                    ib[unsafe_offset=k + 3] = a; ib[unsafe_offset=k + 4] = a + UInt32(n + 2); ib[unsafe_offset=k + 5] = a + UInt32(n + 1)
+        parallelize(fill, np)
+        var vp = unsafe_alloc[Pointer[Float32, MutUntrackedOrigin]](1); vp[unsafe_offset=0] = vb
+        var ip = unsafe_alloc[Pointer[UInt32, MutUntrackedOrigin]](1); ip[unsafe_offset=0] = ib
+        var nvp = unsafe_alloc[Int64](1); nvp[unsafe_offset=0] = Int64(nv)
+        var ntp = unsafe_alloc[Int64](1); ntp[unsafe_offset=0] = Int64(nt)
+        t0 = perf_counter_ns()
+        rtas = xert_build_blas_geoms(1, vp, nvp, ip, ntp, 0, Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+                                     Pointer(to=size).unsafe_origin_cast[MutUntrackedOrigin](), bounds)
+        t1 = perf_counter_ns()
+        vb.unsafe_free(); ib.unsafe_free(); vp.unsafe_free(); ip.unsafe_free(); nvp.unsafe_free(); ntp.unsafe_free(); vo.unsafe_free()
+    else:
+        var npr = np * sub_count(d); nprim = npr
+        var pb = unsafe_alloc[Float32](6 * npr)
+        def boxes(p: Int) {imm}:
+            for k in range(sub_count(d)):
+                var b = sub_box(d, p * sub_count(d) + k); var o = 6 * (p * sub_count(d) + k)
+                pb[unsafe_offset=o] = b[0].x; pb[unsafe_offset=o + 1] = b[0].y; pb[unsafe_offset=o + 2] = b[0].z
+                pb[unsafe_offset=o + 3] = b[1].x; pb[unsafe_offset=o + 4] = b[1].y; pb[unsafe_offset=o + 5] = b[1].z
+        parallelize(boxes, np)
+        t0 = perf_counter_ns()
+        rtas = xert_build_blas_geoms(0, Pointer[Pointer[Float32, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
+                                     Pointer[Int64, MutUntrackedOrigin].unsafe_dangling(), Pointer[Pointer[UInt32, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
+                                     Pointer[Int64, MutUntrackedOrigin].unsafe_dangling(), Int64(npr), pb,
+                                     Pointer(to=size).unsafe_origin_cast[MutUntrackedOrigin](), bounds)
+        t1 = perf_counter_ns()
+        pb.unsafe_free()
+    if Int(rtas) == 0:
+        raise Error("RTAS build failed")
+    var accel = _up(ctx, bufs, rtas, Int(size))
+    xert_free(rtas)
+    if Int(accel) % Int(xert_alignment()) != 0:
+        raise Error("RTAS buffer not aligned")
+    print(name + ":", "procedural sub-squares" if procedural else "triangles", nprim, ", RTAS", Int(size) // 1024, "KiB, build",
+          (t1 - t0) // 1000000, "ms")
+    var tb_d = _up(ctx, bufs, tb, np + 1); var gn_d = _up(ctx, bufs, gn, np); var ext_d = _up(ctx, bufs, ext, np)
+    var img_b = ctx.enqueue_create_buffer[DType.float32](W * H)
+    var st_b = ctx.enqueue_create_buffer[DType.int32](W * H)
+    var img_d = img_b.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
+    var st_d = st_b.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
+    var acc_d = accel.unsafe_origin_cast[MutAnyOrigin]()
+    var pr = Int32(1 if procedural else 0)
+    ctx.synchronize()
+    for hgt in [540, H]:   # the fastest of three launches after one with the compile
+        var g = GCam(gc.eye, gc.fwd, gc.right, gc.up, gc.light, gc.tan_h, gc.w, Int32(hgt), gc.tile, gc.prof)
+        var best = 1 << 62
+        for _ in range(4):
+            var ta = perf_counter_ns()
+            ctx.enqueue_function[render_hw](acc_d, dd, tb_d, gn_d, ext_d, Int32(np), pr, img_d, st_d, g, grid_dim=ceildiv(W * hgt, 64), block_dim=64)
+            ctx.synchronize()
+            best = min(best, Int(perf_counter_ns()) - Int(ta))
+        print(name + ": HW", W, "x", hgt, "render", Float32(best) * Float32(1e-6), "ms,", Float32(W * hgt) / (Float32(best) * Float32(1e-9)) / Float32(1e6), "Mrays/s")
+    with img_b.map_to_host() as hi:
+        for k in range(W * H):
+            img[k] = hi[k]
+            if hi[k] > Float32(0):
+                hitmask[k] = UInt8(1)
+    with st_b.map_to_host() as hs:
+        for k in range(W * H):
+            steps[k // W] += Int(hs[k]); maxs[k // W] = max(maxs[k // W], Int(hs[k]))
+    tb.unsafe_free(); gn.unsafe_free(); ext.unsafe_free(); bounds.unsafe_free()
 
 
 def _grid_levels() -> Int32:
@@ -679,7 +880,8 @@ def main() raises:
         var t0 = perf_counter_ns()
         if scene < 3:
             var nodes = List[BNode](); var order = List[Int32]()
-            _sub_bvh(d, np, nodes, order)
+            if getenv("REF_HW").byte_length() == 0 and getenv("HW") != "1":
+                _sub_bvh(d, np, nodes, order)
             mem = np * (size_of[BezierPatch]() + 16) + len(nodes) * size_of[BNode]() + 4 * len(order) + (npyr if scene > 0 else 0)
             print("BVH:", np * sub_count(d), "sub-squares,", len(nodes), "nodes,", (len(nodes) * size_of[BNode]() + 4 * len(order)) // 1024, "KiB")
             var tb = perf_counter_ns()
@@ -736,12 +938,30 @@ def main() raises:
                 var st_b = ctx.enqueue_create_buffer[DType.int32](W * H)
                 var img_d = img_b.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
                 var st_d = st_b.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
-                var gc = GCam(eye, fwd, right, up, light, tan_h, Int32(W), Int32(H))
+                var gc = GCam(eye, fwd, right, up, light, tan_h, Int32(W), Int32(H), Int32(0) if getenv("TILE") == "0" else Int32(1), Int32(atol(getenv("PROF", "0"))))
+                if getenv("REF_HW").byte_length() > 0 or getenv("HW") == "1":
+                    _hw_render(ctx, bufs, d, dd, np, name, gc, img, hitmask, steps, maxs)
+                    _write_ppm(out_dir + name + "_hw.ppm", img, W, H)
+                    with open(out_dir + name + "_hw.mask", "w") as f:
+                        f.write_bytes(Span(hitmask))
+                    var tot = 0; var mx = 0
+                    for y in range(H):
+                        tot += steps[y]; mx = max(mx, maxs[y])
+                    print(name + ": HW steps/ray", Float32(tot) / Float32(W * H), "(max", mx, ")")
+                    continue
                 ctx.synchronize()
                 var tg0 = perf_counter_ns()
                 ctx.enqueue_function[render_gpu](dd, nd_d, or_d, img_d, st_d, gc, grid_dim=ceildiv(W * H, 64), block_dim=64)
                 ctx.synchronize()
                 var tg1 = perf_counter_ns()
+                var gc5 = GCam(eye, fwd, right, up, light, tan_h, Int32(W), Int32(540), gc.tile, gc.prof)
+                var best5 = 1 << 62
+                for _ in range(3):
+                    var ta5 = perf_counter_ns()
+                    ctx.enqueue_function[render_gpu](dd, nd_d, or_d, img_d, st_d, gc5, grid_dim=ceildiv(W * 540, 64), block_dim=64)
+                    ctx.synchronize()
+                    best5 = min(best5, Int(perf_counter_ns()) - Int(ta5))
+                print(name + ": GPU", W, "x 540 render", Float32(best5) * Float32(1e-6), "ms,", Float32(W * 540) / (Float32(best5) * Float32(1e-9)) / Float32(1e6), "Mrays/s")
                 var tg2 = 0; var tg3 = 1 << 62
                 for _ in range(3):   # the fastest of three launches
                     var ta = perf_counter_ns()
