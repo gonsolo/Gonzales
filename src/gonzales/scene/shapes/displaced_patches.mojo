@@ -719,11 +719,136 @@ def _hf_cell(d: DispSurface, f: Int, u0: Float32, v0: Float32, psz: Float32, s0:
     return (tn <= tf, tn)
 
 
-def intersect_displaced(d: DispSurface, prim: Int, org: Vec3f, dir: Vec3f, t_max: Float32) -> Tuple[Bool, Float32, Float32, Float32, Int, Float32]:
+@fieldwise_init
+struct BLFrame(TrivialRegisterPassable):
+    """A sub-square's limit corners (anchored at the ray origin) and unit normals, 00 10 11 01, per axis."""
+    var px: SIMD[DType.float32, 4]
+    var py: SIMD[DType.float32, 4]
+    var pz: SIMD[DType.float32, 4]
+    var nx: SIMD[DType.float32, 4]
+    var ny: SIMD[DType.float32, 4]
+    var nz: SIMD[DType.float32, 4]
+
+
+def _bl_frame(d: DispSurface, pi: Int, org: Vec3f, s0: Float32, t0: Float32, size: Float32) -> BLFrame:
+    """Corners from global (s, t): neighbouring sub-squares get the same points and normals (0 where degenerate)."""
+    var f = BLFrame(SIMD[DType.float32, 4](0), SIMD[DType.float32, 4](0), SIMD[DType.float32, 4](0), SIMD[DType.float32, 4](0),
+                    SIMD[DType.float32, 4](0), SIMD[DType.float32, 4](0))
+    for k in range(4):
+        var s = s0 + (size if k == 1 or k == 2 else Float32(0)); var t = t0 + (size if k >= 2 else Float32(0))
+        var e = patch_eval(patch_at(d, pi, s, t), s, t)
+        var n = cross(e[1], e[2]); var ln = sqrt(dot(n, n))
+        n = n * (Float32(1) / ln) if ln > Float32(0) else Vec3f(0, 0, 0)
+        f.px[k] = e[0].x - org.x; f.py[k] = e[0].y - org.y; f.pz[k] = e[0].z - org.z
+        f.nx[k] = n.x; f.ny[k] = n.y; f.nz[k] = n.z
+    return f
+
+
+@always_inline
+def _bl_point(d: DispSurface, pi: Int, f: Int, fr: BLFrame, s0: Float32, t0: Float32, inv: Float32, s: Float32, t: Float32) -> Vec3f:
+    """X = B + h N at global (s, t): B and N bilinear in the sub-square's corners, h the face's height there."""
+    var a = SIMD[DType.float32, 1]((s - s0) * inv); var b = SIMD[DType.float32, 1]((t - t0) * inv)
+    var p = Vec3f(_bilerp[1](fr.px, a, b)[0], _bilerp[1](fr.py, a, b)[0], _bilerp[1](fr.pz, a, b)[0])
+    if d.scale <= Float32(0):
+        return p
+    var n = Vec3f(_bilerp[1](fr.nx, a, b)[0], _bilerp[1](fr.ny, a, b)[0], _bilerp[1](fr.nz, a, b)[0])
+    var sz = d.sq[unsafe_offset=3 * pi + 2]
+    return p + n * (face_height(d, f, d.sq[unsafe_offset=3 * pi] + s * sz, d.sq[unsafe_offset=3 * pi + 1] + t * sz) * d.scale)
+
+
+def _bl_box(d: DispSurface, pi: Int, f: Int, fr: BLFrame, s0: Float32, t0: Float32, inv: Float32,
+            dom: Tuple[Float32, Float32, Float32, Float32]) -> Tuple[Vec3f, Vec3f, Float32]:
+    """The cell's box: B's and N's ranges are their values at the cell's corners (bilinear), times the height range."""
+    var a = SIMD[DType.float32, 4](dom[0], dom[0] + dom[2], dom[0] + dom[2], dom[0]) * inv - s0 * inv
+    var b = SIMD[DType.float32, 4](dom[1], dom[1], dom[1] + dom[3], dom[1] + dom[3]) * inv - t0 * inv
+    var x = _bilerp[4](fr.px, a, b); var y = _bilerp[4](fr.py, a, b); var z = _bilerp[4](fr.pz, a, b)
+    var lo = Vec3f(x.reduce_min(), y.reduce_min(), z.reduce_min()); var hi = Vec3f(x.reduce_max(), y.reduce_max(), z.reduce_max())
+    var base = max(max(hi.x - lo.x, hi.y - lo.y), hi.z - lo.z)
+    if d.scale <= Float32(0):
+        return (lo, hi, base)
+    var nx = _bilerp[4](fr.nx, a, b); var ny = _bilerp[4](fr.ny, a, b); var nz = _bilerp[4](fr.nz, a, b)
+    var sz = d.sq[unsafe_offset=3 * pi + 2]; var u0 = d.sq[unsafe_offset=3 * pi]; var v0 = d.sq[unsafe_offset=3 * pi + 1]
+    var hr = height_range(d, f, u0 + dom[0] * sz, u0 + (dom[0] + dom[2]) * sz, v0 + dom[1] * sz, v0 + (dom[1] + dom[3]) * sz)
+    var h0 = hr[0] * d.scale; var h1 = hr[1] * d.scale
+    var ox = _imul(h0, h1, nx.reduce_min(), nx.reduce_max()); var oy = _imul(h0, h1, ny.reduce_min(), ny.reduce_max())
+    var oz = _imul(h0, h1, nz.reduce_min(), nz.reduce_max())
+    var pad = Float32(1e-6) * (abs(x).reduce_max() + abs(y).reduce_max() + abs(z).reduce_max())
+    return (Vec3f(lo.x + ox[0] - pad, lo.y + oy[0] - pad, lo.z + oz[0] - pad), Vec3f(hi.x + ox[1] + pad, hi.y + oy[1] + pad, hi.z + oz[1] + pad), base)
+
+
+def _intersect_bl(d: DispSurface, prim: Int, org: Vec3f, dir: Vec3f, t_max: Float32) -> Tuple[Bool, Float32, Float32, Float32, Int, Float32]:
+    """The sub-square's base as the bilinear patch through its limit corners, displaced along the bilinear blend of their
+    unit normals: X = B + h N. Neighbours share the corners, so their edges agree; no bicubic is touched after entry."""
+    var pi = prim // sub_count(d); var sq = sub_square(d, prim % sub_count(d))
+    var S = sq[2]; var inv_s = Float32(1) / S
+    var f = Int(d.face[unsafe_offset=pi])
+    var texels = d.sq[unsafe_offset=3 * pi + 2] * Float32(1 << max(Int(d.hdr[unsafe_offset=3 * f + 1]), Int(d.hdr[unsafe_offset=3 * f + 2])))
+    var fr = _bl_frame(d, pi, org, sq[0], sq[1], S)
+    var cam = d.cam - org
+    var inv = Vec3f(Float32(1) / dir.x, Float32(1) / dir.y, Float32(1) / dir.z)
+    var best = t_max; var hit = False; var hs = Float32(0); var ht = Float32(0); var hsz = Float32(1)
+    var depth = Int(d.sub_levels); var steps = 0
+    var path = sq[3]; var pend = UInt64(0)
+    var dom = (sq[0], sq[1], S, S)
+    var cur = _bl_box(d, pi, f, fr, sq[0], sq[1], inv_s, dom)
+    var cur_hit = _slab(cur[0], cur[1], inv, best)
+    while True:
+        steps += 1
+        var descend = False
+        if cur_hit[0]:
+            var sz = _leaf_size(cur[0], cur[1], cam, d.pixel)
+            if depth >= PATCH_MAX_DEPTH or max(dom[2], dom[3]) * texels <= Float32(1) or (d.leaf_mode == 5 and cur[2] <= sz[1]):
+                var s0 = dom[0]; var s1 = dom[0] + dom[2]; var t0 = dom[1]; var t1 = dom[1] + dom[3]
+                var sm = s0 + Float32(0.5) * dom[2]; var tm = t0 + Float32(0.5) * dom[3]
+                var cs = SIMD[DType.float32, 8](s0, s1, s1, s0, sm, s1, sm, s0)
+                var ct = SIMD[DType.float32, 8](t0, t0, t1, t1, t0, tm, t1, tm)
+                var cp = Array[Vec3f, 8](fill=Vec3f(0, 0, 0))
+                for k in range(8):
+                    cp[k] = _bl_point(d, pi, f, fr, sq[0], sq[1], inv_s, cs[k], ct[k])
+                var lh = _leaf_hit(cp, s0, s1, t0, t1, dir, best)
+                if lh[0]:
+                    best = lh[1]; hit = True; hs = lh[2]; ht = lh[3]; hsz = max(dom[2], dom[3])
+            else:
+                var along_u = depth % 2 == 0
+                var l_dom = (dom[0], dom[1], dom[2] * Float32(0.5) if along_u else dom[2], dom[3] if along_u else dom[3] * Float32(0.5))
+                var u_dom = (dom[0] + dom[2] * Float32(0.5) if along_u else dom[0], dom[1] if along_u else dom[1] + dom[3] * Float32(0.5), l_dom[2], l_dom[3])
+                var lb = _bl_box(d, pi, f, fr, sq[0], sq[1], inv_s, l_dom); var ub = _bl_box(d, pi, f, fr, sq[0], sq[1], inv_s, u_dom)
+                var h0 = _slab(lb[0], lb[1], inv, best); var h1 = _slab(ub[0], ub[1], inv, best)
+                if h0[0] or h1[0]:
+                    var upper_first = h1[0] and (not h0[0] or h1[1] < h0[1])
+                    if h0[0] and h1[0]:
+                        pend |= UInt64(1) << UInt64(depth)
+                    if upper_first:
+                        path |= UInt64(1) << UInt64(depth)
+                        dom = u_dom; cur = ub; cur_hit = h1
+                    else:
+                        dom = l_dom; cur = lb; cur_hit = h0
+                    depth += 1
+                    descend = True
+        if descend:
+            continue
+        if pend == 0:
+            break
+        var level = 63 - Int(count_leading_zeros(pend))
+        pend &= ~(UInt64(1) << UInt64(level))
+        path = (path & ((UInt64(1) << UInt64(level)) - 1)) | ((~path) & (UInt64(1) << UInt64(level)))
+        depth = level + 1
+        dom = _domain(path, depth)
+        cur = _bl_box(d, pi, f, fr, sq[0], sq[1], inv_s, dom)
+        cur_hit = _slab(cur[0], cur[1], inv, best)
+    return (hit, best, hs, ht, steps, hsz)
+
+
+def intersect_displaced[M: Int = -1](d: DispSurface, prim: Int, org: Vec3f, dir: Vec3f, t_max: Float32) -> Tuple[Bool, Float32, Float32, Float32, Int, Float32]:
     """The nearest hit of primitive prim (patch * sub_count + sub-square) before t_max: (hit, t, s, t, steps, the leaf square's size).
+    M = 5 compiles only the bilinear-base walk (leaf modes 5 and 6).
     Box leaves end where the displaced box is no larger than the footprint; exact leaves where the undisplaced square reaches a
     texel or the footprint, and intersect the bilinear patch through its four displaced corners, so the depth does not grow with
     the displacement's amplitude."""
+    comptime if M == 5:   # a kernel with only the bilinear-base walk keeps few registers live
+        return _intersect_bl(d, prim, org, dir, t_max)
+    if d.leaf_mode >= 5:
+        return _intersect_bl(d, prim, org, dir, t_max)
     if d.greg[unsafe_offset=prim // sub_count(d)] != 1:   # Gregory patches keep the cropping loop
         if d.leaf_mode == 1 or d.leaf_mode == 2:
             return _intersect_fine(d, prim, org, dir, t_max)

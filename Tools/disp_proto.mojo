@@ -102,7 +102,7 @@ def _box_t(lo: Vec3f, hi: Vec3f, org: Vec3f, inv: Vec3f, t_max: Float32) -> Tupl
     return (t0 <= t1, t0)
 
 
-def trace_patches(d: DispSurface, nodes: Pointer[BNode, MutUntrackedOrigin], order: Pointer[Int32, MutUntrackedOrigin], org: Vec3f, dir: Vec3f,
+def trace_patches[M: Int = -1](d: DispSurface, nodes: Pointer[BNode, MutUntrackedOrigin], order: Pointer[Int32, MutUntrackedOrigin], org: Vec3f, dir: Vec3f,
                   boxes_only: Bool = False) -> Hit:
     """Front to back over the sub-square BVH; the hit names the patch."""
     var inv = Vec3f(Float32(1) / dir.x, Float32(1) / dir.y, Float32(1) / dir.z)
@@ -122,7 +122,7 @@ def trace_patches(d: DispSurface, nodes: Pointer[BNode, MutUntrackedOrigin], ord
                     if bt[0] and bt[1] < h.t:
                         h.t = bt[1]; h.prim = prim // sub_count(d); h.steps += 1
                     continue
-                var r = intersect_displaced(d, prim, org, dir, h.t)
+                var r = intersect_displaced[M](d, prim, org, dir, h.t)
                 h.steps += r[4]
                 if r[0] and r[1] < h.t:
                     h.t = r[1]; h.prim = prim // sub_count(d); h.s = r[2]; h.u = r[3]; h.size = r[5]
@@ -188,7 +188,7 @@ def _pix(i: Int, W: Int, tile: Int32) -> Tuple[Int, Int]:
     return ((t % tw) * 4 + k % 4, (t // tw) * 4 + k // 4)
 
 
-def render_gpu(d: DispSurface, nodes: Pointer[BNode, MutUntrackedOrigin], order: Pointer[Int32, MutUntrackedOrigin],
+def render_gpu[M: Int](d: DispSurface, nodes: Pointer[BNode, MutUntrackedOrigin], order: Pointer[Int32, MutUntrackedOrigin],
                img: Pointer[Float32, MutUntrackedOrigin], steps: Pointer[Int32, MutUntrackedOrigin], cam: GCam):
     """One pixel a thread: the same traversal and shading as the CPU rows."""
     var i = global_idx.x
@@ -200,7 +200,7 @@ def render_gpu(d: DispSurface, nodes: Pointer[BNode, MutUntrackedOrigin], order:
     var py = (Float32(1) - Float32(2) * (Float32(y) + Float32(0.5)) / Float32(H)) * cam.tan_h * Float32(H) / Float32(W)
     var dir = cam.fwd + cam.right * px + cam.up * py
     dir = dir * (Float32(1) / sqrt(dot(dir, dir)))
-    var hh = trace_patches(d, nodes, order, cam.eye, dir, cam.prof & 2 != 0)
+    var hh = trace_patches[M](d, nodes, order, cam.eye, dir, cam.prof & 2 != 0)
     steps[unsafe_offset=y * W + x] = Int32(hh.steps)
     var shade = Float32(0)
     if hh.prim >= 0 and cam.prof != 0:
@@ -211,6 +211,14 @@ def render_gpu(d: DispSurface, nodes: Pointer[BNode, MutUntrackedOrigin], order:
             n = -n
         shade = Float32(0.08) + Float32(0.75) * max(dot(n, cam.light), Float32(0))
     img[unsafe_offset=y * W + x] = shade
+
+
+def _render(ctx: DeviceContext, dd: DispSurface, nd: Pointer[BNode, MutUntrackedOrigin], od: Pointer[Int32, MutUntrackedOrigin],
+            img: Pointer[Float32, MutUntrackedOrigin], st: Pointer[Int32, MutUntrackedOrigin], gc: GCam, n: Int) raises:
+    if dd.leaf_mode >= 5:
+        ctx.enqueue_function[render_gpu[5]](dd, nd, od, img, st, gc, grid_dim=ceildiv(n, 64), block_dim=64)
+    else:
+        ctx.enqueue_function[render_gpu[-1]](dd, nd, od, img, st, gc, grid_dim=ceildiv(n, 64), block_dim=64)
 
 
 @always_inline
@@ -268,7 +276,7 @@ def trace_tris(pts: Pointer[Vec3f, MutUntrackedOrigin], tri: Pointer[Int32, MutU
 
 
 @always_inline
-def _rq_trace(accel: MutPointer[UInt8, MutAnyOrigin], d: DispSurface, org: Vec3f, dir: Vec3f, procedural: Bool) -> Hit:
+def _rq_trace[M: Int](accel: MutPointer[UInt8, MutAnyOrigin], d: DispSurface, org: Vec3f, dir: Vec3f, procedural: Bool) -> Hit:
     """Closest hit through Intel's ray queries: the hardware commits triangles; each sub-square it reports runs the
     subdivision loop, whose hit is committed (prim: the triangle, or the patch with its s, u and leaf size)."""
     var h = Hit(Float32(1e30), -1, Float32(0), Float32(0), 0, Float32(0))
@@ -280,7 +288,7 @@ def _rq_trace(accel: MutPointer[UInt8, MutAnyOrigin], d: DispSurface, org: Vec3f
         external_call["intel_ray_query_sync", NoneType](q)
         while not external_call["intel_is_traversal_done", Bool](q):
             var prim = Int(external_call["intel_get_hit_primitive_id", UInt32](q, UInt32(1)))
-            var r = intersect_displaced(d, prim, org, dir, h.t)
+            var r = intersect_displaced[M](d, prim, org, dir, h.t)
             h.steps += r[4]
             if r[0] and r[1] < h.t:
                 h.t = r[1]; h.prim = prim // sub_count(d); h.s = r[2]; h.u = r[3]; h.size = r[5]
@@ -298,7 +306,7 @@ def _rq_trace(accel: MutPointer[UInt8, MutAnyOrigin], d: DispSurface, org: Vec3f
     return h
 
 
-def render_hw(accel: MutPointer[UInt8, MutAnyOrigin], d: DispSurface, tri_base: Pointer[Int32, MutUntrackedOrigin],
+def render_hw[M: Int](accel: MutPointer[UInt8, MutAnyOrigin], d: DispSurface, tri_base: Pointer[Int32, MutUntrackedOrigin],
               grid_n: Pointer[Int32, MutUntrackedOrigin], ext: Pointer[Float32, MutUntrackedOrigin], np: Int32, procedural: Int32,
               img: Pointer[Float32, MutUntrackedOrigin], steps: Pointer[Int32, MutUntrackedOrigin], cam: GCam):
     """render_gpu through the hardware: a hit triangle maps back to its patch and (s, t), shaded as ours."""
@@ -311,7 +319,7 @@ def render_hw(accel: MutPointer[UInt8, MutAnyOrigin], d: DispSurface, tri_base: 
     var py = (Float32(1) - Float32(2) * (Float32(y) + Float32(0.5)) / Float32(H)) * cam.tan_h * Float32(H) / Float32(W)
     var dir = cam.fwd + cam.right * px + cam.up * py
     dir = dir * (Float32(1) / sqrt(dot(dir, dir)))
-    var hh = _rq_trace(accel, d, cam.eye, dir, procedural != 0)
+    var hh = _rq_trace[M](accel, d, cam.eye, dir, procedural != 0)
     steps[unsafe_offset=y * W + x] = Int32(hh.steps)
     var shade = Float32(0)
     if hh.prim >= 0:
@@ -431,7 +439,10 @@ def _hw_render(ctx: DeviceContext, mut bufs: List[DeviceBuffer[DType.uint8]], d:
         var best = 1 << 62
         for _ in range(4):
             var ta = perf_counter_ns()
-            ctx.enqueue_function[render_hw](acc_d, dd, tb_d, gn_d, ext_d, Int32(np), pr, img_d, st_d, g, grid_dim=ceildiv(W * hgt, 64), block_dim=64)
+            if dd.leaf_mode >= 5:
+                ctx.enqueue_function[render_hw[5]](acc_d, dd, tb_d, gn_d, ext_d, Int32(np), pr, img_d, st_d, g, grid_dim=ceildiv(W * hgt, 64), block_dim=64)
+            else:
+                ctx.enqueue_function[render_hw[-1]](acc_d, dd, tb_d, gn_d, ext_d, Int32(np), pr, img_d, st_d, g, grid_dim=ceildiv(W * hgt, 64), block_dim=64)
             ctx.synchronize()
             best = min(best, Int(perf_counter_ns()) - Int(ta))
         print(name + ": HW", W, "x", hgt, "render", Float32(best) * Float32(1e-6), "ms,", Float32(W * hgt) / (Float32(best) * Float32(1e-9)) / Float32(1e6), "Mrays/s")
@@ -453,10 +464,22 @@ def _grid_levels() -> Int32:
 
 
 def _leaf_mode() -> Int32:
-    """LEAF=box (footprint-sized boxes), exact (bilinear leaves at a texel or a pixel; default), texel (at a texel only), hf
-    (exact leaves, cells walked as a height field in the sub-square's affine frame) or crop (exact, boxes cropped per step)."""
+    """LEAF=bl (default: a sub-square's base is bilinear through its limit corners, displaced along their blended normals;
+    bltexel: leaves at a texel only), exact (bicubic base, bilinear leaves at a texel or a pixel), texel (exact at a texel only),
+    hf (exact, cells walked as a height field in the sub-square's affine frame), crop (exact, boxes cropped per step) or box
+    (footprint-sized boxes)."""
     var l = getenv("LEAF")
-    return Int32(0) if l == "box" else (Int32(2) if l == "texel" else (Int32(3) if l == "hf" else (Int32(4) if l == "crop" else Int32(1))))
+    if l == "box":
+        return 0
+    if l == "exact":
+        return 1
+    if l == "texel":
+        return 2
+    if l == "hf":
+        return 3
+    if l == "crop":
+        return 4
+    return 6 if l == "bltexel" else 5
 
 
 def _env_f(name: String, dflt: Float32) raises -> Float32:
@@ -562,7 +585,7 @@ def _hash01(a: UInt32) -> Float32:
     return Float32(Int(x >> 8)) * Float32(1.0 / 16777216.0)
 
 
-def demo_gpu(d: DispSurface, nodes: Pointer[BNode, MutUntrackedOrigin], order: Pointer[Int32, MutUntrackedOrigin],
+def demo_gpu[M: Int](d: DispSurface, nodes: Pointer[BNode, MutUntrackedOrigin], order: Pointer[Int32, MutUntrackedOrigin],
              crgb: Pointer[UInt8, MutUntrackedOrigin], coff: Pointer[Int32, MutUntrackedOrigin], accum: Pointer[Float32, MutUntrackedOrigin], cam: DCam):
     """One jittered sample a pixel, averaged into accum (linear RGB)."""
     var i = global_idx.x
@@ -576,7 +599,7 @@ def demo_gpu(d: DispSurface, nodes: Pointer[BNode, MutUntrackedOrigin], order: P
     var py = (Float32(1) - Float32(2) * (Float32(y) + jy) / Float32(H)) * cam.tan_h * Float32(H) / Float32(W)
     var dir = cam.fwd + cam.right * px + cam.up * py
     dir = dir * (Float32(1) / sqrt(dot(dir, dir)))
-    var hh = trace_patches(d, nodes, order, cam.eye, dir)
+    var hh = trace_patches[M](d, nodes, order, cam.eye, dir)
     var c = Vec3f(Float32(0.02), Float32(0.022), Float32(0.03))   # background
     if hh.prim >= 0:
         var step = max(hh.size, Float32(1.0 / 512.0))
@@ -749,7 +772,10 @@ def run_demo(patches: Pointer[BezierPatch, MutUntrackedOrigin], sq: Pointer[Floa
         var dd = DispSurface(dpat, dsq, dface, dhdr, dpyr, exag / Float32(255), eye, Float32(2) * tan_h / Float32(rw), doff, dchain, dfm, dgreg, _grid_levels(), _leaf_mode())
         var cam = DCam(eye, fwd, right, up, light, tan_h, exposure, Int32(rw), Int32(rh), Int32(frame), Int32(headlight), Int32(1 if color_on else 0))
         var t0 = perf_counter_ns()
-        ctx.enqueue_function[demo_gpu](dd, dnodes, dorder, crgb, coff, daccum, cam, grid_dim=ceildiv(rw * rh, 64), block_dim=64)
+        if dd.leaf_mode >= 5:
+            ctx.enqueue_function[demo_gpu[5]](dd, dnodes, dorder, crgb, coff, daccum, cam, grid_dim=ceildiv(rw * rh, 64), block_dim=64)
+        else:
+            ctx.enqueue_function[demo_gpu[-1]](dd, dnodes, dorder, crgb, coff, daccum, cam, grid_dim=ceildiv(rw * rh, 64), block_dim=64)
         ctx.synchronize()
         var ms = Float64(perf_counter_ns() - t0) * 1e-6
         if moved:
@@ -952,21 +978,21 @@ def main() raises:
                     continue
                 ctx.synchronize()
                 var tg0 = perf_counter_ns()
-                ctx.enqueue_function[render_gpu](dd, nd_d, or_d, img_d, st_d, gc, grid_dim=ceildiv(W * H, 64), block_dim=64)
+                _render(ctx, dd, nd_d, or_d, img_d, st_d, gc, W * H)
                 ctx.synchronize()
                 var tg1 = perf_counter_ns()
                 var gc5 = GCam(eye, fwd, right, up, light, tan_h, Int32(W), Int32(540), gc.tile, gc.prof)
                 var best5 = 1 << 62
                 for _ in range(3):
                     var ta5 = perf_counter_ns()
-                    ctx.enqueue_function[render_gpu](dd, nd_d, or_d, img_d, st_d, gc5, grid_dim=ceildiv(W * 540, 64), block_dim=64)
+                    _render(ctx, dd, nd_d, or_d, img_d, st_d, gc5, W * 540)
                     ctx.synchronize()
                     best5 = min(best5, Int(perf_counter_ns()) - Int(ta5))
                 print(name + ": GPU", W, "x 540 render", Float32(best5) * Float32(1e-6), "ms,", Float32(W * 540) / (Float32(best5) * Float32(1e-9)) / Float32(1e6), "Mrays/s")
                 var tg2 = 0; var tg3 = 1 << 62
                 for _ in range(3):   # the fastest of three launches
                     var ta = perf_counter_ns()
-                    ctx.enqueue_function[render_gpu](dd, nd_d, or_d, img_d, st_d, gc, grid_dim=ceildiv(W * H, 64), block_dim=64)
+                    _render(ctx, dd, nd_d, or_d, img_d, st_d, gc, W * H)
                     ctx.synchronize()
                     var tb2 = perf_counter_ns()
                     if Int(tb2) - Int(ta) < tg3 - tg2:
