@@ -7,6 +7,10 @@ from std.os import getenv
 from std.sys.info import size_of
 from std.time import perf_counter_ns
 from max.algorithm import parallelize
+from max.gpu import global_idx
+from max.gpu.host import DeviceBuffer, DeviceContext
+from std.builtin.device_passable import DevicePassable, DeviceTypeEncoder
+from std.math import ceildiv
 from gonzales.core.geometry import Vec3f, cross, dot
 from gonzales.scene.shapes.patches import BezierPatch
 from gonzales.scene.shapes.displaced_patches import DispSurface, patch_box, patch_at, intersect_displaced, displaced_normal, displaced_point
@@ -83,7 +87,7 @@ struct Hit(TrivialRegisterPassable):
 def trace_patches(d: DispSurface, nodes: Pointer[BNode, MutUntrackedOrigin], order: Pointer[Int32, MutUntrackedOrigin], org: Vec3f, dir: Vec3f) -> Hit:
     var inv = Vec3f(Float32(1) / dir.x, Float32(1) / dir.y, Float32(1) / dir.z)
     var h = Hit(Float32(1e30), -1, Float32(0), Float32(0), 0, Float32(0))
-    var stack = Array[Int32, 512](fill=Int32(0))
+    var stack = Array[Int32, 64](fill=Int32(0))
     var sp = 1
     while sp > 0:
         sp -= 1
@@ -97,10 +101,64 @@ def trace_patches(d: DispSurface, nodes: Pointer[BNode, MutUntrackedOrigin], ord
                 h.steps += r[4]
                 if r[0] and r[1] < h.t:
                     h.t = r[1]; h.prim = pi; h.s = r[2]; h.u = r[3]; h.size = r[5]
-        elif sp < 510:
+        elif sp < 62:
             stack[sp] = nd.a; stack[sp + 1] = nd.b
             sp += 2
     return h
+
+
+@fieldwise_init
+struct GCam(TrivialRegisterPassable, DevicePassable):
+    """The camera and light of a GPU render."""
+    var eye: Vec3f
+    var fwd: Vec3f
+    var right: Vec3f
+    var up: Vec3f
+    var light: Vec3f
+    var tan_h: Float32
+    var w: Int32
+    var h: Int32
+    comptime device_type: AnyType = Self
+
+    def _to_device_type(self, mut encoder: Some[DeviceTypeEncoder], target: MutOpaquePointer[_]):
+        encoder.encode(self, target)
+
+    @staticmethod
+    def get_type_name() -> String:
+        return "GCam"
+
+
+def render_gpu(d: DispSurface, nodes: Pointer[BNode, MutUntrackedOrigin], order: Pointer[Int32, MutUntrackedOrigin],
+               img: Pointer[Float32, MutUntrackedOrigin], steps: Pointer[Int32, MutUntrackedOrigin], cam: GCam):
+    """One pixel a thread: the same traversal and shading as the CPU rows."""
+    var i = global_idx.x
+    var W = Int(cam.w); var H = Int(cam.h)
+    if i >= W * H:
+        return
+    var x = i % W; var y = i // W
+    var px = (Float32(2) * (Float32(x) + Float32(0.5)) / Float32(W) - Float32(1)) * cam.tan_h
+    var py = (Float32(1) - Float32(2) * (Float32(y) + Float32(0.5)) / Float32(H)) * cam.tan_h * Float32(H) / Float32(W)
+    var dir = cam.fwd + cam.right * px + cam.up * py
+    dir = dir * (Float32(1) / sqrt(dot(dir, dir)))
+    var hh = trace_patches(d, nodes, order, cam.eye, dir)
+    steps[unsafe_offset=i] = Int32(hh.steps)
+    var shade = Float32(0)
+    if hh.prim >= 0:
+        var n = displaced_normal(d, hh.prim, hh.s, hh.u, max(hh.size, Float32(1.0 / 512.0)))
+        if dot(n, dir) > Float32(0):
+            n = -n
+        shade = Float32(0.08) + Float32(0.75) * max(dot(n, cam.light), Float32(0))
+    img[unsafe_offset=i] = shade
+
+
+def _up[T: AnyType](ctx: DeviceContext, mut bufs: List[DeviceBuffer[DType.uint8]], src: Pointer[T, MutUntrackedOrigin], n: Int) raises -> Pointer[T, MutUntrackedOrigin]:
+    """n elements to the device, kept alive in bufs; the device pointer."""
+    var buf = ctx.enqueue_create_buffer[DType.uint8](max(n, 1) * size_of[T]())
+    if n > 0:
+        ctx.enqueue_copy(buf, src.unsafe_bitcast[UInt8]())
+    var p = buf.unsafe_ptr().unsafe_bitcast[T]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
+    bufs.append(buf^)
+    return p
 
 
 def trace_tris(pts: Pointer[Vec3f, MutUntrackedOrigin], tri: Pointer[Int32, MutUntrackedOrigin], nodes: Pointer[BNode, MutUntrackedOrigin],
@@ -357,7 +415,41 @@ def main() raises:
                     col.unsafe_free()
                     if hits > 0:
                         hm_ptr[unsafe_offset=y * W + x] = UInt8(1)
-            if getenv("SERIAL") == "1":
+            if getenv("GPU") == "1":   # the same render on the GPU (B580): device copies of everything the traversal reads
+                var ctx = DeviceContext()
+                var bufs = List[DeviceBuffer[DType.uint8]]()
+                var nchain_b = nchain
+                var dd = DispSurface(_up(ctx, bufs, patches, np), _up(ctx, bufs, sq, 3 * np), _up(ctx, bufs, face, np), _up(ctx, bufs, hdr, 3 * nf),
+                                     _up(ctx, bufs, pyr, npyr), scale, eye, pixel, _up(ctx, bufs, chain_off, nf), _up(ctx, bufs, chain, nchain_b),
+                                     _up(ctx, bufs, fm, 12 * np), _up(ctx, bufs, greg, np))
+                var nd_d = _up(ctx, bufs, nodes.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin](), len(nodes))
+                var or_d = _up(ctx, bufs, order.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin](), len(order))
+                var img_b = ctx.enqueue_create_buffer[DType.float32](W * H)
+                var st_b = ctx.enqueue_create_buffer[DType.int32](W * H)
+                var img_d = img_b.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
+                var st_d = st_b.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
+                var gc = GCam(eye, fwd, right, up, light, tan_h, Int32(W), Int32(H))
+                ctx.synchronize()
+                var tg0 = perf_counter_ns()
+                ctx.enqueue_function[render_gpu](dd, nd_d, or_d, img_d, st_d, gc, grid_dim=ceildiv(W * H, 64), block_dim=64)
+                ctx.synchronize()
+                var tg1 = perf_counter_ns()
+                var tg2 = perf_counter_ns()
+                ctx.enqueue_function[render_gpu](dd, nd_d, or_d, img_d, st_d, gc, grid_dim=ceildiv(W * H, 64), block_dim=64)
+                ctx.synchronize()
+                var tg3 = perf_counter_ns()
+                print(name + ": GPU first launch (with compile)", (tg1 - tg0) // 1000000, "ms, render", Float32(tg3 - tg2) * Float32(1e-6), "ms,",
+                      Float32(W * H) / (Float32(tg3 - tg2) * Float32(1e-9)) / Float32(1e6), "Mrays/s")
+                with img_b.map_to_host() as hi:
+                    for k in range(W * H):
+                        img[k] = hi[k]
+                        if hi[k] > Float32(0):
+                            hitmask[k] = UInt8(1)
+                with st_b.map_to_host() as hs:
+                    for k in range(W * H):
+                        steps[k // W] += Int(hs[k]); maxs[k // W] = max(maxs[k // W], Int(hs[k]))
+                _ = len(bufs); _ = len(nodes); _ = len(order)
+            elif getenv("SERIAL") == "1":
                 for y in range(H):
                     row(y)
             else:

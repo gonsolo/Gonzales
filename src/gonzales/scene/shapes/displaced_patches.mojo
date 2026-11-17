@@ -4,6 +4,7 @@
 # rational interior points become boxes over the sub-domain's blend range (Binder and Keller 3.2). Leaves are boxes no
 # larger than the camera's footprint at them, so every ray sees the same surface and neighbouring depths cannot open cracks.
 from std.bit import count_leading_zeros
+from std.builtin.device_passable import DevicePassable, DeviceTypeEncoder
 from std.math import max, min, sqrt, abs, floor, ceil, log2
 from gonzales.core.geometry import Vec3f, cross, dot
 from gonzales.scene.shapes.patches import BezierPatch, patch_eval, _crop, _blossom, _domain, PATCH_MAX_DEPTH
@@ -14,8 +15,17 @@ comptime _F32 = Pointer[Float32, MutUntrackedOrigin]
 
 
 @fieldwise_init
-struct DispSurface(TrivialRegisterPassable):
+struct DispSurface(TrivialRegisterPassable, DevicePassable):
     """Patches with their Ptex face and square (u0, v0, size), the faces' height nodes, the height scale and the camera."""
+    comptime device_type: AnyType = Self
+
+    def _to_device_type(self, mut encoder: Some[DeviceTypeEncoder], target: MutOpaquePointer[_]):
+        encoder.encode(self, target)
+
+    @staticmethod
+    def get_type_name() -> String:
+        return "DispSurface"
+
     var patches: Pointer[BezierPatch, MutUntrackedOrigin]
     var sq: _F32
     var face: _I32
