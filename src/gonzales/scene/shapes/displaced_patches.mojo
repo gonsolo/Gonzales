@@ -40,7 +40,8 @@ struct DispSurface(TrivialRegisterPassable, DevicePassable):
     var fm: _F32         # per patch: the Fm interior points (1,1), (2,1), (2,2), (1,2), 12 floats; patches hold Fp there
     var greg: _U8        # per patch: 1 for a Gregory patch, 2 for an end cap fitted as Bezier
     var sub_levels: Int32  # the BVH's primitives: a patch's sub-squares at this halving depth (4: 4 x 4, 6: 8 x 8, 8: 16 x 16)
-    var leaf_mode: Int32   # 0: box leaves no larger than the footprint; 1: exact bilinear leaves at a texel or a pixel; 2: at a texel only
+    var leaf_mode: Int32   # 0: box leaves no larger than the footprint; 1: exact bilinear leaves at a texel or a pixel; 2: at a texel only;
+                           # 4: as 1, every box cropped from the patch
 
 
 @always_inline
@@ -450,11 +451,161 @@ def _bilinear_hit(q00: Vec3f, q10: Vec3f, q11: Vec3f, q01: Vec3f, dir: Vec3f, t_
     return (hit, t, u, v)
 
 
+def _leaf_hit(cp: Array[Vec3f, 8], s0: Float32, s1: Float32, t0: Float32, t1: Float32, dir: Vec3f,
+              t_max: Float32) -> Tuple[Bool, Float32, Float32, Float32]:
+    """The bilinear patch through the leaf's corners, plus edge fans through the midpoints, which close the T gap to a
+    neighbour one level finer: (hit, t, s, t)."""
+    var sm = s0 + Float32(0.5) * (s1 - s0); var tm = t0 + Float32(0.5) * (t1 - t0)
+    var cs = SIMD[DType.float32, 8](s0, s1, s1, s0, sm, s1, sm, s0)
+    var ct = SIMD[DType.float32, 8](t0, t0, t1, t1, t0, tm, t1, tm)
+    var best = t_max; var hit = False; var hs = Float32(0); var ht = Float32(0)
+    var bh = _bilinear_hit(cp[0], cp[1], cp[2], cp[3], dir, best)
+    if bh[0]:
+        best = bh[1]; hit = True; hs = s0 + bh[2] * (s1 - s0); ht = t0 + bh[3] * (t1 - t0)
+    for k in range(4):
+        var ka = k; var kb = (k + 1) % 4; var km = 4 + k
+        var th = _tri_hit(cp[ka], cp[km], cp[kb], dir, best)
+        if th[0]:
+            best = th[1]; hit = True
+            var w0 = Float32(1) - th[2] - th[3]
+            hs = w0 * cs[ka] + th[2] * cs[km] + th[3] * cs[kb]; ht = w0 * ct[ka] + th[2] * ct[km] + th[3] * ct[kb]
+    return (hit, best, hs, ht)
+
+
+def _exact_leaf(d: DispSurface, pi: Int, dom: Tuple[Float32, Float32, Float32, Float32], org: Vec3f, dir: Vec3f,
+                t_max: Float32) -> Tuple[Bool, Float32, Float32, Float32]:
+    """The exact leaf: displaced corners and edge midpoints from global (s, t), so neighbouring leaves share them."""
+    var s0 = dom[0]; var s1 = dom[0] + dom[2]; var t0 = dom[1]; var t1 = dom[1] + dom[3]
+    var sm = s0 + Float32(0.5) * dom[2]; var tm = t0 + Float32(0.5) * dom[3]
+    var cs = SIMD[DType.float32, 8](s0, s1, s1, s0, sm, s1, sm, s0)   # corners 00 10 11 01, then the edge midpoints
+    var ct = SIMD[DType.float32, 8](t0, t0, t1, t1, t0, tm, t1, tm)
+    var cp = Array[Vec3f, 8](fill=Vec3f(0, 0, 0))
+    for k in range(8):
+        cp[k] = displaced_point(d, pi, cs[k], ct[k]) - org
+    return _leaf_hit(cp, s0, s1, t0, t1, dir, t_max)
+
+
+comptime _A16 = SIMD[DType.float32, 16](0, 1.0 / 3, 2.0 / 3, 1, 0, 1.0 / 3, 2.0 / 3, 1, 0, 1.0 / 3, 2.0 / 3, 1, 0, 1.0 / 3, 2.0 / 3, 1)
+comptime _B16 = SIMD[DType.float32, 16](0, 0, 0, 0, 1.0 / 3, 1.0 / 3, 1.0 / 3, 1.0 / 3, 2.0 / 3, 2.0 / 3, 2.0 / 3, 2.0 / 3, 1, 1, 1, 1)
+
+
+@always_inline
+def _bilerp[w: Int](q: SIMD[DType.float32, 4], a: SIMD[DType.float32, w], b: SIMD[DType.float32, w]) -> SIMD[DType.float32, w]:
+    """The bilinear map with corners q (00 10 11 01) at (a, b)."""
+    return (q[0] + (q[1] - q[0]) * a) * (Float32(1) - b) + (q[3] + (q[2] - q[3]) * a) * b
+
+
+@fieldwise_init
+struct FineFrame(TrivialRegisterPassable):
+    """A sub-square's base patch as the bilinear map through its corners (anchored at the ray origin) with the bicubic's
+    largest deviation from it per axis, and the sub-square's unit-normal range: boxes inside it need no crop."""
+    var qx: SIMD[DType.float32, 4]
+    var qy: SIMD[DType.float32, 4]
+    var qz: SIMD[DType.float32, 4]
+    var eps: Vec3f
+    var nlo: Vec3f
+    var nhi: Vec3f
+
+
+def _fine_frame(o: BezierPatch, s0: Float32, t0: Float32, size: Float32, nlo: Vec3f, nhi: Vec3f) -> FineFrame:
+    var c = _crop(o, s0, s0 + size, t0, t0 + size)
+    var qx = SIMD[DType.float32, 4](c.x[0], c.x[3], c.x[15], c.x[12])
+    var qy = SIMD[DType.float32, 4](c.y[0], c.y[3], c.y[15], c.y[12])
+    var qz = SIMD[DType.float32, 4](c.z[0], c.z[3], c.z[15], c.z[12])
+    # The difference to the degree-elevated bilinear map is a Bezier patch: its control points bound it.
+    var ex = abs(c.x - _bilerp[16](qx, _A16, _B16)).reduce_max(); var ey = abs(c.y - _bilerp[16](qy, _A16, _B16)).reduce_max()
+    var ez = abs(c.z - _bilerp[16](qz, _A16, _B16)).reduce_max()
+    var pad = Float32(1e-6) * (abs(qx).reduce_max() + abs(qy).reduce_max() + abs(qz).reduce_max()) + Float32(1e-7)
+    return FineFrame(qx, qy, qz, Vec3f(ex + pad, ey + pad, ez + pad), nlo, nhi)
+
+
+def _fine_box(d: DispSurface, pi: Int, fr: FineFrame, s0: Float32, t0: Float32, size: Float32,
+              ds0: Float32, ds1: Float32, dt0: Float32, dt1: Float32) -> Tuple[Vec3f, Vec3f, Float32]:
+    """The box over [ds0, ds1] x [dt0, dt1] (patch units) inside the frame's sub-square: the bilinear corners' box widened
+    by the deviation, plus the height range times the frame's normal range; and the undisplaced extent."""
+    var inv = Float32(1) / size
+    var a = SIMD[DType.float32, 4](ds0, ds1, ds1, ds0) * inv - s0 * inv
+    var b = SIMD[DType.float32, 4](dt0, dt0, dt1, dt1) * inv - t0 * inv
+    var x = _bilerp[4](fr.qx, a, b); var y = _bilerp[4](fr.qy, a, b); var z = _bilerp[4](fr.qz, a, b)
+    var lo = Vec3f(x.reduce_min(), y.reduce_min(), z.reduce_min()); var hi = Vec3f(x.reduce_max(), y.reduce_max(), z.reduce_max())
+    var base = max(max(hi.x - lo.x, hi.y - lo.y), hi.z - lo.z)
+    lo = lo - fr.eps; hi = hi + fr.eps
+    if d.scale <= Float32(0):
+        return (lo, hi, base)
+    var u0 = d.sq[unsafe_offset=3 * pi]; var v0 = d.sq[unsafe_offset=3 * pi + 1]; var sz = d.sq[unsafe_offset=3 * pi + 2]
+    var hr = height_range(d, Int(d.face[unsafe_offset=pi]), u0 + ds0 * sz, u0 + ds1 * sz, v0 + dt0 * sz, v0 + dt1 * sz)
+    var h0 = hr[0] * d.scale; var h1 = hr[1] * d.scale
+    var ox = _imul(h0, h1, fr.nlo.x, fr.nhi.x); var oy = _imul(h0, h1, fr.nlo.y, fr.nhi.y); var oz = _imul(h0, h1, fr.nlo.z, fr.nhi.z)
+    return (Vec3f(lo.x + ox[0], lo.y + oy[0], lo.z + oz[0]), Vec3f(hi.x + ox[1], hi.y + oy[1], hi.z + oz[1]), base)
+
+
+def _intersect_fine(d: DispSurface, prim: Int, org: Vec3f, dir: Vec3f, t_max: Float32) -> Tuple[Bool, Float32, Float32, Float32, Int, Float32]:
+    """intersect_displaced with exact leaves for a Bezier patch, its boxes from the sub-square's bilinear frame: no crops
+    and no normal ranges per step, and no per-depth state beyond the halving path."""
+    var pi = prim // sub_count(d); var sq = sub_square(d, prim % sub_count(d))
+    var src = d.patches[unsafe_offset=pi]
+    var o = BezierPatch(src.x - org.x, src.y - org.y, src.z - org.z)
+    var cam = d.cam - org
+    var inv = Vec3f(Float32(1) / dir.x, Float32(1) / dir.y, Float32(1) / dir.z)
+    var best = t_max; var hit = False; var hs = Float32(0); var ht = Float32(0); var hsz = Float32(1)
+    var depth = Int(d.sub_levels); var steps = 0
+    var path = sq[3]; var pend = UInt64(0)
+    var dom = (sq[0], sq[1], sq[2], sq[2])
+    var f = Int(d.face[unsafe_offset=pi])
+    var texels = d.sq[unsafe_offset=3 * pi + 2] * Float32(1 << max(Int(d.hdr[unsafe_offset=3 * f + 1]), Int(d.hdr[unsafe_offset=3 * f + 2])))
+    var root = displaced_box(d, pi, o, org, sq[0], sq[0] + sq[2], sq[1], sq[1] + sq[2])
+    var fr = _fine_frame(o, sq[0], sq[1], sq[2], root[2], root[3])
+    var cur = (root[0], root[1], root[4])
+    var cur_hit = _slab(cur[0], cur[1], inv, best)
+    while True:
+        steps += 1
+        var descend = False
+        if cur_hit[0]:
+            var sz = _leaf_size(cur[0], cur[1], cam, d.pixel)
+            if depth >= PATCH_MAX_DEPTH or max(dom[2], dom[3]) * texels <= Float32(1) or (d.leaf_mode & 1 == 1 and cur[2] <= sz[1]):
+                var lh = _exact_leaf(d, pi, dom, org, dir, best)
+                if lh[0]:
+                    best = lh[1]; hit = True; hs = lh[2]; ht = lh[3]; hsz = max(dom[2], dom[3])
+            else:
+                var along_u = depth % 2 == 0
+                var l_dom = (dom[0], dom[1], dom[2] * Float32(0.5) if along_u else dom[2], dom[3] if along_u else dom[3] * Float32(0.5))
+                var u_dom = (dom[0] + dom[2] * Float32(0.5) if along_u else dom[0], dom[1] if along_u else dom[1] + dom[3] * Float32(0.5), l_dom[2], l_dom[3])
+                var lb = _fine_box(d, pi, fr, sq[0], sq[1], sq[2], l_dom[0], l_dom[0] + l_dom[2], l_dom[1], l_dom[1] + l_dom[3])
+                var ub = _fine_box(d, pi, fr, sq[0], sq[1], sq[2], u_dom[0], u_dom[0] + u_dom[2], u_dom[1], u_dom[1] + u_dom[3])
+                var h0 = _slab(lb[0], lb[1], inv, best); var h1 = _slab(ub[0], ub[1], inv, best)
+                if h0[0] or h1[0]:
+                    var upper_first = h1[0] and (not h0[0] or h1[1] < h0[1])
+                    if h0[0] and h1[0]:
+                        pend |= UInt64(1) << UInt64(depth)
+                    if upper_first:
+                        path |= UInt64(1) << UInt64(depth)
+                        dom = u_dom; cur = ub; cur_hit = h1
+                    else:
+                        dom = l_dom; cur = lb; cur_hit = h0
+                    depth += 1
+                    descend = True
+        if descend:
+            continue
+        if pend == 0:
+            break
+        var level = 63 - Int(count_leading_zeros(pend))
+        pend &= ~(UInt64(1) << UInt64(level))
+        path = (path & ((UInt64(1) << UInt64(level)) - 1)) | ((~path) & (UInt64(1) << UInt64(level)))
+        depth = level + 1
+        dom = _domain(path, depth)
+        cur = _fine_box(d, pi, fr, sq[0], sq[1], sq[2], dom[0], dom[0] + dom[2], dom[1], dom[1] + dom[3])
+        cur_hit = _slab(cur[0], cur[1], inv, best)
+    return (hit, best, hs, ht, steps, hsz)
+
+
 def intersect_displaced(d: DispSurface, prim: Int, org: Vec3f, dir: Vec3f, t_max: Float32) -> Tuple[Bool, Float32, Float32, Float32, Int, Float32]:
     """The nearest hit of primitive prim (patch * sub_count + sub-square) before t_max: (hit, t, s, t, steps, the leaf square's size).
     Box leaves end where the displaced box is no larger than the footprint; exact leaves where the undisplaced square reaches a
     texel or the footprint, and intersect the bilinear patch through its four displaced corners, so the depth does not grow with
     the displacement's amplitude."""
+    if d.greg[unsafe_offset=prim // sub_count(d)] != 1:   # Gregory patches keep the cropping loop
+        if d.leaf_mode == 1 or d.leaf_mode == 2:
+            return _intersect_fine(d, prim, org, dir, t_max)
     var pi = prim // sub_count(d); var sq = sub_square(d, prim % sub_count(d))
     var src = d.patches[unsafe_offset=pi]
     var o = BezierPatch(src.x - org.x, src.y - org.y, src.z - org.z)   # anchored at the ray origin
@@ -479,32 +630,16 @@ def intersect_displaced(d: DispSurface, prim: Int, org: Vec3f, dir: Vec3f, t_max
             if d.leaf_mode == 0:
                 leaf = sz[0] <= sz[1]
             else:
-                leaf = max(dom[2], dom[3]) * texels <= Float32(1) or (d.leaf_mode == 1 and cur[4] <= sz[1])
+                leaf = max(dom[2], dom[3]) * texels <= Float32(1) or (d.leaf_mode != 2 and cur[4] <= sz[1])
             if depth >= PATCH_MAX_DEPTH or leaf:
                 if d.leaf_mode == 0:
                     if cur_hit[1] < best:
                         best = cur_hit[1]; hit = True
                         hs = dom[0] + Float32(0.5) * dom[2]; ht = dom[1] + Float32(0.5) * dom[3]; hsz = max(dom[2], dom[3])
-                else:   # corners from global (s, t): neighbouring leaves of one depth share them
-                    var s0 = dom[0]; var s1 = dom[0] + dom[2]; var t0 = dom[1]; var t1 = dom[1] + dom[3]
-                    var sm = s0 + Float32(0.5) * dom[2]; var tm = t0 + Float32(0.5) * dom[3]
-                    var cs = SIMD[DType.float32, 8](s0, s1, s1, s0, sm, s1, sm, s0)   # corners 00 10 11 01, then the edge midpoints
-                    var ct = SIMD[DType.float32, 8](t0, t0, t1, t1, t0, tm, t1, tm)
-                    var cp = Array[Vec3f, 8](fill=Vec3f(0, 0, 0))
-                    for k in range(8):
-                        cp[k] = displaced_point(d, pi, cs[k], ct[k]) - org
-                    var bh = _bilinear_hit(cp[0], cp[1], cp[2], cp[3], dir, best)
-                    if bh[0]:
-                        best = bh[1]; hit = True
-                        hs = s0 + bh[2] * dom[2]; ht = t0 + bh[3] * dom[3]; hsz = max(dom[2], dom[3])
-                    # Edge fans: a neighbour one level finer bends its edge through the midpoint; these triangles close the T gap.
-                    for k in range(4):
-                        var ka = k; var kb = (k + 1) % 4; var km = 4 + k
-                        var th = _tri_hit(cp[ka], cp[km], cp[kb], dir, best)
-                        if th[0]:
-                            best = th[1]; hit = True
-                            var w0 = Float32(1) - th[2] - th[3]
-                            hs = w0 * cs[ka] + th[2] * cs[km] + th[3] * cs[kb]; ht = w0 * ct[ka] + th[2] * ct[km] + th[3] * ct[kb]; hsz = max(dom[2], dom[3])
+                else:
+                    var lh = _exact_leaf(d, pi, dom, org, dir, best)
+                    if lh[0]:
+                        best = lh[1]; hit = True; hs = lh[2]; ht = lh[3]; hsz = max(dom[2], dom[3])
             else:
                 var along_u = depth % 2 == 0
                 var hu0 = dom[0]; var hv0 = dom[1]; var hdu = dom[2]; var hdv = dom[3]

@@ -453,9 +453,10 @@ def _grid_levels() -> Int32:
 
 
 def _leaf_mode() -> Int32:
-    """LEAF=box (footprint-sized boxes), exact (bilinear leaves at a texel or a pixel; default) or texel (at a texel only)."""
+    """LEAF=box (footprint-sized boxes), exact (bilinear leaves at a texel or a pixel; default), texel (at a texel only) or crop
+    (exact, boxes cropped per step)."""
     var l = getenv("LEAF")
-    return Int32(0) if l == "box" else (Int32(2) if l == "texel" else Int32(1))
+    return Int32(0) if l == "box" else (Int32(2) if l == "texel" else (Int32(4) if l == "crop" else Int32(1)))
 
 
 def _env_f(name: String, dflt: Float32) raises -> Float32:
