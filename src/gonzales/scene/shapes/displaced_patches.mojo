@@ -42,6 +42,8 @@ struct DispSurface(TrivialRegisterPassable, DevicePassable):
     var sub_levels: Int32  # the BVH's primitives: a patch's sub-squares at this halving depth (4: 4 x 4, 6: 8 x 8, 8: 16 x 16)
     var leaf_mode: Int32   # 0: box leaves no larger than the footprint; 1: exact bilinear leaves at a texel or a pixel; 2: at a texel only;
                            # 3: as 1, cells walked in the sub-square's affine (s, t, h) frame; 4: as 1, every box cropped from the patch
+                           # 5 (6: at a texel only): the sub-square's base bilinear through its limit corners
+    var corners: _F32    # per patch the sub-square corners on its (n + 1)^2 grid (corner_grid): limit point, unit normal
 
 
 @always_inline
@@ -730,17 +732,35 @@ struct BLFrame(TrivialRegisterPassable):
     var nz: SIMD[DType.float32, 4]
 
 
-def _bl_frame(d: DispSurface, pi: Int, org: Vec3f, s0: Float32, t0: Float32, size: Float32) -> BLFrame:
-    """Corners from global (s, t): neighbouring sub-squares get the same points and normals (0 where degenerate)."""
+def grid_vertex(d: DispSurface, pi: Int, i: Int, j: Int, n: Int) -> Tuple[Vec3f, Vec3f]:
+    """Grid point (i, j) of patch pi's n x n sub-squares: the limit point and its unit normal (0 where degenerate)."""
+    var s = Float32(i) / Float32(n); var t = Float32(j) / Float32(n)
+    var e = patch_eval(patch_at(d, pi, s, t), s, t)
+    var nv = cross(e[1], e[2]); var ln = sqrt(dot(nv, nv))
+    return (e[0], nv * (Float32(1) / ln) if ln > Float32(0) else Vec3f(0, 0, 0))
+
+
+def corner_grid(d: DispSurface, pi: Int, dst: _F32):
+    """Patch pi's grid points into dst (6 floats each, rows along t), for DispSurface.corners."""
+    var n = 1 << (Int(d.sub_levels) // 2)
+    for j in range(n + 1):
+        for i in range(n + 1):
+            var g = grid_vertex(d, pi, i, j, n); var o = 6 * (j * (n + 1) + i)
+            dst[unsafe_offset=o] = g[0].x; dst[unsafe_offset=o + 1] = g[0].y; dst[unsafe_offset=o + 2] = g[0].z
+            dst[unsafe_offset=o + 3] = g[1].x; dst[unsafe_offset=o + 4] = g[1].y; dst[unsafe_offset=o + 5] = g[1].z
+
+
+def _bl_frame(d: DispSurface, pi: Int, k: Int, org: Vec3f) -> BLFrame:
+    """Sub-square k's corners from the patch's grid: neighbouring sub-squares read the same points and normals."""
+    var n = 1 << (Int(d.sub_levels) // 2)
+    var ku = k % n; var kv = k // n
     var f = BLFrame(SIMD[DType.float32, 4](0), SIMD[DType.float32, 4](0), SIMD[DType.float32, 4](0), SIMD[DType.float32, 4](0),
                     SIMD[DType.float32, 4](0), SIMD[DType.float32, 4](0))
-    for k in range(4):
-        var s = s0 + (size if k == 1 or k == 2 else Float32(0)); var t = t0 + (size if k >= 2 else Float32(0))
-        var e = patch_eval(patch_at(d, pi, s, t), s, t)
-        var n = cross(e[1], e[2]); var ln = sqrt(dot(n, n))
-        n = n * (Float32(1) / ln) if ln > Float32(0) else Vec3f(0, 0, 0)
-        f.px[k] = e[0].x - org.x; f.py[k] = e[0].y - org.y; f.pz[k] = e[0].z - org.z
-        f.nx[k] = n.x; f.ny[k] = n.y; f.nz[k] = n.z
+    var g = d.corners.unsafe_offset(6 * pi * (n + 1) * (n + 1))
+    comptime for c in range(4):
+        var o = 6 * ((kv + (1 if c >= 2 else 0)) * (n + 1) + ku + (1 if c == 1 or c == 2 else 0))
+        f.px[c] = g[unsafe_offset=o] - org.x; f.py[c] = g[unsafe_offset=o + 1] - org.y; f.pz[c] = g[unsafe_offset=o + 2] - org.z
+        f.nx[c] = g[unsafe_offset=o + 3]; f.ny[c] = g[unsafe_offset=o + 4]; f.nz[c] = g[unsafe_offset=o + 5]
     return f
 
 
@@ -783,7 +803,7 @@ def _intersect_bl(d: DispSurface, prim: Int, org: Vec3f, dir: Vec3f, t_max: Floa
     var S = sq[2]; var inv_s = Float32(1) / S
     var f = Int(d.face[unsafe_offset=pi])
     var texels = d.sq[unsafe_offset=3 * pi + 2] * Float32(1 << max(Int(d.hdr[unsafe_offset=3 * f + 1]), Int(d.hdr[unsafe_offset=3 * f + 2])))
-    var fr = _bl_frame(d, pi, org, sq[0], sq[1], S)
+    var fr = _bl_frame(d, pi, prim % sub_count(d), org)
     var cam = d.cam - org
     var inv = Vec3f(Float32(1) / dir.x, Float32(1) / dir.y, Float32(1) / dir.z)
     var best = t_max; var hit = False; var hs = Float32(0); var ht = Float32(0); var hsz = Float32(1)

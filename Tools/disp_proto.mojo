@@ -14,7 +14,7 @@ from std.builtin.device_passable import DevicePassable, DeviceTypeEncoder
 from std.math import ceildiv
 from gonzales.core.geometry import Vec3f, cross, dot
 from gonzales.scene.shapes.patches import BezierPatch
-from gonzales.scene.shapes.displaced_patches import DispSurface, patch_box, sub_box, sub_count, patch_at, intersect_displaced, displaced_normal, displaced_point, displaced_point_n, chain_color
+from gonzales.scene.shapes.displaced_patches import DispSurface, patch_box, sub_box, sub_count, patch_at, intersect_displaced, displaced_normal, displaced_point, displaced_point_n, chain_color, corner_grid
 from gonzales.scene.accel.xert import XeRayDesc, xert_alignment, xert_build_blas_geoms, xert_free
 from std.memory import OpaquePointer
 from std.sys.info import is_gpu
@@ -635,7 +635,7 @@ def _demo_upload(ctx: DeviceContext, nb_buf: DeviceBuffer[DType.uint8], or_buf: 
 def run_demo(patches: Pointer[BezierPatch, MutUntrackedOrigin], sq: Pointer[Float32, MutUntrackedOrigin], face: Pointer[Int32, MutUntrackedOrigin],
              hdr: Pointer[Int32, MutUntrackedOrigin], pyr: Pointer[UInt8, MutUntrackedOrigin], npyr: Int, chain_off: Pointer[Int32, MutUntrackedOrigin],
              chain: Pointer[UInt8, MutUntrackedOrigin], nchain: Int, fm: Pointer[Float32, MutUntrackedOrigin], greg: Pointer[UInt8, MutUntrackedOrigin],
-             np: Int, nf: Int, blo: Vec3f, bhi: Vec3f, out_dir: String) raises:
+             np: Int, nf: Int, blo: Vec3f, bhi: Vec3f, out_dir: String, cgrid: Pointer[Float32, MutUntrackedOrigin], ncg: Int) raises:
     """INTERACTIVE=1: fly around the rock in the Vulkan viewer; DEMO_FRAMES=N: N frames along an orbit without a window."""
     var W = Int(_env_f("W", Float32(960))); var H = Int(_env_f("H", Float32(540)))
     var frames_env = getenv("DEMO_FRAMES")
@@ -668,7 +668,8 @@ def run_demo(patches: Pointer[BezierPatch, MutUntrackedOrigin], sq: Pointer[Floa
     var dpat = _up(ctx, bufs, patches, np); var dsq = _up(ctx, bufs, sq, 3 * np); var dface = _up(ctx, bufs, face, np)
     var dhdr = _up(ctx, bufs, hdr, 3 * nf); var dpyr = _up(ctx, bufs, pyr, npyr); var doff = _up(ctx, bufs, chain_off, nf)
     var dchain = _up(ctx, bufs, chain, nchain); var dfm = _up(ctx, bufs, fm, 12 * np); var dgreg = _up(ctx, bufs, greg, np)
-    var host_d = DispSurface(patches, sq, face, hdr, pyr, exag / Float32(255), Vec3f(0, 0, 0), Float32(0), chain_off, chain, fm, greg, _grid_levels(), _leaf_mode())
+    var dcg = _up(ctx, bufs, cgrid, ncg)
+    var host_d = DispSurface(patches, sq, face, hdr, pyr, exag / Float32(255), Vec3f(0, 0, 0), Float32(0), chain_off, chain, fm, greg, _grid_levels(), _leaf_mode(), cgrid)
     var nodes = List[BNode](); var order = List[Int32]()
     _demo_bvh(host_d, np, nodes, order)
     var nb_cap = max(len(nodes), 1) * size_of[BNode]() * 2   # room for a deeper tree
@@ -754,7 +755,7 @@ def run_demo(patches: Pointer[BezierPatch, MutUntrackedOrigin], sq: Pointer[Floa
             eye = Vec3f(cs[unsafe_offset=0].position.x, cs[unsafe_offset=0].position.y, cs[unsafe_offset=0].position.z)
             fwd = cs[unsafe_offset=0].direction
         if rebuild:
-            host_d = DispSurface(patches, sq, face, hdr, pyr, exag / Float32(255), Vec3f(0, 0, 0), Float32(0), chain_off, chain, fm, greg, _grid_levels(), _leaf_mode())
+            host_d = DispSurface(patches, sq, face, hdr, pyr, exag / Float32(255), Vec3f(0, 0, 0), Float32(0), chain_off, chain, fm, greg, _grid_levels(), _leaf_mode(), cgrid)
             _demo_bvh(host_d, np, nodes, order)
             _demo_upload(ctx, nb_buf, or_buf, nb_stage, nb_cap, nodes, order)   # nodes and the patch order they index
             moved = True
@@ -769,7 +770,7 @@ def run_demo(patches: Pointer[BezierPatch, MutUntrackedOrigin], sq: Pointer[Floa
         var right = cross(fwd, world_up)
         right = right * (Float32(1) / sqrt(dot(right, right)))
         var up = cross(right, fwd)
-        var dd = DispSurface(dpat, dsq, dface, dhdr, dpyr, exag / Float32(255), eye, Float32(2) * tan_h / Float32(rw), doff, dchain, dfm, dgreg, _grid_levels(), _leaf_mode())
+        var dd = DispSurface(dpat, dsq, dface, dhdr, dpyr, exag / Float32(255), eye, Float32(2) * tan_h / Float32(rw), doff, dchain, dfm, dgreg, _grid_levels(), _leaf_mode(), dcg)
         var cam = DCam(eye, fwd, right, up, light, tan_h, exposure, Int32(rw), Int32(rh), Int32(frame), Int32(headlight), Int32(1 if color_on else 0))
         var t0 = perf_counter_ns()
         if dd.leaf_mode >= 5:
@@ -879,8 +880,15 @@ def main() raises:
         if external_call["disp_color_open", Int32](cc) == 0:
             raise Error("cannot read " + col_path)
 
+    var gn = 1 << (Int(_grid_levels()) // 2); var ncg = 6 * (gn + 1) * (gn + 1) * np
+    var cgrid = unsafe_alloc[Float32](ncg)
+    var d_g = DispSurface(patches, sq, face, hdr, pyr, Float32(0), Vec3f(0, 0, 0), Float32(0), chain_off, chain, fm, greg, _grid_levels(), _leaf_mode(), cgrid)
+    def fill_grid(p: Int) {imm}:
+        corner_grid(d_g, p, cgrid.unsafe_offset(6 * (gn + 1) * (gn + 1) * p))
+    parallelize(fill_grid, np)
+    print("sub-square corner grid:", (gn + 1) * (gn + 1), "points a patch,", ncg * 4 // 1024, "KiB")
     if getenv("EDGE_GAP") == "1":
-        _edge_gap(DispSurface(patches, sq, face, hdr, pyr, Float32(0), eye, pixel, chain_off, chain, fm, greg, _grid_levels(), _leaf_mode()), np)
+        _edge_gap(DispSurface(patches, sq, face, hdr, pyr, Float32(0), eye, pixel, chain_off, chain, fm, greg, _grid_levels(), _leaf_mode(), cgrid), np)
         return
     var ngreg = 0
     for p in range(np):
@@ -888,7 +896,7 @@ def main() raises:
     print("Gregory patches:", ngreg, "of", np, "(", np * (size_of[BezierPatch]() + 16) + ngreg * 48, "patch bytes incl. Fm )")
 
     if getenv("INTERACTIVE") == "1" or getenv("DEMO_FRAMES").byte_length() > 0:
-        run_demo(patches, sq, face, hdr, pyr, npyr, chain_off, chain, nchain, fm, greg, np, nf, blo, bhi, out_dir)
+        run_demo(patches, sq, face, hdr, pyr, npyr, chain_off, chain, nchain, fm, greg, np, nf, blo, bhi, out_dir, cgrid, ncg)
         return
 
     var lo_b = List[Vec3f](); var hi_b = List[Vec3f]()
@@ -897,7 +905,7 @@ def main() raises:
         if only.byte_length() > 0 and only != name:
             continue
         var scale = Float32(0) if scene == 0 else (Float32(1) / Float32(255) if scene == 1 else exag / Float32(255))
-        var d = DispSurface(patches, sq, face, hdr, pyr, scale, eye, pixel, chain_off, chain, fm, greg, _grid_levels(), _leaf_mode())
+        var d = DispSurface(patches, sq, face, hdr, pyr, scale, eye, pixel, chain_off, chain, fm, greg, _grid_levels(), _leaf_mode(), cgrid)
         var img = List[Float32](length=W * H, fill=Float32(0))
         var rgb = List[Float32](length=3 * W * H, fill=Float32(0))
         var hitmask = List[UInt8](length=W * H, fill=UInt8(0))
@@ -958,7 +966,7 @@ def main() raises:
                 var nchain_b = nchain
                 var dd = DispSurface(_up(ctx, bufs, patches, np), _up(ctx, bufs, sq, 3 * np), _up(ctx, bufs, face, np), _up(ctx, bufs, hdr, 3 * nf),
                                      _up(ctx, bufs, pyr, npyr), scale, eye, pixel, _up(ctx, bufs, chain_off, nf), _up(ctx, bufs, chain, nchain_b),
-                                     _up(ctx, bufs, fm, 12 * np), _up(ctx, bufs, greg, np), _grid_levels(), _leaf_mode())
+                                     _up(ctx, bufs, fm, 12 * np), _up(ctx, bufs, greg, np), _grid_levels(), _leaf_mode(), _up(ctx, bufs, cgrid, ncg))
                 var nd_d = _up(ctx, bufs, nodes.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin](), len(nodes))
                 var or_d = _up(ctx, bufs, order.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin](), len(order))
                 var img_b = ctx.enqueue_create_buffer[DType.float32](W * H)
