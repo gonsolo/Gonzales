@@ -1208,13 +1208,16 @@ def _psc_apply_shape_alpha(s: Pointer[SceneParseState, MutUntrackedOrigin],
                          "only an imagemap can cut out a shape, so it renders opaque", "imagemap")
         return
     var aff = _imagemap_affine(s, ti)
-    var k = aff.scale.r; var b = aff.bias.r
     var srgb = file.endswith(".png") or file.endswith(".PNG")   # pbrt decodes an 8-bit png float texture as sRGB
+    ma.alpha_mask = psc_alpha_mask(s, file, aff.scale.r, aff.bias.r, srgb)
+
+def psc_alpha_mask(s: Pointer[SceneParseState, MutUntrackedOrigin], file: String, k: Float32, b: Float32, srgb: Bool) -> Int32:
+    """Index of the alpha mask of an image (alpha = b + k * texel), loaded once; -1 if it cannot be read."""
     var key = file + "|" + String(k) + "|" + String(b)
     for mi in range(len(s[unsafe_offset=0].alpha_mask_files)):
         if s[unsafe_offset=0].alpha_mask_files[mi] == key:
-            ma.alpha_mask = Int32(mi)
-            return
+            return Int32(mi)
+    var idx = Int32(-1)
     var data = unsafe_alloc[Pointer[UInt8, MutUntrackedOrigin]](1)
     var wh = unsafe_alloc[Int32](2)
     var flen = file.byte_length()
@@ -1235,7 +1238,7 @@ def _psc_apply_shape_alpha(s: Pointer[SceneParseState, MutUntrackedOrigin],
         var px = data[unsafe_offset=0]
         for i in range(Int(wh[unsafe_offset=0]) * Int(wh[unsafe_offset=1])):
             px[unsafe_offset=i] = lut[Int(px[unsafe_offset=i])]
-        ma.alpha_mask = Int32(len(s[unsafe_offset=0].alpha_mask_files))
+        idx = Int32(len(s[unsafe_offset=0].alpha_mask_files))
         s[unsafe_offset=0].alpha_mask_files.append(key)
         s[unsafe_offset=0].alpha_mask_data.append(data[unsafe_offset=0])
         s[unsafe_offset=0].alpha_mask_w.append(wh[unsafe_offset=0])
@@ -1243,6 +1246,7 @@ def _psc_apply_shape_alpha(s: Pointer[SceneParseState, MutUntrackedOrigin],
     else:
         print("Warning: could not load alpha texture", file, "-- the shape renders opaque")
     data.unsafe_free(); wh.unsafe_free()
+    return idx
 
 def handle_shape(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
                      s: Pointer[SceneParseState, MutUntrackedOrigin]):

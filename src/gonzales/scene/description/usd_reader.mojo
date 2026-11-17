@@ -11,7 +11,7 @@ from gonzales.core.transform import matrix_invert
 from gonzales.scene.appearance.materials import MatKind
 from gonzales.scene.description.parse_types import SceneParseState, NamedMaterial
 from gonzales.scene.description.scene_builder import store_mesh
-from gonzales.scene.description.pbrt_parser import ParsedScene_Mojo, finalize_scene, _psc_finish_object_def, _psc_emit_object_instance
+from gonzales.scene.description.pbrt_parser import ParsedScene_Mojo, finalize_scene, _psc_finish_object_def, _psc_emit_object_instance, psc_alpha_mask
 
 
 def _f32(arr: PythonObject) raises -> Pointer[Float32, MutUntrackedOrigin]:
@@ -62,6 +62,8 @@ def _usd_texture(s: Pointer[SceneParseState, MutUntrackedOrigin], path: String) 
 def _usd_fill(s: Pointer[SceneParseState, MutUntrackedOrigin], d: PythonObject) raises:
     var mats = d["materials"]
     var rgb = _f32(mats)
+    var mat_alpha = _f32(d["mat_alpha"])
+    var alpha_mask = List[Int32]()
     for m in range(Int(py=len(mats))):
         var nm = NamedMaterial(String("usd") + String(m))
         nm.kind = MatKind.diffuse
@@ -73,6 +75,8 @@ def _usd_fill(s: Pointer[SceneParseState, MutUntrackedOrigin], d: PythonObject) 
         var normal = String(py=d["mat_normal"][m])
         if normal.byte_length() > 0:
             nm.normal_tex_idx = _usd_texture(s, normal)
+        var opacity = String(py=d["mat_opacity"][m])
+        alpha_mask.append(psc_alpha_mask(s, opacity, Float32(1), Float32(0), False) if opacity.byte_length() > 0 else Int32(-1))
         s[unsafe_offset=0].named_materials.append(nm^)
 
     var points = _f32(d["points"])
@@ -101,8 +105,10 @@ def _usd_fill(s: Pointer[SceneParseState, MutUntrackedOrigin], d: PythonObject) 
             s[unsafe_offset=0].cur_attr.mat_idx = Int32(r[unsafe_offset=4])
             store_mesh(s, points.unsafe_offset(3 * Int(r[unsafe_offset=0])), indices.unsafe_offset(Int(r[unsafe_offset=2])),
                        Int32(r[unsafe_offset=1]), Int32(r[unsafe_offset=3]))
+            ref mesh = s[unsafe_offset=0].meshes[len(s[unsafe_offset=0].meshes) - 1]
+            mesh.alpha_mask = alpha_mask[Int(r[unsafe_offset=4])]     # UsdPreviewSurface opacity: pbrt's stochastic alpha
+            mesh.alpha_const = mat_alpha[unsafe_offset=Int(r[unsafe_offset=4])]
             if r[unsafe_offset=6] != 0:
-                ref mesh = s[unsafe_offset=0].meshes[len(s[unsafe_offset=0].meshes) - 1]
                 var uv = uvs.unsafe_offset(2 * Int(r[unsafe_offset=0]))
                 mesh.uvs.reserve(2 * Int(r[unsafe_offset=1]))
                 for k in range(2 * Int(r[unsafe_offset=1])):

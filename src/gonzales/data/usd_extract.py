@@ -45,8 +45,8 @@ def _atlas(pattern, cols, rows, kind):
     if os.path.exists(out):
         return out
     import OpenImageIO as oiio
-    r = TEX_RES
-    img = np.zeros((rows * r, cols * r, 3), np.float32)
+    r, nc = TEX_RES, 1 if kind == "alpha" else 3
+    img = np.full((rows * r, cols * r, nc), 1.0 if kind == "alpha" else 0.0, np.float32)   # tiles without a file: opaque
     for udim, f in _udim_tiles(pattern):
         u, v = (udim - 1001) % 10, (udim - 1001) // 10
         if u >= cols or v >= rows:
@@ -58,18 +58,18 @@ def _atlas(pattern, cols, rows, kind):
         while inp.seek_subimage(0, level + 1) and inp.spec().width >= r:
             level += 1
         inp.seek_subimage(0, level)
-        px = inp.read_image(0, level, 0, 3, "float")
+        px = inp.read_image(0, level, 0, nc, "float")
         inp.close()
         if px is None:
             continue
-        px = np.asarray(px, np.float32).reshape(inp.spec().height, inp.spec().width, -1)[:, :, :3]
+        px = np.asarray(px, np.float32).reshape(inp.spec().height, inp.spec().width, -1)[:, :, :nc]
         if px.shape[0] != r:
             px = px[:: max(1, px.shape[0] // r), :: max(1, px.shape[1] // r)][:r, :r]
         if kind == "color":
             px = np.maximum(px @ _ACESCG_TO_REC709.T.astype(np.float32), 0)
         img[(rows - 1 - v) * r:(rows - v) * r, u * r:(u + 1) * r] = px    # v grows upward, image rows downward
     o = oiio.ImageOutput.create(out)
-    o.open(out, oiio.ImageSpec(cols * r, rows * r, 3, "half"))
+    o.open(out, oiio.ImageSpec(cols * r, rows * r, nc, "half"))
     o.write_image(img)
     o.close()
     return out
@@ -112,7 +112,7 @@ class _Scene:
         key = str(mat.GetPath()) if mat else ""
         if key in self.mat_index:
             return self.mat_index[key]
-        rgb, color, normal = (0.5, 0.5, 0.5), "", ""
+        rgb, color, normal, opacity, alpha = (0.5, 0.5, 0.5), "", "", "", 1.0
         if mat:
             surf = mat.ComputeSurfaceSource()[0]
             if surf and surf.GetIdAttr().Get() == "UsdPreviewSurface":
@@ -120,11 +120,15 @@ class _Scene:
                 if inp and not inp.HasConnectedSource() and inp.Get() is not None:
                     rgb = tuple(float(c) for c in inp.Get())
                 color, normal = _texture_input(surf, "diffuseColor"), _texture_input(surf, "normal")
-        tiles = [t for p in (color, normal) if p for t, _ in _udim_tiles(p)]
+                opacity = _texture_input(surf, "opacity")
+                inp = surf.GetInput("opacity")
+                if inp and not inp.HasConnectedSource() and inp.Get() is not None:
+                    alpha = float(inp.Get())
+        tiles = [t for p in (color, normal, opacity) if p for t, _ in _udim_tiles(p)]
         grid = (max((t - 1001) % 10 for t in tiles) + 1, max((t - 1001) // 10 for t in tiles) + 1) if tiles else (1, 1)
         self.mat_index[key] = len(self.mat_rgb)
         self.mat_rgb.append(rgb)
-        self.mat_tex.append((color, normal, grid))
+        self.mat_tex.append((color, normal, opacity, alpha, grid))
         return self.mat_index[key]
 
     def mesh(self, prim, xf, template):
@@ -153,7 +157,7 @@ class _Scene:
             return
         has_uv = uv is not None and len(uv) == len(pts)
         if has_uv:
-            cols, rows = self.mat_tex[mat][2]
+            cols, rows = self.mat_tex[mat][4]
             uv = uv / np.array((cols, rows), np.float32)        # into the material's atlas of UDIM tiles
         else:
             uv = np.zeros((len(pts), 2), np.float32)
@@ -330,8 +334,10 @@ def extract(path, camera_path="", aspect=16.0 / 9.0, frame=""):
         "mesh_xf": cat(sc.xforms, np.float32),
         "meshes": np.ascontiguousarray(np.array(sc.mesh_rows, dtype=np.int64).reshape(-1, 7)),
         "uvs": cat(sc.uvs, np.float32),
-        "mat_color": [_atlas(c, g[0], g[1], "color") if c else "" for c, n, g in sc.mat_tex],
-        "mat_normal": [_atlas(n, g[0], g[1], "raw") if n else "" for c, n, g in sc.mat_tex],
+        "mat_color": [_atlas(c, g[0], g[1], "color") if c else "" for c, n, o, a, g in sc.mat_tex],
+        "mat_normal": [_atlas(n, g[0], g[1], "raw") if n else "" for c, n, o, a, g in sc.mat_tex],
+        "mat_opacity": [_atlas(o, g[0], g[1], "alpha") if o else "" for c, n, o, a, g in sc.mat_tex],
+        "mat_alpha": np.ascontiguousarray(np.array([a for c, n, o, a, g in sc.mat_tex], dtype=np.float32)),
         "materials": np.ascontiguousarray(np.array(sc.mat_rgb, dtype=np.float32).reshape(-1, 3)),
         "n_templates": len(sc.templates),
         "inst_tmpl": np.ascontiguousarray(np.array(sc.inst_tmpl, dtype=np.int32)),
