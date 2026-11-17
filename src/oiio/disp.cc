@@ -109,4 +109,28 @@ void disp_take(void *h, float *cp, float *sq, int *face, int *hdr, unsigned char
         delete d;
 }
 
+// The cage of `ptx`: with pos null only sizes (vertices, faces, indices), else the positions, face sizes and indices too.
+int disp_cage(const char *ptx, float *pos, int *counts, int *idx, int *sizes) {
+        Ptex::String err;
+        PtexPtr<PtexTexture> tex(PtexTexture::open(ptx, err));
+        if (!tex)
+                return 0;
+        PtexPtr<PtexMetaData> meta(tex->getMetaData());
+        const float *p = nullptr;
+        const int *c = nullptr, *v = nullptr;
+        int np = 0, nc = 0, nv = 0;
+        meta->getValue("PtexVertPositions", p, np);
+        meta->getValue("PtexFaceVertCounts", c, nc);
+        meta->getValue("PtexFaceVertIndices", v, nv);
+        if (!p || !c || !v)
+                return 0;
+        sizes[0] = np / 3; sizes[1] = nc; sizes[2] = nv;
+        if (pos) {
+                std::memcpy(pos, p, np * sizeof(float));
+                std::memcpy(counts, c, nc * sizeof(int));
+                std::memcpy(idx, v, nv * sizeof(int));
+        }
+        return 1;
+}
+
 }  // extern "C"

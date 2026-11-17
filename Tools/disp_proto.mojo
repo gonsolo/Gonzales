@@ -214,8 +214,8 @@ def main() raises:
     var only = getenv("ONLY")
 
     var lo_b = List[Vec3f](); var hi_b = List[Vec3f]()
-    for scene in range(4):   # 0: limit surface, 1: scale 1, 2: exaggerated, 3: tessellated reference of 2
-        var name = ["a_limit", "b_disp1", "c_disp" + String(Int(exag)), "d_tess" + String(Int(exag))][scene]
+    for scene in range(5):   # 0: limit surface, 1: scale 1, 2: exaggerated, 3: tessellated reference of 2, 4: the cage
+        var name = ["a_limit", "b_disp1", "c_disp" + String(Int(exag)), "d_tess" + String(Int(exag)), "e_cage"][scene]
         if only.byte_length() > 0 and only != name:
             continue
         var scale = Float32(0) if scene == 0 else (Float32(1) / Float32(255) if scene == 1 else exag / Float32(255))
@@ -270,6 +270,73 @@ def main() raises:
                 tot += steps[y]; mx = max(mx, maxs[y])
             print(name + ": build", (tb - t0) // 1000000, "ms, render", (t1 - tb) // 1000000, "ms,", Float32(W * H) / (Float32(t1 - tb) * Float32(1e-9)) / Float32(1e6),
                   "Mrays/s, steps/ray", Float32(tot) / Float32(W * H), "(max per pixel row", mx, "), memory", mem // 1024, "KiB")
+        elif scene == 4:
+            var sz = unsafe_alloc[Int32](3)
+            _ = external_call["disp_cage", Int32](cname, Int(0), Int(0), Int(0), sz)
+            var cpos = List[Float32](length=3 * Int(sz[0]), fill=0)
+            var ccnt = List[Int32](length=Int(sz[1]), fill=0)
+            var cidx = List[Int32](length=Int(sz[2]), fill=0)
+            _ = external_call["disp_cage", Int32](cname, Int(cpos.unsafe_ptr()), Int(ccnt.unsafe_ptr()), Int(cidx.unsafe_ptr()), sz)
+            var pts = List[Vec3f](); var tri = List[Int32](); var edges = List[Int32]()   # per triangle its 2 cage edges (4 indices)
+            for v in range(Int(sz[0])):
+                pts.append(Vec3f(cpos[3 * v], cpos[3 * v + 1], cpos[3 * v + 2]))
+            var at = 0
+            for f in range(Int(sz[1])):
+                var n = Int(ccnt[f])
+                for k in range(1, n - 1):   # a fan: the first and last triangles carry the outer edges
+                    var a = cidx[at]; var b = cidx[at + k]; var c2 = cidx[at + k + 1]
+                    tri.append(a); tri.append(b); tri.append(c2)
+                    edges.append(b); edges.append(c2)
+                    edges.append(a if k == 1 else c2); edges.append(b if k == 1 else (cidx[at] if k == n - 2 else c2))
+                at += n
+            var nt = len(tri) // 3
+            lo_b.clear(); hi_b.clear()
+            for t in range(nt):
+                var p0 = pts[Int(tri[3 * t])]; var p1 = pts[Int(tri[3 * t + 1])]; var p2 = pts[Int(tri[3 * t + 2])]
+                lo_b.append(Vec3f(min(p0.x, min(p1.x, p2.x)), min(p0.y, min(p1.y, p2.y)), min(p0.z, min(p1.z, p2.z))))
+                hi_b.append(Vec3f(max(p0.x, max(p1.x, p2.x)), max(p0.y, max(p1.y, p2.y)), max(p0.z, max(p1.z, p2.z))))
+            var nodes = List[BNode](); var order = List[Int32]()
+            for t in range(nt):
+                order.append(Int32(t))
+            _ = _build(nodes, order, lo_b, hi_b, 0, nt)
+            var pt_ptr = pts.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
+            var tr_ptr = tri.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
+            var ed_ptr = edges.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
+            var np_ptr = nodes.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
+            var or_ptr = order.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
+            var im_ptr = img.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
+            var hm_ptr = hitmask.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
+            var px_ang = Float32(2) * tan_h / Float32(W)
+            def row_c(y: Int) {imm}:
+                for x in range(W):
+                    var px = (Float32(2) * (Float32(x) + Float32(0.5)) / Float32(W) - Float32(1)) * tan_h
+                    var py = (Float32(1) - Float32(2) * (Float32(y) + Float32(0.5)) / Float32(H)) * tan_h * Float32(H) / Float32(W)
+                    var dir = fwd + right * px + up * py
+                    dir = dir * (Float32(1) / sqrt(dot(dir, dir)))
+                    var h = trace_tris(pt_ptr, tr_ptr, np_ptr, or_ptr, eye, dir)
+                    if h.prim >= 0:
+                        var p0 = pt_ptr[unsafe_offset=Int(tr_ptr[unsafe_offset=3 * h.prim])]
+                        var n = cross(pt_ptr[unsafe_offset=Int(tr_ptr[unsafe_offset=3 * h.prim + 1])] - p0, pt_ptr[unsafe_offset=Int(tr_ptr[unsafe_offset=3 * h.prim + 2])] - p0)
+                        n = n * (Float32(1) / sqrt(dot(n, n)))
+                        if dot(n, dir) > Float32(0):
+                            n = -n
+                        var shade = Float32(0.08) + Float32(0.75) * max(dot(n, light), Float32(0))
+                        var hp = eye + dir * h.t
+                        for e in range(2):   # dark cage edges, a pixel wide
+                            var ea = pt_ptr[unsafe_offset=Int(ed_ptr[unsafe_offset=4 * h.prim + 2 * e])]
+                            var eb = pt_ptr[unsafe_offset=Int(ed_ptr[unsafe_offset=4 * h.prim + 2 * e + 1])]
+                            var ev = eb - ea
+                            var l2 = dot(ev, ev)
+                            if l2 > Float32(0):
+                                var cr = cross(hp - ea, ev)
+                                if sqrt(dot(cr, cr) / l2) < Float32(0.8) * px_ang * h.t:
+                                    shade = Float32(0.12)
+                        im_ptr[unsafe_offset=y * W + x] = shade
+                        hm_ptr[unsafe_offset=y * W + x] = UInt8(1)
+            parallelize(row_c, H)
+            _ = len(nodes); _ = len(order); _ = len(pts); _ = len(tri); _ = len(edges); _ = len(cpos); _ = len(ccnt); _ = len(cidx)
+            sz.unsafe_free()
+            print(name + ":", nt, "triangles of the cage")
         else:
             var nref = Int(_env_f("REF_N", Float32(16)))
             var pts = List[Vec3f](); var tri = List[Int32]()
