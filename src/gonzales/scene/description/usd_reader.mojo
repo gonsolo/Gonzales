@@ -53,6 +53,12 @@ def _usd_sky(s: Pointer[SceneParseState, MutUntrackedOrigin], rgb: RGB):
         s[unsafe_offset=0].inf_portal.append(Float32(0))
 
 
+def _usd_texture(s: Pointer[SceneParseState, MutUntrackedOrigin], path: String) -> Int32:
+    s[unsafe_offset=0].tex_names.append(String("__usd"))
+    s[unsafe_offset=0].tex_files.append(path)
+    return Int32(len(s[unsafe_offset=0].tex_files) - 1)
+
+
 def _usd_fill(s: Pointer[SceneParseState, MutUntrackedOrigin], d: PythonObject) raises:
     var mats = d["materials"]
     var rgb = _f32(mats)
@@ -60,10 +66,18 @@ def _usd_fill(s: Pointer[SceneParseState, MutUntrackedOrigin], d: PythonObject) 
         var nm = NamedMaterial(String("usd") + String(m))
         nm.kind = MatKind.diffuse
         nm.albedo = RGB(rgb[unsafe_offset=3 * m], rgb[unsafe_offset=3 * m + 1], rgb[unsafe_offset=3 * m + 2])
+        var color = String(py=d["mat_color"][m])
+        if color.byte_length() > 0:
+            nm.tex_idx = _usd_texture(s, color)
+            nm.albedo = RGB(Float32(1))
+        var normal = String(py=d["mat_normal"][m])
+        if normal.byte_length() > 0:
+            nm.normal_tex_idx = _usd_texture(s, normal)
         s[unsafe_offset=0].named_materials.append(nm^)
 
     var points = _f32(d["points"])
     var indices = Pointer[Int32, MutUntrackedOrigin](unsafe_from_address=Int(py=d["indices"].ctypes.data))
+    var uvs = _f32(d["uvs"])
     var xf = _f32(d["mesh_xf"])
     var rows_obj = d["meshes"]
     var rows = Pointer[Int64, MutUntrackedOrigin](unsafe_from_address=Int(py=rows_obj.ctypes.data))
@@ -80,13 +94,19 @@ def _usd_fill(s: Pointer[SceneParseState, MutUntrackedOrigin], d: PythonObject) 
             for k in range(16):
                 s[unsafe_offset=0].pending_object_ctm[k] = Float32(1) if k % 5 == 0 else Float32(0)
         for i in range(n_meshes):
-            var r = rows.unsafe_offset(6 * i)
+            var r = rows.unsafe_offset(7 * i)
             if Int(r[unsafe_offset=5]) != t:
                 continue
             _set_ctm(s, xf.unsafe_offset(16 * i))
             s[unsafe_offset=0].cur_attr.mat_idx = Int32(r[unsafe_offset=4])
             store_mesh(s, points.unsafe_offset(3 * Int(r[unsafe_offset=0])), indices.unsafe_offset(Int(r[unsafe_offset=2])),
                        Int32(r[unsafe_offset=1]), Int32(r[unsafe_offset=3]))
+            if r[unsafe_offset=6] != 0:
+                ref mesh = s[unsafe_offset=0].meshes[len(s[unsafe_offset=0].meshes) - 1]
+                var uv = uvs.unsafe_offset(2 * Int(r[unsafe_offset=0]))
+                mesh.uvs.reserve(2 * Int(r[unsafe_offset=1]))
+                for k in range(2 * Int(r[unsafe_offset=1])):
+                    mesh.uvs.append(uv[unsafe_offset=k])
         if t >= 0:
             _set_identity(s)
             _psc_finish_object_def(s)
