@@ -1,11 +1,12 @@
 # Displaced Catmull-Clark surfaces traced without tessellation: Binder and Keller's stackless patch subdivision, with each
 # sub-patch's box widened by its height interval (per-face Ptex min/max pyramids, src/oiio/disp.cc) times the range of its
-# unit normal (interval arithmetic over the derivative nets, after Munkberg et al. 2010). Leaves are boxes no larger than
-# the camera's footprint at them, so every ray sees the same surface and neighbouring depths cannot open cracks.
+# unit normal (interval arithmetic over the derivative nets, after Munkberg et al. 2010). Gregory patches are exact: their
+# rational interior points become boxes over the sub-domain's blend range (Binder and Keller 3.2). Leaves are boxes no
+# larger than the camera's footprint at them, so every ray sees the same surface and neighbouring depths cannot open cracks.
 from std.bit import count_leading_zeros
 from std.math import max, min, sqrt, abs, floor, log2
 from gonzales.core.geometry import Vec3f, cross, dot
-from gonzales.scene.shapes.patches import BezierPatch, patch_eval, _crop, _half, _domain, PATCH_MAX_DEPTH
+from gonzales.scene.shapes.patches import BezierPatch, patch_eval, _crop, _blossom, _domain, PATCH_MAX_DEPTH
 
 comptime _U8 = Pointer[UInt8, MutUntrackedOrigin]
 comptime _I32 = Pointer[Int32, MutUntrackedOrigin]
@@ -25,6 +26,8 @@ struct DispSurface(TrivialRegisterPassable):
     var pixel: Float32   # footprint per unit distance (pixel angle)
     var chain_off: _I32  # per face: its bordered height chain in `chain` (src/oiio/disp.cc)
     var chain: _U8
+    var fm: _F32         # per patch: the Fm interior points (1,1), (2,1), (2,2), (1,2), 12 floats; patches hold Fp there
+    var greg: _U8        # per patch: 1 for a Gregory patch, 2 for an end cap fitted as Bezier
 
 
 @always_inline
@@ -99,22 +102,11 @@ def _unit_comp(a: Float32, b: Float32, m: Float32, big: Float32) -> Tuple[Float3
     return (max(min(a / m, a / big), Float32(-1)), min(max(b / m, b / big), Float32(1)))
 
 
-def _unit_normal_range(p: BezierPatch) -> Tuple[Vec3f, Vec3f]:
-    """Component bounds of N / |N| over the patch, N = Pu x Pv, from the boxes of the derivative nets."""
-    var ux0 = Float32(1e30); var ux1 = Float32(-1e30); var uy0 = Float32(1e30); var uy1 = Float32(-1e30); var uz0 = Float32(1e30); var uz1 = Float32(-1e30)
-    var vx0 = Float32(1e30); var vx1 = Float32(-1e30); var vy0 = Float32(1e30); var vy1 = Float32(-1e30); var vz0 = Float32(1e30); var vz1 = Float32(-1e30)
-    for j in range(4):
-        for i in range(3):
-            var a = j * 4 + i; var b = i * 4 + j   # u differences along rows, v differences along columns
-            ux0 = min(ux0, p.x[a + 1] - p.x[a]); ux1 = max(ux1, p.x[a + 1] - p.x[a])
-            uy0 = min(uy0, p.y[a + 1] - p.y[a]); uy1 = max(uy1, p.y[a + 1] - p.y[a])
-            uz0 = min(uz0, p.z[a + 1] - p.z[a]); uz1 = max(uz1, p.z[a + 1] - p.z[a])
-            vx0 = min(vx0, p.x[b + 4] - p.x[b]); vx1 = max(vx1, p.x[b + 4] - p.x[b])
-            vy0 = min(vy0, p.y[b + 4] - p.y[b]); vy1 = max(vy1, p.y[b + 4] - p.y[b])
-            vz0 = min(vz0, p.z[b + 4] - p.z[b]); vz1 = max(vz1, p.z[b + 4] - p.z[b])
-    var a1 = _imul(uy0, uy1, vz0, vz1); var a2 = _imul(uz0, uz1, vy0, vy1)
-    var b1 = _imul(uz0, uz1, vx0, vx1); var b2 = _imul(ux0, ux1, vz0, vz1)
-    var c1 = _imul(ux0, ux1, vy0, vy1); var c2 = _imul(uy0, uy1, vx0, vx1)
+def _unit_from_boxes(ulo: Vec3f, uhi: Vec3f, vlo: Vec3f, vhi: Vec3f) -> Tuple[Vec3f, Vec3f]:
+    """Component bounds of N / |N|, N = Pu x Pv, for Pu in [ulo, uhi] and Pv in [vlo, vhi]."""
+    var a1 = _imul(ulo.y, uhi.y, vlo.z, vhi.z); var a2 = _imul(ulo.z, uhi.z, vlo.y, vhi.y)
+    var b1 = _imul(ulo.z, uhi.z, vlo.x, vhi.x); var b2 = _imul(ulo.x, uhi.x, vlo.z, vhi.z)
+    var c1 = _imul(ulo.x, uhi.x, vlo.y, vhi.y); var c2 = _imul(ulo.y, uhi.y, vlo.x, vhi.x)
     var lo = Vec3f(a1[0] - a2[1], b1[0] - b2[1], c1[0] - c2[1])
     var hi = Vec3f(a1[1] - a2[0], b1[1] - b2[0], c1[1] - c2[0])
     var nx = max(max(lo.x, -hi.x), Float32(0)); var ny = max(max(lo.y, -hi.y), Float32(0)); var nz = max(max(lo.z, -hi.z), Float32(0))
@@ -127,41 +119,155 @@ def _unit_normal_range(p: BezierPatch) -> Tuple[Vec3f, Vec3f]:
     return (Vec3f(x[0], y[0], z[0]), Vec3f(x[1], y[1], z[1]))
 
 
-def _sampled_normal_range(p: BezierPatch) -> Tuple[Vec3f, Vec3f]:
-    """Unit normals at a 3 x 3 grid just inside the patch, widened by a margin."""
-    var lo = Vec3f(1, 1, 1); var hi = Vec3f(-1, -1, -1)
-    for k in range(9):
-        var e = patch_eval(p, Float32(0.02) + Float32(0.48) * Float32(k % 3), Float32(0.02) + Float32(0.48) * Float32(k // 3))
-        var n = cross(e[1], e[2])
-        var l = sqrt(dot(n, n))
-        if l <= Float32(0):
-            return (Vec3f(-1, -1, -1), Vec3f(1, 1, 1))
-        n = n * (Float32(1) / l)
-        lo = Vec3f(min(lo.x, n.x), min(lo.y, n.y), min(lo.z, n.z)); hi = Vec3f(max(hi.x, n.x), max(hi.y, n.y), max(hi.z, n.z))
-    var m = Float32(0.1)
-    return (Vec3f(max(lo.x - m, Float32(-1)), max(lo.y - m, Float32(-1)), max(lo.z - m, Float32(-1))),
-            Vec3f(min(hi.x + m, Float32(1)), min(hi.y + m, Float32(1)), min(hi.z + m, Float32(1))))
+comptime _SLOTS = SIMD[DType.int32, 4](5, 6, 10, 9)   # Bezier slots of the Gregory interior pairs (OSD's order)
 
 
-def displaced_box(d: DispSurface, pi: Int, p: BezierPatch, s0: Float32, s1: Float32, t0: Float32, t1: Float32,
+@always_inline
+def _ratio_range(alo: Float32, ahi: Float32, blo: Float32, bhi: Float32) -> Tuple[Float32, Float32]:
+    """Range of a / (a + b) for a in [alo, ahi], b in [blo, bhi], a, b >= 0 (OSD's blend weights)."""
+    var lo = alo / (alo + bhi) if alo + bhi > Float32(0) else Float32(0)
+    var hi = ahi / (ahi + blo) if ahi + blo > Float32(0) else Float32(1)
+    return (lo, hi)
+
+
+@always_inline
+def _lam_range(k: Int, s0: Float32, s1: Float32, t0: Float32, t1: Float32) -> Tuple[Float32, Float32]:
+    """Range over [s0, s1] x [t0, t1] of the weight of Fp in interior slot k: s/(s+t), t/(1-s+t), (1-s)/(2-s-t), (1-t)/(1+s-t)."""
+    if k == 0:
+        return _ratio_range(s0, s1, t0, t1)
+    if k == 1:
+        return _ratio_range(t0, t1, Float32(1) - s1, Float32(1) - s0)
+    if k == 2:
+        return _ratio_range(Float32(1) - s1, Float32(1) - s0, Float32(1) - t1, Float32(1) - t0)
+    return _ratio_range(Float32(1) - t1, Float32(1) - t0, s0, s1)
+
+
+@always_inline
+def _lam(k: Int, s: Float32, t: Float32) -> Float32:
+    var r = _lam_range(k, s, s, t, t)
+    return r[0]
+
+
+@fieldwise_init
+struct INet(TrivialRegisterPassable):
+    """A control net with interval points: lower and upper corners per point."""
+    var lo: BezierPatch
+    var hi: BezierPatch
+
+
+def _inet(d: DispSurface, pi: Int, o: BezierPatch, org: Vec3f, s0: Float32, s1: Float32, t0: Float32, t1: Float32) -> INet:
+    """Patch pi (anchored at org, p = o) over [s0, s1] x [t0, t1] as an uncropped interval net: a Gregory patch's interior
+    points range over Fm + w (Fp - Fm) for the sub-domain's weights w."""
+    if d.greg[unsafe_offset=pi] != 1:
+        return INet(o, o)
+    var lo = o; var hi = o
+    for k in range(4):
+        var sl = Int(_SLOTS[k])
+        var w = _lam_range(k, s0, s1, t0, t1)
+        var mx = d.fm[unsafe_offset=12 * pi + 3 * k] - org.x; var my = d.fm[unsafe_offset=12 * pi + 3 * k + 1] - org.y; var mz = d.fm[unsafe_offset=12 * pi + 3 * k + 2] - org.z
+        var ax = mx + (o.x[sl] - mx) * w[0]; var bx = mx + (o.x[sl] - mx) * w[1]
+        var ay = my + (o.y[sl] - my) * w[0]; var by = my + (o.y[sl] - my) * w[1]
+        var az = mz + (o.z[sl] - mz) * w[0]; var bz = mz + (o.z[sl] - mz) * w[1]
+        lo.x[sl] = min(ax, bx); hi.x[sl] = max(ax, bx)
+        lo.y[sl] = min(ay, by); hi.y[sl] = max(ay, by)
+        lo.z[sl] = min(az, bz); hi.z[sl] = max(az, bz)
+    return INet(lo, hi)
+
+
+@always_inline
+def _blossom2(q0: Float32, q1: Float32, q2: Float32, a: Float32, b: Float32) -> Float32:
+    var c0 = q0 + (q1 - q0) * a; var c1 = q1 + (q2 - q1) * a
+    return c0 + (c1 - c0) * b
+
+
+@always_inline
+def _range_crop_du(p: SIMD[DType.float32, 16], q: SIMD[DType.float32, 16], s0: Float32, s1: Float32, t0: Float32, t1: Float32) -> Tuple[Float32, Float32]:
+    """Range over the crop of the u-difference net d_ij = p_(i+1)j - q_ij (3 x 4, quadratic in u, cubic in v)."""
+    var r = SIMD[DType.float32, 16](0)   # rows j, columns 0..2 cropped along u
+    for j in range(4):
+        var d0 = p[j * 4 + 1] - q[j * 4]; var d1 = p[j * 4 + 2] - q[j * 4 + 1]; var d2 = p[j * 4 + 3] - q[j * 4 + 2]
+        r[j * 4] = _blossom2(d0, d1, d2, s0, s0); r[j * 4 + 1] = _blossom2(d0, d1, d2, s0, s1); r[j * 4 + 2] = _blossom2(d0, d1, d2, s1, s1)
+    var lo = Float32(1e30); var hi = Float32(-1e30)
+    for i in range(3):
+        var c0 = r[i]; var c1 = r[4 + i]; var c2 = r[8 + i]; var c3 = r[12 + i]
+        var e0 = _blossom(c0, c1, c2, c3, t0, t0, t0); var e1 = _blossom(c0, c1, c2, c3, t0, t0, t1)
+        var e2 = _blossom(c0, c1, c2, c3, t0, t1, t1); var e3 = _blossom(c0, c1, c2, c3, t1, t1, t1)
+        lo = min(lo, min(min(e0, e1), min(e2, e3))); hi = max(hi, max(max(e0, e1), max(e2, e3)))
+    return (lo, hi)
+
+
+@always_inline
+def _range_crop_dv(p: SIMD[DType.float32, 16], q: SIMD[DType.float32, 16], s0: Float32, s1: Float32, t0: Float32, t1: Float32) -> Tuple[Float32, Float32]:
+    """Range over the crop of the v-difference net d_ij = p_i(j+1) - q_ij (4 x 3, cubic in u, quadratic in v)."""
+    var r = SIMD[DType.float32, 16](0)   # columns i, rows 0..2 cropped along v
+    for i in range(4):
+        var d0 = p[4 + i] - q[i]; var d1 = p[8 + i] - q[4 + i]; var d2 = p[12 + i] - q[8 + i]
+        r[i] = _blossom2(d0, d1, d2, t0, t0); r[4 + i] = _blossom2(d0, d1, d2, t0, t1); r[8 + i] = _blossom2(d0, d1, d2, t1, t1)
+    var lo = Float32(1e30); var hi = Float32(-1e30)
+    for j in range(3):
+        var c0 = r[j * 4]; var c1 = r[j * 4 + 1]; var c2 = r[j * 4 + 2]; var c3 = r[j * 4 + 3]
+        var e0 = _blossom(c0, c1, c2, c3, s0, s0, s0); var e1 = _blossom(c0, c1, c2, c3, s0, s0, s1)
+        var e2 = _blossom(c0, c1, c2, c3, s0, s1, s1); var e3 = _blossom(c0, c1, c2, c3, s1, s1, s1)
+        lo = min(lo, min(min(e0, e1), min(e2, e3))); hi = max(hi, max(max(e0, e1), max(e2, e3)))
+    return (lo, hi)
+
+
+def _net_normal_range(n: INet, exact: Bool, s0: Float32, s1: Float32, t0: Float32, t1: Float32) -> Tuple[Vec3f, Vec3f]:
+    """Unit-normal bounds over the sub-domain from the difference nets of the uncropped interval net, cropped by blossoming:
+    no cancellation however small the crop. Upper differences pair upper with lower points and vice versa."""
+    if exact:   # a Bezier patch: one net
+        var ex = _range_crop_du(n.lo.x, n.lo.x, s0, s1, t0, t1); var ey = _range_crop_du(n.lo.y, n.lo.y, s0, s1, t0, t1)
+        var ez = _range_crop_du(n.lo.z, n.lo.z, s0, s1, t0, t1)
+        var fx = _range_crop_dv(n.lo.x, n.lo.x, s0, s1, t0, t1); var fy = _range_crop_dv(n.lo.y, n.lo.y, s0, s1, t0, t1)
+        var fz = _range_crop_dv(n.lo.z, n.lo.z, s0, s1, t0, t1)
+        return _unit_from_boxes(Vec3f(ex[0], ey[0], ez[0]), Vec3f(ex[1], ey[1], ez[1]), Vec3f(fx[0], fy[0], fz[0]), Vec3f(fx[1], fy[1], fz[1]))
+    var ux = (_range_crop_du(n.lo.x, n.hi.x, s0, s1, t0, t1)[0], _range_crop_du(n.hi.x, n.lo.x, s0, s1, t0, t1)[1])
+    var uy = (_range_crop_du(n.lo.y, n.hi.y, s0, s1, t0, t1)[0], _range_crop_du(n.hi.y, n.lo.y, s0, s1, t0, t1)[1])
+    var uz = (_range_crop_du(n.lo.z, n.hi.z, s0, s1, t0, t1)[0], _range_crop_du(n.hi.z, n.lo.z, s0, s1, t0, t1)[1])
+    var vx = (_range_crop_dv(n.lo.x, n.hi.x, s0, s1, t0, t1)[0], _range_crop_dv(n.hi.x, n.lo.x, s0, s1, t0, t1)[1])
+    var vy = (_range_crop_dv(n.lo.y, n.hi.y, s0, s1, t0, t1)[0], _range_crop_dv(n.hi.y, n.lo.y, s0, s1, t0, t1)[1])
+    var vz = (_range_crop_dv(n.lo.z, n.hi.z, s0, s1, t0, t1)[0], _range_crop_dv(n.hi.z, n.lo.z, s0, s1, t0, t1)[1])
+    return _unit_from_boxes(Vec3f(ux[0], uy[0], uz[0]), Vec3f(ux[1], uy[1], uz[1]), Vec3f(vx[0], vy[0], vz[0]), Vec3f(vx[1], vy[1], vz[1]))
+
+
+def patch_at(d: DispSurface, pi: Int, s: Float32, t: Float32) -> BezierPatch:
+    """The Bezier patch that evaluates like patch pi at (s, t): a Gregory patch's interior points blended for (s, t)."""
+    var p = d.patches[unsafe_offset=pi]
+    if d.greg[unsafe_offset=pi] != 1:
+        return p
+    for k in range(4):
+        var sl = Int(_SLOTS[k])
+        var w = _lam(k, s, t)
+        var mx = d.fm[unsafe_offset=12 * pi + 3 * k]; var my = d.fm[unsafe_offset=12 * pi + 3 * k + 1]; var mz = d.fm[unsafe_offset=12 * pi + 3 * k + 2]
+        p.x[sl] = mx + (p.x[sl] - mx) * w; p.y[sl] = my + (p.y[sl] - my) * w; p.z[sl] = mz + (p.z[sl] - mz) * w
+    return p
+
+
+def displaced_box(d: DispSurface, pi: Int, o: BezierPatch, org: Vec3f, s0: Float32, s1: Float32, t0: Float32, t1: Float32,
                   parent_lo: Vec3f = Vec3f(-1, -1, -1), parent_hi: Vec3f = Vec3f(1, 1, 1)) -> Tuple[Vec3f, Vec3f, Vec3f, Vec3f]:
-    """The box of patch pi's (cropped to p = [s0, s1] x [t0, t1]) displaced surface, and its unit-normal range (within the
-    parent's: tiny crops' derivative nets are rounding noise)."""
-    var lo = Vec3f(p.x.reduce_min(), p.y.reduce_min(), p.z.reduce_min())
-    var hi = Vec3f(p.x.reduce_max(), p.y.reduce_max(), p.z.reduce_max())
+    """The box of patch pi's displaced surface over [s0, s1] x [t0, t1] (o: the patch anchored at org), and its unit-normal
+    range (within the parent's: both are conservative). Everything is cropped from the original nets."""
+    var n = _inet(d, pi, o, org, s0, s1, t0, t1)
+    var cl = _crop(n.lo, s0, s1, t0, t1)
+    var ch = cl if d.greg[unsafe_offset=pi] != 1 else _crop(n.hi, s0, s1, t0, t1)
+    var lo = Vec3f(cl.x.reduce_min(), cl.y.reduce_min(), cl.z.reduce_min())
+    var hi = Vec3f(ch.x.reduce_max(), ch.y.reduce_max(), ch.z.reduce_max())
     if d.scale <= Float32(0):
         return (lo, hi, parent_lo, parent_hi)
     var u0 = d.sq[unsafe_offset=3 * pi]; var v0 = d.sq[unsafe_offset=3 * pi + 1]; var sz = d.sq[unsafe_offset=3 * pi + 2]
     var hr = height_range(d, Int(d.face[unsafe_offset=pi]), u0 + s0 * sz, u0 + s1 * sz, v0 + t0 * sz, v0 + t1 * sz)
     var h0 = hr[0] * d.scale; var h1 = hr[1] * d.scale
-    var nc = _unit_normal_range(p)
-    if (s1 - s0) * (t1 - t0) < Float32(1.0 / 4096.0) and nc[1].x - nc[0].x + nc[1].y - nc[0].y + nc[1].z - nc[0].z > Float32(3):
-        nc = _sampled_normal_range(p)   # Pu x Pv vanishes at extraordinary corners: not rigorous, see the prototype's notes
+    var nc = _net_normal_range(n, d.greg[unsafe_offset=pi] != 1, s0, s1, t0, t1)
     var nlo = Vec3f(max(nc[0].x, parent_lo.x), max(nc[0].y, parent_lo.y), max(nc[0].z, parent_lo.z))
     var nhi = Vec3f(min(nc[1].x, parent_hi.x), min(nc[1].y, parent_hi.y), min(nc[1].z, parent_hi.z))
-    var nr = (nlo, nhi)
-    var ox = _imul(h0, h1, nr[0].x, nr[1].x); var oy = _imul(h0, h1, nr[0].y, nr[1].y); var oz = _imul(h0, h1, nr[0].z, nr[1].z)
+    var ox = _imul(h0, h1, nlo.x, nhi.x); var oy = _imul(h0, h1, nlo.y, nhi.y); var oz = _imul(h0, h1, nlo.z, nhi.z)
     return (Vec3f(lo.x + ox[0], lo.y + oy[0], lo.z + oz[0]), Vec3f(hi.x + ox[1], hi.y + oy[1], hi.z + oz[1]), nlo, nhi)
+
+
+def patch_box(d: DispSurface, pi: Int) -> Tuple[Vec3f, Vec3f]:
+    """The whole displaced patch's box in world space (for the BVH)."""
+    var b = displaced_box(d, pi, d.patches[unsafe_offset=pi], Vec3f(0, 0, 0), Float32(0), Float32(1), Float32(0), Float32(1))
+    return (b[0], b[1])
 
 
 @always_inline
@@ -194,11 +300,10 @@ def intersect_displaced(d: DispSurface, pi: Int, org: Vec3f, dir: Vec3f, t_max: 
     var inv = Vec3f(Float32(1) / dir.x, Float32(1) / dir.y, Float32(1) / dir.z)
     var best = t_max; var hit = False; var hs = Float32(0); var ht = Float32(0); var hsz = Float32(1)
     var nlo = Array[Vec3f, PATCH_MAX_DEPTH + 1](fill=Vec3f(-1, -1, -1)); var nhi = Array[Vec3f, PATCH_MAX_DEPTH + 1](fill=Vec3f(1, 1, 1))
-    var p = o
     var depth = 0; var steps = 0
     var path = UInt64(0); var pend = UInt64(0)
     var dom = (Float32(0), Float32(0), Float32(1), Float32(1))
-    var cur = displaced_box(d, pi, p, Float32(0), Float32(1), Float32(0), Float32(1))
+    var cur = displaced_box(d, pi, o, org, Float32(0), Float32(1), Float32(0), Float32(1))
     nlo[0] = cur[2]; nhi[0] = cur[3]
     var cur_hit = _slab(cur[0], cur[1], inv, best)
     while True:
@@ -212,12 +317,11 @@ def intersect_displaced(d: DispSurface, pi: Int, org: Vec3f, dir: Vec3f, t_max: 
                     hs = dom[0] + Float32(0.5) * dom[2]; ht = dom[1] + Float32(0.5) * dom[3]; hsz = max(dom[2], dom[3])
             else:
                 var along_u = depth % 2 == 0
-                var lo_p = _half(p, along_u, False); var up_p = _half(p, along_u, True)
                 var hu0 = dom[0]; var hv0 = dom[1]; var hdu = dom[2]; var hdv = dom[3]
                 var l_dom = (hu0, hv0, hdu * Float32(0.5) if along_u else hdu, hdv if along_u else hdv * Float32(0.5))
                 var u_dom = (hu0 + hdu * Float32(0.5) if along_u else hu0, hv0 if along_u else hv0 + hdv * Float32(0.5), l_dom[2], l_dom[3])
-                var lb = displaced_box(d, pi, lo_p, l_dom[0], l_dom[0] + l_dom[2], l_dom[1], l_dom[1] + l_dom[3], nlo[depth], nhi[depth])
-                var ub = displaced_box(d, pi, up_p, u_dom[0], u_dom[0] + u_dom[2], u_dom[1], u_dom[1] + u_dom[3], nlo[depth], nhi[depth])
+                var lb = displaced_box(d, pi, o, org, l_dom[0], l_dom[0] + l_dom[2], l_dom[1], l_dom[1] + l_dom[3], nlo[depth], nhi[depth])
+                var ub = displaced_box(d, pi, o, org, u_dom[0], u_dom[0] + u_dom[2], u_dom[1], u_dom[1] + u_dom[3], nlo[depth], nhi[depth])
                 var h0 = _slab(lb[0], lb[1], inv, best); var h1 = _slab(ub[0], ub[1], inv, best)
                 if h0[0] or h1[0]:
                     var upper_first = h1[0] and (not h0[0] or h1[1] < h0[1])
@@ -225,9 +329,9 @@ def intersect_displaced(d: DispSurface, pi: Int, org: Vec3f, dir: Vec3f, t_max: 
                         pend |= UInt64(1) << UInt64(depth)
                     if upper_first:
                         path |= UInt64(1) << UInt64(depth)
-                        p = up_p; dom = u_dom; cur = ub; cur_hit = h1
+                        dom = u_dom; cur = ub; cur_hit = h1
                     else:
-                        p = lo_p; dom = l_dom; cur = lb; cur_hit = h0
+                        dom = l_dom; cur = lb; cur_hit = h0
                     depth += 1
                     nlo[min(depth, PATCH_MAX_DEPTH)] = cur[2]; nhi[min(depth, PATCH_MAX_DEPTH)] = cur[3]
                     descend = True
@@ -241,8 +345,7 @@ def intersect_displaced(d: DispSurface, pi: Int, org: Vec3f, dir: Vec3f, t_max: 
         depth = level + 1
         var dd = _domain(path, depth)
         dom = dd
-        p = _crop(o, dd[0], dd[0] + dd[2], dd[1], dd[1] + dd[3])
-        cur = displaced_box(d, pi, p, dd[0], dd[0] + dd[2], dd[1], dd[1] + dd[3], nlo[level], nhi[level])
+        cur = displaced_box(d, pi, o, org, dd[0], dd[0] + dd[2], dd[1], dd[1] + dd[3], nlo[level], nhi[level])
         nlo[min(depth, PATCH_MAX_DEPTH)] = cur[2]; nhi[min(depth, PATCH_MAX_DEPTH)] = cur[3]
         cur_hit = _slab(cur[0], cur[1], inv, best)
     return (hit, best, hs, ht, steps, hsz)
@@ -282,7 +385,7 @@ def _level_slope(d: DispSurface, f: Int, lvl: Int, u: Float32, v: Float32) -> Tu
 def displaced_normal(d: DispSurface, pi: Int, s: Float32, t: Float32, step: Float32) -> Vec3f:
     """The displaced surface's normal at (s, t) with slopes from the prefiltered level whose texels match `step` (the leaf
     square's size in patch units), blended between the two nearest levels: Su = Pu + hu N, Sv = Pv + hv N."""
-    var e = patch_eval(d.patches[unsafe_offset=pi], s, t)
+    var e = patch_eval(patch_at(d, pi, s, t), s, t)
     var n = cross(e[1], e[2])
     var ln = sqrt(dot(n, n))
     if ln <= Float32(0):
@@ -309,7 +412,7 @@ def displaced_normal(d: DispSurface, pi: Int, s: Float32, t: Float32, step: Floa
 
 def displaced_point(d: DispSurface, pi: Int, s: Float32, t: Float32) -> Vec3f:
     """The displaced surface at (s, t) (the tessellated reference)."""
-    var e = patch_eval(d.patches[unsafe_offset=pi], s, t)
+    var e = patch_eval(patch_at(d, pi, s, t), s, t)
     var n = cross(e[1], e[2])
     var ln = sqrt(dot(n, n))
     if ln <= Float32(0) or d.scale <= Float32(0):

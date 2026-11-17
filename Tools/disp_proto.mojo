@@ -1,7 +1,7 @@
 # Prototype: Moana's lava rock (Catmull-Clark cage + Ptex displacement) ray cast without tessellation, against a
 # tessellated reference. Writes PPM images and prints timings, traversal steps, cracks and memory.
 from std.ffi import external_call
-from std.math import pow, max, min, sqrt, abs, tan
+from std.math import pow, max, min, sqrt, abs, tan, acos
 from std.memory.alloc import unsafe_alloc
 from std.os import getenv
 from std.sys.info import size_of
@@ -9,7 +9,8 @@ from std.time import perf_counter_ns
 from max.algorithm import parallelize
 from gonzales.core.geometry import Vec3f, cross, dot
 from gonzales.scene.shapes.patches import BezierPatch
-from gonzales.scene.shapes.displaced_patches import DispSurface, displaced_box, intersect_displaced, displaced_normal, displaced_point
+from gonzales.scene.shapes.displaced_patches import DispSurface, patch_box, patch_at, intersect_displaced, displaced_normal, displaced_point
+from gonzales.scene.shapes.patches import patch_eval
 
 comptime PTX = "/mnt/storage/moana/base/ex/island/textures/isLavaRocks/Displacement/rockfacebg0001_geo.ptx"
 
@@ -171,6 +172,46 @@ def _write_ppm(path: String, img: List[Float32], w: Int, h: Int) raises:
         f.write_bytes(Span(bytes))
 
 
+def _unit_normal(d: DispSurface, pi: Int, s: Float32, t: Float32) -> Vec3f:
+    var e = patch_eval(patch_at(d, pi, s, t), s, t)
+    var n = cross(e[1], e[2])
+    var l = sqrt(dot(n, n))
+    return n * (Float32(1) / l) if l > Float32(0) else Vec3f(0, 0, 0)
+
+
+def _edge_gap(d: DispSurface, np: Int) raises:
+    """Angle between the two patches' normals along shared edges (matched by their end points), split by Gregory edges."""
+    var ends = Dict[String, Int]()   # key of an edge -> patch * 4 + edge
+    var cs: List[Float32] = [0, 1, 1, 0]; var ct: List[Float32] = [0, 0, 1, 1]   # corners (s, t) counter-clockwise
+    var worst_g = Float32(0); var worst_r = Float32(0); var sum_g = Float64(0); var sum_r = Float64(0); var n_g = 0; var n_r = 0
+    for p in range(np):
+        for e in range(4):
+            var a = patch_eval(d.patches[unsafe_offset=p], cs[e], ct[e])[0]; var b = patch_eval(d.patches[unsafe_offset=p], cs[(e + 1) % 4], ct[(e + 1) % 4])[0]
+            var ka = String(Int(a.x * 1000)) + "," + String(Int(a.y * 1000)) + "," + String(Int(a.z * 1000))
+            var kb = String(Int(b.x * 1000)) + "," + String(Int(b.y * 1000)) + "," + String(Int(b.z * 1000))
+            var key = ka + "|" + kb if ka < kb else kb + "|" + ka
+            if key not in ends:
+                ends[key] = p * 4 + e
+                continue
+            var q = ends[key] // 4; var f = ends[key] % 4
+            var gpair = d.greg[unsafe_offset=p] != 0 or d.greg[unsafe_offset=q] != 0
+            var qa = patch_eval(d.patches[unsafe_offset=q], cs[f], ct[f])[0]
+            var same = dot(qa - a, qa - a) < dot(qa - b, qa - b)   # do the two edges run the same way?
+            for k in range(1, 8):
+                var x = Float32(k) / Float32(8)
+                var ps = cs[e] + (cs[(e + 1) % 4] - cs[e]) * x; var pt = ct[e] + (ct[(e + 1) % 4] - ct[e]) * x
+                var y = x if same else Float32(1) - x
+                var qs = cs[f] + (cs[(f + 1) % 4] - cs[f]) * y; var qt = ct[f] + (ct[(f + 1) % 4] - ct[f]) * y
+                var c = abs(dot(_unit_normal(d, p, ps, pt), _unit_normal(d, q, qs, qt)))
+                var ang = Float32(57.29578) * acos(min(c, Float32(1)))
+                if gpair:
+                    worst_g = max(worst_g, ang); sum_g += Float64(ang); n_g += 1
+                else:
+                    worst_r = max(worst_r, ang); sum_r += Float64(ang); n_r += 1
+    print("normal gap across edges touching Gregory patches: max", worst_g, "deg, mean", sum_g / Float64(max(n_g, 1)), "over", n_g, "samples")
+    print("normal gap across regular edges: max", worst_r, "deg, mean", sum_r / Float64(max(n_r, 1)), "over", n_r, "samples")
+
+
 def main() raises:
     var out_dir = String("/tmp/claude-1000/-home-gonsolo-work-moana-3060-paper/5a168d33-8d85-45d2-a94f-7e6bdd0ebff6/scratchpad/rock/")
     var W = 960; var H = 720
@@ -194,6 +235,9 @@ def main() raises:
     var chain_off = unsafe_alloc[Int32](nf)
     var chain = unsafe_alloc[UInt8](max(nchain, 1))
     external_call["disp_take_chains", NoneType](hd, chain_off, chain)
+    var fm = unsafe_alloc[Float32](12 * np)
+    var greg = unsafe_alloc[UInt8](np)
+    external_call["disp_take_gregory", NoneType](hd, fm, greg)
     external_call["disp_take", NoneType](hd, cpf, sq, face, hdr, pyr, cbox)
     var patches = unsafe_alloc[BezierPatch](np)
     for p in range(np):
@@ -240,13 +284,21 @@ def main() raises:
         if external_call["disp_color_open", Int32](cc) == 0:
             raise Error("cannot read " + col_path)
 
+    if getenv("EDGE_GAP") == "1":
+        _edge_gap(DispSurface(patches, sq, face, hdr, pyr, Float32(0), eye, pixel, chain_off, chain, fm, greg), np)
+        return
+    var ngreg = 0
+    for p in range(np):
+        ngreg += 1 if greg[unsafe_offset=p] == 1 else 0
+    print("Gregory patches:", ngreg, "of", np, "(", np * (size_of[BezierPatch]() + 16) + ngreg * 48, "patch bytes incl. Fm )")
+
     var lo_b = List[Vec3f](); var hi_b = List[Vec3f]()
     for scene in range(5):   # 0: limit surface, 1: scale 1, 2: exaggerated, 3: tessellated reference of 2, 4: the cage
         var name = ["a_limit", "b_disp1", "c_disp" + String(Int(exag)), "d_tess" + String(Int(exag)), "e_cage"][scene]
         if only.byte_length() > 0 and only != name:
             continue
         var scale = Float32(0) if scene == 0 else (Float32(1) / Float32(255) if scene == 1 else exag / Float32(255))
-        var d = DispSurface(patches, sq, face, hdr, pyr, scale, eye, pixel, chain_off, chain)
+        var d = DispSurface(patches, sq, face, hdr, pyr, scale, eye, pixel, chain_off, chain, fm, greg)
         var img = List[Float32](length=W * H, fill=Float32(0))
         var rgb = List[Float32](length=3 * W * H, fill=Float32(0))
         var hitmask = List[UInt8](length=W * H, fill=UInt8(0))
@@ -257,7 +309,7 @@ def main() raises:
         if scene < 3:
             lo_b.clear(); hi_b.clear()
             for p in range(np):
-                var b = displaced_box(d, p, patches[unsafe_offset=p], Float32(0), Float32(1), Float32(0), Float32(1))
+                var b = patch_box(d, p)
                 lo_b.append(b[0]); hi_b.append(b[1])
             var nodes = List[BNode](); var order = List[Int32]()
             for p in range(np):

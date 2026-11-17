@@ -9,7 +9,7 @@
 
 extern "C" void *osd_build(int, const float *, int, const int *, const int *, int, const int *, const float *, int,
                            const int *, const float *, int, int *);
-extern "C" void osd_take(void *, float *, float *, int *);
+extern "C" void osd_take_exact(void *, float *, float *, unsigned char *, float *, int *);
 extern "C" void *ptex_open(const char *);
 extern "C" void ptex_close(void *);
 extern "C" void ptex_read_face(void *, int, int, int, unsigned char *);
@@ -17,7 +17,8 @@ extern "C" void ptex_read_face(void *, int, int, int, unsigned char *);
 namespace {
 
 struct Disp {
-        std::vector<float> cp, sq, cage;
+        std::vector<float> cp, fm, sq, cage;   // cp: Gregory patches with Fp inside, fm: their Fm points (12 floats a patch)
+        std::vector<unsigned char> greg;
         std::vector<int> face, hdr;            // hdr: per face its pyramid offset, log2 width, log2 height
         std::vector<unsigned char> pyr;        // per face: heights, then per coarser level the min and max cells
         std::vector<int> chain_off;            // per face: its bordered height chain in `chain`
@@ -55,9 +56,11 @@ void *disp_open(const char *ptx, int isolation, long long *counts) {
         if (!h)
                 return nullptr;
         d->cp.resize(static_cast<size_t>(np) * 48);
+        d->fm.resize(static_cast<size_t>(np) * 12);
+        d->greg.resize(np);
         d->sq.resize(static_cast<size_t>(np) * 3);
         d->face.resize(np);
-        osd_take(h, d->cp.data(), d->sq.data(), d->face.data());
+        osd_take_exact(h, d->cp.data(), d->fm.data(), d->greg.data(), d->sq.data(), d->face.data());
 
         for (int f = 0; f < nfc; ++f) {
                 const Ptex::Res r = tex->getFaceInfo(f).res;
@@ -120,6 +123,13 @@ void *disp_open(const char *ptx, int isolation, long long *counts) {
         counts[2] = static_cast<long long>(d->pyr.size());
         counts[3] = static_cast<long long>(d->chain.size());
         return d.release();
+}
+
+// The Gregory data (fm 12 floats, greg 1 byte a patch); call before disp_take, which frees everything.
+void disp_take_gregory(void *h, float *fm, unsigned char *greg) {
+        auto *d = static_cast<Disp *>(h);
+        std::memcpy(fm, d->fm.data(), d->fm.size() * sizeof(float));
+        std::memcpy(greg, d->greg.data(), d->greg.size());
 }
 
 // The bordered height chains (offsets: 1 int a face); call before disp_take, which frees everything.
