@@ -24,6 +24,7 @@ from gonzales.scene.appearance.media import Medium, MediumInterface, Grid, NvdbG
 from gonzales.integrators.pt.nee import sms_generate_reservoir, sms_resolve, sms_temporal_step
 from gonzales.integrators.pt.materials import _shade_diffuse_nee
 from gonzales.transport.shade_context import ShadeContext, LightContext, GIPendingX1
+from _shade_fixture import make_shade_context
 from gonzales.transport.restir_gi import gi_reservoir_io_null
 from gonzales.transport.restir_di import reservoir_io_null
 from gonzales.integrators.pt.restir_sms import SMSReservoir, SMSReservoirIO
@@ -68,19 +69,8 @@ def _make_ctx(
     area_light_count: Int,
     light_sampler_cdf: Pointer[Float32, MutUntrackedOrigin],
 ) -> ShadeContext:
-    return ShadeContext(
-        0, bvh2Nodes, primIds, meshes,
-        Pointer[Curve, MutUntrackedOrigin].unsafe_dangling(),
-        materials,
-        Pointer[Pointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
-        Pointer[GpuTexture, MutUntrackedOrigin].unsafe_dangling(), 0,
-        Pointer[NormalSlopeMap, MutUntrackedOrigin].unsafe_dangling(),
-        Pointer[ShadowTask, MutUntrackedOrigin].unsafe_dangling(),
-        CameraFootprint.none(),
-        Pointer[UInt32, MutUntrackedOrigin].unsafe_dangling(),
-        null_guide(),
-        null_guide(),
-        False,
+    return make_shade_context(
+        meshes,
         LightContext(
             area_lights, area_light_count,
             Pointer[DistantLight, MutUntrackedOrigin].unsafe_dangling(), 0,
@@ -88,22 +78,7 @@ def _make_ctx(
             Pointer[InfiniteLight, MutUntrackedOrigin].unsafe_dangling(), 0,
             Pointer[Sphere, MutUntrackedOrigin].unsafe_dangling(), 0,
             LightSampler(light_sampler_cdf, Int32(area_light_count), Int32(0))),
-        Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
-        Pointer[Pointer[PrimId, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
-        Pointer[Instance, MutUntrackedOrigin].unsafe_dangling(),
-        null_spectral_handle(),
-        Pointer[MeasuredBRDF, MutUntrackedOrigin].unsafe_dangling(),
-        Pointer[GIPendingX1, MutUntrackedOrigin].unsafe_dangling(),
-        gi_reservoir_io_null(),
-        Pointer[PathState, MutUntrackedOrigin].unsafe_dangling(), True, True,
-        BVH4.none(),
-        Pointer[SuppressTask, MutUntrackedOrigin].unsafe_dangling(),
-        Pointer[UInt8, MutUntrackedOrigin].unsafe_dangling(),
-        0, Pointer[Medium, MutUntrackedOrigin].unsafe_dangling(), Pointer[MediumInterface, MutUntrackedOrigin].unsafe_dangling(),
-        Pointer[Grid, MutUntrackedOrigin].unsafe_dangling(), Pointer[NvdbGrid, MutUntrackedOrigin].unsafe_dangling(),
-        Float32(0),
-        SIMD[DType.float32, 2](0),
-        SIMD[DType.int32, 4](0),
+        bvh2Nodes, primIds, materials,
     )
 
 # ── Shared fixture: a flat glass plane at z=1 between hit_point (origin,

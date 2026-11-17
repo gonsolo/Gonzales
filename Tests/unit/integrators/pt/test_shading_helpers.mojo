@@ -26,6 +26,7 @@ from gonzales.transport.guide import null_guide
 from gonzales.scene.appearance.media import Medium, MediumInterface, Grid, NvdbGrid
 from gonzales.integrators.pt.common import _build_geom_context_full, _shadow_contribute
 from gonzales.transport.shade_context import ShadeContext, LightContext, GIPendingX1
+from _shade_fixture import make_shade_context, null_light_context
 from gonzales.transport.texturing import _get_tri_verts, _apply_normal_map
 from gonzales.transport.restir_gi import gi_reservoir_io_null
 
@@ -62,19 +63,6 @@ def _make_material(albedo: RGB, normal_tex_idx: Int32) -> Material:
         Int32(-1), Float32(0.0), Float32(0.0), normal_tex_idx, Int32(-1), Float32(1.0), Int32(-1), Int32(-1),
         RGB(Float32(0.0)), RGB(Float32(0.0)), Float32(1.0), Float32(1.0), Int32(-1), RGB(Float32(1.0)), RGB(Float32(0.0)), RGB(Float32(1.0)), Int32(-1), Float32(1.0), Float32(0.0))
 
-def _null_light_context() -> LightContext:
-    """No lights of any kind -- fine, since none of the functions under test
-    touch ctx.lights at all (NEE light-sampling lives in the shade_* callers,
-    not in these lower-level helpers)."""
-    return LightContext(
-        Pointer[AreaLight, MutUntrackedOrigin].unsafe_dangling(), 0,
-        Pointer[DistantLight, MutUntrackedOrigin].unsafe_dangling(), 0,
-        Pointer[PointLight, MutUntrackedOrigin].unsafe_dangling(), 0,
-        Pointer[InfiniteLight, MutUntrackedOrigin].unsafe_dangling(), 0,
-        Pointer[Sphere, MutUntrackedOrigin].unsafe_dangling(), 0,
-        LightSampler(Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(), Int32(0), Int32(0)),
-    )
-
 def _make_ctx(
     bvh2Nodes: Pointer[BVH2Node, MutUntrackedOrigin],
     primIds: Pointer[PrimId, MutUntrackedOrigin],
@@ -85,37 +73,7 @@ def _make_ctx(
     left as a dangling sentinel -- valid as long as the exercised code paths
     never dereference it (verified per-function below: e.g. tex_idx=-1 and
     normal_tex_idx=-1 mean the texture/normal-map branches never run)."""
-    return ShadeContext(
-        0, bvh2Nodes, primIds, meshes,
-        Pointer[Curve, MutUntrackedOrigin].unsafe_dangling(),
-        materials,
-        Pointer[Pointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
-        Pointer[GpuTexture, MutUntrackedOrigin].unsafe_dangling(), 0,
-        Pointer[NormalSlopeMap, MutUntrackedOrigin].unsafe_dangling(),
-        Pointer[ShadowTask, MutUntrackedOrigin].unsafe_dangling(),
-        CameraFootprint.none(),
-        Pointer[UInt32, MutUntrackedOrigin].unsafe_dangling(),
-        null_guide(),
-        null_guide(),
-        False,
-        _null_light_context(),
-        Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
-        Pointer[Pointer[PrimId, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
-        Pointer[Instance, MutUntrackedOrigin].unsafe_dangling(),
-        null_spectral_handle(),
-        Pointer[MeasuredBRDF, MutUntrackedOrigin].unsafe_dangling(),
-        Pointer[GIPendingX1, MutUntrackedOrigin].unsafe_dangling(),
-        gi_reservoir_io_null(),
-        Pointer[PathState, MutUntrackedOrigin].unsafe_dangling(), True, True,
-        BVH4.none(),
-        Pointer[SuppressTask, MutUntrackedOrigin].unsafe_dangling(),
-        Pointer[UInt8, MutUntrackedOrigin].unsafe_dangling(),
-        0, Pointer[Medium, MutUntrackedOrigin].unsafe_dangling(), Pointer[MediumInterface, MutUntrackedOrigin].unsafe_dangling(),
-        Pointer[Grid, MutUntrackedOrigin].unsafe_dangling(), Pointer[NvdbGrid, MutUntrackedOrigin].unsafe_dangling(),
-        Float32(0),
-        SIMD[DType.float32, 2](0),
-        SIMD[DType.int32, 4](0),
-    )
+    return make_shade_context(meshes, null_light_context(), bvh2Nodes, primIds, materials)
 
 def _make_path(org: Vec3f, dir: Vec3f) -> PathState:
     return PathState(
@@ -304,38 +262,7 @@ def test_build_geom_context_full_sphere_prim_returns_exact_analytic_normal() rai
         spheres, 1,
         LightSampler(Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(), Int32(0), Int32(0)),
     )
-    var ctx = ShadeContext(
-        0, Pointer[BVH2Node, MutUntrackedOrigin].unsafe_dangling(),
-        Pointer[PrimId, MutUntrackedOrigin].unsafe_dangling(), meshes,
-        Pointer[Curve, MutUntrackedOrigin].unsafe_dangling(),
-        materials,
-        Pointer[Pointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
-        Pointer[GpuTexture, MutUntrackedOrigin].unsafe_dangling(), 0,
-        Pointer[NormalSlopeMap, MutUntrackedOrigin].unsafe_dangling(),
-        Pointer[ShadowTask, MutUntrackedOrigin].unsafe_dangling(),
-        CameraFootprint.none(),
-        Pointer[UInt32, MutUntrackedOrigin].unsafe_dangling(),
-        null_guide(),
-        null_guide(),
-        False,
-        lights^,
-        Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
-        Pointer[Pointer[PrimId, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
-        Pointer[Instance, MutUntrackedOrigin].unsafe_dangling(),
-        null_spectral_handle(),
-        Pointer[MeasuredBRDF, MutUntrackedOrigin].unsafe_dangling(),
-        Pointer[GIPendingX1, MutUntrackedOrigin].unsafe_dangling(),
-        gi_reservoir_io_null(),
-        Pointer[PathState, MutUntrackedOrigin].unsafe_dangling(), True, True,
-        BVH4.none(),
-        Pointer[SuppressTask, MutUntrackedOrigin].unsafe_dangling(),
-        Pointer[UInt8, MutUntrackedOrigin].unsafe_dangling(),
-        0, Pointer[Medium, MutUntrackedOrigin].unsafe_dangling(), Pointer[MediumInterface, MutUntrackedOrigin].unsafe_dangling(),
-        Pointer[Grid, MutUntrackedOrigin].unsafe_dangling(), Pointer[NvdbGrid, MutUntrackedOrigin].unsafe_dangling(),
-        Float32(0),
-        SIMD[DType.float32, 2](0),
-        SIMD[DType.int32, 4](0),
-    )
+    var ctx = make_shade_context(meshes, lights^, materials=materials)
 
     var org = Vec3f(0.0, 0.0, 5.0)
     var dir = Vec3f(0.0, 0.0, -1.0)

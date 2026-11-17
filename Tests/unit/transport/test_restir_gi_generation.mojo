@@ -26,6 +26,7 @@ from gonzales.integrators.pt.common import gi_pending_x1_init
 from gonzales.integrators.pt.restir import _gi_generate_recon_candidate
 from gonzales.integrators.pt.materials import _shade_diffuse_nee
 from gonzales.transport.shade_context import ShadeContext, LightContext, GIPendingX1
+from _shade_fixture import make_shade_context
 from gonzales.transport.restir_gi import gi_reservoir_io_null
 from gonzales.transport.restir_di import reservoir_io_null
 from gonzales.core.rng import PCG32
@@ -69,19 +70,8 @@ def _make_ctx_with_light(
     use_restir/gi_pending default to off/dangling, matching every real
     non-restir call site; the end-to-end wiring tests below pass real
     values to exercise the full generate/combine/resolve chain."""
-    return ShadeContext(
-        0, bvh2Nodes, primIds, meshes,
-        Pointer[Curve, MutUntrackedOrigin].unsafe_dangling(),
-        Pointer[Material, MutUntrackedOrigin].unsafe_dangling(),
-        Pointer[Pointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
-        Pointer[GpuTexture, MutUntrackedOrigin].unsafe_dangling(), 0,
-        Pointer[NormalSlopeMap, MutUntrackedOrigin].unsafe_dangling(),
-        Pointer[ShadowTask, MutUntrackedOrigin].unsafe_dangling(),
-        CameraFootprint.none(),
-        Pointer[UInt32, MutUntrackedOrigin].unsafe_dangling(),
-        null_guide(),
-        null_guide(),
-        use_restir,
+    return make_shade_context(
+        meshes,
         LightContext(
             area_lights, area_light_count,
             Pointer[DistantLight, MutUntrackedOrigin].unsafe_dangling(), 0,
@@ -89,22 +79,7 @@ def _make_ctx_with_light(
             Pointer[InfiniteLight, MutUntrackedOrigin].unsafe_dangling(), 0,
             Pointer[Sphere, MutUntrackedOrigin].unsafe_dangling(), 0,
             LightSampler(light_sampler_cdf, Int32(area_light_count), Int32(0))),
-        Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
-        Pointer[Pointer[PrimId, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
-        Pointer[Instance, MutUntrackedOrigin].unsafe_dangling(),
-        null_spectral_handle(),
-        Pointer[MeasuredBRDF, MutUntrackedOrigin].unsafe_dangling(),
-        gi_pending,
-        gi_reservoir_io_null(),
-        Pointer[PathState, MutUntrackedOrigin].unsafe_dangling(), True, True,
-        BVH4.none(),
-        Pointer[SuppressTask, MutUntrackedOrigin].unsafe_dangling(),
-        Pointer[UInt8, MutUntrackedOrigin].unsafe_dangling(),
-        0, Pointer[Medium, MutUntrackedOrigin].unsafe_dangling(), Pointer[MediumInterface, MutUntrackedOrigin].unsafe_dangling(),
-        Pointer[Grid, MutUntrackedOrigin].unsafe_dangling(), Pointer[NvdbGrid, MutUntrackedOrigin].unsafe_dangling(),
-        Float32(0),
-        SIMD[DType.float32, 2](0),
-        SIMD[DType.int32, 4](0),
+        bvh2Nodes, primIds, use_restir=use_restir, gi_pending=gi_pending,
     )
 
 # ── Shared fixture: a small light triangle near (0,10,0) facing straight
