@@ -24,7 +24,7 @@ from gonzales.scene.appearance.host_textures import TexPrefetch
 from gonzales.core.fast_io import read_parallel, PARALLEL_MIN
 
 comptime _MAGIC: Int = 0x474E5A53434143
-comptime _FORMAT: Int = 15   # 14: distant and point lights, normal slope maps; 15: alpha masks
+comptime _FORMAT: Int = 16   # 14: distant and point lights, normal slope maps; 15: alpha masks; 16: TriangleMesh.patches
 
 comptime _Ptr = Pointer[UInt8, MutUntrackedOrigin]
 
@@ -120,6 +120,9 @@ def _unsupported(ref s: ParsedScene_Mojo) -> String:
         return "measured materials"
     if s.bvh4.is_real():
         return "a BVH4"
+    for mi in range(Int(s.mesh_count)):
+        if _is_real_ptr(s.meshes[unsafe_offset=mi].patches):
+            return "Bezier patches"
     return String("")
 
 

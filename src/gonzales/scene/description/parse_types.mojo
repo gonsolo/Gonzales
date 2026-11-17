@@ -202,6 +202,7 @@ struct MeshAccum(Copyable, Movable):
     var alpha_mask:  Int32
     var alpha_const: Float32
     var disp_idx:    Int32   # index into SceneParseState.disp_meshes, -1 = not displaced
+    var patch_cp:    List[Float32]   # 48 a triangle: the Bezier patch it stands in for (TriangleMesh.patches)
 
     def __init__(out self, mat_idx: Int32, inside_medium: Int32, outside_medium: Int32):
         self.points        = List[Float32]()
@@ -223,6 +224,7 @@ struct MeshAccum(Copyable, Movable):
         self.alpha_mask    = -1
         self.alpha_const   = 1.0
         self.disp_idx      = -1
+        self.patch_cp      = List[Float32]()
 
 struct SceneParseState(Movable):
     # Current transform matrix and stack

@@ -23,6 +23,7 @@ from gonzales.scene.accel.xert import xert_alignment, xert_heat_path, xert_insta
 from gonzales.scene.description.pbrt_parser import ParsedScene_Mojo
 from gonzales.scene.appearance.host_textures import decode_host_textures, set_tex_maps
 from gonzales.scene.shapes.displacement import DisplacedMesh, DisplacedTri, Rmip
+from gonzales.scene.shapes.patches import BezierPatch
 from gonzales.scene.appearance.ptex_cache import PtexCache, PTEX_QUEUE_CAP
 from gonzales.transport.restir_di import DIReservoir
 from gonzales.integrators.pt.restir_vol import VolReservoir
@@ -396,6 +397,9 @@ struct MeshBuffers(Movable):
                     _gpu_upload_owned[DisplacedTri](ctx, alpha_bufs, dm.tris, Int(s.mesh_n_tris[unsafe_offset=i])), disp_dev[found])
                 disp_temps.append(tmp)
                 mesh_structs_host[unsafe_offset=i].disp = _gpu_upload_owned[DisplacedMesh](ctx, alpha_bufs, tmp, 1)
+            if _is_real_ptr(host_mesh.patches):
+                mesh_structs_host[unsafe_offset=i].patches = _gpu_upload_owned[BezierPatch](
+                    ctx, alpha_bufs, host_mesh.patches, Int(s.mesh_n_tris[unsafe_offset=i]))
 
         # Upload mesh struct array
         var meshes_buf = _gpu_upload_array[TriangleMesh](ctx, mesh_structs_host, Int(s.mesh_count))
@@ -1210,7 +1214,7 @@ struct XertPieces(Movable):
             var curves = Int(s.blas_primid_counts[unsafe_offset=t]) > 0 and rec.type == PrimKind.merged_blas and rec.id2 > Int64(0)
             var disp = False
             for i in range(m0, m1):
-                disp = disp or _is_real_ptr(s.meshes[unsafe_offset=i].disp)
+                disp = disp or _is_real_ptr(s.meshes[unsafe_offset=i].disp) or _is_real_ptr(s.meshes[unsafe_offset=i].patches)
             if n_inst[t] == 0 or n_inst[t] > 4 or tris <= 16 * XERT_PIECE_TRIS or curves or disp:   # pieces hold no procedural leaves
                 continue
             var rest = 0

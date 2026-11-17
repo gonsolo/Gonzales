@@ -36,6 +36,7 @@ from gonzales.scene.shapes.ply import load_ply
 from gonzales.scene.shapes.ply_prefetch import PlyPrefetch, scan_plys, load_all_plys
 from gonzales.scene.description.displacement_builder import apply_shape_displacement
 from gonzales.scene.shapes.displacement import DisplacedMesh, DisplacedTri
+from gonzales.scene.shapes.patches import BezierPatch
 from gonzales.scene.description.material_builder import _psc_handle_make_named_material, _psc_handle_named_material, _imagemap_affine
 from gonzales.scene.appearance.measured_bsdf import load_measured_brdf_full
 from gonzales.scene.description.light_builder import _psc_handle_area_light_source, handle_light_source
@@ -1782,7 +1783,15 @@ def _texture_mapping(s: Pointer[SceneParseState, MutUntrackedOrigin], params: Pa
 # than a duplicated copy of the geometry.
 
 def _displaced_bounds(s: Pointer[SceneParseState, MutUntrackedOrigin], mi: Int, ti: Int, b: Pointer[Float32, MutUntrackedOrigin]):
-    """A displaced triangle's BVH box is its prism's."""
+    """A displaced triangle's BVH box is its prism's, a patch's stand-in triangle's its control points'."""
+    if len(s[unsafe_offset=0].meshes[mi].patch_cp) > 0:
+        for c in range(3):
+            var lo = Float32(1e38); var hi = Float32(-1e38)
+            for k in range(16):
+                var q = s[unsafe_offset=0].meshes[mi].patch_cp[ti * 48 + k * 3 + c]
+                lo = min(lo, q); hi = max(hi, q)
+            b[unsafe_offset=c] = lo; b[unsafe_offset=3 + c] = hi
+        return
     var di = Int(s[unsafe_offset=0].meshes[mi].disp_idx)
     if di < 0:
         return
@@ -1792,6 +1801,13 @@ def _displaced_bounds(s: Pointer[SceneParseState, MutUntrackedOrigin], mi: Int, 
     var bb = tri.bounds()
     b[unsafe_offset=0] = bb[0].x; b[unsafe_offset=1] = bb[0].y; b[unsafe_offset=2] = bb[0].z
     b[unsafe_offset=3] = bb[1].x; b[unsafe_offset=4] = bb[1].y; b[unsafe_offset=5] = bb[1].z
+
+
+def _tri_kind(s: Pointer[SceneParseState, MutUntrackedOrigin], mi: Int, ti: Int) -> Int8:
+    """A mesh triangle's PrimKind: a patch's stand-in, displaced, or plain."""
+    if len(s[unsafe_offset=0].meshes[mi].patch_cp) > 0:
+        return PrimKind.patch
+    return _tri_kind(s, mi, ti)
 
 
 def _is_displaced(s: Pointer[SceneParseState, MutUntrackedOrigin], mi: Int, ti: Int) -> Bool:
@@ -1829,7 +1845,7 @@ def _wrap_world_meshes(s: Pointer[SceneParseState, MutUntrackedOrigin]):
             var nv = len(m.points) // 4
             if (m.is_object_template or m.is_area_light or m.alpha_mask >= Int32(0) or m.alpha_const < Float32(1.0)
                     or m.inside_medium >= Int32(0) or m.outside_medium >= Int32(0) or nv == 0 or len(m.face_idxs) == 0
-                    or m.disp_idx >= Int32(0)):
+                    or m.disp_idx >= Int32(0) or len(m.patch_cp) > 0):
                 break
             var uv = len(m.uvs) >= nv * 2; var nrm = len(m.normals) >= nv * 3
             if j == i:
@@ -1876,7 +1892,7 @@ def _merge_template_meshes(s: Pointer[SceneParseState, MutUntrackedOrigin], defa
             ref m = s[unsafe_offset=0].meshes[mi]
             var nv = len(m.points) // 4
             if (m.is_area_light or m.alpha_mask >= Int32(0) or m.alpha_const < Float32(1.0)
-                    or m.inside_medium >= Int32(0) or m.outside_medium >= Int32(0) or m.disp_idx >= Int32(0)
+                    or m.inside_medium >= Int32(0) or m.outside_medium >= Int32(0) or m.disp_idx >= Int32(0) or len(m.patch_cp) > 0
                     or (len(m.uvs) >= nv * 2 and nv > 0) != has_uv or (len(m.normals) >= nv * 3 and nv > 0) != has_nrm):
                 ok = False
                 break
@@ -2784,6 +2800,15 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
             var dm = unsafe_alloc[DisplacedMesh](1)
             dm[unsafe_offset=0] = s[unsafe_offset=0].disp_meshes[Int(ma.disp_idx)]
             meshes[unsafe_offset=i].disp = dm
+        meshes[unsafe_offset=i].patches = Pointer[BezierPatch, MutUntrackedOrigin].unsafe_dangling()
+        if nt > 0 and len(ma.patch_cp) >= nt * 48:
+            var pa = unsafe_alloc[BezierPatch](nt)
+            for k in range(nt):
+                var x = SIMD[DType.float32, 16](0); var y = SIMD[DType.float32, 16](0); var z = SIMD[DType.float32, 16](0)
+                for c in range(16):
+                    x[c] = ma.patch_cp[k * 48 + c * 3]; y[c] = ma.patch_cp[k * 48 + c * 3 + 1]; z[c] = ma.patch_cp[k * 48 + c * 3 + 2]
+                pa[unsafe_offset=k] = BezierPatch(x, y, z)
+            meshes[unsafe_offset=i].patches = pa
         if len(ma.normals) >= nv * 3:
             var nrm_c = unsafe_alloc[Float32](nv)   # one encoded word a vertex, see TriangleMesh.normals
             var nrm_w = nrm_c.unsafe_bitcast[UInt32]()
@@ -3414,7 +3439,7 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
             var mat_idx = Int(s[unsafe_offset=0].meshes[mi].mat_idx)
             var mat_idx_r = mat_idx if mat_idx >= 0 else Int(default_mat_idx)
             t_prim_ids[unsafe_offset=k] = PrimId(Int64(mi), Int64(ti * 3), Int64(mat_idx_r), Int32(-1),
-                                                 PrimKind.displaced if _is_displaced(s, mi, ti) else PrimKind.triangle, Int8(0), Int8(0), Int8(0))
+                                                 _tri_kind(s, mi, ti), Int8(0), Int8(0), Int8(0))
         t_mesh.unsafe_free(); t_local.unsafe_free(); t_order.unsafe_free()
         blas_nodes_arr[unsafe_offset=tmpl]   = t_nodes
         blas_primids_arr[unsafe_offset=tmpl] = t_prim_ids
@@ -3615,7 +3640,7 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
                     prim_ids_gpu[unsafe_offset=k].materialIndex = Int64(al_mat_base + al_idx)
                 else:
                     var mat_idx = Int(s[unsafe_offset=0].meshes[mi].mat_idx)
-                    prim_ids_gpu[unsafe_offset=k].type          = PrimKind.displaced if _is_displaced(s, mi, ti) else Int8(0)
+                    prim_ids_gpu[unsafe_offset=k].type          = _tri_kind(s, mi, ti)
                     prim_ids_gpu[unsafe_offset=k].id1           = Int64(mi)
                     prim_ids_gpu[unsafe_offset=k].id2           = Int64(ti * 3)
                     prim_ids_gpu[unsafe_offset=k].materialIndex = Int64(mat_idx) if mat_idx >= 0 else Int64(default_mat_idx)
@@ -3645,7 +3670,7 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
                 prim_ids[unsafe_offset=k].materialIndex = Int64(al_mat_base + al_idx)
             else:
                 var mat_idx = Int(s[unsafe_offset=0].meshes[mi].mat_idx)
-                prim_ids[unsafe_offset=k].type          = PrimKind.displaced if _is_displaced(s, mi, ti) else Int8(0)
+                prim_ids[unsafe_offset=k].type          = _tri_kind(s, mi, ti)
                 prim_ids[unsafe_offset=k].id1           = Int64(mi)
                 prim_ids[unsafe_offset=k].id2           = Int64(ti * 3)
                 prim_ids[unsafe_offset=k].materialIndex = Int64(mat_idx) if mat_idx >= 0 else Int64(default_mat_idx)
