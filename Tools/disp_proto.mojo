@@ -14,7 +14,7 @@ from std.builtin.device_passable import DevicePassable, DeviceTypeEncoder
 from std.math import ceildiv
 from gonzales.core.geometry import Vec3f, cross, dot
 from gonzales.scene.shapes.patches import BezierPatch
-from gonzales.scene.shapes.displaced_patches import DispSurface, patch_box, patch_at, intersect_displaced, displaced_normal, displaced_point, chain_color
+from gonzales.scene.shapes.displaced_patches import DispSurface, patch_box, sub_box, SUB_N, patch_at, intersect_displaced, displaced_normal, displaced_point, chain_color
 from gonzales.app.viewer import CameraState, ViewerHandle, viewer_create, viewer_destroy, viewer_poll_events, viewer_should_close, \
     viewer_get_camera_state, viewer_set_camera_state, viewer_update_framebuffer, viewer_take_key
 from gonzales.core.geometry import Point3f
@@ -31,7 +31,7 @@ struct BNode(TrivialRegisterPassable):
     var b: Int32       # interior: right child; leaf: -count
 
 
-def _build(mut nodes: List[BNode], mut order: List[Int32], lo: List[Vec3f], hi: List[Vec3f], first: Int, n: Int) -> Int:
+def _build(mut nodes: List[BNode], mut order: List[Int32], lo: List[Vec3f], hi: List[Vec3f], first: Int, n: Int, leaf_n: Int = 4) -> Int:
     """A midpoint-split BVH over boxes; returns the node index."""
     var blo = Vec3f(1e30, 1e30, 1e30); var bhi = Vec3f(-1e30, -1e30, -1e30)
     var clo = Vec3f(1e30, 1e30, 1e30); var chi = Vec3f(-1e30, -1e30, -1e30)
@@ -44,7 +44,7 @@ def _build(mut nodes: List[BNode], mut order: List[Int32], lo: List[Vec3f], hi: 
         chi = Vec3f(max(chi.x, c.x), max(chi.y, c.y), max(chi.z, c.z))
     var me = len(nodes)
     nodes.append(BNode(blo, bhi, Int32(first), Int32(-n)))
-    if n <= 4:
+    if n <= leaf_n:
         return me
     var e = chi - clo
     var axis = 0 if e.x >= e.y and e.x >= e.z else (1 if e.y >= e.z else 2)
@@ -62,8 +62,8 @@ def _build(mut nodes: List[BNode], mut order: List[Int32], lo: List[Vec3f], hi: 
     var nl = i - first
     if nl == 0 or nl == n:
         nl = n // 2
-    var l = _build(nodes, order, lo, hi, first, nl)
-    var r = _build(nodes, order, lo, hi, first + nl, n - nl)
+    var l = _build(nodes, order, lo, hi, first, nl, leaf_n)
+    var r = _build(nodes, order, lo, hi, first + nl, n - nl, leaf_n)
     nodes[me] = BNode(blo, bhi, Int32(l), Int32(r))
     return me
 
@@ -88,7 +88,18 @@ struct Hit(TrivialRegisterPassable):
     var size: Float32
 
 
+@always_inline
+def _box_t(lo: Vec3f, hi: Vec3f, org: Vec3f, inv: Vec3f, t_max: Float32) -> Tuple[Bool, Float32]:
+    var ax = (lo.x - org.x) * inv.x; var bx = (hi.x - org.x) * inv.x
+    var ay = (lo.y - org.y) * inv.y; var by = (hi.y - org.y) * inv.y
+    var az = (lo.z - org.z) * inv.z; var bz = (hi.z - org.z) * inv.z
+    var t0 = max(max(min(ax, bx), min(ay, by)), max(min(az, bz), Float32(0)))
+    var t1 = min(min(max(ax, bx), max(ay, by)), min(max(az, bz), t_max))
+    return (t0 <= t1, t0)
+
+
 def trace_patches(d: DispSurface, nodes: Pointer[BNode, MutUntrackedOrigin], order: Pointer[Int32, MutUntrackedOrigin], org: Vec3f, dir: Vec3f) -> Hit:
+    """Front to back over the sub-square BVH; the hit names the patch."""
     var inv = Vec3f(Float32(1) / dir.x, Float32(1) / dir.y, Float32(1) / dir.z)
     var h = Hit(Float32(1e30), -1, Float32(0), Float32(0), 0, Float32(0))
     var stack = Array[Int32, 64](fill=Int32(0))
@@ -100,15 +111,39 @@ def trace_patches(d: DispSurface, nodes: Pointer[BNode, MutUntrackedOrigin], ord
             continue
         if nd.b < 0:
             for k in range(Int(nd.a), Int(nd.a) - Int(nd.b)):
-                var pi = Int(order[unsafe_offset=k])
-                var r = intersect_displaced(d, pi, org, dir, h.t)
+                var prim = Int(order[unsafe_offset=k])
+                var r = intersect_displaced(d, prim, org, dir, h.t)
                 h.steps += r[4]
                 if r[0] and r[1] < h.t:
-                    h.t = r[1]; h.prim = pi; h.s = r[2]; h.u = r[3]; h.size = r[5]
+                    h.t = r[1]; h.prim = prim // SUB_N; h.s = r[2]; h.u = r[3]; h.size = r[5]
         elif sp < 62:
-            stack[sp] = nd.a; stack[sp + 1] = nd.b
-            sp += 2
+            var na = nodes[unsafe_offset=Int(nd.a)]; var nb = nodes[unsafe_offset=Int(nd.b)]
+            var ta = _box_t(na.lo, na.hi, org, inv, h.t); var tb = _box_t(nb.lo, nb.hi, org, inv, h.t)
+            var near = nd.a; var far = nd.b; var tn = ta; var tf = tb
+            if tb[0] and (not ta[0] or tb[1] < ta[1]):
+                near = nd.b; far = nd.a; tn = tb; tf = ta
+            if tf[0]:
+                stack[sp] = far; sp += 1
+            if tn[0]:
+                stack[sp] = near; sp += 1
     return h
+
+
+def _sub_bvh(d: DispSurface, np: Int, mut nodes: List[BNode], mut order: List[Int32]):
+    """The BVH over every patch's SUB_N sub-squares for the surface's height scale (boxes in parallel)."""
+    var n = np * SUB_N
+    var lo = List[Vec3f](length=n, fill=Vec3f(0, 0, 0)); var hi = List[Vec3f](length=n, fill=Vec3f(0, 0, 0))
+    var lo_p = lo.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin](); var hi_p = hi.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
+    def boxes(p: Int) {imm}:
+        for k in range(SUB_N):
+            var b = sub_box(d, p * SUB_N + k)
+            lo_p[unsafe_offset=p * SUB_N + k] = b[0]; hi_p[unsafe_offset=p * SUB_N + k] = b[1]
+    parallelize(boxes, np)
+    nodes.clear(); order.clear()
+    for i in range(n):
+        order.append(Int32(i))
+    _ = _build(nodes, order, lo, hi, 0, n, 1)   # one sub-square a leaf: the front-to-back order reaches each
+    _ = len(lo); _ = len(hi)
 
 
 @fieldwise_init
@@ -343,15 +378,7 @@ def demo_gpu(d: DispSurface, nodes: Pointer[BNode, MutUntrackedOrigin], order: P
 
 
 def _demo_bvh(d: DispSurface, np: Int, mut nodes: List[BNode], mut order: List[Int32]):
-    """The patch BVH for the surface's height scale."""
-    var lo = List[Vec3f](); var hi = List[Vec3f]()
-    for p in range(np):
-        var b = patch_box(d, p)
-        lo.append(b[0]); hi.append(b[1])
-    nodes.clear(); order.clear()
-    for p in range(np):
-        order.append(Int32(p))
-    _ = _build(nodes, order, lo, hi, 0, np)
+    _sub_bvh(d, np, nodes, order)
 
 
 def _demo_upload(ctx: DeviceContext, nb_buf: DeviceBuffer[DType.uint8], or_buf: DeviceBuffer[DType.uint8], stage: Pointer[UInt8, MutUntrackedOrigin],
@@ -633,15 +660,10 @@ def main() raises:
         var mem = 0
         var t0 = perf_counter_ns()
         if scene < 3:
-            lo_b.clear(); hi_b.clear()
-            for p in range(np):
-                var b = patch_box(d, p)
-                lo_b.append(b[0]); hi_b.append(b[1])
             var nodes = List[BNode](); var order = List[Int32]()
-            for p in range(np):
-                order.append(Int32(p))
-            _ = _build(nodes, order, lo_b, hi_b, 0, np)
-            mem = np * (size_of[BezierPatch]() + 16) + len(nodes) * size_of[BNode]() + (npyr if scene > 0 else 0)
+            _sub_bvh(d, np, nodes, order)
+            mem = np * (size_of[BezierPatch]() + 16) + len(nodes) * size_of[BNode]() + 4 * len(order) + (npyr if scene > 0 else 0)
+            print("BVH:", np * SUB_N, "sub-squares,", len(nodes), "nodes,", (len(nodes) * size_of[BNode]() + 4 * len(order)) // 1024, "KiB")
             var tb = perf_counter_ns()
             var np_ptr = nodes.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
             var or_ptr = order.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()

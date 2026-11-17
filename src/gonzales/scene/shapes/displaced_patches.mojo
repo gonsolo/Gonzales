@@ -324,19 +324,39 @@ def _leaf_size(lo: Vec3f, hi: Vec3f, cam: Vec3f, pixel: Float32) -> Tuple[Float3
     return (max(max(e.x, e.y), e.z), dist * pixel)
 
 
-def intersect_displaced(d: DispSurface, pi: Int, org: Vec3f, dir: Vec3f, t_max: Float32) -> Tuple[Bool, Float32, Float32, Float32, Int, Float32]:
-    """The nearest hit of patch pi before t_max: (hit, t, s, t, steps, the leaf square's size)."""
+comptime SUB_LEVELS = 4                  # the BVH's primitives: a patch's sub-squares at this depth (4 x 4)
+comptime SUB_N = 1 << SUB_LEVELS
+
+
+@always_inline
+def sub_square(k: Int) -> Tuple[Float32, Float32, UInt64]:
+    """Sub-square k of a patch (k = row * 4 + column): its corner (u0, v0) and the halving path that reaches it."""
+    var ku = k % 4; var kv = k // 4
+    var path = UInt64((ku >> 1) & 1) | (UInt64((kv >> 1) & 1) << 1) | (UInt64(ku & 1) << 2) | (UInt64(kv & 1) << 3)
+    return (Float32(ku) * Float32(0.25), Float32(kv) * Float32(0.25), path)
+
+
+def sub_box(d: DispSurface, prim: Int) -> Tuple[Vec3f, Vec3f]:
+    """The world box of primitive prim = patch * SUB_N + sub-square."""
+    var pi = prim // SUB_N; var sq = sub_square(prim % SUB_N)
+    var b = displaced_box(d, pi, d.patches[unsafe_offset=pi], Vec3f(0, 0, 0), sq[0], sq[0] + Float32(0.25), sq[1], sq[1] + Float32(0.25))
+    return (b[0], b[1])
+
+
+def intersect_displaced(d: DispSurface, prim: Int, org: Vec3f, dir: Vec3f, t_max: Float32) -> Tuple[Bool, Float32, Float32, Float32, Int, Float32]:
+    """The nearest hit of primitive prim (patch * SUB_N + sub-square) before t_max: (hit, t, s, t, steps, the leaf square's size)."""
+    var pi = prim // SUB_N; var sq = sub_square(prim % SUB_N)
     var src = d.patches[unsafe_offset=pi]
     var o = BezierPatch(src.x - org.x, src.y - org.y, src.z - org.z)   # anchored at the ray origin
     var cam = d.cam - org
     var inv = Vec3f(Float32(1) / dir.x, Float32(1) / dir.y, Float32(1) / dir.z)
     var best = t_max; var hit = False; var hs = Float32(0); var ht = Float32(0); var hsz = Float32(1)
     var nlo = Array[Vec3f, PATCH_MAX_DEPTH + 1](fill=Vec3f(-1, -1, -1)); var nhi = Array[Vec3f, PATCH_MAX_DEPTH + 1](fill=Vec3f(1, 1, 1))
-    var depth = 0; var steps = 0
-    var path = UInt64(0); var pend = UInt64(0)
-    var dom = (Float32(0), Float32(0), Float32(1), Float32(1))
-    var cur = displaced_box(d, pi, o, org, Float32(0), Float32(1), Float32(0), Float32(1))
-    nlo[0] = cur[2]; nhi[0] = cur[3]
+    var depth = SUB_LEVELS; var steps = 0
+    var path = sq[2]; var pend = UInt64(0)
+    var dom = (sq[0], sq[1], Float32(0.25), Float32(0.25))
+    var cur = displaced_box(d, pi, o, org, dom[0], dom[0] + dom[2], dom[1], dom[1] + dom[3])
+    nlo[depth] = cur[2]; nhi[depth] = cur[3]
     var cur_hit = _slab(cur[0], cur[1], inv, best)
     while True:
         steps += 1
