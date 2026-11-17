@@ -1,7 +1,7 @@
 # Prototype: Moana's lava rock (Catmull-Clark cage + Ptex displacement) ray cast without tessellation, against a
 # tessellated reference. Writes PPM images and prints timings, traversal steps, cracks and memory.
 from std.ffi import external_call
-from std.math import max, min, sqrt, abs, tan
+from std.math import pow, max, min, sqrt, abs, tan
 from std.memory.alloc import unsafe_alloc
 from std.os import getenv
 from std.sys.info import size_of
@@ -146,6 +146,18 @@ def _env_f(name: String, dflt: Float32) raises -> Float32:
     return Float32(atof(s)) if s.byte_length() > 0 else dflt
 
 
+def _write_ppm_rgb(path: String, img: List[Float32], w: Int, h: Int) raises:
+    var bytes = List[UInt8]()
+    var head = String("P6\n") + String(w) + " " + String(h) + "\n255\n"
+    for c in head.as_bytes():
+        bytes.append(c)
+    for i in range(3 * w * h):
+        var v = min(max(img[i], Float32(0)), Float32(1))
+        bytes.append(UInt8(Int(pow(v, Float32(1.0 / 2.2)) * Float32(255) + Float32(0.5))))
+    with open(path, "w") as f:
+        f.write_bytes(Span(bytes))
+
+
 def _write_ppm(path: String, img: List[Float32], w: Int, h: Int) raises:
     var bytes = List[UInt8]()
     var head = String("P6\n") + String(w) + " " + String(h) + "\n255\n"
@@ -218,6 +230,15 @@ def main() raises:
     var exag = _env_f("EXAG", Float32(8))
     var only = getenv("ONLY")
     var spp_n = Int(sqrt(_env_f("SPP", Float32(1))) + Float32(0.5))   # SPP=64: 8 x 8
+    var col_path = getenv("COLOR")   # a colour Ptex: an RGB image as well
+    var color_on = col_path.byte_length() > 0
+    if color_on:
+        var cc = unsafe_alloc[UInt8](col_path.byte_length() + 1)
+        for i in range(col_path.byte_length()):
+            cc[unsafe_offset=i] = col_path.unsafe_ptr()[unsafe_offset=i]
+        cc[unsafe_offset=col_path.byte_length()] = UInt8(0)
+        if external_call["disp_color_open", Int32](cc) == 0:
+            raise Error("cannot read " + col_path)
 
     var lo_b = List[Vec3f](); var hi_b = List[Vec3f]()
     for scene in range(5):   # 0: limit surface, 1: scale 1, 2: exaggerated, 3: tessellated reference of 2, 4: the cage
@@ -227,6 +248,7 @@ def main() raises:
         var scale = Float32(0) if scene == 0 else (Float32(1) / Float32(255) if scene == 1 else exag / Float32(255))
         var d = DispSurface(patches, sq, face, hdr, pyr, scale, eye, pixel, chain_off, chain)
         var img = List[Float32](length=W * H, fill=Float32(0))
+        var rgb = List[Float32](length=3 * W * H, fill=Float32(0))
         var hitmask = List[UInt8](length=W * H, fill=UInt8(0))
         var steps = List[Int](length=H, fill=0)
         var maxs = List[Int](length=H, fill=0)
@@ -246,12 +268,15 @@ def main() raises:
             var np_ptr = nodes.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
             var or_ptr = order.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
             var im_ptr = img.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
+            var rg_ptr = rgb.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
             var hm_ptr = hitmask.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
             var st_ptr = steps.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
             var mx_ptr = maxs.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
             def row(y: Int) {imm}:
                 for x in range(W):
                     var acc = Float32(0); var hits = 0
+                    var cr = Float32(0); var cg = Float32(0); var cb = Float32(0)
+                    var col = unsafe_alloc[Float32](3)
                     for k in range(spp_n * spp_n):   # stratified sub-pixel samples
                         var jx = (Float32(k % spp_n) + Float32(0.5)) / Float32(spp_n)
                         var jy = (Float32(k // spp_n) + Float32(0.5)) / Float32(spp_n)
@@ -266,9 +291,18 @@ def main() raises:
                             var n = displaced_normal(d, h.prim, h.s, h.u, max(h.size, Float32(1.0 / 512.0)))   # heights at the footprint
                             if dot(n, dir) > Float32(0):
                                 n = -n
-                            acc += Float32(0.08) + Float32(0.75) * max(dot(n, light), Float32(0))
+                            var sh = Float32(0.08) + Float32(0.75) * max(dot(n, light), Float32(0))
+                            acc += sh
                             hits += 1
+                            if color_on:
+                                var sz = d.sq[unsafe_offset=3 * h.prim + 2]
+                                external_call["disp_color", NoneType](d.face[unsafe_offset=h.prim], d.sq[unsafe_offset=3 * h.prim] + h.s * sz,
+                                    d.sq[unsafe_offset=3 * h.prim + 1] + h.u * sz, max(h.size, Float32(1.0 / 1024.0)) * sz, col)
+                                cr += sh * col[unsafe_offset=0]; cg += sh * col[unsafe_offset=1]; cb += sh * col[unsafe_offset=2]
                     im_ptr[unsafe_offset=y * W + x] = acc / Float32(spp_n * spp_n)
+                    var inv_n = Float32(1.6) / Float32(spp_n * spp_n)   # a little exposure for the albedo
+                    rg_ptr[unsafe_offset=3 * (y * W + x)] = cr * inv_n; rg_ptr[unsafe_offset=3 * (y * W + x) + 1] = cg * inv_n; rg_ptr[unsafe_offset=3 * (y * W + x) + 2] = cb * inv_n
+                    col.unsafe_free()
                     if hits > 0:
                         hm_ptr[unsafe_offset=y * W + x] = UInt8(1)
             if getenv("SERIAL") == "1":
@@ -405,5 +439,7 @@ def main() raises:
             print(name + ":", nt, "triangles (up to", nref, "x", nref, "quads a patch), build", (tb - t0) // 1000000, "ms, render", (t1 - tb) // 1000000,
                   "ms, memory", mem // 1024, "KiB; at one quad per texel:", texels * 2, "triangles, about", (texels * (12 + 24 + 2 * 32 * 2)) // (1024 * 1024), "MiB")
         _write_ppm(out_dir + name + ".ppm", img, W, H)
+        if color_on and scene < 3:
+            _write_ppm_rgb(out_dir + name + "_color.ppm", rgb, W, H)
         with open(out_dir + name + ".mask", "w") as f:
             f.write_bytes(Span(hitmask))

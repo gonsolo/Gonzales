@@ -2,6 +2,7 @@
 // osd.cc turns the cage into Bezier patches, and each face's heights get min/max pyramids aligned with its quadtree.
 #include <Ptexture.h>
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <memory>
 #include <vector>
@@ -162,6 +163,29 @@ int disp_cage(const char *ptx, float *pos, int *counts, int *idx, int *sizes) {
                 std::memcpy(idx, v, nv * sizeof(int));
         }
         return 1;
+}
+
+static PtexCache *color_cache = nullptr;
+static PtexTexture *color_tex = nullptr;
+
+// A colour Ptex for disp_color; 0 if it cannot be read.
+int disp_color_open(const char *ptx) {
+        Ptex::String err;
+        if (!color_cache)
+                color_cache = PtexCache::create(16, 1 << 30);
+        color_tex = color_cache->get(ptx, err);
+        return color_tex ? 1 : 0;
+}
+
+// Linear RGB of the colour Ptex at face f, (u, v), filtered bilinearly over a width w in face coordinates.
+void disp_color(int f, float u, float v, float w, float *rgb) {
+        thread_local PtexFilter *filter = nullptr;
+        if (!filter)
+                filter = PtexFilter::getFilter(color_tex, PtexFilter::Options(PtexFilter::f_bilinear));
+        float c[3] = {0, 0, 0};
+        filter->eval(c, 0, 3, f, u, v, w, 0, 0, w);
+        for (int i = 0; i < 3; ++i)
+                rgb[i] = std::pow(std::min(std::max(c[i], 0.0f), 1.0f), 2.2f);   // 8-bit colour Ptex is gamma encoded
 }
 
 }  // extern "C"
