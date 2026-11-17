@@ -3,6 +3,7 @@
 from std.ffi import external_call
 from std.math import pow, max, min, sqrt, abs, tan, acos, sin, cos
 from std.memory.alloc import unsafe_alloc
+from std.memory import unsafe_memcpy
 from std.os import getenv
 from std.sys.info import size_of
 from std.time import perf_counter_ns
@@ -353,6 +354,19 @@ def _demo_bvh(d: DispSurface, np: Int, mut nodes: List[BNode], mut order: List[I
     _ = _build(nodes, order, lo, hi, 0, np)
 
 
+def _demo_upload(ctx: DeviceContext, nb_buf: DeviceBuffer[DType.uint8], or_buf: DeviceBuffer[DType.uint8], stage: Pointer[UInt8, MutUntrackedOrigin],
+                 cap: Int, nodes: List[BNode], order: List[Int32]) raises:
+    var nbytes = len(nodes) * size_of[BNode]()
+    if nbytes > cap:
+        raise Error("patch BVH outgrew its device buffer")
+    for i in range(cap):
+        stage[unsafe_offset=i] = UInt8(0)
+    unsafe_memcpy(dest=stage, src=nodes.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]().unsafe_bitcast[UInt8](), count=nbytes)
+    ctx.enqueue_copy(nb_buf, stage)
+    ctx.enqueue_copy(or_buf, order.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]().unsafe_bitcast[UInt8]())
+    ctx.synchronize()
+
+
 def run_demo(patches: Pointer[BezierPatch, MutUntrackedOrigin], sq: Pointer[Float32, MutUntrackedOrigin], face: Pointer[Int32, MutUntrackedOrigin],
              hdr: Pointer[Int32, MutUntrackedOrigin], pyr: Pointer[UInt8, MutUntrackedOrigin], npyr: Int, chain_off: Pointer[Int32, MutUntrackedOrigin],
              chain: Pointer[UInt8, MutUntrackedOrigin], nchain: Int, fm: Pointer[Float32, MutUntrackedOrigin], greg: Pointer[UInt8, MutUntrackedOrigin],
@@ -391,10 +405,11 @@ def run_demo(patches: Pointer[BezierPatch, MutUntrackedOrigin], sq: Pointer[Floa
     var host_d = DispSurface(patches, sq, face, hdr, pyr, exag / Float32(255), Vec3f(0, 0, 0), Float32(0), chain_off, chain, fm, greg)
     var nodes = List[BNode](); var order = List[Int32]()
     _demo_bvh(host_d, np, nodes, order)
-    var nb_buf = ctx.enqueue_create_buffer[DType.uint8](max(len(nodes), 1) * size_of[BNode]() * 2)   # room for a deeper tree
+    var nb_cap = max(len(nodes), 1) * size_of[BNode]() * 2   # room for a deeper tree
+    var nb_buf = ctx.enqueue_create_buffer[DType.uint8](nb_cap)
     var or_buf = ctx.enqueue_create_buffer[DType.uint8](max(np, 1) * 4)
-    ctx.enqueue_copy(nb_buf, nodes.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]().unsafe_bitcast[UInt8]())
-    ctx.enqueue_copy(or_buf, order.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]().unsafe_bitcast[UInt8]())
+    var nb_stage = unsafe_alloc[UInt8](nb_cap)   # the device copy reads the buffer's whole size
+    _demo_upload(ctx, nb_buf, or_buf, nb_stage, nb_cap, nodes, order)
     var dnodes = nb_buf.unsafe_ptr().unsafe_bitcast[BNode]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
     var dorder = or_buf.unsafe_ptr().unsafe_bitcast[Int32]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
     var accum_b = ctx.enqueue_create_buffer[DType.float32](3 * W * H)
@@ -439,6 +454,8 @@ def run_demo(patches: Pointer[BezierPatch, MutUntrackedOrigin], sq: Pointer[Floa
         if headless:
             if it >= n_frames + 32:
                 break
+            if it == n_frames // 2 and getenv("DEMO_SWITCH").byte_length() > 0:   # test the +/- rebuild without a window
+                exag = Float32(8); rebuild = True
             if it < n_frames:   # an orbit around the rock, then 32 still frames
                 var a = Float32(2) * Float32(3.14159265) * Float32(it) / Float32(max(n_frames, 1))
                 var r = diag * near * Float32(0.83)
@@ -469,8 +486,7 @@ def run_demo(patches: Pointer[BezierPatch, MutUntrackedOrigin], sq: Pointer[Floa
         if rebuild:
             host_d = DispSurface(patches, sq, face, hdr, pyr, exag / Float32(255), Vec3f(0, 0, 0), Float32(0), chain_off, chain, fm, greg)
             _demo_bvh(host_d, np, nodes, order)
-            ctx.enqueue_copy(nb_buf, nodes.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]().unsafe_bitcast[UInt8]())
-            ctx.synchronize()
+            _demo_upload(ctx, nb_buf, or_buf, nb_stage, nb_cap, nodes, order)   # nodes and the patch order they index
             moved = True
         if moved:
             frame = 0
