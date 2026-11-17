@@ -41,10 +41,11 @@ def _usd_camera(s: Pointer[SceneParseState, MutUntrackedOrigin], cam: Pointer[Fl
     c2w.unsafe_free(); w2c.unsafe_free()
 
 
-def _usd_sky(s: Pointer[SceneParseState, MutUntrackedOrigin]):
+def _usd_sky(s: Pointer[SceneParseState, MutUntrackedOrigin], rgb: RGB):
     s[unsafe_offset=0].inf_tex_idx.append(Int32(-1))
-    for _ in range(3):
-        s[unsafe_offset=0].inf_rgb.append(Float32(1))
+    s[unsafe_offset=0].inf_rgb.append(rgb.r)
+    s[unsafe_offset=0].inf_rgb.append(rgb.g)
+    s[unsafe_offset=0].inf_rgb.append(rgb.b)
     for k in range(16):
         s[unsafe_offset=0].inf_ctm.append(Float32(1) if k % 5 == 0 else Float32(0))
     s[unsafe_offset=0].inf_has_portal.append(Int32(0))
@@ -101,7 +102,58 @@ def _usd_fill(s: Pointer[SceneParseState, MutUntrackedOrigin], d: PythonObject) 
     var cam = d["camera"]
     if Int(py=len(cam)) == 16:
         _usd_camera(s, _f32(cam), Float32(Float64(py=d["fov"])))
-    _usd_sky(s)
+    _usd_lights(s, d)
+
+
+def _usd_lights(s: Pointer[SceneParseState, MutUntrackedOrigin], d: PythonObject) raises:
+    var black = NamedMaterial(String("usd_light"))
+    black.kind = MatKind.diffuse
+    black.albedo = RGB(Float32(0))
+    var light_mat = Int32(len(s[unsafe_offset=0].named_materials))
+    s[unsafe_offset=0].named_materials.append(black^)
+
+    var rows_obj = d["emit_rows"]
+    var rows = Pointer[Int64, MutUntrackedOrigin](unsafe_from_address=Int(py=rows_obj.ctypes.data))
+    var pts = _f32(d["emit_pts"])
+    var idx = Pointer[Int32, MutUntrackedOrigin](unsafe_from_address=Int(py=d["emit_idx"].ctypes.data))
+    var ergb = _f32(d["emit_rgb"])
+    _set_identity(s)
+    s[unsafe_offset=0].cur_attr.mat_idx = light_mat
+    s[unsafe_offset=0].cur_attr.is_alight = True
+    for i in range(Int(py=len(rows_obj))):
+        var r = rows.unsafe_offset(4 * i)
+        s[unsafe_offset=0].cur_attr.al_rgb = RGB(ergb[unsafe_offset=3 * i], ergb[unsafe_offset=3 * i + 1], ergb[unsafe_offset=3 * i + 2])
+        store_mesh(s, pts.unsafe_offset(3 * Int(r[unsafe_offset=0])), idx.unsafe_offset(Int(r[unsafe_offset=2])),
+                   Int32(r[unsafe_offset=1]), Int32(r[unsafe_offset=3]))
+    s[unsafe_offset=0].cur_attr.is_alight = False
+
+    var sph_obj = d["spheres"]
+    var sph = _f32(sph_obj)
+    for i in range(Int(py=len(sph_obj))):
+        var q = sph.unsafe_offset(7 * i)
+        s[unsafe_offset=0].spheres_cx.append(q[unsafe_offset=0])
+        s[unsafe_offset=0].spheres_cy.append(q[unsafe_offset=1])
+        s[unsafe_offset=0].spheres_cz.append(q[unsafe_offset=2])
+        s[unsafe_offset=0].spheres_r.append(q[unsafe_offset=3])
+        s[unsafe_offset=0].spheres_mat.append(light_mat)
+        s[unsafe_offset=0].spheres_inside_med.append(s[unsafe_offset=0].cur_attr.inside_medium)
+        s[unsafe_offset=0].spheres_outside_med.append(s[unsafe_offset=0].cur_attr.outside_medium)
+        s[unsafe_offset=0].spheres_al.append(True)
+        s[unsafe_offset=0].spheres_rgb.append(RGB(q[unsafe_offset=4], q[unsafe_offset=5], q[unsafe_offset=6]))
+
+    var dist_obj = d["distant"]
+    var dist = _f32(dist_obj)
+    for i in range(Int(py=len(dist_obj))):
+        for c in range(3):
+            s[unsafe_offset=0].distant_dirs.append(dist[unsafe_offset=6 * i + c])
+            s[unsafe_offset=0].distant_rgbs.append(dist[unsafe_offset=6 * i + 3 + c])
+
+    var sky = _f32(d["sky"])
+    var lit = Int(py=d["n_domes"]) > 0 or Int(py=len(rows_obj)) + Int(py=len(sph_obj)) + Int(py=len(dist_obj)) > 0
+    if Int(py=d["n_domes"]) > 0:
+        _usd_sky(s, RGB(sky[unsafe_offset=0], sky[unsafe_offset=1], sky[unsafe_offset=2]))
+    elif not lit:
+        _usd_sky(s, RGB(Float32(1)))   # an unlit stage: a white sky to see it
 
 
 def mojo_parse_usd_scene(path: Pointer[UInt8, MutUntrackedOrigin], verbose: Bool = False) -> Pointer[ParsedScene_Mojo, MutUntrackedOrigin]:
@@ -113,7 +165,7 @@ def mojo_parse_usd_scene(path: Pointer[UInt8, MutUntrackedOrigin], verbose: Bool
         Python.add_to_path(env_str["GONZALES_DATA_DIR"]("src/gonzales/data"))
         var ux = Python.import_module("usd_extract")
         var aspect = Float64(s_ptr[unsafe_offset=0].film_w) / Float64(s_ptr[unsafe_offset=0].film_h)
-        var d = ux.extract(path_str, env_str["GONZALES_USD_CAMERA"](""), aspect)
+        var d = ux.extract(path_str, env_str["GONZALES_USD_CAMERA"](""), aspect, env_str["GONZALES_USD_TIME"](""))
         _usd_fill(s_ptr, d)
         if verbose:
             print("USD:", Int(py=len(d["meshes"])), "meshes,", Int(py=d["n_templates"]), "templates,",
