@@ -2876,7 +2876,7 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
             mats[unsafe_offset=al_mat_base + al_idx].albedo   = RGB(Float32(0))
             mats[unsafe_offset=al_mat_base + al_idx].emission = em
             mats[unsafe_offset=al_mat_base + al_idx].tex_idx  = Int32(-1)
-            mats[unsafe_offset=al_mat_base + al_idx].roughU   = Float32(0)
+            mats[unsafe_offset=al_mat_base + al_idx].roughU   = Float32(1) if ma.al_hidden else Float32(0)   # Material.lamp_hidden
             mats[unsafe_offset=al_mat_base + al_idx].roughV   = Float32(0)
             mats[unsafe_offset=al_mat_base + al_idx].normal_tex_idx = Int32(-1)
             mats[unsafe_offset=al_mat_base + al_idx].bump_tex_idx = Int32(-1)

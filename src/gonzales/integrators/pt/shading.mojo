@@ -459,7 +459,7 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
             comptime if GSMS_DEBUG >= 2:
                 if e_front and shared_with == 2:
                     path_ptr[].estimate += path_ptr[].throughput * _to_spec_illum(ctx, emission, path_ptr[].wavelengths) * (mnee_w_b if GSMS_DEBUG == 2 else Float32(1))
-            if e_front and mnee_w_b > Float32(0.0):
+            if e_front and mnee_w_b > Float32(0.0) and not (path_ptr[].bounce == 0 and mat.lamp_hidden()):
                 path_ptr[].estimate += _clamped(ctx, path_ptr[].throughput * _to_spec_illum(ctx, emission, path_ptr[].wavelengths) * mnee_w_b, Int(path_ptr[].bounce) - 1)
         else:
             var pdf_bsdf = path_ptr[].lastBsdfPdf

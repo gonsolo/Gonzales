@@ -196,12 +196,16 @@ def _usd_lights(s: Pointer[SceneParseState, MutUntrackedOrigin], d: PythonObject
     _set_identity(s)
     s[unsafe_offset=0].cur_attr.mat_idx = light_mat
     s[unsafe_offset=0].cur_attr.is_alight = True
+    s[unsafe_offset=0].cur_attr.al_transparent = True    # USD lights are no geometry: rays pass them, the camera misses them
+    s[unsafe_offset=0].cur_attr.al_hidden = True
     for i in range(Int(py=len(rows_obj))):
         var r = rows.unsafe_offset(4 * i)
         s[unsafe_offset=0].cur_attr.al_rgb = RGB(ergb[unsafe_offset=3 * i], ergb[unsafe_offset=3 * i + 1], ergb[unsafe_offset=3 * i + 2])
         store_mesh(s, pts.unsafe_offset(3 * Int(r[unsafe_offset=0])), idx.unsafe_offset(Int(r[unsafe_offset=2])),
                    Int32(r[unsafe_offset=1]), Int32(r[unsafe_offset=3]))
     s[unsafe_offset=0].cur_attr.is_alight = False
+    s[unsafe_offset=0].cur_attr.al_transparent = False
+    s[unsafe_offset=0].cur_attr.al_hidden = False
 
     var sph_obj = d["spheres"]
     var sph = _f32(sph_obj)

@@ -46,6 +46,7 @@ def store_mesh[Of: Origin[mut=True], Oi: Origin[mut=True]](
     ma.al_rgb = s[unsafe_offset=0].cur_attr.al_rgb
     ma.al_two_sided = s[unsafe_offset=0].cur_attr.al_two_sided
     ma.al_transparent = s[unsafe_offset=0].cur_attr.al_transparent
+    ma.al_hidden = s[unsafe_offset=0].cur_attr.al_hidden
     ma.points.reserve(Int(n_verts) * 4)
     for v in range(Int(n_verts) * 4):
         ma.points.append(fin_pts[unsafe_offset=v])

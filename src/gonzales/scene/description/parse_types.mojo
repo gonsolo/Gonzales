@@ -57,6 +57,7 @@ struct AttributeState(Copyable, ImplicitlyCopyable, Movable):
     var reverse_orient: Bool   # PBRT ReverseOrientation: flip surface normals
     var al_two_sided:   Bool   # AreaLightSource "bool twosided"
     var al_transparent: Bool   # Cycles' lamp: rays pass it after taking its light, shadows ignore it
+    var al_hidden:      Bool   # a lamp camera rays do not see (USD lights)
 
 struct NamedMaterial(Copyable, ImplicitlyCopyable, Movable):
     var name:           String
@@ -183,6 +184,7 @@ struct MeshAccum(Copyable, Movable):
     var al_rgb:         RGB
     var al_two_sided:   Bool
     var al_transparent: Bool
+    var al_hidden:      Bool
     var inside_medium:  Int32
     var outside_medium: Int32
     # True for meshes captured between ObjectBegin/ObjectEnd (an instancing
@@ -212,6 +214,7 @@ struct MeshAccum(Copyable, Movable):
         self.al_rgb        = RGB(Float32(0))
         self.al_two_sided  = False
         self.al_transparent = False
+        self.al_hidden = False
         self.inside_medium  = inside_medium
         self.outside_medium = outside_medium
         self.is_object_template = False
@@ -471,7 +474,7 @@ struct SceneParseState(Movable):
 
         self.cur_attr  = AttributeState(Int32(-1), False,
                              RGB(Float32(0),Float32(0),Float32(0)),
-                             Int32(-1), Int32(-1), False, False, False)
+                             Int32(-1), Int32(-1), False, False, False, False)
         self.attr_stack = List[AttributeState]()
 
         self.named_materials = List[NamedMaterial]()

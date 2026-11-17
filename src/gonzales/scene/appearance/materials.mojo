@@ -190,6 +190,11 @@ struct Material(TrivialRegisterPassable):
         return (self.type == MatKind.dielectric and not self.is_rough_dielectric()) or self.type == MatKind.thin_dielectric
 
     @always_inline
+    def lamp_hidden(self) -> Bool:
+        """A lamp camera rays do not see (its roughU, unused by lamps)."""
+        return self.type == MatKind.lamp and self.roughU > Float32(0.5)
+
+    @always_inline
     def passes_rays(self) -> Bool:
         """A null interface or a Cycles lamp: rays continue through it unchanged."""
         return self.type == MatKind.interface or self.type == MatKind.lamp
