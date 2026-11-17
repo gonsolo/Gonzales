@@ -20,7 +20,7 @@ struct Disp {
         std::vector<float> cp, fm, sq, cage;   // cp: Gregory patches with Fp inside, fm: their Fm points (12 floats a patch)
         std::vector<unsigned char> greg;
         std::vector<int> face, hdr;            // hdr: per face its node offset, log2 width, log2 height
-        std::vector<unsigned char> pyr;        // per face, levels 2 up: cells of (centre, half u slope / 2, half v slope / 2, residual)
+        std::vector<unsigned char> pyr;        // per face, levels 2 up: cells of (centre, half u slope / 2, half v slope / 2, residual, min, max)
         std::vector<int> chain_off;            // per face: its bordered height chain in `chain`
         std::vector<unsigned char> chain;      // per face, full res to 1x1: (w + 2) x (h + 2) heights, borders from the neighbours
         float box[6] = {1e30f, 1e30f, 1e30f, -1e30f, -1e30f, -1e30f};
@@ -113,8 +113,10 @@ void *disp_open(const char *ptx, int isolation, long long *counts) {
                                         if (nr > 255) {   // a flat node over the cell's range instead
                                                 na = int(std::floor((lo + hi) / 2)); nx = ny = 0; nr = int(std::ceil(std::max(hi - na, na - lo) + 1e-3));
                                         }
+                                        const int mn = std::min(std::max(int(std::floor(lo)), 0), 255), mx = std::min(std::max(int(std::ceil(hi)), 0), 255);
                                         d->pyr.insert(d->pyr.end(), {static_cast<unsigned char>(na), static_cast<unsigned char>(static_cast<signed char>(nx)),
-                                                                     static_cast<unsigned char>(static_cast<signed char>(ny)), static_cast<unsigned char>(nr)});
+                                                                     static_cast<unsigned char>(static_cast<signed char>(ny)), static_cast<unsigned char>(nr),
+                                                                     static_cast<unsigned char>(mn), static_cast<unsigned char>(mx)});
                                 }
                 }
         }

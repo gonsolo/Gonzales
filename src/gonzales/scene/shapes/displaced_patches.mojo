@@ -12,6 +12,7 @@ from gonzales.scene.shapes.patches import BezierPatch, patch_eval, _crop, _bloss
 comptime _U8 = Pointer[UInt8, MutUntrackedOrigin]
 comptime _I32 = Pointer[Int32, MutUntrackedOrigin]
 comptime _F32 = Pointer[Float32, MutUntrackedOrigin]
+comptime NODE_B = 6   # bytes a height node (src/oiio/disp.cc)
 
 
 @fieldwise_init
@@ -30,7 +31,7 @@ struct DispSurface(TrivialRegisterPassable, DevicePassable):
     var sq: _F32
     var face: _I32
     var hdr: _I32        # per face: node offset, log2 width, log2 height
-    var pyr: _U8         # per face from 4 x 4-texel cells up: (centre, half u slope / 2, half v slope / 2, residual) bytes
+    var pyr: _U8         # per face from 4 x 4-texel cells up: (centre, half u slope / 2, half v slope / 2, residual, min, max) bytes
     var scale: Float32   # world units per height byte
     var cam: Vec3f
     var pixel: Float32   # footprint per unit distance (pixel angle)
@@ -69,7 +70,8 @@ def _plane_range(d: DispSurface, node: Int, X0: Float32, X1: Float32, Y0: Float3
     var r = Float32(Int(d.pyr[unsafe_offset=node + 3]))
     var ex0 = bx * (X0 - xc) / hw; var ex1 = bx * (X1 - xc) / hw
     var ey0 = by * (Y0 - yc) / hh; var ey1 = by * (Y1 - yc) / hh
-    return (a + min(ex0, ex1) + min(ey0, ey1) - r, a + max(ex0, ex1) + max(ey0, ey1) + r)
+    var mn = Float32(Int(d.pyr[unsafe_offset=node + 4])); var mx = Float32(Int(d.pyr[unsafe_offset=node + 5]))   # the cell's exact range
+    return (max(a + min(ex0, ex1) + min(ey0, ey1) - r, mn), min(a + max(ex0, ex1) + max(ey0, ey1) + r, mx))
 
 
 def height_range(d: DispSurface, f: Int, u0: Float32, u1: Float32, v0: Float32, v1: Float32) -> Tuple[Float32, Float32]:
@@ -110,13 +112,13 @@ def height_range(d: DispSurface, f: Int, u0: Float32, u1: Float32, v0: Float32, 
         cy0 = min(Int(Y0 / th), ch - 1); cy1 = max(min(Int(ceil(Y1 / th)) - 1, ch - 1), cy0)
         if (cx1 - cx0 <= 1 and cy1 - cy0 <= 1) or (cw == 1 and ch == 1):
             break
-        node += 4 * cw * ch
+        node += NODE_B * cw * ch
         k += 1
     var lo = Float32(1e30); var hi = Float32(-1e30)
     for cy in range(cy0, cy1 + 1):
         for cx in range(cx0, cx1 + 1):
             var bx0 = Float32(cx) * tw; var by0 = Float32(cy) * th
-            var r = _plane_range(d, node + 4 * (cy * cw + cx), max(X0, bx0), min(X1, bx0 + tw), max(Y0, by0), min(Y1, by0 + th),
+            var r = _plane_range(d, node + NODE_B * (cy * cw + cx), max(X0, bx0), min(X1, bx0 + tw), max(Y0, by0), min(Y1, by0 + th),
                                  bx0 + Float32(0.5) * tw, by0 + Float32(0.5) * th, Float32(0.5) * tw, Float32(0.5) * th)
             lo = min(lo, r[0]); hi = max(hi, r[1])
     return (lo, hi)
