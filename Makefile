@@ -119,13 +119,13 @@ editMakefile:
 # C++ bridge libraries. Host-specific tuning via override, e.g. CXXFLAGS="-O3 -march=native".
 CXXFLAGS ?= -O3
 
-OIIO_BRIDGE_SRC = src/oiio/oiio.cc
+OIIO_BRIDGE_SRC = src/oiio/oiio.cc src/oiio/osd.cc
 OIIO_BRIDGE_INC = src/oiio
 OIIO_BRIDGE_LIB = $(BUILD_DIR)/liboiiobridge.so
 
 $(OIIO_BRIDGE_LIB): $(OIIO_BRIDGE_SRC) $(OIIO_BRIDGE_INC)/oiio.h
 	@mkdir -p $(BUILD_DIR)
-	g++ $(CXXFLAGS) -fPIC -shared -std=c++20 -I$(OIIO_BRIDGE_INC) $(OIIO_BRIDGE_SRC) -lOpenImageIO -lPtex -o $(OIIO_BRIDGE_LIB)
+	g++ $(CXXFLAGS) -fPIC -shared -std=c++20 -I$(OIIO_BRIDGE_INC) $(OIIO_BRIDGE_SRC) -lOpenImageIO -lPtex -losdCPU -o $(OIIO_BRIDGE_LIB)
 
 # NanoVDB bridge. nanovdb.mojo (the loader FFI, not the pure-Mojo accessor)
 # is imported by the core renderer now (geometry.mojo, "nanovdb" pbrt
