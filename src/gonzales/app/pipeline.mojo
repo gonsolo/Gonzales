@@ -18,6 +18,7 @@ from gonzales.transport.render_state import TileResult, FilmDims
 from gonzales.scene.shapes.primitives import PrimId, TriangleMesh, Instance, mesh_vi, mesh_pos
 from gonzales.core.geometry import Ray
 from gonzales.scene.shapes.curves import CurveBvh, curve_at, curve_piece_bounds
+from gonzales.scene.shapes.patches import patch_bounds
 from gonzales.integrators.postprocess import denoise, write_image, write_image_cropped
 from gonzales.core.transform import Mat4, matrix_invert
 from gonzales.core.sampling import TileSamplerParams, ThinLens, camera_ray_from_film_xy
@@ -1228,6 +1229,9 @@ def _xert_attach(ctx: DeviceContext, psc: Pointer[ParsedScene_Mojo, MutUntracked
                     for k in range(Int(psc[unsafe_offset=0].mesh_n_tris[unsafe_offset=ms[g]])):
                         if psc[unsafe_offset=0].meshes[unsafe_offset=ms[g]].disp[unsafe_offset=0].tris[unsafe_offset=k].ok():
                             leaves.append(PrimId(Int64(ms[g]), Int64(3 * k), Int64(g), Int32(-1), PrimKind.displaced, Int8(0), Int8(0), Int8(0)))
+                elif _is_real_ptr(psc[unsafe_offset=0].meshes[unsafe_offset=ms[g]].patches):   # Bezier patches, likewise
+                    for k in range(Int(psc[unsafe_offset=0].mesh_n_tris[unsafe_offset=ms[g]])):
+                        leaves.append(PrimId(Int64(ms[g]), Int64(3 * k), Int64(g), Int32(-1), PrimKind.patch, Int8(0), Int8(0), Int8(0)))
         var n_procs = len(leaves) - Int(leaf_base[b])
         var proc_bounds = unsafe_alloc[Float32](6 * max(n_procs, 1))
         for j in range(n_procs):
@@ -1235,6 +1239,9 @@ def _xert_attach(ctx: DeviceContext, psc: Pointer[ParsedScene_Mojo, MutUntracked
             var box = SIMD[DType.float32, 8](1e38, 1e38, 1e38, -1e38, -1e38, -1e38, 0, 0)
             if leaf.type == PrimKind.displaced:
                 var pb = psc[unsafe_offset=0].meshes[unsafe_offset=Int(leaf.id1)].disp[unsafe_offset=0].tris[unsafe_offset=Int(leaf.id2) // 3].bounds()
+                box = SIMD[DType.float32, 8](pb[0].x, pb[0].y, pb[0].z, pb[1].x, pb[1].y, pb[1].z, 0, 0)
+            elif leaf.type == PrimKind.patch:
+                var pb = patch_bounds(psc[unsafe_offset=0].meshes[unsafe_offset=Int(leaf.id1)].patches[unsafe_offset=Int(leaf.id2) // 3])
                 box = SIMD[DType.float32, 8](pb[0].x, pb[0].y, pb[0].z, pb[1].x, pb[1].y, pb[1].z, 0, 0)
             else:
                 var curve = curve_at(psc[unsafe_offset=0].curves, Int(leaf.id1))
@@ -1276,6 +1283,9 @@ def _xert_attach(ctx: DeviceContext, psc: Pointer[ParsedScene_Mojo, MutUntracked
                 for k in range(n):
                     if mesh.disp[unsafe_offset=0].tris[unsafe_offset=t0 + k].ok():
                         t[unsafe_offset=3 * k + 1] = t[unsafe_offset=3 * k]; t[unsafe_offset=3 * k + 2] = t[unsafe_offset=3 * k]
+            elif _is_real_ptr(mesh.patches):   # so is a patch's stand-in triangle
+                for k in range(n):
+                    t[unsafe_offset=3 * k + 1] = t[unsafe_offset=3 * k]; t[unsafe_offset=3 * k + 2] = t[unsafe_offset=3 * k]
             verts[unsafe_offset=g] = v; tris[unsafe_offset=g] = t
             n_verts[unsafe_offset=g] = Int64(nv); n_tris[unsafe_offset=g] = Int64(n)
         var size = Int64(0)
@@ -1407,7 +1417,7 @@ def _xert_attach(ctx: DeviceContext, psc: Pointer[ParsedScene_Mojo, MutUntracked
 
 def _has_displacement(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin]) -> Bool:
     for mi in range(Int(psc[unsafe_offset=0].mesh_count)):
-        if _is_real_ptr(psc[unsafe_offset=0].meshes[unsafe_offset=mi].disp):
+        if _is_real_ptr(psc[unsafe_offset=0].meshes[unsafe_offset=mi].disp) or _is_real_ptr(psc[unsafe_offset=0].meshes[unsafe_offset=mi].patches):
             return True
     return False
 
@@ -1416,7 +1426,7 @@ def _rt_wavefront_setup(handle: Pointer[GpuSceneHandle, MutUntrackedOrigin], psc
     var b = _RtBufs()
     var xe = xert_alignment() > 0
     if not xe and _has_displacement(psc):   # only the Intel structures hold displaced triangles (as procedural boxes)
-        print("RT hardware: off, the scene has displaced shapes")
+        print("RT hardware: off, the scene has displaced shapes or Bezier patches")
         return b^
     var xe_scene = (UInt64(0), Int64(-1), UInt64(0))
     if xe:

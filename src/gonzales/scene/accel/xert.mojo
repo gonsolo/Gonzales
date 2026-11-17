@@ -10,8 +10,9 @@ from gonzales.scene.shapes.curves import Curve, curve_at, intersect_curve
 from gonzales.core.geometry import Vec3f
 from gonzales.scene.accel.bvh import _shadow_is_null_material
 from gonzales.scene.appearance.materials import Material
-from gonzales.scene.shapes.primitives import PrimId, PrimKind, TriangleMesh
+from gonzales.scene.shapes.primitives import PrimId, PrimKind, TriangleMesh, is_surface_tri
 from gonzales.scene.shapes.displacement import displaced_hit
+from gonzales.scene.shapes.patches import intersect_patch
 
 # Hardware ray tracing on Intel Xe2 (src/xert): the driver builds the acceleration structures, kernels trace them with
 # IGC's ray-query built-ins (opencl-c-intel.h, cl_intel_rt_production), linked by name from IGC's built-in library.
@@ -187,6 +188,8 @@ def xert_trace(accel: MutPointer[UInt8, MutAnyOrigin], ray: XeRayDesc, cv: XePro
             var h: Tuple[Bool, Float32, Float32, Float32]
             if is_curve:
                 h = intersect_curve(o3, unit, curve_at(cv.curves, Int(p.id1)), Int(p.id2) // 8, Int(p.id2) % 8, t_max * dlen)
+            elif p.type == PrimKind.patch:   # a Bezier patch: id1 its mesh, id2 its stand-in triangle's first vertex index
+                h = intersect_patch(o3, unit, cv.meshes[unsafe_offset=Int(p.id1)].patches[unsafe_offset=Int(p.id2) // 3], t_max * dlen)
             else:   # a displaced triangle: id1 its mesh, id2 its first vertex index
                 var dh = displaced_hit(cv.meshes[unsafe_offset=Int(p.id1)].disp, Int(p.id2) // 3, o3, unit, t_max * dlen, ray.tmin * dlen)
                 h = (dh[0] != Float32(0), dh[1], dh[2], dh[3])
@@ -213,7 +216,7 @@ def xert_trace(accel: MutPointer[UInt8, MutAnyOrigin], ray: XeRayDesc, cv: XePro
             if external_call["intel_get_hit_candidate", UInt32](q, UInt32(0)) == 1:   # intel_candidate_type_procedural
                 hit.u = ch_u; hit.v = ch_v
                 var p = cv.leaves[unsafe_offset=Int(curve)]
-                if p.type == PrimKind.displaced:   # reported as its base triangle; materialIndex holds its geometry
+                if is_surface_tri(p.type):   # reported as its (stand-in) triangle; materialIndex holds its geometry
                     hit.prim = Int32(Int(p.id2) // 3); hit.geom = Int32(Int(p.materialIndex))
                 else:
                     hit.curve = curve
