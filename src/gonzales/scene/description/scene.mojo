@@ -184,4 +184,5 @@ struct Scene(Movable):
             walkPrimsArr      = Pointer[Pointer[PrimId, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
             walkBvhOfMesh     = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
             bvh4              = BVH4.none(),
+            sharedCtx         = Pointer[UInt8, MutUntrackedOrigin].unsafe_dangling(),
         )

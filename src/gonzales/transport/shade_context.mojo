@@ -1,6 +1,7 @@
 """What a shading point can see of the scene."""
 from gonzales.scene.accel.xert import XeScene, xe_scene_none
-from gonzales.core.geometry import RGB, Vec3f
+from gonzales.core.geometry import RGB, Vec3f, _is_real_ptr
+from std.sys.info import is_gpu
 from gonzales.scene.appearance.materials import Material, MeasuredBRDF
 from gonzales.transport.render_state import PathState, ShadowTask, SuppressTask
 from gonzales.scene.appearance.materials import GpuTexture, NormalSlopeMap
@@ -173,6 +174,10 @@ def _shade_context(
     gsms_queue: Pointer[UInt8, MutUntrackedOrigin] = Pointer[UInt8, MutUntrackedOrigin].unsafe_dangling(),
 ) -> ShadeContext:
     """A ShadeContext over a SceneView: the GPU kernels' and VCM's way to reach the shading code."""
+    var xe = xe_scene_none()
+    comptime if is_gpu():   # the host builds the shared context itself, and sharedCtx is device memory
+        if _is_real_ptr(sd.sharedCtx):
+            xe = sd.sharedCtx.unsafe_bitcast[ShadeContext]()[].xe     # inline shadow rays need the RT hardware (pruned BVH)
     return ShadeContext(
         paths_base=Pointer[PathState, MutUntrackedOrigin].unsafe_dangling(), has_glass=(sd.hasGlass & Int32(1)) != Int32(0), glossy_sms=(sd.hasGlass & Int32(2)) != Int32(0), bvh4=BVH4.none(), suppress_tasks=suppress_tasks, gsms_queue=gsms_queue,
         n_mediums=Int(sd.mediumCount), mediums=sd.mediums, medium_ifaces=sd.mediumInterfaces, grids=sd.grids, nvdb_grids=sd.nvdbGrids,
@@ -191,4 +196,4 @@ def _shade_context(
             distant_lights=sd.distantLights, distant_count=Int(sd.distantLightCount),
             point_lights=sd.pointLights, point_count=Int(sd.pointLightCount),
             infinite_lights=sd.infiniteLights, infinite_count=Int(sd.infiniteLightCount),
-            spheres=sd.spheres, sphere_count=Int(sd.sphereCount), light_sampler=sd.lightSampler), filter_glossy=sd.filterGlossy, clamp=sd.clamp, cycles=sd.cycles, xe=xe_scene_none())
+            spheres=sd.spheres, sphere_count=Int(sd.sphereCount), light_sampler=sd.lightSampler), filter_glossy=sd.filterGlossy, clamp=sd.clamp, cycles=sd.cycles, xe=xe)

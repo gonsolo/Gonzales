@@ -252,6 +252,7 @@ struct SceneView(TrivialRegisterPassable, DevicePassable):
     # material with an image-texture reflectance.
     var gpuTextures: Pointer[GpuTexture, MutUntrackedOrigin]
     var gpuTextureCount: Int64
+    var sharedCtx: Pointer[UInt8, MutUntrackedOrigin]   # the driver's ShadeContext, for its Intel scene; dangling on the CPU
 
     # One NormalSlopeMap per entry of `textures` (same indices, so a
     # material's `normal_tex_idx` addresses both), built once at scene-build

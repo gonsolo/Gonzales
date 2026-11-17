@@ -1057,6 +1057,7 @@ struct GpuSceneHandle(Movable):
             walkPrimsArr=typed_ptr[Pointer[PrimId, MutUntrackedOrigin]](self.walk_bvh.prims_ptrs_buf),
             walkBvhOfMesh=typed_ptr[Int32](self.walk_bvh.of_mesh_buf) if self.walk_bvh.n > 0 else Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
             bvh4=BVH4.none(),
+            sharedCtx=self.shade_ctx_buf.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
         )
 
 def gpu_available() -> Bool:
@@ -1571,6 +1572,7 @@ def gpu_upload_scene(
             var r_prev_c2w_buf = dev_buf(ctx, 64)
             ctx.enqueue_memset(r_prev_c2w_buf, UInt8(0))
             var r_shade_ctx_buf = dev_buf(ctx, 1024)
+            ctx.enqueue_memset(r_shade_ctx_buf, UInt8(0))     # no Intel scene until the driver writes its context
             var r_filter_lut_buf = dev_buf(ctx, 2 * FILTER_LUT_N * 4)
             if s.filter_type == Int32(0):
                 var lut_host = unsafe_alloc[Float32](2 * FILTER_LUT_N)
