@@ -5,7 +5,7 @@ format, the scene is read from it; otherwise the scene is parsed and the file is
 the parser or the scene's data changes: only the scene file's path and size, and the merge/prune settings, are checked.
 
 The snapshot is the ParsedScene_Mojo struct as it stands in memory, followed by every array its pointers name.
-Scenes with media, alpha cut-outs or measured materials are not cached.
+Scenes with media or measured materials are not cached.
 """
 from std.ffi import external_call
 from gonzales.core.env import env_str, env_on, env_int
@@ -24,7 +24,7 @@ from gonzales.scene.appearance.host_textures import TexPrefetch
 from gonzales.core.fast_io import read_parallel, PARALLEL_MIN
 
 comptime _MAGIC: Int = 0x474E5A53434143
-comptime _FORMAT: Int = 14   # 14: distant and point lights, normal slope maps
+comptime _FORMAT: Int = 15   # 14: distant and point lights, normal slope maps; 15: alpha masks
 
 comptime _Ptr = Pointer[UInt8, MutUntrackedOrigin]
 
@@ -120,9 +120,6 @@ def _unsupported(ref s: ParsedScene_Mojo) -> String:
         return "measured materials"
     if s.bvh4.is_real():
         return "a BVH4"
-    for mi in range(Int(s.mesh_count)):
-        if s.meshes[unsafe_offset=mi].alpha_w > Int32(0):
-            return "alpha cut-outs"
     return String("")
 
 
@@ -215,6 +212,20 @@ def scene_cache_save(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin], cache_p
         _put_int(f, 1 if has_mat else 0)
         if has_mat:
             _put[Int32](f, m.materials, per_face)
+    var masks = List[Int]()     # meshes share masks: per mesh its index, a new one followed by its texels
+    for i in range(nm):
+        var m = s.meshes[unsafe_offset=i]
+        var k = -1
+        var fresh = False
+        if m.alpha_w > Int32(0):
+            for j in range(len(masks)):
+                if masks[j] == Int(m.alpha):
+                    k = j
+            if k < 0:
+                k = len(masks); masks.append(Int(m.alpha)); fresh = True
+        _put_int(f, k)
+        if fresh:
+            _put[UInt8](f, m.alpha, Int(m.alpha_w) * Int(m.alpha_h))
 
     _put[BVH2Node](f, s.bvh_nodes, max(Int(s.bvh_node_count), 1)); _put[PrimId](f, s.prim_ids, max(Int(s.prim_count), 1))
     var shared = Int(s.bvh_nodes_cpu) == Int(s.bvh_nodes)
@@ -343,6 +354,13 @@ def scene_cache_load(cache_path: _Ptr, scene_path: _Ptr) -> Pointer[ParsedScene_
         s.mesh_pts[unsafe_offset=i] = s.meshes[unsafe_offset=i].points
         s.mesh_vis[unsafe_offset=i] = s.meshes[unsafe_offset=i].vertexIndices
         s.mesh_fis[unsafe_offset=i] = s.meshes[unsafe_offset=i].faceIndices
+    var masks = List[Pointer[UInt8, MutUntrackedOrigin]]()
+    for i in range(nm):
+        var k = _get_int(f)
+        if k == len(masks):
+            masks.append(_get[UInt8](f, Int(s.meshes[unsafe_offset=i].alpha_w) * Int(s.meshes[unsafe_offset=i].alpha_h)))
+        if k >= 0:
+            s.meshes[unsafe_offset=i].alpha = masks[k]
 
     s.bvh_nodes = _get[BVH2Node](f, max(Int(s.bvh_node_count), 1)); s.prim_ids = _get[PrimId](f, max(Int(s.prim_count), 1))
     if _get_int(f) == 1:
