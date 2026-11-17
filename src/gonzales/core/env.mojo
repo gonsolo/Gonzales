@@ -14,6 +14,7 @@ comptime ENV_SWITCHES: List[EnvSwitch] = [
     # Files and directories
     EnvSwitch("GONZALES_USD_CAMERA", "USD scenes: path or name of the camera prim (default the first camera)"),
     EnvSwitch("GONZALES_USD_TIME", "USD scenes: the frame to read (default the stage's start)"),
+    EnvSwitch("GONZALES_CLAMP_INDIRECT", "float: Cycles' Clamp Indirect, a limit on each indirect light contribution (0 = off)"),
     EnvSwitch("GONZALES_DATA_DIR", "directory of the spectral tables and data (default src/gonzales/data)"),
     EnvSwitch("GONZALES_SCENE_CACHE", "file: parsed-scene cache, written once, read on later starts; .rt and .heat go next to it"),
     EnvSwitch("GONZALES_RT_CACHE", "file: RT-core structure cache (default <GONZALES_SCENE_CACHE>.rt)"),

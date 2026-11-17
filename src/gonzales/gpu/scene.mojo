@@ -1572,6 +1572,13 @@ def gpu_upload_scene(
             var r_prev_c2w_buf = dev_buf(ctx, 64)
             ctx.enqueue_memset(r_prev_c2w_buf, UInt8(0))
             var r_shade_ctx_buf = dev_buf(ctx, 1024)
+            var clamp_indirect = Float32(0)
+            var clamp_env = env_str["GONZALES_CLAMP_INDIRECT"]("")
+            if clamp_env.byte_length() > 0:
+                try:
+                    clamp_indirect = Float32(atof(clamp_env)) * Float32(3)   # as session_set_clamp: Cycles limits the channel sum
+                except:
+                    print("Warning: GONZALES_CLAMP_INDIRECT is no number:", clamp_env)
             ctx.enqueue_memset(r_shade_ctx_buf, UInt8(0))     # no Intel scene until the driver writes its context
             var r_filter_lut_buf = dev_buf(ctx, 2 * FILTER_LUT_N * 4)
             if s.filter_type == Int32(0):
@@ -1679,7 +1686,7 @@ def gpu_upload_scene(
                                     s.filter_norm_x, s.filter_norm_y, s.filter_type),
                 lens=ThinLens(s.camera_lens_radius, s.camera_focal_distance),
                 filter_glossy=Float32(0),
-                clamp=SIMD[DType.float32, 2](0),
+                clamp=SIMD[DType.float32, 2](0, clamp_indirect),
                 cycles=SIMD[DType.int32, 4](0),
                 curve_root=s.curve_root,
                 curve_bvh=CurveBvh.none(),
