@@ -8,7 +8,7 @@ from gonzales.scene.appearance.materials import Material
 from gonzales.scene.shapes.primitives import PrimId, TriangleMesh
 from gonzales.scene.accel.xert import (
     xert_build_blas, xert_build_blas_geoms, xert_build_tlas, xert_alignment, xert_free, xert_trace_rays_gpu,
-    xert_trace_interop_gpu, XERT_MISS,
+    xert_trace_interop_gpu, xert_proc_table, XERT_MISS,
 )
 
 # Intel Xe2 hardware ray tracing: the driver builds a BLAS for the quad [-1, 1]^2 at z = 0 and a grid of rays straight
@@ -166,7 +166,7 @@ def test_xert_instances() raises:
                                                  Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(), Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
                                                  Pointer[Material, MutUntrackedOrigin].unsafe_dangling(),
                                                  Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(), Int32.MAX,
-                                                 Pointer[TriangleMesh, MutUntrackedOrigin].unsafe_dangling(), heat.unsafe_ptr(),
+                                                 Pointer[TriangleMesh, MutUntrackedOrigin].unsafe_dangling(), Int32(Int(xert_proc_table(8))), heat.unsafe_ptr(),
                                                  grid_dim=(NX * NY + 63) // 64, block_dim=64)
     var hits = 0; var expected = 0; var bad = 0
     with results.map_to_host() as h:
