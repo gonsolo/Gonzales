@@ -270,7 +270,13 @@ def mojo_parse_usd_scene(path: Pointer[UInt8, MutUntrackedOrigin], verbose: Bool
         _ = s_ptr.unsafe_take_pointee()
         s_ptr.unsafe_free()
         return Pointer[ParsedScene_Mojo, MutUntrackedOrigin].unsafe_dangling()
-    _plan_ptex_budget(s_ptr[unsafe_offset=0].tex_files)    # paged UDIM textures (oiio.cc), as the pbrt parser plans Ptex
+    var plan = List[String]()      # paged UDIM textures (oiio.cc), as the pbrt parser plans Ptex; each file once
+    var seen = Dict[String, Bool]()
+    for ref f in s_ptr[unsafe_offset=0].tex_files:
+        if f not in seen:
+            seen[f] = True
+            plan.append(f)
+    _plan_ptex_budget(plan)
     var psc = unsafe_alloc[ParsedScene_Mojo](1)
     finalize_scene(s_ptr, psc, verbose)
     _ = s_ptr.unsafe_take_pointee()
