@@ -14,7 +14,7 @@ from std.builtin.device_passable import DevicePassable, DeviceTypeEncoder
 from std.math import ceildiv
 from gonzales.core.geometry import Vec3f, cross, dot
 from gonzales.scene.shapes.patches import BezierPatch
-from gonzales.scene.shapes.displaced_patches import DispSurface, patch_box, sub_box, SUB_N, patch_at, intersect_displaced, displaced_normal, displaced_point, chain_color
+from gonzales.scene.shapes.displaced_patches import DispSurface, patch_box, sub_box, sub_count, patch_at, intersect_displaced, displaced_normal, displaced_point, chain_color
 from gonzales.app.viewer import CameraState, ViewerHandle, viewer_create, viewer_destroy, viewer_poll_events, viewer_should_close, \
     viewer_get_camera_state, viewer_set_camera_state, viewer_update_framebuffer, viewer_take_key
 from gonzales.core.geometry import Point3f
@@ -115,7 +115,7 @@ def trace_patches(d: DispSurface, nodes: Pointer[BNode, MutUntrackedOrigin], ord
                 var r = intersect_displaced(d, prim, org, dir, h.t)
                 h.steps += r[4]
                 if r[0] and r[1] < h.t:
-                    h.t = r[1]; h.prim = prim // SUB_N; h.s = r[2]; h.u = r[3]; h.size = r[5]
+                    h.t = r[1]; h.prim = prim // sub_count(d); h.s = r[2]; h.u = r[3]; h.size = r[5]
         elif sp < 62:
             var na = nodes[unsafe_offset=Int(nd.a)]; var nb = nodes[unsafe_offset=Int(nd.b)]
             var ta = _box_t(na.lo, na.hi, org, inv, h.t); var tb = _box_t(nb.lo, nb.hi, org, inv, h.t)
@@ -130,14 +130,15 @@ def trace_patches(d: DispSurface, nodes: Pointer[BNode, MutUntrackedOrigin], ord
 
 
 def _sub_bvh(d: DispSurface, np: Int, mut nodes: List[BNode], mut order: List[Int32]):
-    """The BVH over every patch's SUB_N sub-squares for the surface's height scale (boxes in parallel)."""
-    var n = np * SUB_N
+    """The BVH over every patch's sub-squares for the surface's height scale (boxes in parallel)."""
+    var nsub = sub_count(d)
+    var n = np * nsub
     var lo = List[Vec3f](length=n, fill=Vec3f(0, 0, 0)); var hi = List[Vec3f](length=n, fill=Vec3f(0, 0, 0))
     var lo_p = lo.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin](); var hi_p = hi.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
     def boxes(p: Int) {imm}:
-        for k in range(SUB_N):
-            var b = sub_box(d, p * SUB_N + k)
-            lo_p[unsafe_offset=p * SUB_N + k] = b[0]; hi_p[unsafe_offset=p * SUB_N + k] = b[1]
+        for k in range(nsub):
+            var b = sub_box(d, p * nsub + k)
+            lo_p[unsafe_offset=p * nsub + k] = b[0]; hi_p[unsafe_offset=p * nsub + k] = b[1]
     parallelize(boxes, np)
     nodes.clear(); order.clear()
     for i in range(n):
@@ -242,6 +243,18 @@ def trace_tris(pts: Pointer[Vec3f, MutUntrackedOrigin], tri: Pointer[Int32, MutU
             stack[sp] = nd.a; stack[sp + 1] = nd.b
             sp += 2
     return h
+
+
+def _grid_levels() -> Int32:
+    """GRID=4/8/16: sub-squares a patch side as BVH primitives (default 8)."""
+    var g = getenv("GRID")
+    return Int32(4) if g == "4" else (Int32(8) if g == "16" else Int32(6))
+
+
+def _leaf_mode() -> Int32:
+    """LEAF=box (footprint-sized boxes), exact (bilinear leaves at a texel or a pixel; default) or texel (at a texel only)."""
+    var l = getenv("LEAF")
+    return Int32(0) if l == "box" else (Int32(2) if l == "texel" else Int32(1))
 
 
 def _env_f(name: String, dflt: Float32) raises -> Float32:
@@ -430,7 +443,7 @@ def run_demo(patches: Pointer[BezierPatch, MutUntrackedOrigin], sq: Pointer[Floa
     var dpat = _up(ctx, bufs, patches, np); var dsq = _up(ctx, bufs, sq, 3 * np); var dface = _up(ctx, bufs, face, np)
     var dhdr = _up(ctx, bufs, hdr, 3 * nf); var dpyr = _up(ctx, bufs, pyr, npyr); var doff = _up(ctx, bufs, chain_off, nf)
     var dchain = _up(ctx, bufs, chain, nchain); var dfm = _up(ctx, bufs, fm, 12 * np); var dgreg = _up(ctx, bufs, greg, np)
-    var host_d = DispSurface(patches, sq, face, hdr, pyr, exag / Float32(255), Vec3f(0, 0, 0), Float32(0), chain_off, chain, fm, greg)
+    var host_d = DispSurface(patches, sq, face, hdr, pyr, exag / Float32(255), Vec3f(0, 0, 0), Float32(0), chain_off, chain, fm, greg, _grid_levels(), _leaf_mode())
     var nodes = List[BNode](); var order = List[Int32]()
     _demo_bvh(host_d, np, nodes, order)
     var nb_cap = max(len(nodes), 1) * size_of[BNode]() * 2   # room for a deeper tree
@@ -516,7 +529,7 @@ def run_demo(patches: Pointer[BezierPatch, MutUntrackedOrigin], sq: Pointer[Floa
             eye = Vec3f(cs[unsafe_offset=0].position.x, cs[unsafe_offset=0].position.y, cs[unsafe_offset=0].position.z)
             fwd = cs[unsafe_offset=0].direction
         if rebuild:
-            host_d = DispSurface(patches, sq, face, hdr, pyr, exag / Float32(255), Vec3f(0, 0, 0), Float32(0), chain_off, chain, fm, greg)
+            host_d = DispSurface(patches, sq, face, hdr, pyr, exag / Float32(255), Vec3f(0, 0, 0), Float32(0), chain_off, chain, fm, greg, _grid_levels(), _leaf_mode())
             _demo_bvh(host_d, np, nodes, order)
             _demo_upload(ctx, nb_buf, or_buf, nb_stage, nb_cap, nodes, order)   # nodes and the patch order they index
             moved = True
@@ -531,7 +544,7 @@ def run_demo(patches: Pointer[BezierPatch, MutUntrackedOrigin], sq: Pointer[Floa
         var right = cross(fwd, world_up)
         right = right * (Float32(1) / sqrt(dot(right, right)))
         var up = cross(right, fwd)
-        var dd = DispSurface(dpat, dsq, dface, dhdr, dpyr, exag / Float32(255), eye, Float32(2) * tan_h / Float32(rw), doff, dchain, dfm, dgreg)
+        var dd = DispSurface(dpat, dsq, dface, dhdr, dpyr, exag / Float32(255), eye, Float32(2) * tan_h / Float32(rw), doff, dchain, dfm, dgreg, _grid_levels(), _leaf_mode())
         var cam = DCam(eye, fwd, right, up, light, tan_h, exposure, Int32(rw), Int32(rh), Int32(frame), Int32(headlight), Int32(1 if color_on else 0))
         var t0 = perf_counter_ns()
         ctx.enqueue_function[demo_gpu](dd, dnodes, dorder, crgb, coff, daccum, cam, grid_dim=ceildiv(rw * rh, 64), block_dim=64)
@@ -639,7 +652,7 @@ def main() raises:
             raise Error("cannot read " + col_path)
 
     if getenv("EDGE_GAP") == "1":
-        _edge_gap(DispSurface(patches, sq, face, hdr, pyr, Float32(0), eye, pixel, chain_off, chain, fm, greg), np)
+        _edge_gap(DispSurface(patches, sq, face, hdr, pyr, Float32(0), eye, pixel, chain_off, chain, fm, greg, _grid_levels(), _leaf_mode()), np)
         return
     var ngreg = 0
     for p in range(np):
@@ -656,7 +669,7 @@ def main() raises:
         if only.byte_length() > 0 and only != name:
             continue
         var scale = Float32(0) if scene == 0 else (Float32(1) / Float32(255) if scene == 1 else exag / Float32(255))
-        var d = DispSurface(patches, sq, face, hdr, pyr, scale, eye, pixel, chain_off, chain, fm, greg)
+        var d = DispSurface(patches, sq, face, hdr, pyr, scale, eye, pixel, chain_off, chain, fm, greg, _grid_levels(), _leaf_mode())
         var img = List[Float32](length=W * H, fill=Float32(0))
         var rgb = List[Float32](length=3 * W * H, fill=Float32(0))
         var hitmask = List[UInt8](length=W * H, fill=UInt8(0))
@@ -668,7 +681,7 @@ def main() raises:
             var nodes = List[BNode](); var order = List[Int32]()
             _sub_bvh(d, np, nodes, order)
             mem = np * (size_of[BezierPatch]() + 16) + len(nodes) * size_of[BNode]() + 4 * len(order) + (npyr if scene > 0 else 0)
-            print("BVH:", np * SUB_N, "sub-squares,", len(nodes), "nodes,", (len(nodes) * size_of[BNode]() + 4 * len(order)) // 1024, "KiB")
+            print("BVH:", np * sub_count(d), "sub-squares,", len(nodes), "nodes,", (len(nodes) * size_of[BNode]() + 4 * len(order)) // 1024, "KiB")
             var tb = perf_counter_ns()
             var np_ptr = nodes.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
             var or_ptr = order.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
@@ -716,7 +729,7 @@ def main() raises:
                 var nchain_b = nchain
                 var dd = DispSurface(_up(ctx, bufs, patches, np), _up(ctx, bufs, sq, 3 * np), _up(ctx, bufs, face, np), _up(ctx, bufs, hdr, 3 * nf),
                                      _up(ctx, bufs, pyr, npyr), scale, eye, pixel, _up(ctx, bufs, chain_off, nf), _up(ctx, bufs, chain, nchain_b),
-                                     _up(ctx, bufs, fm, 12 * np), _up(ctx, bufs, greg, np))
+                                     _up(ctx, bufs, fm, 12 * np), _up(ctx, bufs, greg, np), _grid_levels(), _leaf_mode())
                 var nd_d = _up(ctx, bufs, nodes.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin](), len(nodes))
                 var or_d = _up(ctx, bufs, order.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin](), len(order))
                 var img_b = ctx.enqueue_create_buffer[DType.float32](W * H)

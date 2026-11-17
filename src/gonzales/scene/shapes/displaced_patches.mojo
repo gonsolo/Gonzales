@@ -39,6 +39,8 @@ struct DispSurface(TrivialRegisterPassable, DevicePassable):
     var chain: _U8
     var fm: _F32         # per patch: the Fm interior points (1,1), (2,1), (2,2), (1,2), 12 floats; patches hold Fp there
     var greg: _U8        # per patch: 1 for a Gregory patch, 2 for an end cap fitted as Bezier
+    var sub_levels: Int32  # the BVH's primitives: a patch's sub-squares at this halving depth (4: 4 x 4, 6: 8 x 8, 8: 16 x 16)
+    var leaf_mode: Int32   # 0: box leaves no larger than the footprint; 1: exact bilinear leaves at a texel or a pixel; 2: at a texel only
 
 
 @always_inline
@@ -313,16 +315,18 @@ def patch_at(d: DispSurface, pi: Int, s: Float32, t: Float32) -> BezierPatch:
 
 
 def displaced_box(d: DispSurface, pi: Int, o: BezierPatch, org: Vec3f, s0: Float32, s1: Float32, t0: Float32, t1: Float32,
-                  parent_lo: Vec3f = Vec3f(-1, -1, -1), parent_hi: Vec3f = Vec3f(1, 1, 1)) -> Tuple[Vec3f, Vec3f, Vec3f, Vec3f]:
+                  parent_lo: Vec3f = Vec3f(-1, -1, -1), parent_hi: Vec3f = Vec3f(1, 1, 1)) -> Tuple[Vec3f, Vec3f, Vec3f, Vec3f, Float32]:
     """The box of patch pi's displaced surface over [s0, s1] x [t0, t1] (o: the patch anchored at org), and its unit-normal
-    range (within the parent's: both are conservative). Everything is cropped from the original nets."""
+    range (within the parent's: both are conservative), and the undisplaced sub-patch's extent. Everything is cropped from the
+    original nets."""
     var n = _inet(d, pi, o, org, s0, s1, t0, t1)
     var cl = _crop(n.lo, s0, s1, t0, t1)
     var ch = cl if d.greg[unsafe_offset=pi] != 1 else _crop(n.hi, s0, s1, t0, t1)
     var lo = Vec3f(cl.x.reduce_min(), cl.y.reduce_min(), cl.z.reduce_min())
     var hi = Vec3f(ch.x.reduce_max(), ch.y.reduce_max(), ch.z.reduce_max())
+    var base = max(max(hi.x - lo.x, hi.y - lo.y), hi.z - lo.z)
     if d.scale <= Float32(0):
-        return (lo, hi, parent_lo, parent_hi)
+        return (lo, hi, parent_lo, parent_hi, base)
     var u0 = d.sq[unsafe_offset=3 * pi]; var v0 = d.sq[unsafe_offset=3 * pi + 1]; var sz = d.sq[unsafe_offset=3 * pi + 2]
     var hr = height_range(d, Int(d.face[unsafe_offset=pi]), u0 + s0 * sz, u0 + s1 * sz, v0 + t0 * sz, v0 + t1 * sz)
     var h0 = hr[0] * d.scale; var h1 = hr[1] * d.scale
@@ -330,7 +334,7 @@ def displaced_box(d: DispSurface, pi: Int, o: BezierPatch, org: Vec3f, s0: Float
     var nlo = Vec3f(max(nc[0].x, parent_lo.x), max(nc[0].y, parent_lo.y), max(nc[0].z, parent_lo.z))
     var nhi = Vec3f(min(nc[1].x, parent_hi.x), min(nc[1].y, parent_hi.y), min(nc[1].z, parent_hi.z))
     var ox = _imul(h0, h1, nlo.x, nhi.x); var oy = _imul(h0, h1, nlo.y, nhi.y); var oz = _imul(h0, h1, nlo.z, nhi.z)
-    return (Vec3f(lo.x + ox[0], lo.y + oy[0], lo.z + oz[0]), Vec3f(hi.x + ox[1], hi.y + oy[1], hi.z + oz[1]), nlo, nhi)
+    return (Vec3f(lo.x + ox[0], lo.y + oy[0], lo.z + oz[0]), Vec3f(hi.x + ox[1], hi.y + oy[1], hi.z + oz[1]), nlo, nhi, base)
 
 
 def patch_box(d: DispSurface, pi: Int) -> Tuple[Vec3f, Vec3f]:
@@ -361,37 +365,108 @@ def _leaf_size(lo: Vec3f, hi: Vec3f, cam: Vec3f, pixel: Float32) -> Tuple[Float3
     return (max(max(e.x, e.y), e.z), dist * pixel)
 
 
-comptime SUB_LEVELS = 4                  # the BVH's primitives: a patch's sub-squares at this depth (4 x 4)
-comptime SUB_N = 1 << SUB_LEVELS
+@always_inline
+def sub_count(d: DispSurface) -> Int:
+    """Primitives (sub-squares) a patch."""
+    return 1 << Int(d.sub_levels)
 
 
 @always_inline
-def sub_square(k: Int) -> Tuple[Float32, Float32, UInt64]:
-    """Sub-square k of a patch (k = row * 4 + column): its corner (u0, v0) and the halving path that reaches it."""
-    var ku = k % 4; var kv = k // 4
-    var path = UInt64((ku >> 1) & 1) | (UInt64((kv >> 1) & 1) << 1) | (UInt64(ku & 1) << 2) | (UInt64(kv & 1) << 3)
-    return (Float32(ku) * Float32(0.25), Float32(kv) * Float32(0.25), path)
+def sub_square(d: DispSurface, k: Int) -> Tuple[Float32, Float32, Float32, UInt64]:
+    """Sub-square k of a patch (k = row * n + column): its corner (u0, v0), its size, and the halving path that reaches it."""
+    var la = Int(d.sub_levels) // 2; var n = 1 << la
+    var ku = k % n; var kv = k // n
+    var path = UInt64(0)
+    for i in range(la):   # even depths split u, odd ones v, the coarsest first
+        path |= UInt64((ku >> (la - 1 - i)) & 1) << UInt64(2 * i)
+        path |= UInt64((kv >> (la - 1 - i)) & 1) << UInt64(2 * i + 1)
+    var sz = Float32(1) / Float32(n)
+    return (Float32(ku) * sz, Float32(kv) * sz, sz, path)
 
 
 def sub_box(d: DispSurface, prim: Int) -> Tuple[Vec3f, Vec3f]:
-    """The world box of primitive prim = patch * SUB_N + sub-square."""
-    var pi = prim // SUB_N; var sq = sub_square(prim % SUB_N)
-    var b = displaced_box(d, pi, d.patches[unsafe_offset=pi], Vec3f(0, 0, 0), sq[0], sq[0] + Float32(0.25), sq[1], sq[1] + Float32(0.25))
+    """The world box of primitive prim = patch * sub_count + sub-square."""
+    var pi = prim // sub_count(d); var sq = sub_square(d, prim % sub_count(d))
+    var b = displaced_box(d, pi, d.patches[unsafe_offset=pi], Vec3f(0, 0, 0), sq[0], sq[0] + sq[2], sq[1], sq[1] + sq[2])
     return (b[0], b[1])
 
 
+@always_inline
+def _tri_hit(a: Vec3f, b: Vec3f, c: Vec3f, dir: Vec3f, t_max: Float32) -> Tuple[Bool, Float32, Float32, Float32]:
+    """Ray (from the origin) against triangle a b c (Moller-Trumbore, a hair of overlap): (hit, t, b1, b2)."""
+    var e1 = b - a; var e2 = c - a
+    var pv = cross(dir, e2)
+    var det = dot(e1, pv)
+    if det == Float32(0):
+        return (False, t_max, Float32(0), Float32(0))
+    var inv = Float32(1) / det
+    var tv = -a
+    var u = dot(tv, pv) * inv
+    var qv = cross(tv, e1)
+    var v = dot(dir, qv) * inv
+    var t = dot(e2, qv) * inv
+    comptime e = Float32(1e-3)
+    if u < -e or v < -e or u + v > Float32(1) + e or t <= Float32(0) or t >= t_max:
+        return (False, t_max, Float32(0), Float32(0))
+    return (True, t, u, v)
+
+
+@always_inline
+def _bilinear_hit(q00: Vec3f, q10: Vec3f, q11: Vec3f, q01: Vec3f, dir: Vec3f, t_max: Float32) -> Tuple[Bool, Float32, Float32, Float32]:
+    """Ray (from the origin) against the bilinear patch q00 q10 q11 q01 (Reshetov, Cool Patches, Ray Tracing Gems 2019): (hit, t, u, v)."""
+    var e10 = q10 - q00; var e11 = q11 - q10; var e00 = q01 - q00
+    var qn = cross(q10 - q00, q01 - q11)
+    var a = dot(cross(q00, dir), e00)
+    var c = dot(qn, dir)
+    var b = dot(cross(q10, dir), e11) - a - c
+    var det = b * b - Float32(4) * a * c
+    var t = t_max; var u = Float32(0); var v = Float32(0); var hit = False
+    if det < Float32(0):
+        return (False, t, u, v)
+    det = sqrt(det)
+    var u1: Float32; var u2: Float32
+    if c == Float32(0):
+        u1 = -a / b; u2 = Float32(-1)
+    else:
+        u1 = (-b - (det if b >= Float32(0) else -det)) * Float32(0.5)
+        u2 = a / u1 if u1 != Float32(0) else Float32(-1)
+        u1 = u1 / c
+    comptime e = Float32(1e-3)   # neighbouring leaves overlap a hair: rounding must not let a ray slip between them
+    for r in range(2):
+        var ur = u1 if r == 0 else u2
+        if ur < -e or ur > Float32(1) + e:
+            continue
+        var pa = q00 + e10 * ur
+        var pb = e00 + (e11 - e00) * ur
+        var n = cross(dir, pb)
+        var dd = dot(n, n)
+        if dd <= Float32(0):
+            continue
+        n = cross(n, pa)
+        var tr = dot(n, pb) / dd
+        var vr = dot(n, dir)
+        if vr >= -e * dd and vr <= (Float32(1) + e) * dd and tr > Float32(0) and tr < t:
+            t = tr; u = min(max(ur, Float32(0)), Float32(1)); v = min(max(vr / dd, Float32(0)), Float32(1)); hit = True
+    return (hit, t, u, v)
+
+
 def intersect_displaced(d: DispSurface, prim: Int, org: Vec3f, dir: Vec3f, t_max: Float32) -> Tuple[Bool, Float32, Float32, Float32, Int, Float32]:
-    """The nearest hit of primitive prim (patch * SUB_N + sub-square) before t_max: (hit, t, s, t, steps, the leaf square's size)."""
-    var pi = prim // SUB_N; var sq = sub_square(prim % SUB_N)
+    """The nearest hit of primitive prim (patch * sub_count + sub-square) before t_max: (hit, t, s, t, steps, the leaf square's size).
+    Box leaves end where the displaced box is no larger than the footprint; exact leaves where the undisplaced square reaches a
+    texel or the footprint, and intersect the bilinear patch through its four displaced corners, so the depth does not grow with
+    the displacement's amplitude."""
+    var pi = prim // sub_count(d); var sq = sub_square(d, prim % sub_count(d))
     var src = d.patches[unsafe_offset=pi]
     var o = BezierPatch(src.x - org.x, src.y - org.y, src.z - org.z)   # anchored at the ray origin
     var cam = d.cam - org
     var inv = Vec3f(Float32(1) / dir.x, Float32(1) / dir.y, Float32(1) / dir.z)
     var best = t_max; var hit = False; var hs = Float32(0); var ht = Float32(0); var hsz = Float32(1)
     var nlo = Array[Vec3f, PATCH_MAX_DEPTH + 1](fill=Vec3f(-1, -1, -1)); var nhi = Array[Vec3f, PATCH_MAX_DEPTH + 1](fill=Vec3f(1, 1, 1))
-    var depth = SUB_LEVELS; var steps = 0
-    var path = sq[2]; var pend = UInt64(0)
-    var dom = (sq[0], sq[1], Float32(0.25), Float32(0.25))
+    var depth = Int(d.sub_levels); var steps = 0
+    var path = sq[3]; var pend = UInt64(0)
+    var dom = (sq[0], sq[1], sq[2], sq[2])
+    var f = Int(d.face[unsafe_offset=pi])
+    var texels = d.sq[unsafe_offset=3 * pi + 2] * Float32(1 << max(Int(d.hdr[unsafe_offset=3 * f + 1]), Int(d.hdr[unsafe_offset=3 * f + 2])))   # a patch side in finest texels
     var cur = displaced_box(d, pi, o, org, dom[0], dom[0] + dom[2], dom[1], dom[1] + dom[3])
     nlo[depth] = cur[2]; nhi[depth] = cur[3]
     var cur_hit = _slab(cur[0], cur[1], inv, best)
@@ -400,10 +475,36 @@ def intersect_displaced(d: DispSurface, prim: Int, org: Vec3f, dir: Vec3f, t_max
         var descend = False
         if cur_hit[0]:
             var sz = _leaf_size(cur[0], cur[1], cam, d.pixel)
-            if depth >= PATCH_MAX_DEPTH or sz[0] <= sz[1]:
-                if cur_hit[1] < best:
-                    best = cur_hit[1]; hit = True
-                    hs = dom[0] + Float32(0.5) * dom[2]; ht = dom[1] + Float32(0.5) * dom[3]; hsz = max(dom[2], dom[3])
+            var leaf: Bool
+            if d.leaf_mode == 0:
+                leaf = sz[0] <= sz[1]
+            else:
+                leaf = max(dom[2], dom[3]) * texels <= Float32(1) or (d.leaf_mode == 1 and cur[4] <= sz[1])
+            if depth >= PATCH_MAX_DEPTH or leaf:
+                if d.leaf_mode == 0:
+                    if cur_hit[1] < best:
+                        best = cur_hit[1]; hit = True
+                        hs = dom[0] + Float32(0.5) * dom[2]; ht = dom[1] + Float32(0.5) * dom[3]; hsz = max(dom[2], dom[3])
+                else:   # corners from global (s, t): neighbouring leaves of one depth share them
+                    var s0 = dom[0]; var s1 = dom[0] + dom[2]; var t0 = dom[1]; var t1 = dom[1] + dom[3]
+                    var sm = s0 + Float32(0.5) * dom[2]; var tm = t0 + Float32(0.5) * dom[3]
+                    var cs = SIMD[DType.float32, 8](s0, s1, s1, s0, sm, s1, sm, s0)   # corners 00 10 11 01, then the edge midpoints
+                    var ct = SIMD[DType.float32, 8](t0, t0, t1, t1, t0, tm, t1, tm)
+                    var cp = Array[Vec3f, 8](fill=Vec3f(0, 0, 0))
+                    for k in range(8):
+                        cp[k] = displaced_point(d, pi, cs[k], ct[k]) - org
+                    var bh = _bilinear_hit(cp[0], cp[1], cp[2], cp[3], dir, best)
+                    if bh[0]:
+                        best = bh[1]; hit = True
+                        hs = s0 + bh[2] * dom[2]; ht = t0 + bh[3] * dom[3]; hsz = max(dom[2], dom[3])
+                    # Edge fans: a neighbour one level finer bends its edge through the midpoint; these triangles close the T gap.
+                    for k in range(4):
+                        var ka = k; var kb = (k + 1) % 4; var km = 4 + k
+                        var th = _tri_hit(cp[ka], cp[km], cp[kb], dir, best)
+                        if th[0]:
+                            best = th[1]; hit = True
+                            var w0 = Float32(1) - th[2] - th[3]
+                            hs = w0 * cs[ka] + th[2] * cs[km] + th[3] * cs[kb]; ht = w0 * ct[ka] + th[2] * ct[km] + th[3] * ct[kb]; hsz = max(dom[2], dom[3])
             else:
                 var along_u = depth % 2 == 0
                 var hu0 = dom[0]; var hv0 = dom[1]; var hdu = dom[2]; var hdv = dom[3]
