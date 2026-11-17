@@ -193,6 +193,42 @@ int disp_cage(const char *ptx, float *pos, int *counts, int *idx, int *sizes) {
         return 1;
 }
 
+// The colour Ptex as bordered RGB8 chains per face (oiio.cc's ptex_read_face), for GPU lookups; total bytes in *n, null
+// if it cannot be read. Its faces must match the displacement's.
+void *disp_color_chains(const char *ptx, long long *n) {
+        Ptex::String err;
+        PtexPtr<PtexTexture> tex(PtexTexture::open(ptx, err));
+        void *pt = tex ? ptex_open(ptx) : nullptr;
+        if (!pt)
+                return nullptr;
+        auto *c = new Disp;
+        for (int f = 0; f < tex->numFaces(); ++f) {
+                const Ptex::Res r = tex->getFaceInfo(f).res;
+                size_t texels = 0;
+                for (int ul = r.ulog2, vl = r.vlog2;; ul = std::max(ul - 1, 0), vl = std::max(vl - 1, 0)) {
+                        texels += static_cast<size_t>((1 << ul) + 2) * ((1 << vl) + 2);
+                        if (ul == 0 && vl == 0)
+                                break;
+                }
+                c->chain_off.push_back(static_cast<int>(c->chain.size()));
+                const size_t at = c->chain.size();
+                c->chain.resize(at + texels * 3);
+                ptex_read_face(pt, f, r.ulog2, r.vlog2, c->chain.data() + at);
+        }
+        ptex_close(pt);
+        *n = static_cast<long long>(c->chain.size());
+        return c;
+}
+
+// Copy the colour chains out (per face its offset in RGB texels, then the bytes) and free them.
+void disp_color_chains_take(void *h, int *off, unsigned char *rgb) {
+        auto *c = static_cast<Disp *>(h);
+        for (size_t f = 0; f < c->chain_off.size(); ++f)
+                off[f] = c->chain_off[f] / 3;
+        std::memcpy(rgb, c->chain.data(), c->chain.size());
+        delete c;
+}
+
 static PtexCache *color_cache = nullptr;
 static PtexTexture *color_tex = nullptr;
 

@@ -5,7 +5,7 @@
 # larger than the camera's footprint at them, so every ray sees the same surface and neighbouring depths cannot open cracks.
 from std.bit import count_leading_zeros
 from std.builtin.device_passable import DevicePassable, DeviceTypeEncoder
-from std.math import max, min, sqrt, abs, floor, ceil, log2
+from std.math import max, min, sqrt, abs, floor, ceil, log2, pow
 from gonzales.core.geometry import Vec3f, cross, dot
 from gonzales.scene.shapes.patches import BezierPatch, patch_eval, _crop, _blossom, _domain, PATCH_MAX_DEPTH
 
@@ -451,3 +451,31 @@ def displaced_point(d: DispSurface, pi: Int, s: Float32, t: Float32) -> Vec3f:
         return e[0]
     var f = Int(d.face[unsafe_offset=pi]); var u0 = d.sq[unsafe_offset=3 * pi]; var v0 = d.sq[unsafe_offset=3 * pi + 1]; var sz = d.sq[unsafe_offset=3 * pi + 2]
     return e[0] + n * (face_height(d, f, u0 + s * sz, v0 + t * sz) * d.scale / ln)
+
+
+@always_inline
+def _rgb_texel(rgb: _U8, off: Int, w: Int, x: Int, y: Int) -> Vec3f:
+    var i = 3 * (off + (y + 1) * (w + 2) + x + 1)
+    return Vec3f(Float32(Int(rgb[unsafe_offset=i])), Float32(Int(rgb[unsafe_offset=i + 1])), Float32(Int(rgb[unsafe_offset=i + 2])))
+
+
+def chain_color(d: DispSurface, rgb: _U8, rgb_off: _I32, pi: Int, s: Float32, t: Float32, step: Float32) -> Vec3f:
+    """Linear colour at (s, t) of patch pi from bordered RGB8 chains with the displacement's faces (src/oiio/disp.cc), bilinear
+    at the level whose texels match `step` (the leaf square's size in patch units); the borders hide the face edges."""
+    var f = Int(d.face[unsafe_offset=pi]); var u0 = d.sq[unsafe_offset=3 * pi]; var v0 = d.sq[unsafe_offset=3 * pi + 1]; var sz = d.sq[unsafe_offset=3 * pi + 2]
+    var ul = Int(d.hdr[unsafe_offset=3 * f + 1]); var vl = Int(d.hdr[unsafe_offset=3 * f + 2])
+    var lvl = Int(min(max(log2(max(step * sz * Float32(1 << max(ul, vl)), Float32(1e-6))), Float32(0)), Float32(max(ul, vl))))
+    var off = Int(rgb_off[unsafe_offset=f])
+    var l = 0; var cul = ul; var cvl = vl
+    while l < lvl and (cul > 0 or cvl > 0):
+        off += ((1 << cul) + 2) * ((1 << cvl) + 2)
+        cul = max(cul - 1, 0); cvl = max(cvl - 1, 0); l += 1
+    var w = 1 << cul; var h = 1 << cvl
+    var fx = min(max((u0 + s * sz) * Float32(w) - Float32(0.5), Float32(-0.5)), Float32(w) - Float32(0.5))
+    var fy = min(max((v0 + t * sz) * Float32(h) - Float32(0.5), Float32(-0.5)), Float32(h) - Float32(0.5))
+    var x0 = Int(floor(fx)); var y0 = Int(floor(fy))
+    var tx = fx - Float32(x0); var ty = fy - Float32(y0)
+    var c = (_rgb_texel(rgb, off, w, x0, y0) * (Float32(1) - tx) + _rgb_texel(rgb, off, w, x0 + 1, y0) * tx) * (Float32(1) - ty) \
+          + (_rgb_texel(rgb, off, w, x0, y0 + 1) * (Float32(1) - tx) + _rgb_texel(rgb, off, w, x0 + 1, y0 + 1) * tx) * ty
+    var k = Float32(1) / Float32(255)
+    return Vec3f(pow(c.x * k, Float32(2.2)), pow(c.y * k, Float32(2.2)), pow(c.z * k, Float32(2.2)))   # 8-bit colour is gamma 2.2
