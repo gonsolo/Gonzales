@@ -217,6 +217,7 @@ def main() raises:
     var pixel = Float32(2) * tan_h / Float32(W) * _env_f("FOOTPRINT", Float32(1))
     var exag = _env_f("EXAG", Float32(8))
     var only = getenv("ONLY")
+    var spp_n = Int(sqrt(_env_f("SPP", Float32(1))) + Float32(0.5))   # SPP=64: 8 x 8
 
     var lo_b = List[Vec3f](); var hi_b = List[Vec3f]()
     for scene in range(5):   # 0: limit surface, 1: scale 1, 2: exaggerated, 3: tessellated reference of 2, 4: the cage
@@ -250,18 +251,25 @@ def main() raises:
             var mx_ptr = maxs.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
             def row(y: Int) {imm}:
                 for x in range(W):
-                    var px = (Float32(2) * (Float32(x) + Float32(0.5)) / Float32(W) - Float32(1)) * tan_h
-                    var py = (Float32(1) - Float32(2) * (Float32(y) + Float32(0.5)) / Float32(H)) * tan_h * Float32(H) / Float32(W)
-                    var dir = fwd + right * px + up * py
-                    dir = dir * (Float32(1) / sqrt(dot(dir, dir)))
-                    var h = trace_patches(d, np_ptr, or_ptr, eye, dir)
-                    st_ptr[unsafe_offset=y] += h.steps
-                    mx_ptr[unsafe_offset=y] = max(mx_ptr[unsafe_offset=y], h.steps)
-                    if h.prim >= 0:
-                        var n = displaced_normal(d, h.prim, h.s, h.u, max(h.size, Float32(1.0 / 512.0)))   # heights at the footprint
-                        if dot(n, dir) > Float32(0):
-                            n = -n
-                        im_ptr[unsafe_offset=y * W + x] = Float32(0.08) + Float32(0.75) * max(dot(n, light), Float32(0))
+                    var acc = Float32(0); var hits = 0
+                    for k in range(spp_n * spp_n):   # stratified sub-pixel samples
+                        var jx = (Float32(k % spp_n) + Float32(0.5)) / Float32(spp_n)
+                        var jy = (Float32(k // spp_n) + Float32(0.5)) / Float32(spp_n)
+                        var px = (Float32(2) * (Float32(x) + jx) / Float32(W) - Float32(1)) * tan_h
+                        var py = (Float32(1) - Float32(2) * (Float32(y) + jy) / Float32(H)) * tan_h * Float32(H) / Float32(W)
+                        var dir = fwd + right * px + up * py
+                        dir = dir * (Float32(1) / sqrt(dot(dir, dir)))
+                        var h = trace_patches(d, np_ptr, or_ptr, eye, dir)
+                        st_ptr[unsafe_offset=y] += h.steps
+                        mx_ptr[unsafe_offset=y] = max(mx_ptr[unsafe_offset=y], h.steps)
+                        if h.prim >= 0:
+                            var n = displaced_normal(d, h.prim, h.s, h.u, max(h.size, Float32(1.0 / 512.0)))   # heights at the footprint
+                            if dot(n, dir) > Float32(0):
+                                n = -n
+                            acc += Float32(0.08) + Float32(0.75) * max(dot(n, light), Float32(0))
+                            hits += 1
+                    im_ptr[unsafe_offset=y * W + x] = acc / Float32(spp_n * spp_n)
+                    if hits > 0:
                         hm_ptr[unsafe_offset=y * W + x] = UInt8(1)
             if getenv("SERIAL") == "1":
                 for y in range(H):
