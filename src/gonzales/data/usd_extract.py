@@ -8,6 +8,7 @@ from pxr import Usd, UsdGeom, UsdShade, UsdLux, Gf
 
 _SKIP_PURPOSES = (UsdGeom.Tokens.proxy, UsdGeom.Tokens.guide)
 _ACESCG_TO_REC709 = np.array([[1.70505, -0.62179, -0.08326], [-0.13026, 1.14080, -0.01055], [-0.02400, -0.12897, 1.15297]])
+_LIGHT_FILTER = [t for t in os.environ.get("USD_EXTRACT_LIGHTS", "").split(",") if t]   # debugging: only these light types
 TEX_CACHE = os.environ.get("GONZALES_USD_TEX_CACHE", "/tmp/gonzales_usd_tex")
 TEX_RES = int(os.environ.get("GONZALES_USD_TEX_RES", "64"))   # texels per UDIM tile side of the resident level
 
@@ -249,6 +250,8 @@ def _lights(stage, xc, time, visible):
             it.PruneChildren()
             continue
         if not prim.HasAPI(UsdLux.LightAPI):
+            continue
+        if _LIGHT_FILTER and prim.GetTypeName() not in _LIGHT_FILTER:
             continue
         api = UsdLux.LightAPI(prim)
         rgb = np.array(api.GetColorAttr().Get(time), np.float64) * api.GetIntensityAttr().Get(time) * 2.0 ** (api.GetExposureAttr().Get(time) or 0.0)
