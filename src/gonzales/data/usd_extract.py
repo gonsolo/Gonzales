@@ -148,6 +148,23 @@ def _quantize(col, k, iters=8):
     return centres, nearest(centres)
 
 
+def _vertex_normals(m, pts, counts, fvi, time):
+    """Authored vertex normals, else smooth ones: area-weighted face normals summed at the points. Catmull-Clark meshes
+    (most of ALab) are shaded smooth this way, on their control mesh."""
+    n = m.GetNormalsAttr().Get(time)
+    if n is not None and len(n) == len(pts) and m.GetNormalsInterpolation() in (UsdGeom.Tokens.vertex, UsdGeom.Tokens.varying):
+        n = np.asarray(n, np.float32)
+    else:
+        t = _triangulate(counts, fvi).reshape(-1, 3)
+        n = np.zeros((len(pts), 3), np.float64)
+        if len(t):
+            fn = np.cross(pts[t[:, 1]] - pts[t[:, 0]], pts[t[:, 2]] - pts[t[:, 0]]).astype(np.float64)
+            for c in range(3):
+                n[:, c] = sum(np.bincount(t[:, k], weights=fn[:, c], minlength=len(pts)) for k in range(3))
+    ln = np.linalg.norm(n, axis=1, keepdims=True)
+    return np.where(ln > 0, n / np.maximum(ln, 1e-30), 0).astype(np.float32)
+
+
 def _flat(m):
     return np.array(m, dtype=np.float32).reshape(16)
 
@@ -173,6 +190,7 @@ class _Scene:
         self.mesh_rows = []         # point offset, points, index offset, triangles, material, template (-1: world), has uv
         self.mat_index, self.mat_rgb, self.mat_tex, self.mat_par = {}, [], [], []
         self.uvs = []
+        self.normals = []           # per point, in the mesh's own space
         self.templates = {}         # prototype path -> template id
         self.inst_tmpl, self.inst_xf = [], []
         self.curve_cp, self.curve_w, self.curve_mat = [], [], []
@@ -225,6 +243,7 @@ class _Scene:
         pts = np.asarray(pts, dtype=np.float32)
         counts = m.GetFaceVertexCountsAttr().Get(self.time)
         fvi = np.asarray(m.GetFaceVertexIndicesAttr().Get(self.time), dtype=np.int64)
+        nrm = _vertex_normals(m, pts, counts, fvi, self.time)
         mat = self.material(prim)
         uv = None
         pv = UsdGeom.PrimvarsAPI(prim).GetPrimvar("st")
@@ -235,7 +254,7 @@ class _Scene:
             if interp == UsdGeom.Tokens.faceVarying and len(fvi):
                 corner = idx if idx is not None else np.arange(len(fvi))
                 _, first, inv = np.unique(fvi * (len(vals) + 1) + corner, return_index=True, return_inverse=True)
-                pts, uv, fvi = pts[fvi[first]], vals[corner[first]], inv.reshape(-1)    # one vertex per (point, uv)
+                pts, uv, nrm, fvi = pts[fvi[first]], vals[corner[first]], nrm[fvi[first]], inv.reshape(-1)   # one vertex per (point, uv)
             elif interp == UsdGeom.Tokens.vertex:
                 uv = vals[idx] if idx is not None else vals
         tris = _triangulate(counts, fvi)
@@ -252,6 +271,7 @@ class _Scene:
         self.mesh_rows.append((self.n_points, len(pts), self.n_indices, len(tris) // 3, mat, template, int(has_uv)))
         self.points.append(pts.reshape(-1))
         self.uvs.append(uv.reshape(-1))
+        self.normals.append(nrm.reshape(-1))
         self.indices.append(tris)
         self.xforms.append(_flat(xf))
         self.n_points += len(pts)
@@ -489,6 +509,7 @@ def extract(path, camera_path="", aspect=16.0 / 9.0, frame=""):
         "mesh_xf": cat(sc.xforms, np.float32),
         "meshes": np.ascontiguousarray(np.array(sc.mesh_rows, dtype=np.int64).reshape(-1, 7)),
         "uvs": cat(sc.uvs, np.float32),
+        "normals": cat(sc.normals, np.float32),
         "mat_color": [_texture(t["color"], *t["grid"], "color") if t["color"] else "" for t in sc.mat_tex],
         "mat_normal": [_texture(t["normal"], *t["grid"], "raw") if t["normal"] else "" for t in sc.mat_tex],
         "mat_opacity": [_atlas(t["opacity"], *t["grid"], "alpha") if t["opacity"] else "" for t in sc.mat_tex],

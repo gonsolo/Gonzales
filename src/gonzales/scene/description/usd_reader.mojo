@@ -4,10 +4,11 @@
 # libusd's jemalloc, LD_PRELOAD=libjemalloc.so.2.
 from std.memory.alloc import unsafe_alloc
 from std.ffi import external_call
+from std.math import sqrt
 from std.python import Python, PythonObject
 from gonzales.core.env import env_str
 from gonzales.core.geometry import RGB
-from gonzales.core.transform import matrix_invert
+from gonzales.core.transform import matrix_invert, transform_normals
 from gonzales.scene.appearance.materials import MatKind
 from gonzales.scene.description.parse_types import SceneParseState, NamedMaterial
 from gonzales.scene.description.scene_builder import store_mesh
@@ -117,6 +118,8 @@ def _usd_fill(s: Pointer[SceneParseState, MutUntrackedOrigin], d: PythonObject) 
     var points = _f32(d["points"])
     var indices = Pointer[Int32, MutUntrackedOrigin](unsafe_from_address=Int(py=d["indices"].ctypes.data))
     var uvs = _f32(d["uvs"])
+    var nrms = _f32(d["normals"])
+    var xf_inv = unsafe_alloc[Float32](16)
     var xf = _f32(d["mesh_xf"])
     var rows_obj = d["meshes"]
     var rows = Pointer[Int64, MutUntrackedOrigin](unsafe_from_address=Int(py=rows_obj.ctypes.data))
@@ -141,6 +144,17 @@ def _usd_fill(s: Pointer[SceneParseState, MutUntrackedOrigin], d: PythonObject) 
             store_mesh(s, points.unsafe_offset(3 * Int(r[unsafe_offset=0])), indices.unsafe_offset(Int(r[unsafe_offset=2])),
                        Int32(r[unsafe_offset=1]), Int32(r[unsafe_offset=3]))
             ref mesh = s[unsafe_offset=0].meshes[len(s[unsafe_offset=0].meshes) - 1]
+            var nv = Int(r[unsafe_offset=1])
+            _ = matrix_invert(xf.unsafe_offset(16 * i), xf_inv)     # normals as the pbrt path: by the CTM's inverse
+            var n_out = unsafe_alloc[Float32](3 * nv)
+            transform_normals(xf_inv, nrms.unsafe_offset(3 * Int(r[unsafe_offset=0])), Int32(nv), n_out)
+            mesh.normals.reserve(3 * nv)
+            for k in range(nv):
+                var nx = n_out[unsafe_offset=3 * k]; var ny = n_out[unsafe_offset=3 * k + 1]; var nz = n_out[unsafe_offset=3 * k + 2]
+                var ln = sqrt(nx * nx + ny * ny + nz * nz)
+                var sc = Float32(1) / ln if ln > Float32(1e-12) else Float32(0)
+                mesh.normals.append(nx * sc); mesh.normals.append(ny * sc); mesh.normals.append(nz * sc)
+            n_out.unsafe_free()
             mesh.alpha_mask = alpha_mask[Int(r[unsafe_offset=4])]     # UsdPreviewSurface opacity: pbrt's stochastic alpha
             mesh.alpha_const = par[unsafe_offset=4 * Int(r[unsafe_offset=4])]
             if r[unsafe_offset=6] != 0:
@@ -167,6 +181,7 @@ def _usd_fill(s: Pointer[SceneParseState, MutUntrackedOrigin], d: PythonObject) 
         ps.curves_flat.append(Int32(0))     # round, as USD's curves without normals
         ps.curves_al.append(False); ps.curves_al_rgb.append(RGB(Float32(0)))
 
+    xf_inv.unsafe_free()
     var inst_tmpl_obj = d["inst_tmpl"]
     var inst_tmpl = Pointer[Int32, MutUntrackedOrigin](unsafe_from_address=Int(py=inst_tmpl_obj.ctypes.data))
     var inst_xf = _f32(d["inst_xf"])
