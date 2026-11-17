@@ -41,7 +41,7 @@ struct DispSurface(TrivialRegisterPassable, DevicePassable):
     var greg: _U8        # per patch: 1 for a Gregory patch, 2 for an end cap fitted as Bezier
     var sub_levels: Int32  # the BVH's primitives: a patch's sub-squares at this halving depth (4: 4 x 4, 6: 8 x 8, 8: 16 x 16)
     var leaf_mode: Int32   # 0: box leaves no larger than the footprint; 1: exact bilinear leaves at a texel or a pixel; 2: at a texel only;
-                           # 4: as 1, every box cropped from the patch
+                           # 3: as 1, cells walked in the sub-square's affine (s, t, h) frame; 4: as 1, every box cropped from the patch
 
 
 @always_inline
@@ -598,6 +598,127 @@ def _intersect_fine(d: DispSurface, prim: Int, org: Vec3f, dir: Vec3f, t_max: Fl
     return (hit, best, hs, ht, steps, hsz)
 
 
+@always_inline
+def _len(v: Vec3f) -> Float32:
+    return sqrt(dot(v, v))
+
+
+@always_inline
+def _corner_normal(c: BezierPatch, k0: Int, ka: Int, kb: Int) -> Vec3f:
+    """The unit normal at net point k0 from the differences to ka and kb (ordered to give Pu x Pv); 0 if degenerate."""
+    var a = Vec3f(c.x[ka] - c.x[k0], c.y[ka] - c.y[k0], c.z[ka] - c.z[k0]); var b = Vec3f(c.x[kb] - c.x[k0], c.y[kb] - c.y[k0], c.z[kb] - c.z[k0])
+    var n = cross(a, b)
+    var l = _len(n)
+    return n * (Float32(1) / l) if l > Float32(0) else Vec3f(0, 0, 0)
+
+
+def _intersect_hf(d: DispSurface, prim: Int, org: Vec3f, dir: Vec3f, t_max: Float32) -> Tuple[Bool, Float32, Float32, Float32, Int, Float32]:
+    """A Bezier patch's sub-square as a height field: the ray goes into the affine frame (a, b, h) -> C + Ba (a - 1/2) +
+    Bb (b - 1/2) + h Nc of the bilinear base through its corners and their interpolated normals; the surface is within E of
+    that frame (the bicubic's deviation from the bilinear, the bilinear's twist, |h| times the normals' spread), which pads
+    every cell. Cells are the halvings of the sub-square, each a box [a] x [b] x [height range] in the frame; leaves are exact.
+    Nc is the corner normals' mean."""
+    var pi = prim // sub_count(d); var sq = sub_square(d, prim % sub_count(d))
+    var S = sq[2]
+    var src = d.patches[unsafe_offset=pi]
+    var o = BezierPatch(src.x - org.x, src.y - org.y, src.z - org.z)
+    var c = _crop(o, sq[0], sq[0] + S, sq[1], sq[1] + S)
+    var qx = SIMD[DType.float32, 4](c.x[0], c.x[3], c.x[15], c.x[12])
+    var qy = SIMD[DType.float32, 4](c.y[0], c.y[3], c.y[15], c.y[12])
+    var qz = SIMD[DType.float32, 4](c.z[0], c.z[3], c.z[15], c.z[12])
+    var e_b = _len(Vec3f(abs(c.x - _bilerp[16](qx, _A16, _B16)).reduce_max(), abs(c.y - _bilerp[16](qy, _A16, _B16)).reduce_max(),
+                         abs(c.z - _bilerp[16](qz, _A16, _B16)).reduce_max()))
+    var q00 = Vec3f(qx[0], qy[0], qz[0]); var q10 = Vec3f(qx[1], qy[1], qz[1]); var q11 = Vec3f(qx[2], qy[2], qz[2]); var q01 = Vec3f(qx[3], qy[3], qz[3])
+    var nc = (_corner_normal(c, 0, 1, 4) + _corner_normal(c, 3, 7, 2) + _corner_normal(c, 15, 14, 11) + _corner_normal(c, 12, 8, 13)) * Float32(0.25)
+    var ba = ((q10 - q00) + (q11 - q01)) * Float32(0.5); var bb = ((q01 - q00) + (q11 - q10)) * Float32(0.5)
+    var cc = (q00 + q10 + q11 + q01) * Float32(0.25)
+    var r0 = cross(bb, nc); var r1 = cross(nc, ba); var r2 = cross(ba, bb)
+    var det = dot(ba, r0)
+    var nr = _net_normal_range(INet(o, o), True, sq[0], sq[0] + S, sq[1], sq[1] + S)
+    var f = Int(d.face[unsafe_offset=pi]); var u0 = d.sq[unsafe_offset=3 * pi]; var v0 = d.sq[unsafe_offset=3 * pi + 1]; var psz = d.sq[unsafe_offset=3 * pi + 2]
+    var texels = psz * Float32(1 << max(Int(d.hdr[unsafe_offset=3 * f + 1]), Int(d.hdr[unsafe_offset=3 * f + 2])))
+    var hr = height_range(d, f, u0 + sq[0] * psz, u0 + (sq[0] + S) * psz, v0 + sq[1] * psz, v0 + (sq[1] + S) * psz)
+    var hmax = max(abs(hr[0]), abs(hr[1])) * max(d.scale, Float32(0))
+    var spread = _len(nr[1] - nr[0]) * Float32(0.5) + _len((nr[0] + nr[1]) * Float32(0.5) - nc)   # |N - Nc| inside the normal range
+    var e = e_b + _len(q00 - q10 + q11 - q01) * Float32(0.25) + hmax * spread
+    e = e * Float32(1.0001) + Float32(1e-6) * (_len(cc) + _len(ba) + _len(bb))
+    if abs(det) < Float32(1e-20) * _len(ba) * _len(bb) or not (e == e):
+        return (False, t_max, Float32(0), Float32(0), 1, S)   # degenerate frame: nothing to walk
+    var idet = Float32(1) / det
+    r0 = r0 * idet; r1 = r1 * idet; r2 = r2 * idet   # the rows of the frame's inverse
+    var lo = Vec3f(Float32(0.5) - dot(r0, cc), Float32(0.5) - dot(r1, cc), -dot(r2, cc))   # the ray origin (0) in the frame
+    var ld = Vec3f(dot(r0, dir), dot(r1, dir), dot(r2, dir))
+    var pad = Vec3f(_len(r0) * e / S, _len(r1) * e / S, _len(r2) * e)   # a and b in sub-square units, then per patch unit below
+    var linv = Vec3f(Float32(1) / ld.x, Float32(1) / ld.y, Float32(1) / ld.z)
+    var cam = d.cam - org
+    var ext = max(_len(ba), _len(bb))   # the base's extent per sub-square unit
+    var best = t_max; var hit = False; var hs = Float32(0); var ht = Float32(0); var hsz = Float32(1)
+    var depth = Int(d.sub_levels); var steps = 0
+    var path = sq[3]; var pend = UInt64(0)
+    var dom = (sq[0], sq[1], S, S)
+    var cur_hit = _hf_cell(d, f, u0, v0, psz, sq[0], sq[1], S, dom, lo, linv, pad, best)
+    while True:
+        steps += 1
+        var descend = False
+        if cur_hit[0]:
+            var am = (dom[0] + Float32(0.5) * dom[2] - sq[0]) / S - Float32(0.5); var bm = (dom[1] + Float32(0.5) * dom[3] - sq[1]) / S - Float32(0.5)
+            var wc = cc + ba * am + bb * bm - cam
+            var cext = ext * max(dom[2], dom[3]) / S
+            var dist = max(_len(wc) - cext, cext * Float32(0.1) + Float32(1e-4))
+            if depth >= PATCH_MAX_DEPTH or max(dom[2], dom[3]) * texels <= Float32(1) or cext <= dist * d.pixel:
+                var lh = _exact_leaf(d, pi, dom, org, dir, best)
+                if lh[0]:
+                    best = lh[1]; hit = True; hs = lh[2]; ht = lh[3]; hsz = max(dom[2], dom[3])
+            else:
+                var along_u = depth % 2 == 0
+                var l_dom = (dom[0], dom[1], dom[2] * Float32(0.5) if along_u else dom[2], dom[3] if along_u else dom[3] * Float32(0.5))
+                var u_dom = (dom[0] + dom[2] * Float32(0.5) if along_u else dom[0], dom[1] if along_u else dom[1] + dom[3] * Float32(0.5), l_dom[2], l_dom[3])
+                var h0 = _hf_cell(d, f, u0, v0, psz, sq[0], sq[1], S, l_dom, lo, linv, pad, best)
+                var h1 = _hf_cell(d, f, u0, v0, psz, sq[0], sq[1], S, u_dom, lo, linv, pad, best)
+                if h0[0] or h1[0]:
+                    var upper_first = h1[0] and (not h0[0] or h1[1] < h0[1])
+                    if h0[0] and h1[0]:
+                        pend |= UInt64(1) << UInt64(depth)
+                    if upper_first:
+                        path |= UInt64(1) << UInt64(depth)
+                        dom = u_dom; cur_hit = h1
+                    else:
+                        dom = l_dom; cur_hit = h0
+                    depth += 1
+                    descend = True
+        if descend:
+            continue
+        if pend == 0:
+            break
+        var level = 63 - Int(count_leading_zeros(pend))
+        pend &= ~(UInt64(1) << UInt64(level))
+        path = (path & ((UInt64(1) << UInt64(level)) - 1)) | ((~path) & (UInt64(1) << UInt64(level)))
+        depth = level + 1
+        dom = _domain(path, depth)
+        cur_hit = _hf_cell(d, f, u0, v0, psz, sq[0], sq[1], S, dom, lo, linv, pad, best)
+    return (hit, best, hs, ht, steps, hsz)
+
+
+@always_inline
+def _hf_cell(d: DispSurface, f: Int, u0: Float32, v0: Float32, psz: Float32, s0: Float32, t0: Float32, S: Float32,
+             dom: Tuple[Float32, Float32, Float32, Float32], lo: Vec3f, linv: Vec3f, pad: Vec3f, t_max: Float32) -> Tuple[Bool, Float32]:
+    """The ray (frame origin lo, inverse direction linv) against a cell's box in the frame: [a] x [b] x [height range],
+    padded by the frame's error."""
+    var a0 = (dom[0] - s0) / S - pad.x; var a1 = (dom[0] + dom[2] - s0) / S + pad.x
+    var b0 = (dom[1] - t0) / S - pad.y; var b1 = (dom[1] + dom[3] - t0) / S + pad.y
+    var h = Tuple[Float32, Float32](0, 0)
+    if d.scale > Float32(0):
+        var hr = height_range(d, f, u0 + dom[0] * psz, u0 + (dom[0] + dom[2]) * psz, v0 + dom[1] * psz, v0 + (dom[1] + dom[3]) * psz)
+        h = (hr[0] * d.scale, hr[1] * d.scale)
+    var h0 = h[0] - pad.z; var h1 = h[1] + pad.z
+    var ax = (a0 - lo.x) * linv.x; var bx = (a1 - lo.x) * linv.x
+    var ay = (b0 - lo.y) * linv.y; var by = (b1 - lo.y) * linv.y
+    var az = (h0 - lo.z) * linv.z; var bz = (h1 - lo.z) * linv.z
+    var tn = max(max(min(ax, bx), min(ay, by)), max(min(az, bz), Float32(0)))
+    var tf = min(min(max(ax, bx), max(ay, by)), min(max(az, bz), t_max))
+    return (tn <= tf, tn)
+
+
 def intersect_displaced(d: DispSurface, prim: Int, org: Vec3f, dir: Vec3f, t_max: Float32) -> Tuple[Bool, Float32, Float32, Float32, Int, Float32]:
     """The nearest hit of primitive prim (patch * sub_count + sub-square) before t_max: (hit, t, s, t, steps, the leaf square's size).
     Box leaves end where the displaced box is no larger than the footprint; exact leaves where the undisplaced square reaches a
@@ -606,6 +727,8 @@ def intersect_displaced(d: DispSurface, prim: Int, org: Vec3f, dir: Vec3f, t_max
     if d.greg[unsafe_offset=prim // sub_count(d)] != 1:   # Gregory patches keep the cropping loop
         if d.leaf_mode == 1 or d.leaf_mode == 2:
             return _intersect_fine(d, prim, org, dir, t_max)
+        if d.leaf_mode == 3:
+            return _intersect_hf(d, prim, org, dir, t_max)
     var pi = prim // sub_count(d); var sq = sub_square(d, prim % sub_count(d))
     var src = d.patches[unsafe_offset=pi]
     var o = BezierPatch(src.x - org.x, src.y - org.y, src.z - org.z)   # anchored at the ray origin
