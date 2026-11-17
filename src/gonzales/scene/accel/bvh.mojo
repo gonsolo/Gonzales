@@ -25,7 +25,8 @@ from gonzales.scene.shapes.curves import Curve, curve_at, CurveBvh, intersect_cu
 from gonzales.core.rng import PCG32
 from gonzales.scene.appearance.footprint import CameraFootprint
 from gonzales.core.spectrum import SpectralHandle
-from gonzales.scene.shapes.primitives import PrimKind
+from gonzales.scene.shapes.primitives import PrimKind, is_surface_tri
+from gonzales.scene.shapes.patches import intersect_patch
 
 # ── BVH2 Compact Nodes (32 bytes per node, 1 cache line) ──────────────────────
 # Layout: Point3f min (12 B) + Point3f max (12 B) + Int32 offset (4 B) + Int32 count (4 B) = 32 B
@@ -1360,7 +1361,10 @@ def _mesh_tri_hit(
 
 @always_inline
 def _displaced_tri_hit(mesh: TriangleMesh, base_vidx: Int, ray_org: Vec3f, ray_dir: Vec3f, tMax: Float32) -> Tuple[Bool, Float32, Float32, Float32]:
-    """A PrimId.type 9 triangle: the displaced surface over it (scene/shapes/displacement.mojo), as intersect_triangle answers."""
+    """A PrimId.type 9 or 10 triangle: the displaced surface over it (scene/shapes/displacement.mojo) or its Bezier patch,
+    as intersect_triangle answers (a patch's (u, v) as the barycentrics)."""
+    if _is_real_ptr(mesh.patches):
+        return intersect_patch(ray_org, ray_dir, mesh.patches[unsafe_offset=base_vidx // 3], tMax)
     var h = displaced_hit(mesh.disp, base_vidx // 3, ray_org, ray_dir, tMax)
     return (h[0] != Float32(0), h[1], h[2], h[3])
 
@@ -1464,12 +1468,12 @@ def _traverse_blas_triangles[wide_on: Bool = True](
                 var base_vidx = (offset * per_leaf + j) * 3
                 if not merged:
                     prim = blasPrimIds[unsafe_offset=offset + j]
-                    if prim.type != PrimKind.triangle and prim.type != PrimKind.displaced:
+                    if prim.type != PrimKind.triangle and not is_surface_tri(prim.type):
                         continue
                     mesh_idx = Int(prim.id1)
                     base_vidx = Int(prim.id2)
                 if _is_real_ptr(cnt): cnt[unsafe_offset=5] += Int32(1)
-                var h = _displaced_tri_hit(meshes[unsafe_offset=mesh_idx], base_vidx, ray_org, ray_dir, localTHit) if prim.type == PrimKind.displaced \
+                var h = _displaced_tri_hit(meshes[unsafe_offset=mesh_idx], base_vidx, ray_org, ray_dir, localTHit) if is_surface_tri(prim.type) \
                     else _mesh_tri_hit(meshes[unsafe_offset=mesh_idx], mesh_idx, base_vidx, ray_org, ray_dir, localTHit)
                 if h[0]:
                     localTHit = h[1]
@@ -1832,7 +1836,7 @@ def traverse_bvh2_core[Or: Origin[mut=True]](
                 var mesh_idx: Int
                 var base_vidx: Int
 
-                if prim.type == PrimKind.triangle or prim.type == PrimKind.displaced:
+                if prim.type == PrimKind.triangle or is_surface_tri(prim.type):
                     mesh_idx = Int(prim.id1)
                     base_vidx = Int(prim.id2)
                 elif prim.type == PrimKind.emitter:
@@ -1871,7 +1875,7 @@ def traverse_bvh2_core[Or: Origin[mut=True]](
                 var p1 = mesh_pos(mesh, v1_idx)
                 var p2 = mesh_pos(mesh, v2_idx)
 
-                var hit_res = _displaced_tri_hit(meshes[unsafe_offset=mesh_idx], base_vidx, ray_org, ray_dir, localTHit) if prim.type == PrimKind.displaced else intersect_triangle(ray_org, ray_dir, p0, p1, p2, localTHit)
+                var hit_res = _displaced_tri_hit(meshes[unsafe_offset=mesh_idx], base_vidx, ray_org, ray_dir, localTHit) if is_surface_tri(prim.type) else intersect_triangle(ray_org, ray_dir, p0, p1, p2, localTHit)
                 if hit_res[0] and not alpha_killed(mesh, v0_idx, v1_idx, v2_idx, hit_res[2], hit_res[3],
                                                    ray_org, ray_dir, (mesh_idx << 32) | base_vidx):
                     localTHit = hit_res[1]
@@ -2027,7 +2031,7 @@ def traverse_bvh2_core_defer_curves[curves_on: Bool = True, inst_on: Bool = True
                 var mesh_idx: Int
                 var base_vidx: Int
 
-                if prim.type == PrimKind.triangle or prim.type == PrimKind.displaced:
+                if prim.type == PrimKind.triangle or is_surface_tri(prim.type):
                     mesh_idx = Int(prim.id1)
                     base_vidx = Int(prim.id2)
                 elif prim.type == PrimKind.emitter:
@@ -2067,7 +2071,7 @@ def traverse_bvh2_core_defer_curves[curves_on: Bool = True, inst_on: Bool = True
                 var p1 = mesh_pos(mesh, v1_idx)
                 var p2 = mesh_pos(mesh, v2_idx)
 
-                var hit_res = _displaced_tri_hit(meshes[unsafe_offset=mesh_idx], base_vidx, ray_org, ray_dir, localTHit) if prim.type == PrimKind.displaced else intersect_triangle(ray_org, ray_dir, p0, p1, p2, localTHit)
+                var hit_res = _displaced_tri_hit(meshes[unsafe_offset=mesh_idx], base_vidx, ray_org, ray_dir, localTHit) if is_surface_tri(prim.type) else intersect_triangle(ray_org, ray_dir, p0, p1, p2, localTHit)
                 if hit_res[0] and (not alpha_on or not alpha_killed(mesh, v0_idx, v1_idx, v2_idx, hit_res[2], hit_res[3],
                                                    ray_org, ray_dir, (mesh_idx << 32) | base_vidx)):
                     localTHit = hit_res[1]
@@ -2251,7 +2255,7 @@ def any_hit_bvh2_core[wide_on: Bool = True](
                 var prim = primIds[unsafe_offset=offset + j]
                 var mesh_idx: Int
                 var base_vidx: Int
-                if prim.type == PrimKind.triangle or prim.type == PrimKind.displaced:
+                if prim.type == PrimKind.triangle or is_surface_tri(prim.type):
                     mesh_idx = Int(prim.id1)
                     base_vidx = Int(prim.id2)
                 elif prim.type == PrimKind.emitter:
@@ -2279,7 +2283,7 @@ def any_hit_bvh2_core[wide_on: Bool = True](
                 var p0 = mesh_pos(meshes[unsafe_offset=mesh_idx], v0)
                 var p1 = mesh_pos(meshes[unsafe_offset=mesh_idx], v1)
                 var p2 = mesh_pos(meshes[unsafe_offset=mesh_idx], v2)
-                var hit_res = _displaced_tri_hit(meshes[unsafe_offset=mesh_idx], base_vidx, ray_org, ray_dir, tMax) if prim.type == PrimKind.displaced else intersect_triangle(ray_org, ray_dir, p0, p1, p2, tMax)
+                var hit_res = _displaced_tri_hit(meshes[unsafe_offset=mesh_idx], base_vidx, ray_org, ray_dir, tMax) if is_surface_tri(prim.type) else intersect_triangle(ray_org, ray_dir, p0, p1, p2, tMax)
                 if hit_res[0]:
                     # Tested after the hit, not before: the null-material and
                     # alpha lookups only matter for a primitive that is
@@ -2490,7 +2494,7 @@ def _bvh4_tris(
             for c in range(_BVH4_TRI_STRIDE):
                 t[unsafe_offset=c] = Float32(0.0)
             var (mesh_idx, base_vidx) = prim.triangle()
-            if mesh_idx < 0 or prim.type == PrimKind.displaced:   # resolved through the PrimId
+            if mesh_idx < 0 or is_surface_tri(prim.type):   # resolved through the PrimId
                 t[unsafe_offset=3] = Float32(2.0)
                 continue
             var mesh = meshes[unsafe_offset=mesh_idx]
@@ -2708,7 +2712,7 @@ def traverse_bvh4_core[Or: Origin[mut=True]](
                         bestV = curve_hit[3]
                         hitIndex = slot
                         instHit = False
-                elif prim.type == PrimKind.displaced:
+                elif is_surface_tri(prim.type):
                     var dh = _displaced_tri_hit(meshes[unsafe_offset=Int(prim.id1)], Int(prim.id2), ray_org, ray_dir, localTHit)
                     if dh[0]:
                         localTHit = dh[1]
@@ -2874,7 +2878,7 @@ def any_hit_bvh4_core(
                     var curve = curve_at(curves, Int(prim.id1))
                     if intersect_curve(ray_org, ray_dir, curve, Int(prim.id2) // 8, Int(prim.id2) % 8, tMax)[0]:
                         return True
-                elif prim.type == PrimKind.displaced:
+                elif is_surface_tri(prim.type):
                     if _shadow_is_null_material(materials, prim.materialIndex):
                         continue
                     if _displaced_tri_hit(meshes[unsafe_offset=Int(prim.id1)], Int(prim.id2), ray_org, ray_dir, tMax)[0]:

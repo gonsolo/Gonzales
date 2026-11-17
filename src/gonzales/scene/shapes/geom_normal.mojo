@@ -4,6 +4,7 @@ from gonzales.core.geometry import Point3f, Vec3f, cross, dot, _is_real_ptr
 from gonzales.scene.shapes.primitives import Intersection, TriangleMesh, Instance, Sphere, sphere_outward_normal, mesh_vi
 from gonzales.scene.shapes.primitives import mesh_normal, mesh_pos
 from gonzales.scene.shapes.displacement import displaced_hit_normal
+from gonzales.scene.shapes.patches import patch_hit_normal
 from gonzales.core.transform import transform_normal, Mat4
 from std.math import sqrt
 from gonzales.scene.shapes.primitives import PrimKind
@@ -52,6 +53,9 @@ def _geom_normal(
     if _is_real_ptr(m.disp):
         var dn = displaced_hit_normal(m.disp, bv, inter.u, inter.v)
         if dot(dn, dn) > Float32(0): n = dn
+    elif _is_real_ptr(m.patches):
+        var pn = patch_hit_normal(m.patches, bv, inter.u, inter.v)
+        if dot(pn, pn) > Float32(0): n = pn
     if inter.primId.instanceIdx >= Int32(0):
         n = transform_normal(Mat4(instances[unsafe_offset=Int(inter.primId.instanceIdx)].world_to_obj()), n)
     var l = dot(n, n)
@@ -100,6 +104,9 @@ def _shading_normal_at(
     if _is_real_ptr(m.disp):
         var dn = displaced_hit_normal(m.disp, bv, inter.u, inter.v)
         if dot(dn, dn) > Float32(0): gn = dn; displaced = True
+    elif _is_real_ptr(m.patches):
+        var pn = patch_hit_normal(m.patches, bv, inter.u, inter.v)
+        if dot(pn, pn) > Float32(0): gn = pn; displaced = True
     if inter.primId.instanceIdx >= Int32(0):
         gn = transform_normal(Mat4(instances[unsafe_offset=Int(inter.primId.instanceIdx)].world_to_obj()), gn)
     var gl = dot(gn, gn)

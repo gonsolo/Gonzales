@@ -9,6 +9,7 @@ from std.math import floor, sqrt, abs, fma
 from std.memory import bitcast
 from gonzales.core.geometry import Point3f, Vec3f, RGB, _is_real_ptr, cross, dot
 from gonzales.scene.shapes.displacement import DisplacedMesh
+from gonzales.scene.shapes.patches import BezierPatch
 
 # ── Scene primitives ───────────────────────────────────────────────────────────
 
@@ -21,6 +22,13 @@ struct PrimKind:
     comptime merged_blas = Int8(7)   # a merged object template's record (bvh._traverse_blas_triangles)
     comptime instances = Int8(8)     # the instance BVH's leaf
     comptime displaced = Int8(9)     # a triangle under shape displacement, ids as a triangle's
+    comptime patch = Int8(10)        # a Bezier patch's stand-in triangle (TriangleMesh.patches), ids as a triangle's
+
+
+@always_inline
+def is_surface_tri(t: Int8) -> Bool:
+    """A triangle whose surface is computed: displaced, or a Bezier patch."""
+    return t == PrimKind.displaced or t == PrimKind.patch
 
 
 @fieldwise_init
@@ -37,7 +45,7 @@ struct PrimId(TrivialRegisterPassable):
     @always_inline
     def triangle(self) -> Tuple[Int, Int]:
         """(mesh, first vertex index) of a mesh triangle, displaced or emitting; (-1, 0) for anything else."""
-        if self.type == PrimKind.triangle or self.type == PrimKind.displaced:
+        if self.type == PrimKind.triangle or is_surface_tri(self.type):
             return (Int(self.id1), Int(self.id2))
         if self.type == PrimKind.emitter and self.id2 != Int64(-1):
             return (Int(self.id2 >> 32), Int(self.id2 & 0xFFFFFFFF) * 3)
@@ -131,6 +139,8 @@ struct TriangleMesh(TrivialRegisterPassable):
     var quads: Int32
     # Shape-level displacement (scene/shapes/displacement.mojo): its triangles are PrimId.type 9; dangling if none.
     var disp: Pointer[DisplacedMesh, MutUntrackedOrigin]
+    # One Bezier patch a triangle (PrimId.type 10): triangle k stands in for patch k, its barycentrics are the patch's (u, v).
+    var patches: Pointer[BezierPatch, MutUntrackedOrigin]
 
     def __init__(
         out self,
@@ -158,12 +168,13 @@ struct TriangleMesh(TrivialRegisterPassable):
         self.quads = Int32(0)
         self.emit_two_sided = 0
         self.disp = Pointer[DisplacedMesh, MutUntrackedOrigin].unsafe_dangling()
+        self.patches = Pointer[BezierPatch, MutUntrackedOrigin].unsafe_dangling()
 
 @always_inline
 def surface_prim(p: PrimId) -> PrimId:
-    """A displaced triangle's hit (type 9) is shaded as its base triangle's (type 0)."""
+    """A displaced triangle's or patch's hit (type 9, 10) is shaded as its (stand-in) triangle's (type 0)."""
     var q = p
-    if q.type == PrimKind.displaced:
+    if is_surface_tri(q.type):
         q.type = PrimKind.triangle
     return q
 

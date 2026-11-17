@@ -133,7 +133,7 @@ def intersect_patch(org: Vec3f, dir: Vec3f, patch: BezierPatch, t_max: Float32) 
         var leaf = _box_hit(p, inv, best)
         if leaf[0]:
             if depth >= PATCH_MAX_DEPTH or leaf[2] <= eps:
-                if leaf[1] < best:
+                if leaf[1] < best and leaf[1] > Float32(0):   # a leaf around the origin is the surface the ray leaves
                     best = leaf[1]; hit = True
                     var d = _domain(path, depth)
                     hu = d[0] + Float32(0.5) * d[2]; hv = d[1] + Float32(0.5) * d[3]
@@ -165,7 +165,17 @@ def intersect_patch(org: Vec3f, dir: Vec3f, patch: BezierPatch, t_max: Float32) 
     return (hit, best, hu, hv)
 
 
+def patch_bounds(p: BezierPatch) -> Tuple[Vec3f, Vec3f]:
+    """The control points' box, which holds the patch."""
+    return (Vec3f(p.x.reduce_min(), p.y.reduce_min(), p.z.reduce_min()), Vec3f(p.x.reduce_max(), p.y.reduce_max(), p.z.reduce_max()))
+
+
 def patch_normal(patch: BezierPatch, u: Float32, v: Float32) -> Vec3f:
     """The unnormalized surface normal dP/du x dP/dv."""
     var e = patch_eval(patch, u, v)
     return cross(e[1], e[2])
+
+
+def patch_hit_normal(patches: Pointer[BezierPatch, MutUntrackedOrigin], base_vidx: Int, u: Float32, v: Float32) -> Vec3f:
+    """The patch normal at a stand-in triangle's hit; geometric and shading normal alike."""
+    return patch_normal(patches[unsafe_offset=base_vidx // 3], u, v)

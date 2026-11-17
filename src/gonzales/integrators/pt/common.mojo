@@ -6,6 +6,7 @@ from gonzales.scene.appearance.materials import Material
 from gonzales.transport.render_state import PathState, ShadowTask, SHADOW_SLOTS
 from gonzales.scene.appearance.materials import GpuTexture
 from gonzales.scene.shapes.displacement import displaced_hit_normal
+from gonzales.scene.shapes.patches import patch_hit_normal
 from gonzales.scene.shapes.primitives import Intersection, TriangleMesh, Sphere, Instance, mesh_uv, mesh_has_uvs, mesh_face
 from gonzales.core.geometry import Ray
 from gonzales.scene.shapes.primitives import mesh_pos, mesh_vi, alpha_killed
@@ -118,7 +119,7 @@ def _shading_normal(
     hit came from an instanced BLAS (instance_idx >= 0), transformed to world
     space — mesh.normals are per-vertex OBJECT-space data in that case, so
     the interpolated result is transformed the same way before comparison."""
-    if _is_real_ptr(mesh.disp):   # _hit_geom's geo_normal is the displaced surface's already
+    if _is_real_ptr(mesh.disp) or _is_real_ptr(mesh.patches):   # _hit_geom's geo_normal is the surface's already
         return geo_normal
     var sn = _interp_vertex_normal(mesh, v0, v1, v2, bu, bv, instance_idx, instances)
     if dot(sn, sn) == Float32(0.0):
@@ -315,6 +316,8 @@ def _hit_geom(
     var dn = Vec3f(0, 0, 0)
     if _is_real_ptr(mesh.disp) and inter.primId.type == PrimKind.triangle:
         dn = displaced_hit_normal(mesh.disp, Int(inter.primId.id2), inter.u, inter.v)
+    elif _is_real_ptr(mesh.patches):
+        dn = patch_hit_normal(mesh.patches, Int(inter.primId.id2), inter.u, inter.v)
     var gnr = _geom_normal_and_ray(path_ptr, p0, p1, p2, instance_idx, instances, dn)
     return (True, False, gnr[0], gnr[1], gnr[2], mesh, v0, v1, v2)
 

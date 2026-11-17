@@ -38,7 +38,7 @@ from std.math import ceildiv, sqrt
 from std.sys import has_accelerator
 from gonzales.gpu.scene import GpuSceneHandle
 from gonzales.transport.sss_walk import _sss_walk_step, WalkTracer
-from gonzales.scene.shapes.primitives import PrimKind
+from gonzales.scene.shapes.primitives import PrimKind, is_surface_tri
 
 @__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
 @__llvm_metadata(`nvvm.minctasm`=SIMDLength(1))    # NVIDIA keeps its old register budget; AMD ignores this
@@ -1470,7 +1470,7 @@ def any_hit_bvh2_gpu[curves_on: Bool, inst_on: Bool, alpha_on: Bool](
                 var prim = sd.primIds[unsafe_offset=offset + j]
                 var mesh_idx: Int
                 var base_vidx: Int
-                if prim.type == PrimKind.triangle or prim.type == PrimKind.displaced:
+                if prim.type == PrimKind.triangle or is_surface_tri(prim.type):
                     mesh_idx = Int(prim.id1)
                     base_vidx = Int(prim.id2)
                 elif prim.type == PrimKind.emitter:
@@ -1497,7 +1497,7 @@ def any_hit_bvh2_gpu[curves_on: Bool, inst_on: Bool, alpha_on: Bool](
                 var p0 = mesh_pos(sd.meshes[unsafe_offset=mesh_idx], v0)
                 var p1 = mesh_pos(sd.meshes[unsafe_offset=mesh_idx], v1)
                 var p2 = mesh_pos(sd.meshes[unsafe_offset=mesh_idx], v2)
-                var hit_res = _displaced_tri_hit(sd.meshes[unsafe_offset=mesh_idx], base_vidx, ray_org, ray_dir, tMax) if prim.type == PrimKind.displaced else intersect_triangle(ray_org, ray_dir, p0, p1, p2, tMax)
+                var hit_res = _displaced_tri_hit(sd.meshes[unsafe_offset=mesh_idx], base_vidx, ray_org, ray_dir, tMax) if is_surface_tri(prim.type) else intersect_triangle(ray_org, ray_dir, p0, p1, p2, tMax)
                 if hit_res[0]:
                     if _shadow_is_null_material(sd.materials, prim.materialIndex):
                         continue

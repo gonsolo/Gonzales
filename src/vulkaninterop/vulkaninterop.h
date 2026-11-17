@@ -89,6 +89,7 @@ typedef struct {
     int32_t uv_corners;         // texture coordinates derived from the vertex index: unused here, layout only
     int32_t quads;              // quad-soup form (no vertexIndices): never set for the meshes this bridge gets
     const void* disp;           // shape-level displacement: unused here, layout only
+    const void* patches;        // Bezier patches of a subdivision mesh: unused here, layout only
 } VulkanInteropMesh;
 
 // Builds an interop-AND-ray-query-capable Vulkan device, a real BLAS/TLAS
