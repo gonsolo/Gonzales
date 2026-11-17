@@ -7,6 +7,7 @@
 #include <opensubdiv/far/stencilTable.h>
 #include <opensubdiv/far/topologyDescriptor.h>
 #include <opensubdiv/far/topologyRefinerFactory.h>
+#include <cstdlib>
 #include <cstring>
 #include <memory>
 #include <vector>
@@ -17,12 +18,20 @@ namespace {
 
 struct Patches {
         std::vector<float> cp;    // 16 control points (x, y, z) a patch, row v = 0 first
+        std::vector<float> cpg;   // the same, but a Gregory patch's own boundary and Fp interior points
+        std::vector<float> fm;    // the 4 Fm interior points (1,1), (2,1), (2,2), (1,2); a Bezier patch's own interior
+        std::vector<unsigned char> greg;   // 1: a Gregory patch (osd/patchBasis.h Osd_EvalBasisGregory), 2: one fitted as Bezier
         std::vector<float> uv;    // the patch's square in its base face: u0, v0, size (ptex style)
         std::vector<int> face;    // its Ptex face: a quad, or one sub-face of another polygon
 };
 
 // Inverse of the cubic Bernstein matrix at t = 0, 1/3, 2/3, 1: Bezier points from 4 samples of a cubic.
 const float kInv[4][4] = {{1, 0, 0, 0}, {-5.0f / 6, 3, -1.5f, 1.0f / 3}, {1.0f / 3, -1.5f, 3, -5.0f / 6}, {0, 0, 0, 1}};
+
+// Gregory basis point -> Bezier position (column + 4 * row) for the 12 boundary points; interior pairs (Fp, Fm) per slot.
+const int kGregBoundary[12] = {0, 1, 7, 5, 2, 6, 16, 12, 15, 17, 11, 10};
+const int kGregBezier[12] = {0, 1, 2, 3, 4, 7, 8, 11, 12, 13, 14, 15};
+const int kGregFp[4] = {3, 8, 13, 18}, kGregFm[4] = {4, 9, 14, 19}, kGregSlot[4] = {5, 6, 10, 9};
 
 }  // namespace
 
@@ -87,6 +96,8 @@ void *osd_build(int n_verts, const float *pts, int n_faces, const int *counts, c
         int patch_base = 0, vert_base = 0;
         for (int a = 0; a < table->GetNumPatchArrays(); ++a) {
                 const int n = table->GetNumPatches(a), ncv = table->GetPatchArrayDescriptor(a).GetNumControlVertices();
+                const bool irregular = table->GetPatchArrayDescriptor(a).GetType() == Far::PatchDescriptor::GREGORY_BASIS;
+                const bool gregory = irregular && !std::getenv("OSD_GREGORY_FIT");   // the old Bezier fit, for comparisons
                 Far::ConstIndexArray cvs = table->GetPatchArrayVertices(a);
                 for (int p = 0; p < n; ++p) {
                         Far::PatchTable::PatchHandle h;
@@ -123,6 +134,29 @@ void *osd_build(int n_verts, const float *pts, int n_faces, const int *counts, c
                                                         b[j][i][c] += kInv[j][k] * t[k][i][c];
                                                 out->cp.push_back(b[j][i][c]);
                                         }
+                        float g[16][3], m[4][3];
+                        for (int k = 0; k < 16; ++k)
+                                for (int c = 0; c < 3; ++c)
+                                        g[k][c] = b[k / 4][k % 4][c];
+                        for (int k = 0; k < 4; ++k)
+                                for (int c = 0; c < 3; ++c)
+                                        m[k][c] = g[kGregSlot[k]][c];
+                        if (gregory) {   // the exact Gregory patch: boundary points, Fp in the interior slots, Fm aside
+                                auto at = [&](int gi, int c) { return verts[static_cast<size_t>(cvs[p * ncv + gi]) * 3 + c]; };
+                                for (int k = 0; k < 12; ++k)
+                                        for (int c = 0; c < 3; ++c)
+                                                g[kGregBezier[k]][c] = at(kGregBoundary[k], c);
+                                for (int k = 0; k < 4; ++k)
+                                        for (int c = 0; c < 3; ++c) {
+                                                g[kGregSlot[k]][c] = at(kGregFp[k], c);
+                                                m[k][c] = at(kGregFm[k], c);
+                                        }
+                        }
+                        for (int k = 0; k < 16; ++k)
+                                out->cpg.insert(out->cpg.end(), {g[k][0], g[k][1], g[k][2]});
+                        for (int k = 0; k < 4; ++k)
+                                out->fm.insert(out->fm.end(), {m[k][0], m[k][1], m[k][2]});
+                        out->greg.push_back(gregory ? 1 : (irregular ? 2 : 0));   // 2: an end cap fitted as Bezier
                         float u0 = 0, v0 = 0, u1 = 1, v1 = 1;
                         param.Unnormalize(u0, v0);
                         param.Unnormalize(u1, v1);
@@ -134,6 +168,17 @@ void *osd_build(int n_verts, const float *pts, int n_faces, const int *counts, c
         }
         *n_out = static_cast<int>(out->face.size());
         return out;
+}
+
+// The exact form: cpg (48 floats a patch), fm (12 floats) and greg (1 byte), then the rest as osd_take does.
+void osd_take_exact(void *h, float *cpg, float *fm, unsigned char *greg, float *uv, int *face) {
+        auto *p = static_cast<Patches *>(h);
+        std::memcpy(cpg, p->cpg.data(), p->cpg.size() * sizeof(float));
+        std::memcpy(fm, p->fm.data(), p->fm.size() * sizeof(float));
+        std::memcpy(greg, p->greg.data(), p->greg.size());
+        std::memcpy(uv, p->uv.data(), p->uv.size() * sizeof(float));
+        std::memcpy(face, p->face.data(), p->face.size() * sizeof(int));
+        delete p;
 }
 
 // Copy the patches into cp (48 floats a patch), uv (3 floats) and face (1 int), then free them.
