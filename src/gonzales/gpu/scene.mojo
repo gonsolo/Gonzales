@@ -139,6 +139,18 @@ struct BvhBuffers(Movable):
         # Upload BVH nodes and prim IDs (copy only the real bytes; the
         # buffer may be a 1-element placeholder when the scene has no
         # geometry).
+        # Pruned on Intel: the hardware traces triangles and curves (procedural leaves), so the device gets an empty BVH.
+        var hw_only = env_str["GONZALES_RT_PRUNE"]() == "1" and Int(s.instance_count) > 0 and xert_alignment() > 0
+        if hw_only:
+            print("GPU: pruned for Intel RT, the software BVH (" + String(Int(s.bvh_node_count_cpu)) + " nodes) stays on the host")
+            var empty = unsafe_alloc[UInt8](size_of[BVH2Node]() + size_of[PrimId]())
+            for i in range(size_of[BVH2Node]() + size_of[PrimId]()):
+                empty[unsafe_offset=i] = UInt8(0)
+            var nb = _gpu_upload_array[BVH2Node](ctx, empty.unsafe_bitcast[BVH2Node](), 1)
+            var pb = _gpu_upload_array[PrimId](ctx, empty.unsafe_offset(size_of[BVH2Node]()).unsafe_bitcast[PrimId](), 1)
+            ctx.synchronize()
+            empty.unsafe_free()
+            return Self(nodes_buf=nb^, prim_ids_buf=pb^)
         var bvh_buf = _gpu_upload_array[BVH2Node](ctx, s.bvh_nodes_cpu, max(Int(s.bvh_node_count_cpu), 1))   # an empty BVH still has its zero root
         var prim_buf = _gpu_upload_array[PrimId](ctx, s.prim_ids_cpu, _gpu_prim_count(s))
         return Self(nodes_buf=bvh_buf^, prim_ids_buf=prim_buf^)
