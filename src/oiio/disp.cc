@@ -9,6 +9,9 @@
 extern "C" void *osd_build(int, const float *, int, const int *, const int *, int, const int *, const float *, int,
                            const int *, const float *, int, int *);
 extern "C" void osd_take(void *, float *, float *, int *);
+extern "C" void *ptex_open(const char *);
+extern "C" void ptex_close(void *);
+extern "C" void ptex_read_face(void *, int, int, int, unsigned char *);
 
 namespace {
 
@@ -16,6 +19,8 @@ struct Disp {
         std::vector<float> cp, sq, cage;
         std::vector<int> face, hdr;            // hdr: per face its pyramid offset, log2 width, log2 height
         std::vector<unsigned char> pyr;        // per face: heights, then per coarser level the min and max cells
+        std::vector<int> chain_off;            // per face: its bordered height chain in `chain`
+        std::vector<unsigned char> chain;      // per face, full res to 1x1: (w + 2) x (h + 2) heights, borders from the neighbours
         float box[6] = {1e30f, 1e30f, 1e30f, -1e30f, -1e30f, -1e30f};
 };
 
@@ -91,10 +96,36 @@ void *disp_open(const char *ptx, int isolation, long long *counts) {
                         ch = nh;
                 }
         }
+        void *pt = ptex_open(ptx);   // oiio.cc: Ptex chains with the neighbours' texels in the borders (rotation-aware)
+        std::vector<unsigned char> rgb;
+        for (int f = 0; pt && f < nfc; ++f) {
+                const Ptex::Res r = tex->getFaceInfo(f).res;
+                size_t texels = 0;
+                for (int ul = r.ulog2, vl = r.vlog2;; ul = std::max(ul - 1, 0), vl = std::max(vl - 1, 0)) {
+                        texels += static_cast<size_t>((1 << ul) + 2) * ((1 << vl) + 2);
+                        if (ul == 0 && vl == 0)
+                                break;
+                }
+                rgb.resize(texels * 3);
+                ptex_read_face(pt, f, r.ulog2, r.vlog2, rgb.data());
+                d->chain_off.push_back(static_cast<int>(d->chain.size()));
+                for (size_t i = 0; i < texels; ++i)
+                        d->chain.push_back(rgb[i * 3]);   // uint8 data: channel 0 is the height byte
+        }
+        if (pt)
+                ptex_close(pt);
         counts[0] = np;
         counts[1] = nfc;
         counts[2] = static_cast<long long>(d->pyr.size());
+        counts[3] = static_cast<long long>(d->chain.size());
         return d.release();
+}
+
+// The bordered height chains (offsets: 1 int a face); call before disp_take, which frees everything.
+void disp_take_chains(void *h, int *off, unsigned char *chain) {
+        auto *d = static_cast<Disp *>(h);
+        std::memcpy(off, d->chain_off.data(), d->chain_off.size() * sizeof(int));
+        std::memcpy(chain, d->chain.data(), d->chain.size());
 }
 
 // Copy everything out (cp 48 floats, sq 3 floats, face 1 int a patch; hdr 3 ints a face; box 6 floats) and free it.
