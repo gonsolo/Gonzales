@@ -1,4 +1,5 @@
 """What a shading point can see of the scene."""
+from gonzales.scene.accel.xert import XeScene, xe_scene_none
 from gonzales.core.geometry import RGB, Vec3f
 from gonzales.scene.appearance.materials import Material, MeasuredBRDF
 from gonzales.transport.render_state import PathState, ShadowTask, SuppressTask
@@ -158,6 +159,7 @@ struct ShadeContext:
     var filter_glossy: Float32
     var clamp: SIMD[DType.float32, 2]   # SceneView.clamp
     var cycles: SIMD[DType.int32, 4]    # SceneView.cycles
+    var xe: XeScene                     # Intel ray tracing for shadow rays without a deferral slot; accel dangling elsewhere
 
 
 @always_inline
@@ -189,4 +191,4 @@ def _shade_context(
             distant_lights=sd.distantLights, distant_count=Int(sd.distantLightCount),
             point_lights=sd.pointLights, point_count=Int(sd.pointLightCount),
             infinite_lights=sd.infiniteLights, infinite_count=Int(sd.infiniteLightCount),
-            spheres=sd.spheres, sphere_count=Int(sd.sphereCount), light_sampler=sd.lightSampler), filter_glossy=sd.filterGlossy, clamp=sd.clamp, cycles=sd.cycles)
+            spheres=sd.spheres, sphere_count=Int(sd.sphereCount), light_sampler=sd.lightSampler), filter_glossy=sd.filterGlossy, clamp=sd.clamp, cycles=sd.cycles, xe=xe_scene_none())

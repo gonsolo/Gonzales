@@ -1,4 +1,5 @@
 from gonzales.scene.accel.bvh import SceneView
+from gonzales.scene.accel.xert import xert_active, xert_scene
 from gonzales.core.geometry import TERMINAL_SEGMENT_GRACE_ROUNDS
 from gonzales.scene.appearance.materials import MatKind
 from gonzales.scene.shapes.primitives import Intersection, Sphere
@@ -439,6 +440,8 @@ def _gpu_bounce_kernels(
     var shared_ctx = shared_shade_context(sd, handle[].sobol_buf.unsafe_ptr().unsafe_bitcast[UInt32](), path_base, use_restir, shadow_ptr)
     shared_ctx.guide = handle[].guide_read
     shared_ctx.guide_write = handle[].guide_write
+    if xert_active():
+        shared_ctx.xe = xert_scene()
     comptime assert size_of[ShadeContext]() <= 1024, "grow GpuSceneHandle.shade_ctx_buf"
     handle[].ctx.enqueue_copy(handle[].shade_ctx_buf, Pointer(to=shared_ctx).unsafe_bitcast[UInt8]())
     if handle[].has_glass_material:

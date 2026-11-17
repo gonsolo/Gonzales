@@ -1,4 +1,5 @@
 """The path tracer's shading step: dispatch to a material, on CPU and GPU."""
+from gonzales.scene.accel.xert import xe_scene_none
 from std.collections import Array
 from std.math import sqrt, floor, abs
 from std.ffi import external_call
@@ -664,7 +665,7 @@ def cpu_shade_context(
             distant_lights=distantLights, distant_count=distantLightCount,
             point_lights=pointLights, point_count=pointLightCount,
             infinite_lights=infiniteLights, infinite_count=infiniteLightCount,
-            spheres=spheres, sphere_count=sphereCount, light_sampler=light_sampler), filter_glossy=filter_glossy, clamp=clamp, cycles=cycles)
+            spheres=spheres, sphere_count=sphereCount, light_sampler=light_sampler), filter_glossy=filter_glossy, clamp=clamp, cycles=cycles, xe=xe_scene_none())
 
 
 @always_inline

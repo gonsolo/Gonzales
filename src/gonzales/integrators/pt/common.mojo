@@ -15,7 +15,8 @@ from gonzales.scene.shapes.curves import Curve, curve_at, curve_piece_endpoints,
 from gonzales.transport.bxdf import BxDFSample, GeomContext, SobolSamples8, BxDFFlags
 from gonzales.core.rng import PCG32
 from gonzales.scene.appearance.footprint import CameraFootprint, UVFootprint, TriWorld, tri_world, hit_uv_footprint
-from gonzales.scene.accel.bvh import any_hit_dispatch, curve_offset_eps
+from gonzales.scene.accel.bvh import any_hit_dispatch, curve_offset_eps, ray_sphere_hit
+from gonzales.scene.accel.xert import xert_occluded
 from gonzales.core.sampling import sobol_sample_n, sobol_dim_seed
 from gonzales.core.transform import transform_normal, Mat4
 from gonzales.transport.guide import GuideGrid, guide_pos_to_cell, guide_record, null_guide, guide_is_active
@@ -392,6 +393,15 @@ def _emitter_invisible(ctx: ShadeContext, al: AreaLight) -> Bool:
 
 
 @always_inline
+# On Intel the software BVH may hold no triangles (GONZALES_RT_PRUNE): ask the hardware, and test the analytic spheres here.
+@always_inline
+def _xe_blocked(ctx: ShadeContext, ray: Ray, tmax: Float32) -> Bool:
+    for k in range(ctx.lights.sphere_count):
+        if ray_sphere_hit(ctx.lights.spheres[unsafe_offset=k].center, ctx.lights.spheres[unsafe_offset=k].radius, ray, Float32(1e-4), tmax) > Float32(0):
+            return True
+    return xert_occluded(ctx.xe, ray.origin.x, ray.origin.y, ray.origin.z, ray.direction.x, ray.direction.y, ray.direction.z, tmax)
+
+
 def _shadow_inline(ctx: ShadeContext, guide_write: GuideGrid) -> Bool:
     """True when _shadow_contribute would trace its ray right here as a plain any-hit test (no deferral, media or guiding)."""
     return ctx.n_mediums == 0 and not _is_real_ptr(ctx.shadow_tasks) and not guide_is_active(guide_write)
@@ -401,6 +411,8 @@ def _shadow_inline(ctx: ShadeContext, guide_write: GuideGrid) -> Bool:
 def _shadow_blocked(ctx: ShadeContext, origin: Vec3f, dir: Vec3f, tmax: Float32) -> Bool:
     """The plain any-hit shadow test of _shadow_contribute."""
     var shadow_ray = Ray(Point3f(origin[0], origin[1], origin[2]), Vec3f(dir[0], dir[1], dir[2]))
+    if _is_real_ptr(ctx.xe.accel):
+        return _xe_blocked(ctx, shadow_ray, tmax)
     return any_hit_dispatch(ctx.bvh4, ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves, shadow_ray, tmax,
                              ctx.blasNodesArr, ctx.blasPrimIdsArr, ctx.instances,
                              ctx.lights.spheres, ctx.lights.sphere_count,
@@ -457,6 +469,8 @@ def _shadow_contribute[enqueue_shadow: Bool, defer_only: Bool = False](
                                   ctx.materials, ctx.mediums, ctx.medium_ifaces, ctx.grids, ctx.nvdb_grids,
                                   ctx.spectral, path_ptr[].wavelengths, pcg)
         blocked = tr.is_black()
+    elif _is_real_ptr(ctx.xe.accel):
+        blocked = _xe_blocked(ctx, shadow_ray, tmax)
     else:
         blocked = any_hit_dispatch(ctx.bvh4, ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves, shadow_ray, tmax,
                                     ctx.blasNodesArr, ctx.blasPrimIdsArr, ctx.instances,

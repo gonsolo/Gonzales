@@ -278,6 +278,21 @@ struct XeScene(TrivialRegisterPassable):
     var cv: XeProcs
     var heat: Pointer[UInt32, MutUntrackedOrigin]
 
+def xe_scene_none() -> XeScene:
+    return XeScene(Pointer[UInt8, MutUntrackedOrigin].unsafe_dangling(), Int64(0), Int64(-1), Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
+                   XeProcs(Pointer[Curve, MutUntrackedOrigin].unsafe_dangling(), Pointer[PrimId, MutUntrackedOrigin].unsafe_dangling(),
+                           Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(), Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
+                           Pointer[Material, MutUntrackedOrigin].unsafe_dangling(), Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
+                           Int32.MAX, Pointer[TriangleMesh, MutUntrackedOrigin].unsafe_dangling(), Int32(0)),
+                   Pointer[UInt32, MutUntrackedOrigin].unsafe_dangling())
+
+
+# Whether the hardware finds any hit in (0, tmax]: shading's own shadow test when no deferral slot is free.
+@always_inline
+def xert_occluded(sc: XeScene, ox: Float32, oy: Float32, oz: Float32, dx: Float32, dy: Float32, dz: Float32, tmax: Float32) -> Bool:
+    return xert_trace(sc.accel.unsafe_origin_cast[MutAnyOrigin](), XeRayDesc(ox, oy, oz, dx, dy, dz, Float32(0), tmax, 0xFF, XERT_ANY_HIT), sc.cv).prim >= 0
+
+
 def xert_scene() -> XeScene:
     return XeScene(
         Pointer[UInt8, MutUntrackedOrigin](unsafe_from_address=Int(external_call["xert_scene_accel", UInt64]())),
