@@ -1,6 +1,6 @@
 #!/bin/bash
 # Moana's lava rock in a window on the Intel B580: tessellation-free displaced Catmull-Clark patches (Tools/disp_proto.mojo).
-# Fly with W/A/S/D, Q/E (Space/C), Shift x10, wheel = speed, drag = look; +/- displacement x2 / x0.5, 0 limit surface,
+# Fly with W/A/S/D, Q/E (Space/C), Shift x10, wheel = speed, drag = look; +/- displacement x2 / x0.5, 0 displacement off/on,
 # L headlight, Esc quit. Env: EXAG (displacement scale, default 1) W H EXPOSURE COLOR (colour Ptex) HALF=0 (full res moving)
 # DEMO_FRAMES=N (no window: N frames around the rock, then 32 still ones to rock/demo_last.ppm). Build the tool first:
 #   make unittest-intel-src && . $HAL/env.sh && uv run mojo build Tools/disp_proto.mojo -I build/intel-src \

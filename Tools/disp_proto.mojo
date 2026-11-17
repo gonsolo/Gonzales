@@ -403,6 +403,7 @@ def run_demo(patches: Pointer[BezierPatch, MutUntrackedOrigin], sq: Pointer[Floa
     var frames_env = getenv("DEMO_FRAMES")
     var headless = frames_env.byte_length() > 0
     var exag = _env_f("EXAG", Float32(1))
+    var exag_off = exag if exag > Float32(0) else Float32(1)   # what 0 switches back to
     var exposure = _env_f("EXPOSURE", Float32(3))
     var half_move = getenv("HALF") != "0"
     var ctx = DeviceContext()
@@ -499,8 +500,12 @@ def run_demo(patches: Pointer[BezierPatch, MutUntrackedOrigin], sq: Pointer[Floa
                 exag = max(exag * Float32(2), Float32(1)); rebuild = True
             elif key == 45 or key == 333:
                 exag = exag * Float32(0.5) if exag > Float32(1) else Float32(0); rebuild = True
-            elif key == 48:
-                exag = Float32(0); rebuild = True
+            elif key == 48:   # displacement off, and back on at the same scale
+                if exag > Float32(0):
+                    exag_off = exag; exag = Float32(0)
+                else:
+                    exag = exag_off
+                rebuild = True
             elif key == 76:
                 headlight = 1 - headlight; frame = 0
             if rebuild:
