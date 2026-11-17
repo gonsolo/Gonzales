@@ -31,8 +31,9 @@ def _texture_input(surf, name):
     a = f.Get() if f else None
     if not a:
         return ""
-    layer = src.GetPrim().GetPrimStack()[0].layer
-    path = a.resolvedPath or layer.ComputeAbsolutePath(a.path)
+    layer = next((p.layer for p in f.GetAttr().GetPropertyStack() if p.HasDefaultValue()), src.GetPrim().GetPrimStack()[0].layer)
+    path = a.resolvedPath or (a.path if os.path.isabs(a.path) else    # relative to the layer that authored it
+                              os.path.normpath(os.path.join(os.path.dirname(layer.realPath), a.path)))
     if "<UDIM>" in a.path and "<UDIM>" not in path:
         path = re.sub(r"\.1\d{3}\.", ".<UDIM>.", path)
     return path
