@@ -8,7 +8,7 @@ from gonzales.scene.appearance.materials import GpuTexture
 from gonzales.scene.shapes.displacement import displaced_hit_normal
 from gonzales.scene.shapes.primitives import Intersection, TriangleMesh, Sphere, Instance, mesh_uv, mesh_has_uvs, mesh_face
 from gonzales.core.geometry import Ray
-from gonzales.scene.shapes.primitives import mesh_pos
+from gonzales.scene.shapes.primitives import mesh_pos, mesh_vi, alpha_killed
 from gonzales.scene.appearance.lights import AreaLight
 from gonzales.transport.shadow_media import shadow_transmittance
 from gonzales.scene.shapes.curves import Curve, curve_at, curve_piece_endpoints, curve_hit_normal
@@ -16,7 +16,7 @@ from gonzales.transport.bxdf import BxDFSample, GeomContext, SobolSamples8, BxDF
 from gonzales.core.rng import PCG32
 from gonzales.scene.appearance.footprint import CameraFootprint, UVFootprint, TriWorld, tri_world, hit_uv_footprint
 from gonzales.scene.accel.bvh import any_hit_dispatch, curve_offset_eps, ray_sphere_hit
-from gonzales.scene.accel.xert import xert_occluded
+from gonzales.scene.accel.xert import xert_occluded, xert_closest
 from gonzales.core.sampling import sobol_sample_n, sobol_dim_seed
 from gonzales.core.transform import transform_normal, Mat4
 from gonzales.transport.guide import GuideGrid, guide_pos_to_cell, guide_record, null_guide, guide_is_active
@@ -399,7 +399,24 @@ def _xe_blocked(ctx: ShadeContext, ray: Ray, tmax: Float32) -> Bool:
     for k in range(ctx.lights.sphere_count):
         if ray_sphere_hit(ctx.lights.spheres[unsafe_offset=k].center, ctx.lights.spheres[unsafe_offset=k].radius, ray, Float32(1e-4), tmax) > Float32(0):
             return True
-    return xert_occluded(ctx.xe, ray.origin.x, ray.origin.y, ray.origin.z, ray.direction.x, ray.direction.y, ray.direction.z, tmax)
+    if ctx.xe.alpha == 0:
+        return xert_occluded(ctx.xe, ray.origin.x, ray.origin.y, ray.origin.z, ray.direction.x, ray.direction.y, ray.direction.z, tmax)
+    var tmin = Float32(0)
+    for _ in range(32):     # closest hits until one survives its alpha, as the deferred shadow rays do
+        var h = xert_closest(ctx.xe, ray.origin.x, ray.origin.y, ray.origin.z, ray.direction.x, ray.direction.y, ray.direction.z, tmin, tmax)
+        if h.prim < 0:
+            return False
+        if h.curve >= 0:
+            return True
+        var ordinary = ctx.xe.ord_inst >= 0 and Int(h.inst) >= Int(ctx.xe.ord_inst)
+        var mi = Int(ctx.xe.ord_mesh[unsafe_offset=Int(h.inst) - Int(ctx.xe.ord_inst)]) if ordinary else Int(ctx.xe.base_mesh[unsafe_offset=Int(h.inst)]) + Int(h.geom)
+        var mesh = ctx.meshes[unsafe_offset=mi]
+        var t3 = Int(h.prim) * 3
+        if not alpha_killed(mesh, Int(mesh_vi(mesh, t3)), Int(mesh_vi(mesh, t3 + 1)), Int(mesh_vi(mesh, t3 + 2)), h.u, h.v,
+                            Vec3f(ray.origin.x, ray.origin.y, ray.origin.z), ray.direction, (mi << 32) | t3):
+            return True
+        tmin = h.t * Float32(1.00001) + Float32(1.0e-5)
+    return True
 
 
 def _shadow_inline(ctx: ShadeContext, guide_write: GuideGrid) -> Bool:

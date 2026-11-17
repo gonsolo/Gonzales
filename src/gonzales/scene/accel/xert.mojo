@@ -265,7 +265,7 @@ def xert_trace_interop_gpu(accel: MutPointer[UInt8, MutAnyOrigin], rays: MutPoin
         return
     var sc = XeScene(accel.unsafe_origin_cast[MutUntrackedOrigin](), n_meshes, ord_inst, ord_mesh.unsafe_origin_cast[MutUntrackedOrigin](),
                      XeProcs(curves, leaves, leaf_base, inst_blas, materials, piece_rec, piece_base, meshes, leaf_ids),
-                     heat.unsafe_origin_cast[MutUntrackedOrigin]())
+                     heat.unsafe_origin_cast[MutUntrackedOrigin](), Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(), Int32(0))
     results.unsafe_store(8 * i, xert_trace_interop_one(sc, rays.unsafe_load[width=8](8 * i), flags))
 
 # The scene of xert_trace_interop_gpu's arguments, for kernels that trace in their own loop.
@@ -277,6 +277,8 @@ struct XeScene(TrivialRegisterPassable):
     var ord_mesh: Pointer[Int32, MutUntrackedOrigin]
     var cv: XeProcs
     var heat: Pointer[UInt32, MutUntrackedOrigin]
+    var base_mesh: Pointer[Int32, MutUntrackedOrigin]   # an instance's first mesh, for alpha tests in shading
+    var alpha: Int32
 
 def xe_scene_none() -> XeScene:
     return XeScene(Pointer[UInt8, MutUntrackedOrigin].unsafe_dangling(), Int64(0), Int64(-1), Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
@@ -284,13 +286,17 @@ def xe_scene_none() -> XeScene:
                            Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(), Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
                            Pointer[Material, MutUntrackedOrigin].unsafe_dangling(), Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
                            Int32.MAX, Pointer[TriangleMesh, MutUntrackedOrigin].unsafe_dangling(), Int32(0)),
-                   Pointer[UInt32, MutUntrackedOrigin].unsafe_dangling())
+                   Pointer[UInt32, MutUntrackedOrigin].unsafe_dangling(), Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(), Int32(0))
 
 
 # Whether the hardware finds any hit in (0, tmax]: shading's own shadow test when no deferral slot is free.
 @always_inline
 def xert_occluded(sc: XeScene, ox: Float32, oy: Float32, oz: Float32, dx: Float32, dy: Float32, dz: Float32, tmax: Float32) -> Bool:
     return xert_trace(sc.accel.unsafe_origin_cast[MutAnyOrigin](), XeRayDesc(ox, oy, oz, dx, dy, dz, Float32(0), tmax, 0xFF, XERT_ANY_HIT), sc.cv).prim >= 0
+
+
+def xert_closest(sc: XeScene, ox: Float32, oy: Float32, oz: Float32, dx: Float32, dy: Float32, dz: Float32, tmin: Float32, tmax: Float32) -> XeHit:
+    return xert_trace(sc.accel.unsafe_origin_cast[MutAnyOrigin](), XeRayDesc(ox, oy, oz, dx, dy, dz, tmin, tmax, 0xFF, 0), sc.cv)
 
 
 def xert_scene() -> XeScene:
@@ -305,7 +311,7 @@ def xert_scene() -> XeScene:
                  Pointer[Material, MutUntrackedOrigin](unsafe_from_address=Int(xert_proc_table(4))),
                  Pointer[Int32, MutUntrackedOrigin](unsafe_from_address=Int(xert_proc_table(5))), Int32(Int(xert_proc_table(6))),
                  Pointer[TriangleMesh, MutUntrackedOrigin](unsafe_from_address=Int(xert_proc_table(7))), Int32(Int(xert_proc_table(8)))),
-        Pointer[UInt32, MutUntrackedOrigin](unsafe_from_address=Int(external_call["xert_heat", UInt64]())))
+        Pointer[UInt32, MutUntrackedOrigin](unsafe_from_address=Int(external_call["xert_heat", UInt64]())), Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(), Int32(0))
 
 # One ray r (interop layout) traced into its 8 result words.
 @always_inline
