@@ -156,6 +156,7 @@ def _build_scene() -> SceneView:
         Pointer[Pointer[PrimId, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
         Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
         BVH4.none(),
+        Pointer[UInt8, MutUntrackedOrigin].unsafe_dangling(),
     )
 
 # Both subpath halves of a VCM pass share one hero-wavelength set (see

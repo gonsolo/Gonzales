@@ -146,6 +146,7 @@ def _dummy_sd() -> SceneView:
         Pointer[Pointer[PrimId, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
         Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
         BVH4.none(),
+        Pointer[UInt8, MutUntrackedOrigin].unsafe_dangling(),
     )
 
 # ── _pdf_solid_to_area ────────────────────────────────────────────────────────
@@ -366,6 +367,7 @@ def test_bdpt_connect_to_cache_sums_one_paired_light_path() raises:
         Pointer[Pointer[PrimId, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
         Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
         BVH4.none(),
+        Pointer[UInt8, MutUntrackedOrigin].unsafe_dangling(),
     )
 
     var cv = BDPTVertex(

@@ -252,7 +252,6 @@ struct SceneView(TrivialRegisterPassable, DevicePassable):
     # material with an image-texture reflectance.
     var gpuTextures: Pointer[GpuTexture, MutUntrackedOrigin]
     var gpuTextureCount: Int64
-    var sharedCtx: Pointer[UInt8, MutUntrackedOrigin]   # the driver's ShadeContext, for its Intel scene; dangling on the CPU
 
     # One NormalSlopeMap per entry of `textures` (same indices, so a
     # material's `normal_tex_idx` addresses both), built once at scene-build
@@ -324,6 +323,7 @@ struct SceneView(TrivialRegisterPassable, DevicePassable):
     # [MNEE probes, probes that found glass, switched-off flag]; dangling = MNEE always on
     # CPU-only 4-wide collapse of bvh2Nodes (build_bvh4); BVH4.none() = use the BVH2.
     var bvh4: BVH4
+    var sharedCtx: Pointer[UInt8, MutUntrackedOrigin]   # the driver's ShadeContext, for its Intel scene; dangling on the CPU
 
 # ── Infinite/distant-light emission + NEE sampling (shared by bdpt_*.mojo and
 #    sppm.mojo — lives here, not shading.mojo, to avoid an import cycle:

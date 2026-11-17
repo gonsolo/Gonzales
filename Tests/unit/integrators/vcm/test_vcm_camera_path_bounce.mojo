@@ -150,6 +150,7 @@ def _build_scene() -> SceneView:
         Pointer[Pointer[PrimId, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
         Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
         BVH4.none(),
+        Pointer[UInt8, MutUntrackedOrigin].unsafe_dangling(),
     )
 
 def _identity_camera_matrices() -> Tuple[Pointer[Float32, MutUntrackedOrigin], Pointer[Float32, MutUntrackedOrigin]]:
