@@ -3,7 +3,7 @@
 # Fly with W/A/S/D, Q/E (Space/C), Shift x10, wheel = speed, drag = look; +/- displacement x2 / x0.5, 0 displacement off/on,
 # L headlight, Esc quit. Env: EXAG (displacement scale, default 1) W H EXPOSURE COLOR (colour Ptex) HALF=0 (full res moving)
 # GRID=4/8/16 (sub-squares a patch side in the BVH, default 16) LEAF=bl/exact/box/texel/hf/crop (see _leaf_mode in the tool)
-# DEMO_FRAMES=N (no window: N frames around the rock, then 32 still ones to rock/demo_last.ppm). Build the tool first:
+# HW=0 (our BVH instead of an Intel RTAS for the sub-squares) DEMO_FRAMES=N (no window: N frames around the rock, then 32 still ones to rock/demo_last.ppm). Build the tool first:
 #   make unittest-intel-src && . $HAL/env.sh && uv run mojo build Tools/disp_proto.mojo -I build/intel-src \
 #     -o build/disp_proto_gpu --target-accelerator intel:xe2 <MOJO_LINK_FLAGS>
 set -euo pipefail

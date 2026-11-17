@@ -585,9 +585,10 @@ def _hash01(a: UInt32) -> Float32:
     return Float32(Int(x >> 8)) * Float32(1.0 / 16777216.0)
 
 
-def demo_gpu[M: Int](d: DispSurface, nodes: Pointer[BNode, MutUntrackedOrigin], order: Pointer[Int32, MutUntrackedOrigin],
-             crgb: Pointer[UInt8, MutUntrackedOrigin], coff: Pointer[Int32, MutUntrackedOrigin], accum: Pointer[Float32, MutUntrackedOrigin], cam: DCam):
-    """One jittered sample a pixel, averaged into accum (linear RGB)."""
+def demo_gpu[M: Int, HWT: Bool](d: DispSurface, nodes: Pointer[BNode, MutUntrackedOrigin], order: Pointer[Int32, MutUntrackedOrigin],
+             accel: MutPointer[UInt8, MutAnyOrigin], crgb: Pointer[UInt8, MutUntrackedOrigin], coff: Pointer[Int32, MutUntrackedOrigin],
+             accum: Pointer[Float32, MutUntrackedOrigin], cam: DCam):
+    """One jittered sample a pixel, averaged into accum (linear RGB). HWT: the top level in Intel's RTAS (accel), else the BVH."""
     var i = global_idx.x
     var W = Int(cam.w); var H = Int(cam.h)
     if i >= W * H:
@@ -599,7 +600,11 @@ def demo_gpu[M: Int](d: DispSurface, nodes: Pointer[BNode, MutUntrackedOrigin], 
     var py = (Float32(1) - Float32(2) * (Float32(y) + jy) / Float32(H)) * cam.tan_h * Float32(H) / Float32(W)
     var dir = cam.fwd + cam.right * px + cam.up * py
     dir = dir * (Float32(1) / sqrt(dot(dir, dir)))
-    var hh = trace_patches[M](d, nodes, order, cam.eye, dir)
+    var hh: Hit
+    comptime if HWT:
+        hh = _rq_trace[M](accel, d, cam.eye, dir, True)
+    else:
+        hh = trace_patches[M](d, nodes, order, cam.eye, dir)
     var c = Vec3f(Float32(0.02), Float32(0.022), Float32(0.03))   # background
     if hh.prim >= 0:
         var step = max(hh.size, Float32(1.0 / 512.0))
@@ -613,6 +618,33 @@ def demo_gpu[M: Int](d: DispSurface, nodes: Pointer[BNode, MutUntrackedOrigin], 
     var a = Vec3f(accum[unsafe_offset=3 * i], accum[unsafe_offset=3 * i + 1], accum[unsafe_offset=3 * i + 2]) if cam.frame > 0 else Vec3f(0, 0, 0)
     a = a + (c - a) * (Float32(1) / (k + Float32(1)))
     accum[unsafe_offset=3 * i] = a.x; accum[unsafe_offset=3 * i + 1] = a.y; accum[unsafe_offset=3 * i + 2] = a.z
+
+
+def _proc_rtas(ctx: DeviceContext, d: DispSurface, np: Int) raises -> DeviceBuffer[DType.uint8]:
+    """Our sub-squares' boxes as procedural primitives in an Intel RTAS, on the device."""
+    var npr = np * sub_count(d)
+    var pb = unsafe_alloc[Float32](6 * npr)
+    def boxes(p: Int) {imm}:
+        for k in range(sub_count(d)):
+            var b = sub_box(d, p * sub_count(d) + k); var o = 6 * (p * sub_count(d) + k)
+            pb[unsafe_offset=o] = b[0].x; pb[unsafe_offset=o + 1] = b[0].y; pb[unsafe_offset=o + 2] = b[0].z
+            pb[unsafe_offset=o + 3] = b[1].x; pb[unsafe_offset=o + 4] = b[1].y; pb[unsafe_offset=o + 5] = b[1].z
+    parallelize(boxes, np)
+    var size = Int64(0); var bounds = unsafe_alloc[Float32](6)
+    var rtas = xert_build_blas_geoms(0, Pointer[Pointer[Float32, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
+                                     Pointer[Int64, MutUntrackedOrigin].unsafe_dangling(), Pointer[Pointer[UInt32, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
+                                     Pointer[Int64, MutUntrackedOrigin].unsafe_dangling(), Int64(npr), pb,
+                                     Pointer(to=size).unsafe_origin_cast[MutUntrackedOrigin](), bounds)
+    pb.unsafe_free(); bounds.unsafe_free()
+    if Int(rtas) == 0:
+        raise Error("RTAS build failed")
+    var buf = ctx.enqueue_create_buffer[DType.uint8](Int(size))
+    ctx.enqueue_copy(buf, rtas)
+    ctx.synchronize()
+    xert_free(rtas)
+    if Int(buf.unsafe_ptr()) % Int(xert_alignment()) != 0:
+        raise Error("RTAS buffer not aligned")
+    return buf^
 
 
 def _demo_bvh(d: DispSurface, np: Int, mut nodes: List[BNode], mut order: List[Int32]):
@@ -671,12 +703,18 @@ def run_demo(patches: Pointer[BezierPatch, MutUntrackedOrigin], sq: Pointer[Floa
     var dcg = _up(ctx, bufs, cgrid, ncg)
     var host_d = DispSurface(patches, sq, face, hdr, pyr, exag / Float32(255), Vec3f(0, 0, 0), Float32(0), chain_off, chain, fm, greg, _grid_levels(), _leaf_mode(), cgrid)
     var nodes = List[BNode](); var order = List[Int32]()
-    _demo_bvh(host_d, np, nodes, order)
+    var use_hw = getenv("HW") != "0" and xert_alignment() != 0   # the top level in Intel's RTAS (HW=0: our BVH)
+    var accel_buf = ctx.enqueue_create_buffer[DType.uint8](64)
+    if use_hw:
+        accel_buf = _proc_rtas(ctx, host_d, np)
+    else:
+        _demo_bvh(host_d, np, nodes, order)
     var nb_cap = max(len(nodes), 1) * size_of[BNode]() * 2   # room for a deeper tree
     var nb_buf = ctx.enqueue_create_buffer[DType.uint8](nb_cap)
     var or_buf = ctx.enqueue_create_buffer[DType.uint8](max(len(order), 1) * 4)   # one entry per BVH primitive (sub-square)
     var nb_stage = unsafe_alloc[UInt8](nb_cap)   # the device copy reads the buffer's whole size
-    _demo_upload(ctx, nb_buf, or_buf, nb_stage, nb_cap, nodes, order)
+    if not use_hw:
+        _demo_upload(ctx, nb_buf, or_buf, nb_stage, nb_cap, nodes, order)
     var dnodes = nb_buf.unsafe_ptr().unsafe_bitcast[BNode]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
     var dorder = or_buf.unsafe_ptr().unsafe_bitcast[Int32]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
     var accum_b = ctx.enqueue_create_buffer[DType.float32](3 * W * H)
@@ -756,8 +794,11 @@ def run_demo(patches: Pointer[BezierPatch, MutUntrackedOrigin], sq: Pointer[Floa
             fwd = cs[unsafe_offset=0].direction
         if rebuild:
             host_d = DispSurface(patches, sq, face, hdr, pyr, exag / Float32(255), Vec3f(0, 0, 0), Float32(0), chain_off, chain, fm, greg, _grid_levels(), _leaf_mode(), cgrid)
-            _demo_bvh(host_d, np, nodes, order)
-            _demo_upload(ctx, nb_buf, or_buf, nb_stage, nb_cap, nodes, order)   # nodes and the patch order they index
+            if use_hw:
+                accel_buf = _proc_rtas(ctx, host_d, np)
+            else:
+                _demo_bvh(host_d, np, nodes, order)
+                _demo_upload(ctx, nb_buf, or_buf, nb_stage, nb_cap, nodes, order)   # nodes and the patch order they index
             moved = True
         if moved:
             frame = 0
@@ -773,10 +814,15 @@ def run_demo(patches: Pointer[BezierPatch, MutUntrackedOrigin], sq: Pointer[Floa
         var dd = DispSurface(dpat, dsq, dface, dhdr, dpyr, exag / Float32(255), eye, Float32(2) * tan_h / Float32(rw), doff, dchain, dfm, dgreg, _grid_levels(), _leaf_mode(), dcg)
         var cam = DCam(eye, fwd, right, up, light, tan_h, exposure, Int32(rw), Int32(rh), Int32(frame), Int32(headlight), Int32(1 if color_on else 0))
         var t0 = perf_counter_ns()
-        if dd.leaf_mode >= 5:
-            ctx.enqueue_function[demo_gpu[5]](dd, dnodes, dorder, crgb, coff, daccum, cam, grid_dim=ceildiv(rw * rh, 64), block_dim=64)
+        var acc_d = accel_buf.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutAnyOrigin]()
+        if use_hw and dd.leaf_mode >= 5:
+            ctx.enqueue_function[demo_gpu[5, True]](dd, dnodes, dorder, acc_d, crgb, coff, daccum, cam, grid_dim=ceildiv(rw * rh, 64), block_dim=64)
+        elif use_hw:
+            ctx.enqueue_function[demo_gpu[-1, True]](dd, dnodes, dorder, acc_d, crgb, coff, daccum, cam, grid_dim=ceildiv(rw * rh, 64), block_dim=64)
+        elif dd.leaf_mode >= 5:
+            ctx.enqueue_function[demo_gpu[5, False]](dd, dnodes, dorder, acc_d, crgb, coff, daccum, cam, grid_dim=ceildiv(rw * rh, 64), block_dim=64)
         else:
-            ctx.enqueue_function[demo_gpu[-1]](dd, dnodes, dorder, crgb, coff, daccum, cam, grid_dim=ceildiv(rw * rh, 64), block_dim=64)
+            ctx.enqueue_function[demo_gpu[-1, False]](dd, dnodes, dorder, acc_d, crgb, coff, daccum, cam, grid_dim=ceildiv(rw * rh, 64), block_dim=64)
         ctx.synchronize()
         var ms = Float64(perf_counter_ns() - t0) * 1e-6
         if moved:
