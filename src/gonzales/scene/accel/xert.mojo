@@ -232,7 +232,7 @@ def xert_trace(accel: MutPointer[UInt8, MutAnyOrigin], ray: XeRayDesc, cv: XePro
 comptime XERT_MISS = UInt32(0xFFFFFFFF)
 
 def xert_trace_rays_gpu(accel: MutPointer[UInt8, MutAnyOrigin], rays: MutPointer[Float32, MutAnyOrigin],
-                        results: MutPointer[UInt32, MutAnyOrigin], n: Int64, flags: UInt32):
+                        results: MutPointer[UInt32, MutAnyOrigin], n: Int64, flags: UInt32, leaf_ids: Int32):
     var i = global_idx.x
     if i >= Int(n):
         return
@@ -240,7 +240,7 @@ def xert_trace_rays_gpu(accel: MutPointer[UInt8, MutAnyOrigin], rays: MutPointer
     var none = XeProcs(Pointer[Curve, MutUntrackedOrigin].unsafe_dangling(), Pointer[PrimId, MutUntrackedOrigin].unsafe_dangling(),
                         Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(), Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
                         Pointer[Material, MutUntrackedOrigin].unsafe_dangling(), Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
-                        Int32.MAX, Pointer[TriangleMesh, MutUntrackedOrigin].unsafe_dangling(), Int32(Int(xert_proc_table(8))))
+                        Int32.MAX, Pointer[TriangleMesh, MutUntrackedOrigin].unsafe_dangling(), leaf_ids)
     var hit = xert_trace(accel, XeRayDesc(r[0], r[1], r[2], r[4], r[5], r[6], r[3], r[7], 0xFF, flags), none)
     var o = results.unsafe_offset(8 * i)
     o[unsafe_offset=0] = bitcast[DType.uint32](hit.t)

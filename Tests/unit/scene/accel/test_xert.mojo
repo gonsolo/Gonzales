@@ -46,7 +46,7 @@ def test_xert_quad() raises:
                 h[8 * i + k] = r[k]
     var results = ctx.enqueue_create_buffer[DType.uint32](8 * N * N)
     ctx.enqueue_function[xert_trace_rays_gpu](accel.unsafe_ptr(), rays.unsafe_ptr(), results.unsafe_ptr(), Int64(N * N), UInt32(0),
-                                              grid_dim=(N * N + 63) // 64, block_dim=64)
+                                              Int32(Int(xert_proc_table(8))), grid_dim=(N * N + 63) // 64, block_dim=64)
     var hits = 0; var prims = List[Int](length=2, fill=0); var bad = 0
     with results.map_to_host() as h:
         with rays.map_to_host() as rh:
