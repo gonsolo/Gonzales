@@ -724,10 +724,14 @@ def main() raises:
                 ctx.enqueue_function[render_gpu](dd, nd_d, or_d, img_d, st_d, gc, grid_dim=ceildiv(W * H, 64), block_dim=64)
                 ctx.synchronize()
                 var tg1 = perf_counter_ns()
-                var tg2 = perf_counter_ns()
-                ctx.enqueue_function[render_gpu](dd, nd_d, or_d, img_d, st_d, gc, grid_dim=ceildiv(W * H, 64), block_dim=64)
-                ctx.synchronize()
-                var tg3 = perf_counter_ns()
+                var tg2 = 0; var tg3 = 1 << 62
+                for _ in range(3):   # the fastest of three launches
+                    var ta = perf_counter_ns()
+                    ctx.enqueue_function[render_gpu](dd, nd_d, or_d, img_d, st_d, gc, grid_dim=ceildiv(W * H, 64), block_dim=64)
+                    ctx.synchronize()
+                    var tb2 = perf_counter_ns()
+                    if Int(tb2) - Int(ta) < tg3 - tg2:
+                        tg2 = Int(ta); tg3 = Int(tb2)
                 print(name + ": GPU first launch (with compile)", (tg1 - tg0) // 1000000, "ms, render", Float32(tg3 - tg2) * Float32(1e-6), "ms,",
                       Float32(W * H) / (Float32(tg3 - tg2) * Float32(1e-9)) / Float32(1e6), "Mrays/s")
                 with img_b.map_to_host() as hi:
