@@ -21,6 +21,7 @@ void viewer_poll_events(ViewerHandle viewer);
 int viewer_denoise_enabled(ViewerHandle viewer);
 void viewer_get_camera_state(ViewerHandle viewer, CameraState *out);
 void viewer_set_camera_state(ViewerHandle viewer, const CameraState *state);
+int viewer_take_key(ViewerHandle viewer);   // the last key the viewer itself does not use (GLFW code), 0 if none
 void viewer_destroy(ViewerHandle viewer);
 
 #ifdef __cplusplus

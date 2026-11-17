@@ -43,6 +43,10 @@ def viewer_get_camera_state[Or: Origin[mut=True]](v: ViewerHandle, result: Point
 def viewer_set_camera_state[Os: Origin[mut=True]](v: ViewerHandle, state: Pointer[CameraState, Os]):
     external_call["viewer_set_camera_state", NoneType, ViewerHandle, Pointer[CameraState, MutUntrackedOrigin]](v, state.unsafe_origin_cast[MutUntrackedOrigin]())
 
+def viewer_take_key(v: ViewerHandle) -> Int32:
+    """The last key the viewer does not use itself (a GLFW key code), 0 if none since the last call."""
+    return external_call["viewer_take_key", Int32, ViewerHandle](v)
+
 def viewer_destroy(v: ViewerHandle):
     external_call["viewer_destroy", NoneType, ViewerHandle](v)
 

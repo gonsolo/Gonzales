@@ -94,6 +94,7 @@ struct Viewer {
     bool denoise = false;         // N toggles the denoiser
     bool showFps = false;         // F toggles the frame-rate overlay
     bool showGpu = false;         // G toggles the graphics-card overlay
+    int pendingKey = 0;           // the last other key pressed, for the application (viewer_take_key)
     char gpuName[256] = {0};
     uint64_t vramBytes = 0;       // largest device-local heap
     double lastFrameTime = 0.0;
@@ -230,6 +231,9 @@ static void keyCallback(GLFWwindow* window, int key, int /*scancode*/,
     } else if (key == GLFW_KEY_G) {
         auto* v = static_cast<Viewer*>(glfwGetWindowUserPointer(window));
         if (v) v->showGpu = !v->showGpu;
+    } else {
+        auto* v = static_cast<Viewer*>(glfwGetWindowUserPointer(window));
+        if (v) v->pendingKey = key;
     }
 }
 
@@ -1209,6 +1213,14 @@ void viewer_set_camera_state(ViewerHandle viewer, const CameraState *state) {
     float yawRad = atan2f(v->camera.dirX, -v->camera.dirZ);
     v->pitch = pitchRad * 180.0f / 3.14159265f;
     v->yaw = yawRad * 180.0f / 3.14159265f;
+}
+
+int viewer_take_key(ViewerHandle viewer) {
+    auto* v = static_cast<Viewer*>(viewer);
+    if (!v) return 0;
+    int k = v->pendingKey;
+    v->pendingKey = 0;
+    return k;
 }
 
 void viewer_destroy(ViewerHandle viewer) {
