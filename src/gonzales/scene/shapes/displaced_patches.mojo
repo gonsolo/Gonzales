@@ -3,7 +3,7 @@
 # unit normal (interval arithmetic over the derivative nets, after Munkberg et al. 2010). Leaves are boxes no larger than
 # the camera's footprint at them, so every ray sees the same surface and neighbouring depths cannot open cracks.
 from std.bit import count_leading_zeros
-from std.math import max, min, sqrt, abs, floor
+from std.math import max, min, sqrt, abs, floor, log2
 from gonzales.core.geometry import Vec3f, cross, dot
 from gonzales.scene.shapes.patches import BezierPatch, patch_eval, _crop, _half, _domain, PATCH_MAX_DEPTH
 
@@ -23,6 +23,8 @@ struct DispSurface(TrivialRegisterPassable):
     var scale: Float32   # world units per height byte
     var cam: Vec3f
     var pixel: Float32   # footprint per unit distance (pixel angle)
+    var chain_off: _I32  # per face: its bordered height chain in `chain` (src/oiio/disp.cc)
+    var chain: _U8
 
 
 @always_inline
@@ -246,8 +248,40 @@ def intersect_displaced(d: DispSurface, pi: Int, org: Vec3f, dir: Vec3f, t_max: 
     return (hit, best, hs, ht, steps, hsz)
 
 
+@always_inline
+def _chain_h(d: DispSurface, off: Int, w: Int, x: Int, y: Int) -> Float32:
+    """Height byte (x, y) of a bordered level, x in [-1, w], y in [-1, h]."""
+    return Float32(Int(d.chain[unsafe_offset=off + (y + 1) * (w + 2) + x + 1]))
+
+
+def _level_slope(d: DispSurface, f: Int, lvl: Int, u: Float32, v: Float32) -> Tuple[Float32, Float32]:
+    """(dh/du, dh/dv) in bytes per face unit at level lvl: central differences at the texel centres, interpolated bilinearly.
+    Texels next to an edge difference against the neighbour's border texels, so the slopes continue across face edges."""
+    var ul = Int(d.hdr[unsafe_offset=3 * f + 1]); var vl = Int(d.hdr[unsafe_offset=3 * f + 2])
+    var off = Int(d.chain_off[unsafe_offset=f])
+    var l = 0; var cul = ul; var cvl = vl
+    while l < lvl and (cul > 0 or cvl > 0):
+        off += ((1 << cul) + 2) * ((1 << cvl) + 2)
+        cul = max(cul - 1, 0); cvl = max(cvl - 1, 0); l += 1
+    var w = 1 << cul; var h = 1 << cvl
+    var fx = min(max(u * Float32(w) - Float32(0.5), Float32(-0.5)), Float32(w) - Float32(0.5))
+    var fy = min(max(v * Float32(h) - Float32(0.5), Float32(-0.5)), Float32(h) - Float32(0.5))
+    var x0 = Int(floor(fx)); var y0 = Int(floor(fy))
+    var tx = fx - Float32(x0); var ty = fy - Float32(y0)
+    var su = Float32(0); var sv = Float32(0)
+    for k in range(4):
+        var x = min(max(x0 + (k % 2), -1), w); var y = min(max(y0 + (k // 2), -1), h)
+        var wk = (tx if k % 2 == 1 else Float32(1) - tx) * (ty if k >= 2 else Float32(1) - ty)
+        # Central differences inside the bordered level; one-sided on the border texels themselves.
+        var xa = max(x - 1, -1); var xb = min(x + 1, w); var ya = max(y - 1, -1); var yb = min(y + 1, h)
+        su += wk * (_chain_h(d, off, w, xb, y) - _chain_h(d, off, w, xa, y)) / Float32(xb - xa)
+        sv += wk * (_chain_h(d, off, w, x, yb) - _chain_h(d, off, w, x, ya)) / Float32(yb - ya)
+    return (su * Float32(w), sv * Float32(h))   # per texel to per face unit
+
+
 def displaced_normal(d: DispSurface, pi: Int, s: Float32, t: Float32, step: Float32) -> Vec3f:
-    """The displaced surface's normal at (s, t): Su = Pu + hu N, Sv = Pv + hv N, heights differenced over `step`."""
+    """The displaced surface's normal at (s, t) with slopes from the prefiltered level whose texels match `step` (the leaf
+    square's size in patch units), blended between the two nearest levels: Su = Pu + hu N, Sv = Pv + hv N."""
     var e = patch_eval(d.patches[unsafe_offset=pi], s, t)
     var n = cross(e[1], e[2])
     var ln = sqrt(dot(n, n))
@@ -257,9 +291,17 @@ def displaced_normal(d: DispSurface, pi: Int, s: Float32, t: Float32, step: Floa
     if d.scale <= Float32(0):
         return n
     var f = Int(d.face[unsafe_offset=pi]); var u0 = d.sq[unsafe_offset=3 * pi]; var v0 = d.sq[unsafe_offset=3 * pi + 1]; var sz = d.sq[unsafe_offset=3 * pi + 2]
-    var hs = (face_height(d, f, u0 + (s + step) * sz, v0 + t * sz) - face_height(d, f, u0 + (s - step) * sz, v0 + t * sz)) / (Float32(2) * step)
-    var ht = (face_height(d, f, u0 + s * sz, v0 + (t + step) * sz) - face_height(d, f, u0 + s * sz, v0 + (t - step) * sz)) / (Float32(2) * step)
-    var su = e[1] + n * (hs * d.scale); var sv = e[2] + n * (ht * d.scale)
+    var ul = Int(d.hdr[unsafe_offset=3 * f + 1]); var vl = Int(d.hdr[unsafe_offset=3 * f + 2])
+    var res = Float32(1 << max(ul, vl))
+    var lod = min(max(log2(max(step * sz * res, Float32(1e-6))), Float32(0)), Float32(max(ul, vl)))
+    var l0 = Int(floor(lod)); var fr = lod - Float32(l0)
+    var u = u0 + s * sz; var v = v0 + t * sz
+    var g = _level_slope(d, f, l0, u, v)
+    if fr > Float32(0) and l0 < max(ul, vl):
+        var g1 = _level_slope(d, f, l0 + 1, u, v)
+        g = (g[0] + (g1[0] - g[0]) * fr, g[1] + (g1[1] - g[1]) * fr)
+    var hs = g[0] * sz * d.scale; var ht = g[1] * sz * d.scale   # dh/ds = size * dh/du
+    var su = e[1] + n * hs; var sv = e[2] + n * ht
     var dn = cross(su, sv)
     var l2 = sqrt(dot(dn, dn))
     return dn * (Float32(1) / l2) if l2 > Float32(0) else n

@@ -162,7 +162,7 @@ def _write_ppm(path: String, img: List[Float32], w: Int, h: Int) raises:
 def main() raises:
     var out_dir = String("/tmp/claude-1000/-home-gonsolo-work-moana-3060-paper/5a168d33-8d85-45d2-a94f-7e6bdd0ebff6/scratchpad/rock/")
     var W = 960; var H = 720
-    var counts = unsafe_alloc[Int64](3)
+    var counts = unsafe_alloc[Int64](4)
     var ptx = String(PTX)
     var cname = unsafe_alloc[UInt8](ptx.byte_length() + 1)
     for i in range(ptx.byte_length()):
@@ -178,6 +178,10 @@ def main() raises:
     var hdr = unsafe_alloc[Int32](3 * nf)
     var pyr = unsafe_alloc[UInt8](npyr)
     var cbox = unsafe_alloc[Float32](6)
+    var nchain = Int(counts[3])
+    var chain_off = unsafe_alloc[Int32](nf)
+    var chain = unsafe_alloc[UInt8](max(nchain, 1))
+    external_call["disp_take_chains", NoneType](hd, chain_off, chain)
     external_call["disp_take", NoneType](hd, cpf, sq, face, hdr, pyr, cbox)
     var patches = unsafe_alloc[BezierPatch](np)
     for p in range(np):
@@ -191,6 +195,7 @@ def main() raises:
     var blo = Vec3f(cbox[unsafe_offset=0], cbox[unsafe_offset=1], cbox[unsafe_offset=2])
     var bhi = Vec3f(cbox[unsafe_offset=3], cbox[unsafe_offset=4], cbox[unsafe_offset=5])
     print("rock:", np, "patches,", nf, "faces,", texels, "texels,", npyr, "pyramid bytes; box", blo.x, blo.y, blo.z, "..", bhi.x, bhi.y, bhi.z)
+    print("bordered height chains:", nchain, "bytes =", Float32(nchain) / Float32(texels), "x the plain heights (", texels, "bytes ); min/max pyramid", npyr, "bytes")
 
     # Camera: a 3/4 view of the cage box (CAM_* overrides), and the light grazing from the side.
     var c = (blo + bhi) * Float32(0.5)
@@ -219,7 +224,7 @@ def main() raises:
         if only.byte_length() > 0 and only != name:
             continue
         var scale = Float32(0) if scene == 0 else (Float32(1) / Float32(255) if scene == 1 else exag / Float32(255))
-        var d = DispSurface(patches, sq, face, hdr, pyr, scale, eye, pixel)
+        var d = DispSurface(patches, sq, face, hdr, pyr, scale, eye, pixel, chain_off, chain)
         var img = List[Float32](length=W * H, fill=Float32(0))
         var hitmask = List[UInt8](length=W * H, fill=UInt8(0))
         var steps = List[Int](length=H, fill=0)
