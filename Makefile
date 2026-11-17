@@ -119,7 +119,7 @@ editMakefile:
 # C++ bridge libraries. Host-specific tuning via override, e.g. CXXFLAGS="-O3 -march=native".
 CXXFLAGS ?= -O3
 
-OIIO_BRIDGE_SRC = src/oiio/oiio.cc src/oiio/osd.cc
+OIIO_BRIDGE_SRC = src/oiio/oiio.cc src/oiio/osd.cc src/oiio/disp.cc
 OIIO_BRIDGE_INC = src/oiio
 OIIO_BRIDGE_LIB = $(BUILD_DIR)/liboiiobridge.so
 
