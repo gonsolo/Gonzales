@@ -384,8 +384,8 @@ def _demo_bvh(d: DispSurface, np: Int, mut nodes: List[BNode], mut order: List[I
 def _demo_upload(ctx: DeviceContext, nb_buf: DeviceBuffer[DType.uint8], or_buf: DeviceBuffer[DType.uint8], stage: Pointer[UInt8, MutUntrackedOrigin],
                  cap: Int, nodes: List[BNode], order: List[Int32]) raises:
     var nbytes = len(nodes) * size_of[BNode]()
-    if nbytes > cap:
-        raise Error("patch BVH outgrew its device buffer")
+    if nbytes > cap or len(order) * 4 != len(or_buf):
+        raise Error("patch BVH does not match its device buffers")
     for i in range(cap):
         stage[unsafe_offset=i] = UInt8(0)
     unsafe_memcpy(dest=stage, src=nodes.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]().unsafe_bitcast[UInt8](), count=nbytes)
@@ -434,7 +434,7 @@ def run_demo(patches: Pointer[BezierPatch, MutUntrackedOrigin], sq: Pointer[Floa
     _demo_bvh(host_d, np, nodes, order)
     var nb_cap = max(len(nodes), 1) * size_of[BNode]() * 2   # room for a deeper tree
     var nb_buf = ctx.enqueue_create_buffer[DType.uint8](nb_cap)
-    var or_buf = ctx.enqueue_create_buffer[DType.uint8](max(np, 1) * 4)
+    var or_buf = ctx.enqueue_create_buffer[DType.uint8](max(len(order), 1) * 4)   # one entry per BVH primitive (sub-square)
     var nb_stage = unsafe_alloc[UInt8](nb_cap)   # the device copy reads the buffer's whole size
     _demo_upload(ctx, nb_buf, or_buf, nb_stage, nb_cap, nodes, order)
     var dnodes = nb_buf.unsafe_ptr().unsafe_bitcast[BNode]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
