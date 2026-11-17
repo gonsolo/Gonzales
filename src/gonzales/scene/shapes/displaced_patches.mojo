@@ -796,6 +796,18 @@ def _bl_box(d: DispSurface, pi: Int, f: Int, fr: BLFrame, s0: Float32, t0: Float
     return (Vec3f(lo.x + ox[0] - pad, lo.y + oy[0] - pad, lo.z + oz[0] - pad), Vec3f(hi.x + ox[1] + pad, hi.y + oy[1] + pad, hi.z + oz[1] + pad), base)
 
 
+def _bl_leaf(d: DispSurface, pi: Int, f: Int, fr: BLFrame, s0q: Float32, t0q: Float32, inv_s: Float32,
+            dom: Tuple[Float32, Float32, Float32, Float32], dir: Vec3f, t_max: Float32) -> Tuple[Bool, Float32, Float32, Float32]:
+    var s0 = dom[0]; var s1 = dom[0] + dom[2]; var t0 = dom[1]; var t1 = dom[1] + dom[3]
+    var sm = s0 + Float32(0.5) * dom[2]; var tm = t0 + Float32(0.5) * dom[3]
+    var cs = SIMD[DType.float32, 8](s0, s1, s1, s0, sm, s1, sm, s0)
+    var ct = SIMD[DType.float32, 8](t0, t0, t1, t1, t0, tm, t1, tm)
+    var cp = Array[Vec3f, 8](fill=Vec3f(0, 0, 0))
+    for k in range(8):
+        cp[k] = _bl_point(d, pi, f, fr, s0q, t0q, inv_s, cs[k], ct[k])
+    return _leaf_hit(cp, s0, s1, t0, t1, dir, t_max)
+
+
 def _intersect_bl(d: DispSurface, prim: Int, org: Vec3f, dir: Vec3f, t_max: Float32) -> Tuple[Bool, Float32, Float32, Float32, Int, Float32]:
     """The sub-square's base as the bilinear patch through its limit corners, displaced along the bilinear blend of their
     unit normals: X = B + h N. Neighbours share the corners, so their edges agree; no bicubic is touched after entry."""
@@ -810,6 +822,10 @@ def _intersect_bl(d: DispSurface, prim: Int, org: Vec3f, dir: Vec3f, t_max: Floa
     var depth = Int(d.sub_levels); var steps = 0
     var path = sq[3]; var pend = UInt64(0)
     var dom = (sq[0], sq[1], S, S)
+    var lo0 = Vec3f(fr.px.reduce_min(), fr.py.reduce_min(), fr.pz.reduce_min()); var hi0 = Vec3f(fr.px.reduce_max(), fr.py.reduce_max(), fr.pz.reduce_max())
+    if S * texels <= Float32(1) or (d.leaf_mode == 5 and max(max(hi0.x - lo0.x, hi0.y - lo0.y), hi0.z - lo0.z) <= _leaf_size(lo0, hi0, cam, d.pixel)[1]):
+        var lh = _bl_leaf(d, pi, f, fr, sq[0], sq[1], inv_s, dom, dir, best)   # a leaf already; the caller tested its box
+        return (lh[0], lh[1], lh[2], lh[3], 1, S)
     var cur = _bl_box(d, pi, f, fr, sq[0], sq[1], inv_s, dom)
     var cur_hit = _slab(cur[0], cur[1], inv, best)
     while True:
@@ -818,14 +834,7 @@ def _intersect_bl(d: DispSurface, prim: Int, org: Vec3f, dir: Vec3f, t_max: Floa
         if cur_hit[0]:
             var sz = _leaf_size(cur[0], cur[1], cam, d.pixel)
             if depth >= PATCH_MAX_DEPTH or max(dom[2], dom[3]) * texels <= Float32(1) or (d.leaf_mode == 5 and cur[2] <= sz[1]):
-                var s0 = dom[0]; var s1 = dom[0] + dom[2]; var t0 = dom[1]; var t1 = dom[1] + dom[3]
-                var sm = s0 + Float32(0.5) * dom[2]; var tm = t0 + Float32(0.5) * dom[3]
-                var cs = SIMD[DType.float32, 8](s0, s1, s1, s0, sm, s1, sm, s0)
-                var ct = SIMD[DType.float32, 8](t0, t0, t1, t1, t0, tm, t1, tm)
-                var cp = Array[Vec3f, 8](fill=Vec3f(0, 0, 0))
-                for k in range(8):
-                    cp[k] = _bl_point(d, pi, f, fr, sq[0], sq[1], inv_s, cs[k], ct[k])
-                var lh = _leaf_hit(cp, s0, s1, t0, t1, dir, best)
+                var lh = _bl_leaf(d, pi, f, fr, sq[0], sq[1], inv_s, dom, dir, best)
                 if lh[0]:
                     best = lh[1]; hit = True; hs = lh[2]; ht = lh[3]; hsz = max(dom[2], dom[3])
             else:
