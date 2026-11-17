@@ -145,6 +145,12 @@ def scene_cache_variant() -> Int:
         for c in (cull + "@" + env_str["GONZALES_CAMERA_SCENE"]()).as_bytes():
             h = (h * 31 + Int(c)) & 0xFFFFFFF
         v += 64 * (h + 1)
+    var usd_view = env_str["GONZALES_USD_CAMERA"]() + "@" + env_str["GONZALES_USD_TIME"]()
+    if usd_view != "@":   # a USD scene bakes its camera and frame into the cache
+        var h = 0
+        for c in usd_view.as_bytes():
+            h = (h * 31 + Int(c)) & 0xFFFFFFF
+        v += (h + 1) << 34
     return v + 2 * prune
 
 

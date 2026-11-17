@@ -44,11 +44,10 @@ def mojo_parse_scene_any(path: Pointer[UInt8, MutUntrackedOrigin],
     if is_xml:
         return mojo_parse_mitsuba_scene(path, verbose)
     var path_s = String(unsafe_from_utf8_ptr=path.as_imm())
-    if path_s.endswith(".usd") or path_s.endswith(".usda") or path_s.endswith(".usdc") or path_s.endswith(".usdz"):
-        return mojo_parse_usd_scene(path, verbose)
+    var usd = path_s.endswith(".usd") or path_s.endswith(".usda") or path_s.endswith(".usdc") or path_s.endswith(".usdz")
     var cache_env = env_str["GONZALES_SCENE_CACHE"]()
     if cache_env.byte_length() == 0:
-        return mojo_parse_scene(path, verbose, plys)
+        return mojo_parse_usd_scene(path, verbose) if usd else mojo_parse_scene(path, verbose, plys)
     var cpath = unsafe_alloc[UInt8](cache_env.byte_length() + 1)
     for k in range(cache_env.byte_length()):
         cpath[unsafe_offset=k] = cache_env.as_bytes()[k]
@@ -58,7 +57,7 @@ def mojo_parse_scene_any(path: Pointer[UInt8, MutUntrackedOrigin],
         cpath.unsafe_free()
         _camera_override(cached)
         return cached
-    var psc = mojo_parse_scene(path, verbose, plys)
+    var psc = mojo_parse_usd_scene(path, verbose) if usd else mojo_parse_scene(path, verbose, plys)
     _ = scene_cache_save(psc, cpath, path)
     cpath.unsafe_free()
     _camera_override(psc)
