@@ -1,7 +1,7 @@
 # Prototype: Moana's lava rock (Catmull-Clark cage + Ptex displacement) ray cast without tessellation, against a
 # tessellated reference. Writes PPM images and prints timings, traversal steps, cracks and memory.
 from std.ffi import external_call
-from std.math import pow, max, min, sqrt, abs, tan, acos
+from std.math import pow, max, min, sqrt, abs, tan, acos, sin, cos
 from std.memory.alloc import unsafe_alloc
 from std.os import getenv
 from std.sys.info import size_of
@@ -13,7 +13,10 @@ from std.builtin.device_passable import DevicePassable, DeviceTypeEncoder
 from std.math import ceildiv
 from gonzales.core.geometry import Vec3f, cross, dot
 from gonzales.scene.shapes.patches import BezierPatch
-from gonzales.scene.shapes.displaced_patches import DispSurface, patch_box, patch_at, intersect_displaced, displaced_normal, displaced_point
+from gonzales.scene.shapes.displaced_patches import DispSurface, patch_box, patch_at, intersect_displaced, displaced_normal, displaced_point, chain_color
+from gonzales.app.viewer import CameraState, ViewerHandle, viewer_create, viewer_destroy, viewer_poll_events, viewer_should_close, \
+    viewer_get_camera_state, viewer_set_camera_state, viewer_update_framebuffer, viewer_take_key
+from gonzales.core.geometry import Point3f
 from gonzales.scene.shapes.patches import patch_eval
 
 comptime PTX = "/mnt/storage/moana/base/ex/island/textures/isLavaRocks/Displacement/rockfacebg0001_geo.ptx"
@@ -151,6 +154,11 @@ def render_gpu(d: DispSurface, nodes: Pointer[BNode, MutUntrackedOrigin], order:
     img[unsafe_offset=i] = shade
 
 
+@always_inline
+def _is_real(p: ViewerHandle) -> Bool:
+    return Int(p) > 16
+
+
 def _up[T: AnyType](ctx: DeviceContext, mut bufs: List[DeviceBuffer[DType.uint8]], src: Pointer[T, MutUntrackedOrigin], n: Int) raises -> Pointer[T, MutUntrackedOrigin]:
     """n elements to the device, kept alive in bufs; the device pointer."""
     var buf = ctx.enqueue_create_buffer[DType.uint8](max(n, 1) * size_of[T]())
@@ -270,6 +278,246 @@ def _edge_gap(d: DispSurface, np: Int) raises:
     print("normal gap across regular edges: max", worst_r, "deg, mean", sum_r / Float64(max(n_r, 1)), "over", n_r, "samples")
 
 
+@fieldwise_init
+struct DCam(TrivialRegisterPassable, DevicePassable):
+    """The interactive frame: camera, key light, exposure, size and accumulation index."""
+    var eye: Vec3f
+    var fwd: Vec3f
+    var right: Vec3f
+    var up: Vec3f
+    var light: Vec3f
+    var tan_h: Float32
+    var exposure: Float32
+    var w: Int32
+    var h: Int32
+    var frame: Int32       # samples already in the accumulation; 0 restarts it
+    var headlight: Int32
+    var color: Int32
+    comptime device_type: AnyType = Self
+
+    def _to_device_type(self, mut encoder: Some[DeviceTypeEncoder], target: MutOpaquePointer[_]):
+        encoder.encode(self, target)
+
+    @staticmethod
+    def get_type_name() -> String:
+        return "DCam"
+
+
+@always_inline
+def _hash01(a: UInt32) -> Float32:
+    var x = a * UInt32(747796405) + UInt32(2891336453)
+    x = ((x >> ((x >> 28) + 4)) ^ x) * UInt32(277803737)
+    x = (x >> 22) ^ x
+    return Float32(Int(x >> 8)) * Float32(1.0 / 16777216.0)
+
+
+def demo_gpu(d: DispSurface, nodes: Pointer[BNode, MutUntrackedOrigin], order: Pointer[Int32, MutUntrackedOrigin],
+             crgb: Pointer[UInt8, MutUntrackedOrigin], coff: Pointer[Int32, MutUntrackedOrigin], accum: Pointer[Float32, MutUntrackedOrigin], cam: DCam):
+    """One jittered sample a pixel, averaged into accum (linear RGB)."""
+    var i = global_idx.x
+    var W = Int(cam.w); var H = Int(cam.h)
+    if i >= W * H:
+        return
+    var x = i % W; var y = i // W
+    var seed = UInt32(i) * UInt32(9781) + UInt32(Int(cam.frame)) * UInt32(6271) + UInt32(1)
+    var jx = _hash01(seed); var jy = _hash01(seed ^ UInt32(0x9E3779B9))
+    var px = (Float32(2) * (Float32(x) + jx) / Float32(W) - Float32(1)) * cam.tan_h
+    var py = (Float32(1) - Float32(2) * (Float32(y) + jy) / Float32(H)) * cam.tan_h * Float32(H) / Float32(W)
+    var dir = cam.fwd + cam.right * px + cam.up * py
+    dir = dir * (Float32(1) / sqrt(dot(dir, dir)))
+    var hh = trace_patches(d, nodes, order, cam.eye, dir)
+    var c = Vec3f(Float32(0.02), Float32(0.022), Float32(0.03))   # background
+    if hh.prim >= 0:
+        var step = max(hh.size, Float32(1.0 / 512.0))
+        var n = displaced_normal(d, hh.prim, hh.s, hh.u, step)
+        if dot(n, dir) > Float32(0):
+            n = -n
+        var l = -dir if cam.headlight != 0 else cam.light
+        var albedo = chain_color(d, crgb, coff, hh.prim, hh.s, hh.u, step) if cam.color != 0 else Vec3f(Float32(0.5), Float32(0.5), Float32(0.5))
+        c = albedo * ((Float32(0.12) + max(dot(n, l), Float32(0))) * cam.exposure)
+    var k = Float32(Int(cam.frame))
+    var a = Vec3f(accum[unsafe_offset=3 * i], accum[unsafe_offset=3 * i + 1], accum[unsafe_offset=3 * i + 2]) if cam.frame > 0 else Vec3f(0, 0, 0)
+    a = a + (c - a) * (Float32(1) / (k + Float32(1)))
+    accum[unsafe_offset=3 * i] = a.x; accum[unsafe_offset=3 * i + 1] = a.y; accum[unsafe_offset=3 * i + 2] = a.z
+
+
+def _demo_bvh(d: DispSurface, np: Int, mut nodes: List[BNode], mut order: List[Int32]):
+    """The patch BVH for the surface's height scale."""
+    var lo = List[Vec3f](); var hi = List[Vec3f]()
+    for p in range(np):
+        var b = patch_box(d, p)
+        lo.append(b[0]); hi.append(b[1])
+    nodes.clear(); order.clear()
+    for p in range(np):
+        order.append(Int32(p))
+    _ = _build(nodes, order, lo, hi, 0, np)
+
+
+def run_demo(patches: Pointer[BezierPatch, MutUntrackedOrigin], sq: Pointer[Float32, MutUntrackedOrigin], face: Pointer[Int32, MutUntrackedOrigin],
+             hdr: Pointer[Int32, MutUntrackedOrigin], pyr: Pointer[UInt8, MutUntrackedOrigin], npyr: Int, chain_off: Pointer[Int32, MutUntrackedOrigin],
+             chain: Pointer[UInt8, MutUntrackedOrigin], nchain: Int, fm: Pointer[Float32, MutUntrackedOrigin], greg: Pointer[UInt8, MutUntrackedOrigin],
+             np: Int, nf: Int, blo: Vec3f, bhi: Vec3f, out_dir: String) raises:
+    """INTERACTIVE=1: fly around the rock in the Vulkan viewer; DEMO_FRAMES=N: N frames along an orbit without a window."""
+    var W = Int(_env_f("W", Float32(960))); var H = Int(_env_f("H", Float32(540)))
+    var frames_env = getenv("DEMO_FRAMES")
+    var headless = frames_env.byte_length() > 0
+    var exag = _env_f("EXAG", Float32(1))
+    var exposure = _env_f("EXPOSURE", Float32(3))
+    var half_move = getenv("HALF") != "0"
+    var ctx = DeviceContext()
+    var bufs = List[DeviceBuffer[DType.uint8]]()
+    # The colour Ptex as bordered RGB chains (same faces as the displacement).
+    var col = getenv("COLOR")
+    if col.byte_length() == 0:
+        col = "/mnt/storage/moana/base/ex/island/textures/isLavaRocks/Color/rockfacebg0001_geo.ptx"
+    var cn = unsafe_alloc[UInt8](col.byte_length() + 1)
+    for i in range(col.byte_length()):
+        cn[unsafe_offset=i] = col.unsafe_ptr()[unsafe_offset=i]
+    cn[unsafe_offset=col.byte_length()] = UInt8(0)
+    var ncb = unsafe_alloc[Int64](1)
+    var ch = external_call["disp_color_chains", Int](cn, ncb)
+    var color_on = ch != 0
+    var coff_h = unsafe_alloc[Int32](max(nf, 1)); var crgb_h = unsafe_alloc[UInt8](max(Int(ncb[0]), 1) if color_on else 1)
+    if color_on:
+        external_call["disp_color_chains_take", NoneType](ch, coff_h, crgb_h)
+        print("colour chains:", Int(ncb[0]), "bytes")
+    else:
+        print("no colour:", col)
+    var crgb = _up(ctx, bufs, crgb_h, Int(ncb[0]) if color_on else 1)
+    var coff = _up(ctx, bufs, coff_h, nf)
+    var dpat = _up(ctx, bufs, patches, np); var dsq = _up(ctx, bufs, sq, 3 * np); var dface = _up(ctx, bufs, face, np)
+    var dhdr = _up(ctx, bufs, hdr, 3 * nf); var dpyr = _up(ctx, bufs, pyr, npyr); var doff = _up(ctx, bufs, chain_off, nf)
+    var dchain = _up(ctx, bufs, chain, nchain); var dfm = _up(ctx, bufs, fm, 12 * np); var dgreg = _up(ctx, bufs, greg, np)
+    var host_d = DispSurface(patches, sq, face, hdr, pyr, exag / Float32(255), Vec3f(0, 0, 0), Float32(0), chain_off, chain, fm, greg)
+    var nodes = List[BNode](); var order = List[Int32]()
+    _demo_bvh(host_d, np, nodes, order)
+    var nb_buf = ctx.enqueue_create_buffer[DType.uint8](max(len(nodes), 1) * size_of[BNode]() * 2)   # room for a deeper tree
+    var or_buf = ctx.enqueue_create_buffer[DType.uint8](max(np, 1) * 4)
+    ctx.enqueue_copy(nb_buf, nodes.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]().unsafe_bitcast[UInt8]())
+    ctx.enqueue_copy(or_buf, order.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]().unsafe_bitcast[UInt8]())
+    var dnodes = nb_buf.unsafe_ptr().unsafe_bitcast[BNode]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
+    var dorder = or_buf.unsafe_ptr().unsafe_bitcast[Int32]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
+    var accum_b = ctx.enqueue_create_buffer[DType.float32](3 * W * H)
+    var daccum = accum_b.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
+    ctx.synchronize()
+
+    # The tool's default 3/4 view, the key light from the upper side.
+    var c = (blo + bhi) * Float32(0.5)
+    var ext = bhi - blo
+    var diag = sqrt(dot(ext, ext))
+    var near = _env_f("CAM_DIST", Float32(1.1))
+    var eye = Vec3f(c.x + Float32(0.45) * diag * near, c.y + Float32(0.55) * diag * near, c.z + Float32(0.7) * diag * near)
+    var fwd = c - eye
+    fwd = fwd * (Float32(1) / sqrt(dot(fwd, fwd)))
+    var tan_h = tan(Float32(40) * Float32(3.14159265) / Float32(360))
+    var light = Vec3f(Float32(0.45), Float32(1), Float32(0.3))
+    light = light * (Float32(1) / sqrt(dot(light, light)))
+    var world_up = Vec3f(0, 1, 0)
+    var viewer = ViewerHandle.unsafe_dangling()
+    var title = String("Moana lava rock: tessellation-free displaced Catmull-Clark (B580)")
+    var cs = unsafe_alloc[CameraState](1)
+    cs[unsafe_offset=0] = CameraState(Point3f(eye.x, eye.y, eye.z), fwd, world_up, Int32(1))
+    if not headless:
+        var tb = unsafe_alloc[UInt8](title.byte_length() + 1)
+        for i in range(title.byte_length()):
+            tb[unsafe_offset=i] = title.unsafe_ptr()[unsafe_offset=i]
+        tb[unsafe_offset=title.byte_length()] = UInt8(0)
+        viewer = viewer_create(Int32(W), Int32(H), tb, Int32(0))
+        if not _is_real(viewer):
+            raise Error("cannot open the viewer window")
+        viewer_set_camera_state(viewer, cs)
+        print("controls: W/A/S/D move, Q/E or Space/C up/down, Shift x10, wheel speed, drag look; +/- displacement x2 / x0.5,",
+              "0 limit surface, L headlight, Esc quit")
+    var n_frames = Int(atof(frames_env)) if headless else 0
+    var frame = 0; var headlight = 0
+    var t_last = perf_counter_ns(); var frames_since = 0; var moving_ms = Float64(0); var moving_n = 0; var still_ms = Float64(0); var still_n = 0
+    var it = 0
+    var host = List[Float32](length=3 * W * H, fill=Float32(0))
+    var cur_w = W; var cur_h = H
+    while True:
+        var moved = False; var rebuild = False
+        if headless:
+            if it >= n_frames + 32:
+                break
+            if it < n_frames:   # an orbit around the rock, then 32 still frames
+                var a = Float32(2) * Float32(3.14159265) * Float32(it) / Float32(max(n_frames, 1))
+                var r = diag * near * Float32(0.83)
+                eye = Vec3f(c.x + r * sin(a + Float32(0.57)), c.y + Float32(0.55) * diag * near, c.z + r * cos(a + Float32(0.57)))
+                fwd = c - eye
+                fwd = fwd * (Float32(1) / sqrt(dot(fwd, fwd)))
+                moved = True
+        else:
+            viewer_poll_events(viewer)
+            if viewer_should_close(viewer) != 0:
+                break
+            var key = Int(viewer_take_key(viewer))
+            if key == 61 or key == 334:   # '=' / '+' and keypad +
+                exag = max(exag * Float32(2), Float32(1)); rebuild = True
+            elif key == 45 or key == 333:
+                exag = exag * Float32(0.5) if exag > Float32(1) else Float32(0); rebuild = True
+            elif key == 48:
+                exag = Float32(0); rebuild = True
+            elif key == 76:
+                headlight = 1 - headlight; frame = 0
+            if rebuild:
+                print("displacement x", exag)
+            viewer_get_camera_state(viewer, cs)
+            if cs[unsafe_offset=0].cameraChanged != 0:
+                moved = True
+            eye = Vec3f(cs[unsafe_offset=0].position.x, cs[unsafe_offset=0].position.y, cs[unsafe_offset=0].position.z)
+            fwd = cs[unsafe_offset=0].direction
+        if rebuild:
+            host_d = DispSurface(patches, sq, face, hdr, pyr, exag / Float32(255), Vec3f(0, 0, 0), Float32(0), chain_off, chain, fm, greg)
+            _demo_bvh(host_d, np, nodes, order)
+            ctx.enqueue_copy(nb_buf, nodes.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]().unsafe_bitcast[UInt8]())
+            ctx.synchronize()
+            moved = True
+        if moved:
+            frame = 0
+        var rw = W; var rh = H
+        if moved and half_move:
+            rw = W // 2; rh = H // 2
+        elif not moved and (cur_w != W):
+            frame = 0   # back to full resolution
+        cur_w = rw; cur_h = rh
+        var right = cross(fwd, world_up)
+        right = right * (Float32(1) / sqrt(dot(right, right)))
+        var up = cross(right, fwd)
+        var dd = DispSurface(dpat, dsq, dface, dhdr, dpyr, exag / Float32(255), eye, Float32(2) * tan_h / Float32(rw), doff, dchain, dfm, dgreg)
+        var cam = DCam(eye, fwd, right, up, light, tan_h, exposure, Int32(rw), Int32(rh), Int32(frame), Int32(headlight), Int32(1 if color_on else 0))
+        var t0 = perf_counter_ns()
+        ctx.enqueue_function[demo_gpu](dd, dnodes, dorder, crgb, coff, daccum, cam, grid_dim=ceildiv(rw * rh, 64), block_dim=64)
+        ctx.synchronize()
+        var ms = Float64(perf_counter_ns() - t0) * 1e-6
+        if moved:
+            moving_ms += ms; moving_n += 1
+        else:
+            still_ms += ms; still_n += 1
+        frame += 1
+        if not headless or it == n_frames + 31:
+            with accum_b.map_to_host() as hb:
+                if headless:
+                    for k in range(3 * rw * rh):
+                        host[k] = hb[k]
+                else:
+                    viewer_update_framebuffer(viewer, hb.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin](), Int32(rw), Int32(rh))
+        frames_since += 1
+        var now = perf_counter_ns()
+        if now - t_last > 2000000000:
+            print("frame", it, ":", Float64(frames_since) / (Float64(now - t_last) * 1e-9), "fps,", rw, "x", rh, ",", frame, "spp; GPU ms/frame moving",
+                  moving_ms / Float64(max(moving_n, 1)), "still", still_ms / Float64(max(still_n, 1)))
+            t_last = now; frames_since = 0
+        it += 1
+    print("GPU ms per frame:", moving_ms / Float64(max(moving_n, 1)), "moving (", moving_n, "frames ),", still_ms / Float64(max(still_n, 1)), "still (", still_n, "frames ); exag", exag)
+    if headless:   # the viewer's display transform: Reinhard, then gamma
+        for k in range(3 * W * H):
+            host[k] = host[k] / (host[k] + Float32(1))
+        _write_ppm_rgb(out_dir + "demo_last.ppm", host, W, H)
+    else:
+        viewer_destroy(viewer)
+    _ = len(bufs); _ = len(nodes); _ = len(order)
+
+
 def main() raises:
     var out_dir = String("/tmp/claude-1000/-home-gonsolo-work-moana-3060-paper/5a168d33-8d85-45d2-a94f-7e6bdd0ebff6/scratchpad/rock/")
     var W = 960; var H = 720
@@ -349,6 +597,10 @@ def main() raises:
     for p in range(np):
         ngreg += 1 if greg[unsafe_offset=p] == 1 else 0
     print("Gregory patches:", ngreg, "of", np, "(", np * (size_of[BezierPatch]() + 16) + ngreg * 48, "patch bytes incl. Fm )")
+
+    if getenv("INTERACTIVE") == "1" or getenv("DEMO_FRAMES").byte_length() > 0:
+        run_demo(patches, sq, face, hdr, pyr, npyr, chain_off, chain, nchain, fm, greg, np, nf, blo, bhi, out_dir)
+        return
 
     var lo_b = List[Vec3f](); var hi_b = List[Vec3f]()
     for scene in range(5):   # 0: limit surface, 1: scale 1, 2: exaggerated, 3: tessellated reference of 2, 4: the cage
