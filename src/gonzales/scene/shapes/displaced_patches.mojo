@@ -1,10 +1,10 @@
 # Displaced Catmull-Clark surfaces traced without tessellation: Binder and Keller's stackless patch subdivision, with each
-# sub-patch's box widened by its height interval (per-face Ptex min/max pyramids, src/oiio/disp.cc) times the range of its
+# sub-patch's box widened by its height interval (per-face planes + residuals, Xu et al. 2026; src/oiio/disp.cc) times the range of its
 # unit normal (interval arithmetic over the derivative nets, after Munkberg et al. 2010). Gregory patches are exact: their
 # rational interior points become boxes over the sub-domain's blend range (Binder and Keller 3.2). Leaves are boxes no
 # larger than the camera's footprint at them, so every ray sees the same surface and neighbouring depths cannot open cracks.
 from std.bit import count_leading_zeros
-from std.math import max, min, sqrt, abs, floor, log2
+from std.math import max, min, sqrt, abs, floor, ceil, log2
 from gonzales.core.geometry import Vec3f, cross, dot
 from gonzales.scene.shapes.patches import BezierPatch, patch_eval, _crop, _blossom, _domain, PATCH_MAX_DEPTH
 
@@ -15,12 +15,12 @@ comptime _F32 = Pointer[Float32, MutUntrackedOrigin]
 
 @fieldwise_init
 struct DispSurface(TrivialRegisterPassable):
-    """Patches with their Ptex face and square (u0, v0, size), the faces' pyramids, the height scale and the camera."""
+    """Patches with their Ptex face and square (u0, v0, size), the faces' height nodes, the height scale and the camera."""
     var patches: Pointer[BezierPatch, MutUntrackedOrigin]
     var sq: _F32
     var face: _I32
-    var hdr: _I32        # per face: pyramid offset, log2 width, log2 height
-    var pyr: _U8
+    var hdr: _I32        # per face: node offset, log2 width, log2 height
+    var pyr: _U8         # per face from 4 x 4-texel cells up: (centre, half u slope / 2, half v slope / 2, residual) bytes
     var scale: Float32   # world units per height byte
     var cam: Vec3f
     var pixel: Float32   # footprint per unit distance (pixel angle)
@@ -32,12 +32,13 @@ struct DispSurface(TrivialRegisterPassable):
 
 @always_inline
 def _texel(d: DispSurface, off: Int, w: Int, x: Int, y: Int) -> Float32:
-    return Float32(Int(d.pyr[unsafe_offset=off + y * w + x]))
+    """Height byte (x, y) of a face's finest level, read from its bordered chain."""
+    return Float32(Int(d.chain[unsafe_offset=off + (y + 1) * (w + 2) + x + 1]))
 
 
 def face_height(d: DispSurface, f: Int, u: Float32, v: Float32) -> Float32:
     """The bilinear height (in bytes) at (u, v) of face f's finest level."""
-    var off = Int(d.hdr[unsafe_offset=3 * f]); var w = 1 << Int(d.hdr[unsafe_offset=3 * f + 1]); var h = 1 << Int(d.hdr[unsafe_offset=3 * f + 2])
+    var off = Int(d.chain_off[unsafe_offset=f]); var w = 1 << Int(d.hdr[unsafe_offset=3 * f + 1]); var h = 1 << Int(d.hdr[unsafe_offset=3 * f + 2])
     var x = min(max(u * Float32(w) - Float32(0.5), Float32(0)), Float32(w - 1))
     var y = min(max(v * Float32(h) - Float32(0.5), Float32(0)), Float32(h - 1))
     var x0 = min(Int(x), w - 1); var y0 = min(Int(y), h - 1)
@@ -48,15 +49,30 @@ def face_height(d: DispSurface, f: Int, u: Float32, v: Float32) -> Float32:
     return a * (Float32(1) - fy) + b * fy
 
 
+@always_inline
+def _plane_range(d: DispSurface, node: Int, X0: Float32, X1: Float32, Y0: Float32, Y1: Float32,
+                 xc: Float32, yc: Float32, hw: Float32, hh: Float32) -> Tuple[Float32, Float32]:
+    """A node's plane +- residual over the texel-position rectangle [X0, X1] x [Y0, Y1] (inside its cell)."""
+    var a = Float32(Int(d.pyr[unsafe_offset=node]))
+    var bx = Float32(2) * d.pyr[unsafe_offset=node + 1].cast[DType.int8]().cast[DType.float32]()
+    var by = Float32(2) * d.pyr[unsafe_offset=node + 2].cast[DType.int8]().cast[DType.float32]()
+    var r = Float32(Int(d.pyr[unsafe_offset=node + 3]))
+    var ex0 = bx * (X0 - xc) / hw; var ex1 = bx * (X1 - xc) / hw
+    var ey0 = by * (Y0 - yc) / hh; var ey1 = by * (Y1 - yc) / hh
+    return (a + min(ex0, ex1) + min(ey0, ey1) - r, a + max(ex0, ex1) + max(ey0, ey1) + r)
+
+
 def height_range(d: DispSurface, f: Int, u0: Float32, u1: Float32, v0: Float32, v1: Float32) -> Tuple[Float32, Float32]:
-    """Bounds (in bytes) of the bilinear heights over [u0, u1] x [v0, v1] of face f: exact below two texels, else the pyramid."""
-    var off = Int(d.hdr[unsafe_offset=3 * f]); var ul = Int(d.hdr[unsafe_offset=3 * f + 1]); var vl = Int(d.hdr[unsafe_offset=3 * f + 2])
+    """Bounds (in bytes) of the bilinear heights over [u0, u1] x [v0, v1] of face f: exact up to 4 texels, else the planes and
+    residuals of the covering nodes (src/oiio/disp.cc)."""
+    var ul = Int(d.hdr[unsafe_offset=3 * f + 1]); var vl = Int(d.hdr[unsafe_offset=3 * f + 2])
     var w = 1 << ul; var h = 1 << vl
     var x0 = min(max(Int(floor(u0 * Float32(w) - Float32(0.5))), 0), w - 1)
     var x1 = min(max(Int(floor(u1 * Float32(w) - Float32(0.5))) + 1, 0), w - 1)
     var y0 = min(max(Int(floor(v0 * Float32(h) - Float32(0.5))), 0), h - 1)
     var y1 = min(max(Int(floor(v1 * Float32(h) - Float32(0.5))) + 1, 0), h - 1)
-    if x1 - x0 <= 2 and y1 - y0 <= 2:   # a bilinear patch's extremes lie on its corners and the texel centres inside
+    if x1 - x0 <= 4 and y1 - y0 <= 4:   # a bilinear patch's extremes lie on its corners and the texel centres inside
+        var off = Int(d.chain_off[unsafe_offset=f])
         var lo = Float32(1e30); var hi = Float32(-1e30)
         for c in range(4):
             var hv = face_height(d, f, u0 if c % 2 == 0 else u1, v0 if c < 2 else v1)
@@ -72,21 +88,27 @@ def height_range(d: DispSurface, f: Int, u0: Float32, u1: Float32, v0: Float32, 
                 var t = _texel(d, off, w, x, y)
                 lo = min(lo, t); hi = max(hi, t)
         return (lo, hi)
-    var lvl = 0
-    while (x1 >> lvl) - (x0 >> lvl) > 1 or (y1 >> lvl) - (y0 >> lvl) > 1:
-        lvl += 1
-    if lvl == 0:
-        lvl = 1
-    var o = off + w * h   # level 1's min cells follow the heights
-    var cw = max(w // 2, 1); var ch = max(h // 2, 1)
-    for _ in range(1, lvl):
-        o += 2 * cw * ch
-        cw = max(cw // 2, 1); ch = max(ch // 2, 1)
+    var X0 = u0 * Float32(w); var X1 = u1 * Float32(w); var Y0 = v0 * Float32(h); var Y1 = v1 * Float32(h)
+    var node = Int(d.hdr[unsafe_offset=3 * f])
+    var k = 2
+    var cw = 1; var ch = 1; var tw = Float32(1); var th = Float32(1)
+    var cx0 = 0; var cx1 = 0; var cy0 = 0; var cy1 = 0
+    while True:
+        cw = max(w >> k, 1); ch = max(h >> k, 1)
+        tw = Float32(w // cw); th = Float32(h // ch)
+        cx0 = min(Int(X0 / tw), cw - 1); cx1 = max(min(Int(ceil(X1 / tw)) - 1, cw - 1), cx0)
+        cy0 = min(Int(Y0 / th), ch - 1); cy1 = max(min(Int(ceil(Y1 / th)) - 1, ch - 1), cy0)
+        if (cx1 - cx0 <= 1 and cy1 - cy0 <= 1) or (cw == 1 and ch == 1):
+            break
+        node += 4 * cw * ch
+        k += 1
     var lo = Float32(1e30); var hi = Float32(-1e30)
-    for y in range(min(y0 >> lvl, ch - 1), min(y1 >> lvl, ch - 1) + 1):
-        for x in range(min(x0 >> lvl, cw - 1), min(x1 >> lvl, cw - 1) + 1):
-            lo = min(lo, Float32(Int(d.pyr[unsafe_offset=o + y * cw + x])))
-            hi = max(hi, Float32(Int(d.pyr[unsafe_offset=o + cw * ch + y * cw + x])))
+    for cy in range(cy0, cy1 + 1):
+        for cx in range(cx0, cx1 + 1):
+            var bx0 = Float32(cx) * tw; var by0 = Float32(cy) * th
+            var r = _plane_range(d, node + 4 * (cy * cw + cx), max(X0, bx0), min(X1, bx0 + tw), max(Y0, by0), min(Y1, by0 + th),
+                                 bx0 + Float32(0.5) * tw, by0 + Float32(0.5) * th, Float32(0.5) * tw, Float32(0.5) * th)
+            lo = min(lo, r[0]); hi = max(hi, r[1])
     return (lo, hi)
 
 

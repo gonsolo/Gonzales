@@ -1,5 +1,5 @@
 // Displaced Catmull-Clark surfaces from a Ptex displacement file: its meta data holds the cage (Ptex's mesh convention),
-// osd.cc turns the cage into Bezier patches, and each face's heights get min/max pyramids aligned with its quadtree.
+// osd.cc turns the cage into Bezier patches, and each face's heights get a quadtree of planes with residuals.
 #include <Ptexture.h>
 #include <algorithm>
 #include <cmath>
@@ -19,8 +19,8 @@ namespace {
 struct Disp {
         std::vector<float> cp, fm, sq, cage;   // cp: Gregory patches with Fp inside, fm: their Fm points (12 floats a patch)
         std::vector<unsigned char> greg;
-        std::vector<int> face, hdr;            // hdr: per face its pyramid offset, log2 width, log2 height
-        std::vector<unsigned char> pyr;        // per face: heights, then per coarser level the min and max cells
+        std::vector<int> face, hdr;            // hdr: per face its node offset, log2 width, log2 height
+        std::vector<unsigned char> pyr;        // per face, levels 2 up: cells of (centre, half u slope / 2, half v slope / 2, residual)
         std::vector<int> chain_off;            // per face: its bordered height chain in `chain`
         std::vector<unsigned char> chain;      // per face, full res to 1x1: (w + 2) x (h + 2) heights, borders from the neighbours
         float box[6] = {1e30f, 1e30f, 1e30f, -1e30f, -1e30f, -1e30f};
@@ -62,42 +62,60 @@ void *disp_open(const char *ptx, int isolation, long long *counts) {
         d->face.resize(np);
         osd_take_exact(h, d->cp.data(), d->fm.data(), d->greg.data(), d->sq.data(), d->face.data());
 
-        for (int f = 0; f < nfc; ++f) {
+        for (int f = 0; f < nfc; ++f) {   // per face: plane + residual nodes from 4 x 4-texel cells up (Xu, Zhou, Budge 2026)
                 const Ptex::Res r = tex->getFaceInfo(f).res;
                 const int ul = r.ulog2, vl = r.vlog2, w = 1 << ul, hh = 1 << vl;
                 d->hdr.insert(d->hdr.end(), {static_cast<int>(d->pyr.size()), ul, vl});
-                std::vector<unsigned char> lvl(static_cast<size_t>(w) * hh);
+                std::vector<float> lvl(static_cast<size_t>(w) * hh);
                 float px[4];
                 for (int y = 0; y < hh; ++y)
                         for (int x = 0; x < w; ++x) {
                                 tex->getPixel(f, x, y, px, 0, 1);
-                                lvl[static_cast<size_t>(y) * w + x] =
-                                    static_cast<unsigned char>(std::min(std::max(px[0], 0.0f), 1.0f) * 255.0f + 0.5f);
+                                lvl[static_cast<size_t>(y) * w + x] = std::round(std::min(std::max(px[0], 0.0f), 1.0f) * 255.0f);
                         }
-                d->pyr.insert(d->pyr.end(), lvl.begin(), lvl.end());
-                std::vector<unsigned char> lo = lvl, hi = lvl;
-                int cw = w, ch = hh;
-                while (cw > 1 || ch > 1) {   // cell (x, y) of the next level covers cells 2x..2x+1, 2y..2y+1
-                        const int nw = std::max(cw / 2, 1), nh = std::max(ch / 2, 1);
-                        std::vector<unsigned char> nlo(static_cast<size_t>(nw) * nh), nhi(nlo.size());
-                        for (int y = 0; y < nh; ++y)
-                                for (int x = 0; x < nw; ++x) {
-                                        unsigned char a = 255, b = 0;
-                                        for (int dy = 0; dy < 2; ++dy)
-                                                for (int dx = 0; dx < 2; ++dx) {
-                                                        const int sx = std::min(2 * x + dx, cw - 1), sy = std::min(2 * y + dy, ch - 1);
-                                                        a = std::min(a, lo[static_cast<size_t>(sy) * cw + sx]);
-                                                        b = std::max(b, hi[static_cast<size_t>(sy) * cw + sx]);
+                auto height = [&](float X, float Y) {   // the bilinear height at texel position (X, Y), clamped like face_height
+                        const float x = std::min(std::max(X - 0.5f, 0.0f), float(w - 1)), y = std::min(std::max(Y - 0.5f, 0.0f), float(hh - 1));
+                        const int x0 = std::min(int(x), w - 1), y0 = std::min(int(y), hh - 1), x1 = std::min(x0 + 1, w - 1), y1 = std::min(y0 + 1, hh - 1);
+                        const float fx = x - x0, fy = y - y0;
+                        const float a = lvl[y0 * w + x0] * (1 - fx) + lvl[y0 * w + x1] * fx, b = lvl[y1 * w + x0] * (1 - fx) + lvl[y1 * w + x1] * fx;
+                        return a * (1 - fy) + b * fy;
+                };
+                for (int k = 2; (w >> (k - 1)) > 1 || (hh >> (k - 1)) > 1; ++k) {
+                        const int cw = std::max(w >> k, 1), ch = std::max(hh >> k, 1), tw = w / cw, th = hh / ch;
+                        for (int cy = 0; cy < ch; ++cy)
+                                for (int cx = 0; cx < cw; ++cx) {
+                                        const float X0 = cx * tw, X1 = X0 + tw, Y0 = cy * th, Y1 = Y0 + th, xc = X0 + 0.5f * tw, yc = Y0 + 0.5f * th;
+                                        double sh = 0, sx = 0, sy = 0, sxx = 0, syy = 0;   // least squares over the cell's texel centres
+                                        for (int y = int(Y0); y < int(Y1); ++y)
+                                                for (int x = int(X0); x < int(X1); ++x) {
+                                                        const double h = lvl[y * w + x], ex = (x + 0.5 - xc) / (0.5 * tw), ey = (y + 0.5 - yc) / (0.5 * th);
+                                                        sh += h; sx += h * ex; sy += h * ey; sxx += ex * ex; syy += ey * ey;
                                                 }
-                                        nlo[static_cast<size_t>(y) * nw + x] = a;
-                                        nhi[static_cast<size_t>(y) * nw + x] = b;
+                                        const double nn = double(tw) * th;
+                                        const int qa = std::min(std::max(int(std::lround(sh / nn)), 0), 255);
+                                        const int qx = sxx > 0 ? std::min(std::max(int(std::lround(sx / sxx / 2)), -127), 127) : 0;
+                                        const int qy = syy > 0 ? std::min(std::max(int(std::lround(sy / syy / 2)), -127), 127) : 0;
+                                        // Residual: the piecewise bilinear surface minus the plane peaks on the region's grid of
+                                        // texel-centre lines and its own edges, so these points bound it exactly.
+                                        std::vector<float> xs = {X0}, ys = {Y0};
+                                        for (int x = int(X0); x < int(X1); ++x) xs.push_back(x + 0.5f);
+                                        for (int y = int(Y0); y < int(Y1); ++y) ys.push_back(y + 0.5f);
+                                        xs.push_back(X1); ys.push_back(Y1);
+                                        double dev = 0, lo = 1e30, hi = -1e30;
+                                        for (float Y : ys)
+                                                for (float X : xs) {
+                                                        const double hgt = height(X, Y);
+                                                        const double pl = qa + 2.0 * qx * (X - xc) / (0.5 * tw) + 2.0 * qy * (Y - yc) / (0.5 * th);
+                                                        dev = std::max(dev, std::abs(hgt - pl));
+                                                        lo = std::min(lo, hgt); hi = std::max(hi, hgt);
+                                                }
+                                        int na = qa, nx = qx, ny = qy, nr = int(std::ceil(dev + 1e-3));
+                                        if (nr > 255) {   // a flat node over the cell's range instead
+                                                na = int(std::floor((lo + hi) / 2)); nx = ny = 0; nr = int(std::ceil(std::max(hi - na, na - lo) + 1e-3));
+                                        }
+                                        d->pyr.insert(d->pyr.end(), {static_cast<unsigned char>(na), static_cast<unsigned char>(static_cast<signed char>(nx)),
+                                                                     static_cast<unsigned char>(static_cast<signed char>(ny)), static_cast<unsigned char>(nr)});
                                 }
-                        d->pyr.insert(d->pyr.end(), nlo.begin(), nlo.end());
-                        d->pyr.insert(d->pyr.end(), nhi.begin(), nhi.end());
-                        lo.swap(nlo);
-                        hi.swap(nhi);
-                        cw = nw;
-                        ch = nh;
                 }
         }
         void *pt = ptex_open(ptx);   // oiio.cc: Ptex chains with the neighbours' texels in the borders (rotation-aware)
