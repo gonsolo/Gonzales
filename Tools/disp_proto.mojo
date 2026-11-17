@@ -246,9 +246,9 @@ def trace_tris(pts: Pointer[Vec3f, MutUntrackedOrigin], tri: Pointer[Int32, MutU
 
 
 def _grid_levels() -> Int32:
-    """GRID=4/8/16: sub-squares a patch side as BVH primitives (default 8)."""
+    """GRID=4/8/16: sub-squares a patch side as BVH primitives (default 16)."""
     var g = getenv("GRID")
-    return Int32(4) if g == "4" else (Int32(8) if g == "16" else Int32(6))
+    return Int32(4) if g == "4" else (Int32(6) if g == "8" else Int32(8))
 
 
 def _leaf_mode() -> Int32:
