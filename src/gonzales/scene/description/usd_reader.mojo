@@ -8,7 +8,7 @@ from std.math import sqrt
 from std.python import Python, PythonObject
 from gonzales.core.env import env_str
 from gonzales.core.geometry import RGB
-from gonzales.core.transform import matrix_invert, transform_normals
+from gonzales.core.transform import matrix_invert, transform_normals, transform_points
 from gonzales.scene.appearance.materials import MatKind
 from gonzales.scene.description.parse_types import SceneParseState, NamedMaterial
 from gonzales.scene.description.scene_builder import store_mesh
@@ -119,6 +119,7 @@ def _usd_fill(s: Pointer[SceneParseState, MutUntrackedOrigin], d: PythonObject) 
     var indices = Pointer[Int32, MutUntrackedOrigin](unsafe_from_address=Int(py=d["indices"].ctypes.data))
     var uvs = _f32(d["uvs"])
     var nrms = _f32(d["normals"])
+    var pcp = _f32(d["patch_cp"])
     var xf_inv = unsafe_alloc[Float32](16)
     var xf = _f32(d["mesh_xf"])
     var rows_obj = d["meshes"]
@@ -136,7 +137,7 @@ def _usd_fill(s: Pointer[SceneParseState, MutUntrackedOrigin], d: PythonObject) 
             for k in range(16):
                 s[unsafe_offset=0].pending_object_ctm[k] = Float32(1) if k % 5 == 0 else Float32(0)
         for i in range(n_meshes):
-            var r = rows.unsafe_offset(7 * i)
+            var r = rows.unsafe_offset(8 * i)
             if Int(r[unsafe_offset=5]) != t:
                 continue
             _set_ctm(s, xf.unsafe_offset(16 * i))
@@ -145,16 +146,30 @@ def _usd_fill(s: Pointer[SceneParseState, MutUntrackedOrigin], d: PythonObject) 
                        Int32(r[unsafe_offset=1]), Int32(r[unsafe_offset=3]))
             ref mesh = s[unsafe_offset=0].meshes[len(s[unsafe_offset=0].meshes) - 1]
             var nv = Int(r[unsafe_offset=1])
-            _ = matrix_invert(xf.unsafe_offset(16 * i), xf_inv)     # normals as the pbrt path: by the CTM's inverse
-            var n_out = unsafe_alloc[Float32](3 * nv)
-            transform_normals(xf_inv, nrms.unsafe_offset(3 * Int(r[unsafe_offset=0])), Int32(nv), n_out)
-            mesh.normals.reserve(3 * nv)
-            for k in range(nv):
-                var nx = n_out[unsafe_offset=3 * k]; var ny = n_out[unsafe_offset=3 * k + 1]; var nz = n_out[unsafe_offset=3 * k + 2]
-                var ln = sqrt(nx * nx + ny * ny + nz * nz)
-                var sc = Float32(1) / ln if ln > Float32(1e-12) else Float32(0)
-                mesh.normals.append(nx * sc); mesh.normals.append(ny * sc); mesh.normals.append(nz * sc)
-            n_out.unsafe_free()
+            if r[unsafe_offset=7] >= 0:     # Bezier patches: control points by the CTM, as the points; normals from the patches
+                var npch = Int(r[unsafe_offset=3])
+                var src = pcp.unsafe_offset(48 * Int(r[unsafe_offset=7]))
+                var raw4 = unsafe_alloc[Float32](64 * npch); var out4 = unsafe_alloc[Float32](64 * npch)
+                for k in range(16 * npch):
+                    raw4[unsafe_offset=4 * k] = src[unsafe_offset=3 * k]; raw4[unsafe_offset=4 * k + 1] = src[unsafe_offset=3 * k + 1]
+                    raw4[unsafe_offset=4 * k + 2] = src[unsafe_offset=3 * k + 2]; raw4[unsafe_offset=4 * k + 3] = Float32(1)
+                transform_points(s[unsafe_offset=0].ctm.unsafe_ptr(), raw4, Int32(16 * npch), out4)
+                mesh.patch_cp.reserve(48 * npch)
+                for k in range(16 * npch):
+                    mesh.patch_cp.append(out4[unsafe_offset=4 * k]); mesh.patch_cp.append(out4[unsafe_offset=4 * k + 1])
+                    mesh.patch_cp.append(out4[unsafe_offset=4 * k + 2])
+                raw4.unsafe_free(); out4.unsafe_free()
+            else:
+                _ = matrix_invert(xf.unsafe_offset(16 * i), xf_inv)     # normals as the pbrt path: by the CTM's inverse
+                var n_out = unsafe_alloc[Float32](3 * nv)
+                transform_normals(xf_inv, nrms.unsafe_offset(3 * Int(r[unsafe_offset=0])), Int32(nv), n_out)
+                mesh.normals.reserve(3 * nv)
+                for k in range(nv):
+                    var nx = n_out[unsafe_offset=3 * k]; var ny = n_out[unsafe_offset=3 * k + 1]; var nz = n_out[unsafe_offset=3 * k + 2]
+                    var ln = sqrt(nx * nx + ny * ny + nz * nz)
+                    var sc = Float32(1) / ln if ln > Float32(1e-12) else Float32(0)
+                    mesh.normals.append(nx * sc); mesh.normals.append(ny * sc); mesh.normals.append(nz * sc)
+                n_out.unsafe_free()
             mesh.alpha_mask = alpha_mask[Int(r[unsafe_offset=4])]     # UsdPreviewSurface opacity: pbrt's stochastic alpha
             mesh.alpha_const = par[unsafe_offset=4 * Int(r[unsafe_offset=4])]
             if r[unsafe_offset=6] != 0:

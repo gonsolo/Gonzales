@@ -12,6 +12,34 @@ _LIGHT_FILTER = [t for t in os.environ.get("USD_EXTRACT_LIGHTS", "").split(",") 
 TEX_CACHE = os.environ.get("GONZALES_USD_TEX_CACHE", "/tmp/gonzales_usd_tex")
 TEX_RES = int(os.environ.get("GONZALES_USD_TEX_RES", "64"))   # texels per UDIM tile side of the resident level
 CURVE_COLOURS = 16      # materials per curve prim, from its quantized displayColor
+SUBDIV = os.environ.get("GONZALES_USD_SUBDIV", "1") != "0"     # Catmull-Clark meshes as Bezier patches (src/oiio/osd.cc)
+SUBDIV_ISO = int(os.environ.get("GONZALES_USD_SUBDIV_ISO", "2"))
+_OSD = []
+
+
+def _osd():
+    """OpenSubdiv's patches through gonzales' bridge library, or None."""
+    if not _OSD:
+        import ctypes
+        path = os.environ.get("GONZALES_OSD_LIB",
+                              os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", "build", "liboiiobridge.so"))
+        try:
+            lib = ctypes.CDLL(path)
+            lib.osd_build.restype = ctypes.c_void_p
+            lib.osd_build.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p,
+                                      ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p,
+                                      ctypes.c_int, ctypes.POINTER(ctypes.c_int)]
+            lib.osd_take.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p]
+            _OSD.append(lib)
+        except OSError:
+            _OSD.append(None)
+    return _OSD[0]
+
+
+def _bilinear(q, s, t):
+    """q: (n, 4, 2) corners in Ptex order (0,0) (1,0) (1,1) (0,1); s, t: (n,)."""
+    s = s[:, None]; t = t[:, None]
+    return (1 - s) * (1 - t) * q[:, 0] + s * (1 - t) * q[:, 1] + s * t * q[:, 2] + (1 - s) * t * q[:, 3]
 
 
 def _udim_tiles(pattern):
@@ -194,6 +222,7 @@ class _Scene:
         self.templates = {}         # prototype path -> template id
         self.inst_tmpl, self.inst_xf = [], []
         self.curve_cp, self.curve_w, self.curve_mat = [], [], []
+        self.patch_cps, self.n_patches = [], 0
         self.curve_mats = {}        # (material, quantized colour) -> material
         self.curve_pending = []     # per curve prim: base material, root points, displayColor per curve, segment curves
         self.skins = {}             # colour texture file name -> [(points, UDIM uvs, xf)] of the world meshes using it
@@ -245,6 +274,8 @@ class _Scene:
         fvi = np.asarray(m.GetFaceVertexIndicesAttr().Get(self.time), dtype=np.int64)
         nrm = _vertex_normals(m, pts, counts, fvi, self.time)
         mat = self.material(prim)
+        if SUBDIV and m.GetSubdivisionSchemeAttr().Get() == UsdGeom.Tokens.catmullClark and self.patch_mesh(m, pts, counts, fvi, mat, xf, template):
+            return
         uv = None
         pv = UsdGeom.PrimvarsAPI(prim).GetPrimvar("st")
         if pv and pv.HasValue():
@@ -268,7 +299,7 @@ class _Scene:
             uv = uv / np.array((cols, rows), np.float32)        # into the material's atlas of UDIM tiles
         else:
             uv = np.zeros((len(pts), 2), np.float32)
-        self.mesh_rows.append((self.n_points, len(pts), self.n_indices, len(tris) // 3, mat, template, int(has_uv)))
+        self.mesh_rows.append((self.n_points, len(pts), self.n_indices, len(tris) // 3, mat, template, int(has_uv), -1))
         self.points.append(pts.reshape(-1))
         self.uvs.append(uv.reshape(-1))
         self.normals.append(nrm.reshape(-1))
@@ -276,6 +307,94 @@ class _Scene:
         self.xforms.append(_flat(xf))
         self.n_points += len(pts)
         self.n_indices += len(tris)
+
+    def patch_mesh(self, m, pts, counts, fvi, mat, xf, template):
+        """A Catmull-Clark mesh as Bezier patches, each with a stand-in triangle on corners (0,0) (1,0) (0,1) whose
+        barycentrics are the patch's (u, v). Its uvs come bilinearly from the base face (a non-quad's sub-face)."""
+        import ctypes
+        lib = _osd()
+        if lib is None or len(pts) == 0:
+            return False
+        counts = np.asarray(counts, np.int32)
+        if len(counts) == 0 or counts.min() < 3:
+            return False
+        idx = np.ascontiguousarray(fvi, np.int32)
+        ci, cl, cs = (np.asarray(a.Get(self.time) or [], d) for a, d in ((m.GetCreaseIndicesAttr(), np.int32),
+                      (m.GetCreaseLengthsAttr(), np.int32), (m.GetCreaseSharpnessesAttr(), np.float32)))
+        pairs, sharp, k = [], [], 0
+        for j, n in enumerate(cl):
+            chain = ci[k:k + n]
+            for e in range(n - 1):
+                pairs += [chain[e], chain[e + 1]]
+                sharp.append(cs[j] if len(cs) == len(cl) else (cs[len(sharp)] if len(sharp) < len(cs) else 0))
+            k += n
+        pairs = np.ascontiguousarray(pairs, np.int32); sharp = np.ascontiguousarray(sharp, np.float32)
+        co = np.ascontiguousarray(m.GetCornerIndicesAttr().Get(self.time) or [], np.int32)
+        cw = np.ascontiguousarray(m.GetCornerSharpnessesAttr().Get(self.time) or [], np.float32)
+        if len(cw) != len(co):
+            co = co[:0]; cw = cw[:0]
+        p32 = np.ascontiguousarray(pts, np.float32)
+        n = ctypes.c_int(0)
+        h = lib.osd_build(len(p32), p32.ctypes.data, len(counts), counts.ctypes.data, idx.ctypes.data,
+                          len(sharp), pairs.ctypes.data, sharp.ctypes.data, len(co), co.ctypes.data, cw.ctypes.data,
+                          SUBDIV_ISO, ctypes.byref(n))
+        if not h or n.value == 0:
+            return False
+        np_ = n.value
+        cp = np.empty(np_ * 48, np.float32); puv = np.empty(np_ * 3, np.float32); face = np.empty(np_, np.int32)
+        lib.osd_take(h, cp.ctypes.data, puv.ctypes.data, face.ctypes.data)
+        c = cp.reshape(np_, 16, 3)
+        tri_pts = np.stack([c[:, 0], c[:, 3], c[:, 12]], 1).reshape(-1, 3)
+        # Corner uvs of each face (faceVarying or vertex st), then the patches' three stand-in corners.
+        cuv = None
+        pv = UsdGeom.PrimvarsAPI(m.GetPrim()).GetPrimvar("st")
+        if pv and pv.HasValue():
+            vals = np.asarray(pv.Get(self.time), dtype=np.float32).reshape(-1, 2)
+            vi = np.asarray(pv.GetIndices(self.time), dtype=np.int64) if pv.IsIndexed() else None
+            if pv.GetInterpolation() == UsdGeom.Tokens.faceVarying:
+                cuv = vals[vi] if vi is not None else vals
+            elif pv.GetInterpolation() == UsdGeom.Tokens.vertex:
+                cuv = (vals[vi] if vi is not None else vals)[fvi]
+            if cuv is not None and len(cuv) != len(fvi):
+                cuv = None
+        has_uv = cuv is not None
+        if has_uv:
+            starts = np.concatenate(([0], np.cumsum(counts)[:-1]))
+            nptex = np.where(counts == 4, 1, counts)
+            pface = np.repeat(np.arange(len(counts)), nptex)
+            psub = np.arange(nptex.sum()) - np.repeat(np.cumsum(nptex) - nptex, nptex)
+            f = pface[face]; j = psub[face]; nv = counts[f]; st = starts[f]
+            quad = nv == 4
+            q = np.empty((np_, 4, 2), np.float32)
+            for k4 in range(4):   # quads: the face's own corners
+                q[quad, k4] = cuv[st[quad] + k4]
+            if (~quad).any():     # a non-quad's sub-face j: corner j, the next edge's middle, the centre, the previous edge's middle
+                nq = ~quad
+                cj = cuv[st[nq] + j[nq]]
+                cn = cuv[st[nq] + (j[nq] + 1) % nv[nq]]
+                cpv = cuv[st[nq] + (j[nq] - 1) % nv[nq]]
+                centre = np.array([cuv[a:a + b].mean(0) for a, b in zip(st[nq], nv[nq])], np.float32)
+                q[nq, 0] = cj; q[nq, 1] = 0.5 * (cj + cn); q[nq, 2] = centre; q[nq, 3] = 0.5 * (cj + cpv)
+            u0, v0, sz = puv[0::3], puv[1::3], puv[2::3]
+            uv = np.stack([_bilinear(q, u0, v0), _bilinear(q, u0 + sz, v0), _bilinear(q, u0, v0 + sz)], 1).reshape(-1, 2)
+            if template == -1 and self.mat_tex[mat]["color"]:
+                self.skins.setdefault(os.path.basename(self.mat_tex[mat]["color"]), []).append((tri_pts.astype(np.float32), uv.copy(), xf))
+            cols, rows = self.mat_tex[mat]["grid"]
+            uv = (uv / np.array((cols, rows), np.float32)).astype(np.float32)
+        else:
+            uv = np.zeros((len(tri_pts), 2), np.float32)
+        tris = np.arange(len(tri_pts), dtype=np.int32)
+        self.mesh_rows.append((self.n_points, len(tri_pts), self.n_indices, np_, mat, template, int(has_uv), self.n_patches))
+        self.points.append(tri_pts.astype(np.float32).reshape(-1))
+        self.uvs.append(uv.reshape(-1))
+        self.normals.append(np.zeros(len(tri_pts) * 3, np.float32))    # shading takes the patch normal
+        self.indices.append(tris)
+        self.xforms.append(_flat(xf))
+        self.patch_cps.append(cp)
+        self.n_points += len(tri_pts)
+        self.n_indices += len(tris)
+        self.n_patches += np_
+        return True
 
     def visible(self, prim):
         img = UsdGeom.Imageable(prim)
@@ -507,7 +626,8 @@ def extract(path, camera_path="", aspect=16.0 / 9.0, frame=""):
         "points": cat(sc.points, np.float32),
         "indices": cat(sc.indices, np.int32),
         "mesh_xf": cat(sc.xforms, np.float32),
-        "meshes": np.ascontiguousarray(np.array(sc.mesh_rows, dtype=np.int64).reshape(-1, 7)),
+        "meshes": np.ascontiguousarray(np.array(sc.mesh_rows, dtype=np.int64).reshape(-1, 8)),
+        "patch_cp": cat(sc.patch_cps, np.float32),
         "uvs": cat(sc.uvs, np.float32),
         "normals": cat(sc.normals, np.float32),
         "mat_color": [_texture(t["color"], *t["grid"], "color") if t["color"] else "" for t in sc.mat_tex],
