@@ -5,7 +5,7 @@ format, the scene is read from it; otherwise the scene is parsed and the file is
 the parser or the scene's data changes: only the scene file's path and size, and the merge/prune settings, are checked.
 
 The snapshot is the ParsedScene_Mojo struct as it stands in memory, followed by every array its pointers name.
-Scenes with media, distant or point lights, normal maps, alpha cut-outs or measured materials are not cached.
+Scenes with media, alpha cut-outs or measured materials are not cached.
 """
 from std.ffi import external_call
 from gonzales.core.env import env_str, env_on, env_int
@@ -15,7 +15,7 @@ from std.time import perf_counter_ns
 from gonzales.core.geometry import _is_real_ptr
 from gonzales.scene.accel.bvh import BVH2Node, BVH4
 from gonzales.scene.shapes.curves import Curve
-from gonzales.scene.appearance.lights import AreaLight, InfiniteLight, LightSampler, LIGHT_BOUNDS_STRIDE
+from gonzales.scene.appearance.lights import AreaLight, InfiniteLight, DistantLight, PointLight, LightSampler, LIGHT_BOUNDS_STRIDE
 from gonzales.scene.appearance.materials import Material
 from gonzales.scene.description.pbrt_parser import ParsedScene_Mojo, _plan_ptex_budget, mojo_parsed_free
 from gonzales.scene.shapes.primitives import Instance, PrimId, Sphere, TriangleMesh, mesh_points_floats
@@ -24,7 +24,7 @@ from gonzales.scene.appearance.host_textures import TexPrefetch
 from gonzales.core.fast_io import read_parallel, PARALLEL_MIN
 
 comptime _MAGIC: Int = 0x474E5A53434143
-comptime _FORMAT: Int = 13   # 13: texture mappings
+comptime _FORMAT: Int = 14   # 14: distant and point lights, normal slope maps
 
 comptime _Ptr = Pointer[UInt8, MutUntrackedOrigin]
 
@@ -116,15 +116,10 @@ def _file_size(path: _Ptr) -> Int:
 def _unsupported(ref s: ParsedScene_Mojo) -> String:
     if s.medium_count > 0 or s.grid_count > 0 or s.nvdb_grid_count > 0:
         return "media"
-    if s.distant_count > 0 or s.point_count > 0:
-        return "distant or point lights"
     if s.measured_count > 0:
         return "measured materials"
     if s.bvh4.is_real():
         return "a BVH4"
-    for ti in range(Int(s.tex_count)):
-        if s.nmaps[unsafe_offset=ti].res > Int32(0):
-            return "normal maps"
     for mi in range(Int(s.mesh_count)):
         if s.meshes[unsafe_offset=mi].alpha_w > Int32(0):
             return "alpha cut-outs"
@@ -240,6 +235,7 @@ def scene_cache_save(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin], cache_p
     _put[Float32](f, s.light_sampler.cdf, max(Int(s.light_sampler.n) + 1, 2) + (Int(s.light_sampler.n) * LIGHT_BOUNDS_STRIDE if s.light_sampler.has_bounds != Int32(0) else 0))
     _put[Float32](f, s.light_pick_cdf, max(Int(s.light_pick_n) + 1, 2))
 
+    _put[DistantLight](f, s.distant_lights, Int(s.distant_count)); _put[PointLight](f, s.point_lights, Int(s.point_count))
     _put[InfiniteLight](f, s.infinite_lights, Int(s.infinite_count))
     for i in range(Int(s.infinite_count)):
         var il = s.infinite_lights[unsafe_offset=i]
@@ -265,6 +261,11 @@ def scene_cache_save(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin], cache_p
     for ti in range(Int(s.tex_count)):
         _put_cstr(f, s.tex_filenames[unsafe_offset=ti])
     _put[Float32](f, s.tex_map, 16 * Int(s.tex_count))
+    for ti in range(Int(s.tex_count)):
+        var nm = s.nmaps[unsafe_offset=ti]
+        _put_int(f, Int(nm.res))
+        if nm.res > Int32(0):
+            _put[Float32](f, nm.slopes, 2 * Int(nm.res) * Int(nm.res))
     _put_int(f, _MAGIC)
     _fclose(f)
     print("scene cache: written in " + String(Float64(perf_counter_ns() - t0) / 1.0e9) + " s")
@@ -366,6 +367,7 @@ def scene_cache_load(cache_path: _Ptr, scene_path: _Ptr) -> Pointer[ParsedScene_
     s.light_sampler = LightSampler(ls_cdf, s.light_sampler.n, s.light_sampler.has_bounds)
     s.light_pick_cdf = _get[Float32](f, max(Int(s.light_pick_n) + 1, 2))
 
+    s.distant_lights = _get[DistantLight](f, Int(s.distant_count)); s.point_lights = _get[PointLight](f, Int(s.point_count))
     s.infinite_lights = _get[InfiniteLight](f, Int(s.infinite_count))
     for i in range(Int(s.infinite_count)):
         if _get_int(f) == 1:
@@ -400,7 +402,8 @@ def scene_cache_load(cache_path: _Ptr, scene_path: _Ptr) -> Pointer[ParsedScene_
     if n_tex > 0:
         s.nmaps = unsafe_alloc[NormalSlopeMap](n_tex)
         for ti in range(n_tex):
-            s.nmaps[unsafe_offset=ti] = normal_slope_map_none()
+            var res = _get_int(f)
+            s.nmaps[unsafe_offset=ti] = NormalSlopeMap(_get[Float32](f, 2 * res * res), Int32(res)) if res > 0 else normal_slope_map_none()
     var ok = _get_int(f) == _MAGIC
     _fclose(f)
     if not ok:
