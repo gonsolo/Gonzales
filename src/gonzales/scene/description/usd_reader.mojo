@@ -59,25 +59,60 @@ def _usd_texture(s: Pointer[SceneParseState, MutUntrackedOrigin], path: String) 
     return Int32(len(s[unsafe_offset=0].tex_files) - 1)
 
 
+def _usd_surface(name: String, metal: Bool, albedo: RGB, tex: Int32, normal: Int32, ior: Float32, alpha: Float32,
+                 rough: Int32) -> NamedMaterial:
+    # UsdPreviewSurface: GGX over diffuse (Cycles' Principled layering) or a metal whose F0 is the colour.
+    var nm = NamedMaterial(name)
+    nm.kind = MatKind.conductor if metal else MatKind.coated_diffuse
+    nm.principled = not metal
+    nm.albedo = albedo; nm.tex_idx = tex; nm.normal_tex_idx = normal; nm.ior = ior
+    nm.roughness_u = Float32(0) if rough >= 0 else alpha
+    nm.roughness_v = nm.roughness_u
+    nm.rough_tex_idx = rough
+    return nm^
+
+
 def _usd_fill(s: Pointer[SceneParseState, MutUntrackedOrigin], d: PythonObject) raises:
     var mats = d["materials"]
     var rgb = _f32(mats)
-    var mat_alpha = _f32(d["mat_alpha"])
+    var par = _f32(d["mat_par"])       # opacity, metallic, ior, roughness
     var alpha_mask = List[Int32]()
+    var parts = List[NamedMaterial]()  # the two sides of partly metallic materials, after all USD materials
     for m in range(Int(py=len(mats))):
-        var nm = NamedMaterial(String("usd") + String(m))
-        nm.kind = MatKind.diffuse
-        nm.albedo = RGB(rgb[unsafe_offset=3 * m], rgb[unsafe_offset=3 * m + 1], rgb[unsafe_offset=3 * m + 2])
+        var q = par.unsafe_offset(4 * m)
+        var name = String("usd") + String(m)
+        var albedo = RGB(rgb[unsafe_offset=3 * m], rgb[unsafe_offset=3 * m + 1], rgb[unsafe_offset=3 * m + 2])
+        var tex = Int32(-1); var normal_tex = Int32(-1); var rough_tex = Int32(-1)
         var color = String(py=d["mat_color"][m])
         if color.byte_length() > 0:
-            nm.tex_idx = _usd_texture(s, color)
-            nm.albedo = RGB(Float32(1))
+            tex = _usd_texture(s, color)
+            albedo = RGB(Float32(1))
         var normal = String(py=d["mat_normal"][m])
         if normal.byte_length() > 0:
-            nm.normal_tex_idx = _usd_texture(s, normal)
+            normal_tex = _usd_texture(s, normal)
+        var rough = String(py=d["mat_rough"][m])
+        if rough.byte_length() > 0:
+            rough_tex = _usd_texture(s, rough)
+        var ior = min(max(q[unsafe_offset=2], Float32(1.05)), Float32(3))
+        var alpha = q[unsafe_offset=3] * q[unsafe_offset=3]
+        var metal = String(py=d["mat_metal"][m])
+        if metal.byte_length() > 0:
+            var mix = NamedMaterial(name)
+            mix.kind = MatKind.mix
+            mix.mix_name1 = name + "d"; mix.mix_name2 = name + "c"   # amount = metallic picks the metal
+            mix.mix_amount = q[unsafe_offset=1]
+            mix.rough_tex_idx = _usd_texture(s, metal)
+            mix.albedo = albedo
+            s[unsafe_offset=0].named_materials.append(mix^)
+            parts.append(_usd_surface(name + "d", False, albedo, tex, normal_tex, ior, alpha, rough_tex))
+            parts.append(_usd_surface(name + "c", True, albedo, tex, normal_tex, ior, alpha, rough_tex))
+        else:
+            s[unsafe_offset=0].named_materials.append(_usd_surface(name, q[unsafe_offset=1] >= Float32(0.5), albedo, tex, normal_tex,
+                                                                   ior, alpha, rough_tex))
         var opacity = String(py=d["mat_opacity"][m])
         alpha_mask.append(psc_alpha_mask(s, opacity, Float32(1), Float32(0), False) if opacity.byte_length() > 0 else Int32(-1))
-        s[unsafe_offset=0].named_materials.append(nm^)
+    for ref nm in parts:
+        s[unsafe_offset=0].named_materials.append(nm.copy())
 
     var points = _f32(d["points"])
     var indices = Pointer[Int32, MutUntrackedOrigin](unsafe_from_address=Int(py=d["indices"].ctypes.data))
@@ -107,7 +142,7 @@ def _usd_fill(s: Pointer[SceneParseState, MutUntrackedOrigin], d: PythonObject) 
                        Int32(r[unsafe_offset=1]), Int32(r[unsafe_offset=3]))
             ref mesh = s[unsafe_offset=0].meshes[len(s[unsafe_offset=0].meshes) - 1]
             mesh.alpha_mask = alpha_mask[Int(r[unsafe_offset=4])]     # UsdPreviewSurface opacity: pbrt's stochastic alpha
-            mesh.alpha_const = mat_alpha[unsafe_offset=Int(r[unsafe_offset=4])]
+            mesh.alpha_const = par[unsafe_offset=4 * Int(r[unsafe_offset=4])]
             if r[unsafe_offset=6] != 0:
                 var uv = uvs.unsafe_offset(2 * Int(r[unsafe_offset=0]))
                 mesh.uvs.reserve(2 * Int(r[unsafe_offset=1]))

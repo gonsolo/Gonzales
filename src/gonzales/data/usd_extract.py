@@ -46,7 +46,7 @@ def _atlas(pattern, cols, rows, kind):
         return out
     import OpenImageIO as oiio
     r, nc = TEX_RES, 1 if kind == "alpha" else 3
-    img = np.full((rows * r, cols * r, nc), 1.0 if kind == "alpha" else 0.0, np.float32)   # tiles without a file: opaque
+    img = np.full((rows * r, cols * r, nc), {"alpha": 1.0, "rough": 0.0625}.get(kind, 0.0), np.float32)   # tiles without a file: opaque, roughness 0.5
     for udim, f in _udim_tiles(pattern):
         u, v = (udim - 1001) % 10, (udim - 1001) // 10
         if u >= cols or v >= rows:
@@ -58,7 +58,7 @@ def _atlas(pattern, cols, rows, kind):
         while inp.seek_subimage(0, level + 1) and inp.spec().width >= r:
             level += 1
         inp.seek_subimage(0, level)
-        px = inp.read_image(0, level, 0, nc, "float")
+        px = inp.read_image(0, level, 0, 1 if kind in ("rough", "metal") else nc, "float")
         inp.close()
         if px is None:
             continue
@@ -67,12 +67,44 @@ def _atlas(pattern, cols, rows, kind):
             px = px[:: max(1, px.shape[0] // r), :: max(1, px.shape[1] // r)][:r, :r]
         if kind == "color":
             px = np.maximum(px @ _ACESCG_TO_REC709.T.astype(np.float32), 0)
+        elif kind == "rough":
+            px = np.repeat(np.clip(px, 0, 1) ** 4, 3, axis=2)  # gonzales takes alpha = sqrt(texel), UsdPreviewSurface roughness^2
+        elif kind == "metal":
+            px = np.repeat(np.clip(px, 0, 1), 3, axis=2)
         img[(rows - 1 - v) * r:(rows - v) * r, u * r:(u + 1) * r] = px    # v grows upward, image rows downward
     o = oiio.ImageOutput.create(out)
     o.open(out, oiio.ImageSpec(cols * r, rows * r, nc, "half"))
     o.write_image(img)
     o.close()
     return out
+
+
+def _tile_texels(pattern):
+    """{udim: the first channel of the tile's level at TEX_RES texels}."""
+    import OpenImageIO as oiio
+    out = {}
+    for udim, f in _udim_tiles(pattern):
+        inp = oiio.ImageInput.open(f)
+        if not inp:
+            continue
+        level = 0
+        while inp.seek_subimage(0, level + 1) and inp.spec().width >= TEX_RES:
+            level += 1
+        inp.seek_subimage(0, level)
+        px = inp.read_image(0, level, 0, 1, "float")
+        inp.close()
+        if px is not None:
+            out[udim] = np.asarray(px, np.float32).reshape(-1)
+    return out
+
+
+def _metal_ior(metal, ior):
+    """Mean metallic and median IOR over the texels inside UV islands, where the IOR map is not 0."""
+    it, mt = (_tile_texels(ior) if ior else {}), (_tile_texels(metal) if metal else {})
+    cov = {u: a > 0.5 for u, a in it.items()}
+    iv = np.concatenate([a[cov[u]] for u, a in it.items()]) if it else np.zeros(0)
+    mv = np.concatenate([a[cov[u]] if u in cov and len(cov[u]) == len(a) else a for u, a in mt.items()]) if mt else np.zeros(0)
+    return (float(mv.mean()) if len(mv) else None), (float(np.median(iv)) if len(iv) else None)
 
 
 def _flat(m):
@@ -98,7 +130,7 @@ class _Scene:
         self.xc = UsdGeom.XformCache(time)
         self.points, self.indices, self.xforms = [], [], []
         self.mesh_rows = []         # point offset, points, index offset, triangles, material, template (-1: world), has uv
-        self.mat_index, self.mat_rgb, self.mat_tex = {}, [], []
+        self.mat_index, self.mat_rgb, self.mat_tex, self.mat_par = {}, [], [], []
         self.uvs = []
         self.templates = {}         # prototype path -> template id
         self.inst_tmpl, self.inst_xf = [], []
@@ -112,23 +144,32 @@ class _Scene:
         key = str(mat.GetPath()) if mat else ""
         if key in self.mat_index:
             return self.mat_index[key]
-        rgb, color, normal, opacity, alpha = (0.5, 0.5, 0.5), "", "", "", 1.0
+        rgb, tex, par = (0.5, 0.5, 0.5), {"color": "", "normal": "", "opacity": "", "roughness": "", "metallic": ""}, \
+            {"opacity": 1.0, "metallic": 0.0, "ior": 1.5, "roughness": 0.5}
         if mat:
             surf = mat.ComputeSurfaceSource()[0]
             if surf and surf.GetIdAttr().Get() == "UsdPreviewSurface":
                 inp = surf.GetInput("diffuseColor")
                 if inp and not inp.HasConnectedSource() and inp.Get() is not None:
                     rgb = tuple(float(c) for c in inp.Get())
-                color, normal = _texture_input(surf, "diffuseColor"), _texture_input(surf, "normal")
-                opacity = _texture_input(surf, "opacity")
-                inp = surf.GetInput("opacity")
-                if inp and not inp.HasConnectedSource() and inp.Get() is not None:
-                    alpha = float(inp.Get())
-        tiles = [t for p in (color, normal, opacity) if p for t, _ in _udim_tiles(p)]
-        grid = (max((t - 1001) % 10 for t in tiles) + 1, max((t - 1001) // 10 for t in tiles) + 1) if tiles else (1, 1)
+                tex["color"], tex["normal"] = _texture_input(surf, "diffuseColor"), _texture_input(surf, "normal")
+                for name in par:
+                    inp = surf.GetInput(name)
+                    if inp and not inp.HasConnectedSource() and inp.Get() is not None:
+                        par[name] = float(inp.Get())
+                    elif inp and inp.HasConnectedSource() and name in tex:
+                        tex[name] = _texture_input(surf, name)
+                m, i = _metal_ior(tex["metallic"], _texture_input(surf, "ior"))
+                par["metallic"] = par["metallic"] if m is None else m
+                par["ior"] = par["ior"] if i is None else i
+        if not 0.02 < par["metallic"] < 0.98:
+            tex["metallic"] = ""        # all dielectric or all metal: no mix
+        tiles = [t for p in tex.values() if p for t, _ in _udim_tiles(p)]
+        tex["grid"] = (max((t - 1001) % 10 for t in tiles) + 1, max((t - 1001) // 10 for t in tiles) + 1) if tiles else (1, 1)
         self.mat_index[key] = len(self.mat_rgb)
         self.mat_rgb.append(rgb)
-        self.mat_tex.append((color, normal, opacity, alpha, grid))
+        self.mat_tex.append(tex)
+        self.mat_par.append(par)
         return self.mat_index[key]
 
     def mesh(self, prim, xf, template):
@@ -157,7 +198,7 @@ class _Scene:
             return
         has_uv = uv is not None and len(uv) == len(pts)
         if has_uv:
-            cols, rows = self.mat_tex[mat][4]
+            cols, rows = self.mat_tex[mat]["grid"]
             uv = uv / np.array((cols, rows), np.float32)        # into the material's atlas of UDIM tiles
         else:
             uv = np.zeros((len(pts), 2), np.float32)
@@ -334,10 +375,13 @@ def extract(path, camera_path="", aspect=16.0 / 9.0, frame=""):
         "mesh_xf": cat(sc.xforms, np.float32),
         "meshes": np.ascontiguousarray(np.array(sc.mesh_rows, dtype=np.int64).reshape(-1, 7)),
         "uvs": cat(sc.uvs, np.float32),
-        "mat_color": [_atlas(c, g[0], g[1], "color") if c else "" for c, n, o, a, g in sc.mat_tex],
-        "mat_normal": [_atlas(n, g[0], g[1], "raw") if n else "" for c, n, o, a, g in sc.mat_tex],
-        "mat_opacity": [_atlas(o, g[0], g[1], "alpha") if o else "" for c, n, o, a, g in sc.mat_tex],
-        "mat_alpha": np.ascontiguousarray(np.array([a for c, n, o, a, g in sc.mat_tex], dtype=np.float32)),
+        "mat_color": [_atlas(t["color"], *t["grid"], "color") if t["color"] else "" for t in sc.mat_tex],
+        "mat_normal": [_atlas(t["normal"], *t["grid"], "raw") if t["normal"] else "" for t in sc.mat_tex],
+        "mat_opacity": [_atlas(t["opacity"], *t["grid"], "alpha") if t["opacity"] else "" for t in sc.mat_tex],
+        "mat_rough": [_atlas(t["roughness"], *t["grid"], "rough") if t["roughness"] else "" for t in sc.mat_tex],
+        "mat_metal": [_atlas(t["metallic"], *t["grid"], "metal") if t["metallic"] else "" for t in sc.mat_tex],
+        "mat_par": np.ascontiguousarray(np.array([[p["opacity"], p["metallic"], p["ior"], p["roughness"]] for p in sc.mat_par],
+                                                 dtype=np.float32).reshape(-1, 4)),   # opacity, metallic, ior, roughness
         "materials": np.ascontiguousarray(np.array(sc.mat_rgb, dtype=np.float32).reshape(-1, 3)),
         "n_templates": len(sc.templates),
         "inst_tmpl": np.ascontiguousarray(np.array(sc.inst_tmpl, dtype=np.int32)),
