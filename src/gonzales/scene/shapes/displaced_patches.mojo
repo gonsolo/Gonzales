@@ -807,7 +807,8 @@ def _intersect_bl(d: DispSurface, prim: Int, org: Vec3f, dir: Vec3f, t_max: Floa
     var S = sq[2]; var inv_s = Float32(1) / S
     var f = Int(d.face[unsafe_offset=pi])
     var texels = d.sq[unsafe_offset=3 * pi + 2] * Float32(1 << max(Int(d.hdr[unsafe_offset=3 * f + 1]), Int(d.hdr[unsafe_offset=3 * f + 2])))
-    var fr = _bl_frame(d, pi, prim % sub_count(d), org)
+    var kq = prim % sub_count(d)
+    var fr = _bl_frame(d, pi, kq, org)
     var cam = d.cam - org
     var inv = Vec3f(Float32(1) / dir.x, Float32(1) / dir.y, Float32(1) / dir.z)
     var best = t_max; var hit = False; var hs = Float32(0); var ht = Float32(0); var hsz = Float32(1)
@@ -826,14 +827,14 @@ def _intersect_bl(d: DispSurface, prim: Int, org: Vec3f, dir: Vec3f, t_max: Floa
         if cur_hit[0]:
             var sz = _leaf_size(cur[0], cur[1], cam, d.pixel)
             if depth >= PATCH_MAX_DEPTH or max(dom[2], dom[3]) * texels <= Float32(1) or (d.leaf_mode == 5 and cur[2] <= sz[1]):
-                var lh = _bl_leaf(d, pi, f, fr, sq[0], sq[1], inv_s, dom, dir, best)
+                var lh = _bl_leaf(d, pi, f, _bl_frame(d, pi, kq, org), sq[0], sq[1], inv_s, dom, dir, best)
                 if lh[0]:
                     best = lh[1]; hit = True; hs = lh[2]; ht = lh[3]; hsz = max(dom[2], dom[3])
             else:
                 var along_u = depth % 2 == 0
                 var l_dom = (dom[0], dom[1], dom[2] * Float32(0.5) if along_u else dom[2], dom[3] if along_u else dom[3] * Float32(0.5))
                 var u_dom = (dom[0] + dom[2] * Float32(0.5) if along_u else dom[0], dom[1] if along_u else dom[1] + dom[3] * Float32(0.5), l_dom[2], l_dom[3])
-                var lb = _bl_box(d, pi, f, fr, sq[0], sq[1], inv_s, l_dom); var ub = _bl_box(d, pi, f, fr, sq[0], sq[1], inv_s, u_dom)
+                var lb = _bl_box(d, pi, f, _bl_frame(d, pi, kq, org), sq[0], sq[1], inv_s, l_dom); var ub = _bl_box(d, pi, f, _bl_frame(d, pi, kq, org), sq[0], sq[1], inv_s, u_dom)
                 var h0 = _slab(lb[0], lb[1], inv, best); var h1 = _slab(ub[0], ub[1], inv, best)
                 if h0[0] or h1[0]:
                     var upper_first = h1[0] and (not h0[0] or h1[1] < h0[1])
@@ -855,7 +856,7 @@ def _intersect_bl(d: DispSurface, prim: Int, org: Vec3f, dir: Vec3f, t_max: Floa
         path = (path & ((UInt64(1) << UInt64(level)) - 1)) | ((~path) & (UInt64(1) << UInt64(level)))
         depth = level + 1
         dom = _domain(path, depth)
-        cur = _bl_box(d, pi, f, fr, sq[0], sq[1], inv_s, dom)
+        cur = _bl_box(d, pi, f, _bl_frame(d, pi, kq, org), sq[0], sq[1], inv_s, dom)
         cur_hit = _slab(cur[0], cur[1], inv, best)
     return (hit, best, hs, ht, steps, hsz)
 
