@@ -716,14 +716,47 @@ def grid_vertex(d: DispSurface, pi: Int, i: Int, j: Int, n: Int) -> Tuple[Vec3f,
     return (e[0], nv * (Float32(1) / ln) if ln > Float32(0) else Vec3f(0, 0, 0))
 
 
-def corner_grid(d: DispSurface, pi: Int, dst: _F32):
-    """Patch pi's grid points into dst (6 floats each, rows along t), for DispSurface.corners."""
+def corner_words(n: Int) -> Int:
+    """Floats per patch in DispSurface.corners: origin and step, then 5 x u16 per grid point."""
+    return 4 + (5 * (n + 1) * (n + 1) + 1) // 2
+
+
+def corner_step(extent: Float32) -> Float32:
+    """The power of two that spans the largest patch extent in 16 bits."""
+    var s = Float32(1)
+    while extent > s * Float32(65000):
+        s *= Float32(2)
+    while extent <= s * Float32(32500):
+        s *= Float32(0.5)
+    return s
+
+
+def _oct16(v: Float32) -> UInt16:
+    return UInt16(Int(round(min(max(v, Float32(-1)), Float32(1)) * Float32(32767))) + 32768)
+
+
+def corner_grid(d: DispSurface, pi: Int, lo: Vec3f, step: Float32, dst: _F32):
+    """Patch pi's grid points into dst, rows along t: positions as global multiples of step (so patches sharing
+    a point store the same one), unit normals octahedral; (0, 0) is a degenerate normal."""
     var n = 1 << (Int(d.sub_levels) // 2)
+    var k = Vec3f(floor(lo.x / step), floor(lo.y / step), floor(lo.z / step))
+    dst[unsafe_offset=0] = k.x * step; dst[unsafe_offset=1] = k.y * step; dst[unsafe_offset=2] = k.z * step; dst[unsafe_offset=3] = step
+    var q = dst.unsafe_offset(4).bitcast[UInt16]()
     for j in range(n + 1):
         for i in range(n + 1):
-            var g = grid_vertex(d, pi, i, j, n); var o = 6 * (j * (n + 1) + i)
-            dst[unsafe_offset=o] = g[0].x; dst[unsafe_offset=o + 1] = g[0].y; dst[unsafe_offset=o + 2] = g[0].z
-            dst[unsafe_offset=o + 3] = g[1].x; dst[unsafe_offset=o + 4] = g[1].y; dst[unsafe_offset=o + 5] = g[1].z
+            var g = grid_vertex(d, pi, i, j, n); var o = 5 * (j * (n + 1) + i)
+            q[unsafe_offset=o] = UInt16(min(max(Int(round(g[0].x / step) - k.x), 0), 65535))
+            q[unsafe_offset=o + 1] = UInt16(min(max(Int(round(g[0].y / step) - k.y), 0), 65535))
+            q[unsafe_offset=o + 2] = UInt16(min(max(Int(round(g[0].z / step) - k.z), 0), 65535))
+            var nv = g[1]; var l1 = abs(nv.x) + abs(nv.y) + abs(nv.z)
+            if l1 == Float32(0):
+                q[unsafe_offset=o + 3] = UInt16(0); q[unsafe_offset=o + 4] = UInt16(0)
+                continue
+            var u = nv.x / l1; var v = nv.y / l1
+            if nv.z < Float32(0):
+                var uu = (Float32(1) - abs(v)) * (Float32(1) if u >= Float32(0) else Float32(-1))
+                v = (Float32(1) - abs(u)) * (Float32(1) if v >= Float32(0) else Float32(-1)); u = uu
+            q[unsafe_offset=o + 3] = _oct16(u); q[unsafe_offset=o + 4] = _oct16(v)
 
 
 def _bl_frame(d: DispSurface, pi: Int, k: Int, org: Vec3f) -> BLFrame:
@@ -732,11 +765,22 @@ def _bl_frame(d: DispSurface, pi: Int, k: Int, org: Vec3f) -> BLFrame:
     var ku = k % n; var kv = k // n
     var f = BLFrame(SIMD[DType.float32, 4](0), SIMD[DType.float32, 4](0), SIMD[DType.float32, 4](0), SIMD[DType.float32, 4](0),
                     SIMD[DType.float32, 4](0), SIMD[DType.float32, 4](0))
-    var g = d.corners.unsafe_offset(6 * pi * (n + 1) * (n + 1))
-    comptime for c in range(4):
-        var o = 6 * ((kv + (1 if c >= 2 else 0)) * (n + 1) + ku + (1 if c == 1 or c == 2 else 0))
-        f.px[c] = g[unsafe_offset=o] - org.x; f.py[c] = g[unsafe_offset=o + 1] - org.y; f.pz[c] = g[unsafe_offset=o + 2] - org.z
-        f.nx[c] = g[unsafe_offset=o + 3]; f.ny[c] = g[unsafe_offset=o + 4]; f.nz[c] = g[unsafe_offset=o + 5]
+    var g = d.corners.unsafe_offset(pi * corner_words(n))
+    var st = g[unsafe_offset=3]
+    var b = Vec3f(g[unsafe_offset=0], g[unsafe_offset=1], g[unsafe_offset=2])
+    var q = g.unsafe_offset(4).bitcast[UInt16]()
+    comptime for c in range(4):   # b + q st is exact, the same float in every patch that stores the point
+        var o = 5 * ((kv + (1 if c >= 2 else 0)) * (n + 1) + ku + (1 if c == 1 or c == 2 else 0))
+        f.px[c] = (b.x + Float32(q[unsafe_offset=o]) * st) - org.x; f.py[c] = (b.y + Float32(q[unsafe_offset=o + 1]) * st) - org.y
+        f.pz[c] = (b.z + Float32(q[unsafe_offset=o + 2]) * st) - org.z
+        var e0 = q[unsafe_offset=o + 3]; var e1 = q[unsafe_offset=o + 4]
+        var u = (Float32(e0) - Float32(32768)) * Float32(1.0 / 32767); var v = (Float32(e1) - Float32(32768)) * Float32(1.0 / 32767)
+        var z = Float32(1) - abs(u) - abs(v)
+        if z < Float32(0):
+            var uu = (Float32(1) - abs(v)) * (Float32(1) if u >= Float32(0) else Float32(-1))
+            v = (Float32(1) - abs(u)) * (Float32(1) if v >= Float32(0) else Float32(-1)); u = uu
+        var r = Float32(0) if e0 == UInt16(0) and e1 == UInt16(0) else Float32(1) / sqrt(u * u + v * v + z * z)
+        f.nx[c] = u * r; f.ny[c] = v * r; f.nz[c] = z * r
     return f
 
 
