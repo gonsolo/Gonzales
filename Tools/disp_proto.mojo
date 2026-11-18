@@ -102,12 +102,15 @@ def _box_t(lo: Vec3f, hi: Vec3f, org: Vec3f, inv: Vec3f, t_max: Float32) -> Tupl
     return (t0 <= t1, t0)
 
 
+comptime TOP_STACK = 32   # the sub-square BVH is about 20 levels deep; every entry costs a register
+
+
 def trace_patches[M: Int = -1](d: DispSurface, nodes: Pointer[BNode, MutUntrackedOrigin], order: Pointer[Int32, MutUntrackedOrigin], org: Vec3f, dir: Vec3f,
                   boxes_only: Bool = False) -> Hit:
     """Front to back over the sub-square BVH; the hit names the patch."""
     var inv = Vec3f(Float32(1) / dir.x, Float32(1) / dir.y, Float32(1) / dir.z)
     var h = Hit(Float32(1e30), -1, Float32(0), Float32(0), 0, Float32(0))
-    var stack = Array[Int32, 64](fill=Int32(0))
+    var stack = Array[Int32, TOP_STACK](fill=Int32(0))
     var sp = 1
     while sp > 0:
         sp -= 1
@@ -126,7 +129,7 @@ def trace_patches[M: Int = -1](d: DispSurface, nodes: Pointer[BNode, MutUntracke
                 h.steps += r[4]
                 if r[0] and r[1] < h.t:
                     h.t = r[1]; h.prim = prim // sub_count(d); h.s = r[2]; h.u = r[3]; h.size = r[5]
-        elif sp < 62:
+        elif sp < TOP_STACK - 2:
             var na = nodes[unsafe_offset=Int(nd.a)]; var nb = nodes[unsafe_offset=Int(nd.b)]
             var ta = _box_t(na.lo, na.hi, org, inv, h.t); var tb = _box_t(nb.lo, nb.hi, org, inv, h.t)
             var near = nd.a; var far = nd.b; var tn = ta; var tf = tb
