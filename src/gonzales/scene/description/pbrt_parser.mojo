@@ -1807,7 +1807,7 @@ def _tri_kind(s: Pointer[SceneParseState, MutUntrackedOrigin], mi: Int, ti: Int)
     """A mesh triangle's PrimKind: a patch's stand-in, displaced, or plain."""
     if len(s[unsafe_offset=0].meshes[mi].patch_cp) > 0:
         return PrimKind.patch
-    return _tri_kind(s, mi, ti)
+    return PrimKind.displaced if _is_displaced(s, mi, ti) else PrimKind.triangle
 
 
 def _is_displaced(s: Pointer[SceneParseState, MutUntrackedOrigin], mi: Int, ti: Int) -> Bool:
