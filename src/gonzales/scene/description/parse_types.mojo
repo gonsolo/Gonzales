@@ -1,6 +1,7 @@
 from std.collections import Array
 from gonzales.core.geometry import RGB
 from gonzales.scene.shapes.displacement import DisplacedMesh, Rmip
+from gonzales.scene.shapes.disp_build import DispMesh
 from std.os.path import exists
 from gonzales.scene.shapes.ply_prefetch import PlyPrefetch
 
@@ -129,6 +130,9 @@ struct NamedMaterial(Copyable, ImplicitlyCopyable, Movable):
     var ptex_file:      String
     var ptex_scale:     Float32
     var ptex_gamma:     Float32
+    # A Ptex "texture displacement": its file and height scale (GONZALES_SUBDIV_DISP=1 displaces the mesh's cage by it).
+    var disp_ptex_file:  String
+    var disp_ptex_scale: Float32
 
     def __init__(out self, name: String):
         self.name           = name
@@ -172,6 +176,8 @@ struct NamedMaterial(Copyable, ImplicitlyCopyable, Movable):
         self.ptex_file      = String()
         self.ptex_scale     = Float32(1)
         self.ptex_gamma     = Float32(2.2)
+        self.disp_ptex_file  = String()
+        self.disp_ptex_scale = Float32(1)
 
 struct MeshAccum(Copyable, Movable):
     var points:         List[Float32]  # 4 floats per vertex (xyz + pad)
@@ -202,6 +208,7 @@ struct MeshAccum(Copyable, Movable):
     var alpha_mask:  Int32
     var alpha_const: Float32
     var disp_idx:    Int32   # index into SceneParseState.disp_meshes, -1 = not displaced
+    var subdiv_idx:  Int32   # index into SceneParseState.subdiv_meshes (the mesh is that Ptex's cage), -1 = none
     var patch_cp:    List[Float32]   # 48 a triangle: the Bezier patch it stands in for (TriangleMesh.patches)
 
     def __init__(out self, mat_idx: Int32, inside_medium: Int32, outside_medium: Int32):
@@ -224,6 +231,7 @@ struct MeshAccum(Copyable, Movable):
         self.alpha_mask    = -1
         self.alpha_const   = 1.0
         self.disp_idx      = -1
+        self.subdiv_idx    = -1
         self.patch_cp      = List[Float32]()
 
 struct SceneParseState(Movable):
@@ -352,6 +360,10 @@ struct SceneParseState(Movable):
     var disp_meshes: List[DisplacedMesh]
     var disp_map_keys: List[String]
     var disp_maps: List[Rmip]
+    # Displaced Catmull-Clark meshes from Ptex displacement (scene/shapes/disp_build.mojo), one per file, with the height scale
+    var subdiv_meshes: List[DispMesh]
+    var subdiv_files:  List[String]
+    var subdiv_scale:  List[Float32]
     var alpha_mask_files: List[String]
     var alpha_mask_data:  List[Pointer[UInt8, MutUntrackedOrigin]]
     var alpha_mask_w:     List[Int32]
@@ -547,6 +559,9 @@ struct SceneParseState(Movable):
         self.map_tex_map = List[Float32]()
         self.disp_meshes = List[DisplacedMesh]()
         self.disp_map_keys = List[String]()
+        self.subdiv_meshes = List[DispMesh]()
+        self.subdiv_files  = List[String]()
+        self.subdiv_scale  = List[Float32]()
         self.disp_maps = List[Rmip]()
         self.alpha_mask_files = List[String]()
         self.alpha_mask_data  = List[Pointer[UInt8, MutUntrackedOrigin]]()

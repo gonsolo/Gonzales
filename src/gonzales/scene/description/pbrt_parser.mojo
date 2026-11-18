@@ -34,7 +34,7 @@ from gonzales.core.spectrum import SpectralHandle
 from gonzales.core.sampling import gaussian_norm, ThinLens
 from gonzales.scene.shapes.ply import load_ply
 from gonzales.scene.shapes.ply_prefetch import PlyPrefetch, scan_plys, load_all_plys
-from gonzales.scene.description.displacement_builder import apply_shape_displacement
+from gonzales.scene.description.displacement_builder import apply_shape_displacement, apply_subdiv_displacement
 from gonzales.scene.shapes.displacement import DisplacedMesh, DisplacedTri
 from gonzales.scene.shapes.patches import BezierPatch
 from gonzales.scene.description.material_builder import _psc_handle_make_named_material, _psc_handle_named_material, _imagemap_affine
@@ -1468,6 +1468,7 @@ def handle_shape(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
             if cache_i < 0:
                 nrm_ptr.unsafe_free()
         apply_shape_displacement(s, params)
+        apply_subdiv_displacement(s)
         if cache_i >= 0:
             s[unsafe_offset=0].ply_cache[unsafe_offset=0].release(cache_i)
         else:
@@ -1845,7 +1846,7 @@ def _wrap_world_meshes(s: Pointer[SceneParseState, MutUntrackedOrigin]):
             var nv = len(m.points) // 4
             if (m.is_object_template or m.is_area_light or m.alpha_mask >= Int32(0) or m.alpha_const < Float32(1.0)
                     or m.inside_medium >= Int32(0) or m.outside_medium >= Int32(0) or nv == 0 or len(m.face_idxs) == 0
-                    or m.disp_idx >= Int32(0) or len(m.patch_cp) > 0):
+                    or m.disp_idx >= Int32(0) or m.subdiv_idx >= Int32(0) or len(m.patch_cp) > 0):
                 break
             var uv = len(m.uvs) >= nv * 2; var nrm = len(m.normals) >= nv * 3
             if j == i:
@@ -1892,7 +1893,7 @@ def _merge_template_meshes(s: Pointer[SceneParseState, MutUntrackedOrigin], defa
             ref m = s[unsafe_offset=0].meshes[mi]
             var nv = len(m.points) // 4
             if (m.is_area_light or m.alpha_mask >= Int32(0) or m.alpha_const < Float32(1.0)
-                    or m.inside_medium >= Int32(0) or m.outside_medium >= Int32(0) or m.disp_idx >= Int32(0) or len(m.patch_cp) > 0
+                    or m.inside_medium >= Int32(0) or m.outside_medium >= Int32(0) or m.disp_idx >= Int32(0) or m.subdiv_idx >= Int32(0) or len(m.patch_cp) > 0
                     or (len(m.uvs) >= nv * 2 and nv > 0) != has_uv or (len(m.normals) >= nv * 3 and nv > 0) != has_nrm):
                 ok = False
                 break

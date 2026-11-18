@@ -1011,6 +1011,7 @@ def _psc_handle_make_named_material(handle: Pointer[PbrtScanner, MutUntrackedOri
     var bump_tex_idx_for_mat = Int32(-1)
     var bump_scale_for_mat = Float32(1)
     var disp_tex = params.get_string("displacement", "")
+    var disp_ptex_for_mat = String()
     if disp_tex != "":
         var matched_disp = False
         for pti in range(len(s[unsafe_offset=0].ptex_tex_names)):
@@ -1019,6 +1020,7 @@ def _psc_handle_make_named_material(handle: Pointer[PbrtScanner, MutUntrackedOri
                 if ptex_file_for_mat.byte_length() == 0:
                     ptex_file_for_mat = s[unsafe_offset=0].ptex_tex_files[pti]
                 bump_scale_for_mat = s[unsafe_offset=0].ptex_tex_scale[pti]
+                disp_ptex_for_mat = s[unsafe_offset=0].ptex_tex_files[pti]
                 break
         for ti in range(len(s[unsafe_offset=0].tex_names)):
             if s[unsafe_offset=0].tex_names[ti] == disp_tex:
@@ -1141,6 +1143,8 @@ def _psc_handle_make_named_material(handle: Pointer[PbrtScanner, MutUntrackedOri
     nm.ptex_file      = ptex_file_for_mat
     nm.ptex_scale     = ptex_scale_for_mat
     nm.ptex_gamma     = ptex_gamma_for_mat
+    nm.disp_ptex_file  = disp_ptex_for_mat
+    nm.disp_ptex_scale = bump_scale_for_mat
     nm.tex_scale      = tex_scale_for_mat
     nm.sss_mean_refl  = sss_mean_refl_for_mat
     nm.tex_bias       = tex_bias_for_mat
