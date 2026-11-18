@@ -138,6 +138,43 @@ void *disp_open(const char *ptx, int isolation, long long *counts) {
         }
         if (pt)
                 ptex_close(pt);
+        // Each face's diagonal border texel such that its four corner texels average to the vertex's height, the mean of the
+        // corner texels of all faces around it: then all of them agree at the vertex and on the half texel of edge beside it.
+        auto texel = [&](int f, int x, int y) -> unsigned char & {
+                const int w = 1 << tex->getFaceInfo(f).res.ulog2;
+                return d->chain[d->chain_off[f] + static_cast<size_t>(y + 1) * (w + 2) + x + 1];
+        };
+        auto corner = [&](int f, int c, int ox, int oy) {   // (ox, oy): 0 for the texel inside, 1 one texel out
+                const Ptex::Res r = tex->getFaceInfo(f).res;
+                const int w = 1 << r.ulog2, h = 1 << r.vlog2;
+                const int x = (c == 1 || c == 2) ? w - 1 + ox : -ox, y = c >= 2 ? h - 1 + oy : -oy;
+                return std::pair<int, int>(x, y);
+        };
+        for (int f = 0; !d->chain_off.empty() && f < nfc; ++f)
+                for (int c = 0; c < 4; ++c) {
+                        int sum = 0, n = 0, g = f, k = c;
+                        bool closed = false;
+                        for (int step = 0; step < 32; ++step) {   // around the vertex: across edge k, which starts at corner k
+                                const Ptex::FaceInfo &gi = tex->getFaceInfo(g);
+                                if (gi.isSubface())
+                                        break;
+                                const auto p = corner(g, k, 0, 0);
+                                sum += texel(g, p.first, p.second); ++n;
+                                const int af = gi.adjface(k), ae = gi.adjedge(k);
+                                if (af < 0)
+                                        break;
+                                g = af; k = (ae + 1) % 4;
+                                if (g == f && k == c) {
+                                        closed = true;
+                                        break;
+                                }
+                        }
+                        if (!closed)
+                                continue;
+                        const auto p = corner(f, c, 0, 0), a = corner(f, c, 1, 0), b = corner(f, c, 0, 1), q = corner(f, c, 1, 1);
+                        const int dv = int(std::lround(4.0 * sum / n - texel(f, p.first, p.second) - texel(f, a.first, a.second) - texel(f, b.first, b.second)));
+                        texel(f, q.first, q.second) = static_cast<unsigned char>(std::min(std::max(dv, 0), 255));
+                }
         counts[0] = np;
         counts[1] = nfc;
         counts[2] = static_cast<long long>(d->pyr.size());
