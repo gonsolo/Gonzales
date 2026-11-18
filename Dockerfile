@@ -10,6 +10,7 @@ RUN pacman -Syu --noconfirm && \
     openimagedenoise \
     openimageio \
     ptex \
+    opensubdiv \
     wget \
     unzip \
     sudo \
