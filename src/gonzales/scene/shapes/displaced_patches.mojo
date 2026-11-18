@@ -740,16 +740,31 @@ def _bl_frame(d: DispSurface, pi: Int, k: Int, org: Vec3f) -> BLFrame:
     return f
 
 
+def _heights8(d: DispSurface, f: Int, u0: Float32, v0: Float32, sz: Float32, s: SIMD[DType.float32, 8],
+              t: SIMD[DType.float32, 8]) -> SIMD[DType.float32, 8]:
+    """face_height at 8 points of patch square (u0, v0, sz): the face's header is read once."""
+    var off = Int(d.chain_off[unsafe_offset=f]); var w = 1 << Int(d.hdr[unsafe_offset=3 * f + 1]); var h = 1 << Int(d.hdr[unsafe_offset=3 * f + 2])
+    var x = min(max((s * sz + u0) * Float32(w) - Float32(0.5), Float32(-0.5)), Float32(w) - Float32(0.5))
+    var y = min(max((t * sz + v0) * Float32(h) - Float32(0.5), Float32(-0.5)), Float32(h) - Float32(0.5))
+    var r = SIMD[DType.float32, 8](0)
+    comptime for k in range(8):
+        var x0 = min(Int(floor(x[k])), w - 1); var y0 = min(Int(floor(y[k])), h - 1)
+        var fx = x[k] - Float32(x0); var fy = y[k] - Float32(y0)
+        var a = _texel(d, off, w, x0, y0) * (Float32(1) - fx) + _texel(d, off, w, x0 + 1, y0) * fx
+        var b = _texel(d, off, w, x0, y0 + 1) * (Float32(1) - fx) + _texel(d, off, w, x0 + 1, y0 + 1) * fx
+        r[k] = a * (Float32(1) - fy) + b * fy
+    return r
+
+
 @always_inline
-def _bl_point(d: DispSurface, pi: Int, f: Int, fr: BLFrame, s0: Float32, t0: Float32, inv: Float32, s: Float32, t: Float32) -> Vec3f:
-    """X = B + h N at global (s, t): B and N bilinear in the sub-square's corners, h the face's height there."""
+def _bl_point(d: DispSurface, fr: BLFrame, s0: Float32, t0: Float32, inv: Float32, s: Float32, t: Float32, hgt: Float32) -> Vec3f:
+    """X = B + h N at global (s, t): B and N bilinear in the sub-square's corners, h (bytes) the face's height there."""
     var a = SIMD[DType.float32, 1]((s - s0) * inv); var b = SIMD[DType.float32, 1]((t - t0) * inv)
     var p = Vec3f(_bilerp[1](fr.px, a, b)[0], _bilerp[1](fr.py, a, b)[0], _bilerp[1](fr.pz, a, b)[0])
     if d.scale <= Float32(0):
         return p
     var n = Vec3f(_bilerp[1](fr.nx, a, b)[0], _bilerp[1](fr.ny, a, b)[0], _bilerp[1](fr.nz, a, b)[0])
-    var sz = d.sq[unsafe_offset=3 * pi + 2]
-    return p + n * (face_height(d, f, d.sq[unsafe_offset=3 * pi] + s * sz, d.sq[unsafe_offset=3 * pi + 1] + t * sz) * d.scale)
+    return p + n * (hgt * d.scale)
 
 
 def _bl_box(d: DispSurface, pi: Int, f: Int, fr: BLFrame, s0: Float32, t0: Float32, inv: Float32,
@@ -778,9 +793,10 @@ def _bl_leaf(d: DispSurface, pi: Int, f: Int, fr: BLFrame, s0q: Float32, t0q: Fl
     var sm = s0 + Float32(0.5) * dom[2]; var tm = t0 + Float32(0.5) * dom[3]
     var cs = SIMD[DType.float32, 8](s0, s1, s1, s0, sm, s1, sm, s0)
     var ct = SIMD[DType.float32, 8](t0, t0, t1, t1, t0, tm, t1, tm)
+    var hs = _heights8(d, f, d.sq[unsafe_offset=3 * pi], d.sq[unsafe_offset=3 * pi + 1], d.sq[unsafe_offset=3 * pi + 2], cs, ct)
     var cp = Array[Vec3f, 8](fill=Vec3f(0, 0, 0))
     for k in range(8):
-        cp[k] = _bl_point(d, pi, f, fr, s0q, t0q, inv_s, cs[k], ct[k])
+        cp[k] = _bl_point(d, fr, s0q, t0q, inv_s, cs[k], ct[k], hs[k])
     return _leaf_hit(cp, s0, s1, t0, t1, dir, t_max)
 
 
