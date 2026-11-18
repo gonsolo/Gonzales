@@ -2,6 +2,7 @@
 // osd.cc turns the cage into Bezier patches, and each face's heights get a quadtree of planes with residuals.
 #include <Ptexture.h>
 #include <algorithm>
+#include <cstdio>
 #include <cmath>
 #include <cstring>
 #include <memory>
@@ -19,6 +20,7 @@ namespace {
 struct Disp {
         std::vector<float> cp, fm, sq, cage;   // cp: Gregory patches with Fp inside, fm: their Fm points (12 floats a patch)
         std::vector<unsigned char> greg;
+        std::vector<unsigned char> drop;       // per face: the finest levels left out for the view
         std::vector<int> face, hdr;            // hdr: per face its node offset, log2 width, log2 height
         std::vector<unsigned char> pyr;        // per face, levels 2 up: cells of (centre, half u slope / 2, half v slope / 2, residual, min, max)
         std::vector<int> chain_off;            // per face: its bordered height chain in `chain`
@@ -30,8 +32,29 @@ struct Disp {
 
 extern "C" {
 
+// The cage's box (6 floats) of `ptx` from its meta data; 0 on failure.
+int disp_bounds(const char *ptx, float *box) {
+        Ptex::String err;
+        PtexPtr<PtexTexture> tex(PtexTexture::open(ptx, err));
+        if (!tex)
+                return 0;
+        PtexPtr<PtexMetaData> meta(tex->getMetaData());
+        const float *pos = nullptr;
+        int npos = 0;
+        meta->getValue("PtexVertPositions", pos, npos);
+        if (!pos || npos < 3)
+                return 0;
+        for (int i = 0; i < 3; ++i)
+                box[i] = 1e30f, box[3 + i] = -1e30f;
+        for (int i = 0; i < npos; ++i)
+                box[i % 3] = std::min(box[i % 3], pos[i]), box[3 + i % 3] = std::max(box[3 + i % 3], pos[i]);
+        return 1;
+}
+
 // The cage and heights of `ptx` as Bezier patches and pyramids; counts: patches, faces, pyramid bytes. Null on failure.
-void *disp_open(const char *ptx, int isolation, long long *counts) {
+// view (eye x, y, z, pixel angle, keep; keep <= 0: off) or null: a face keeps its finer levels only while its texels at its nearest point
+// to the eye are at least `keep` pixels; the coarser level then stands in for the face's resolution everywhere.
+void *disp_open(const char *ptx, int isolation, long long *counts, const float *view) {
         Ptex::String err;
         PtexPtr<PtexTexture> tex(PtexTexture::open(ptx, err));
         if (!tex)
@@ -51,6 +74,33 @@ void *disp_open(const char *ptx, int isolation, long long *counts) {
                 d->box[i % 3] = std::min(d->box[i % 3], pos[i]);
                 d->box[3 + i % 3] = std::max(d->box[3 + i % 3], pos[i]);
         }
+        std::vector<int> rul(nfc), rvl(nfc);   // the resolution kept per face
+        long long full = 0, kept = 0;
+        for (int f = 0, at = 0; f < nfc; at += vcount[f], ++f) {
+                const Ptex::Res r = tex->getFaceInfo(f).res;
+                int drop = 0;
+                if (view && view[4] > 0) {
+                        float lo[3] = {1e30f, 1e30f, 1e30f}, hi[3] = {-1e30f, -1e30f, -1e30f}, edge = 0;
+                        for (int k = 0; k < vcount[f]; ++k) {
+                                const float *a = pos + 3 * vidx[at + k], *b = pos + 3 * vidx[at + (k + 1) % vcount[f]];
+                                edge = std::max(edge, std::sqrt((a[0] - b[0]) * (a[0] - b[0]) + (a[1] - b[1]) * (a[1] - b[1]) + (a[2] - b[2]) * (a[2] - b[2])));
+                                for (int i = 0; i < 3; ++i)
+                                        lo[i] = std::min(lo[i], a[i]), hi[i] = std::max(hi[i], a[i]);
+                        }
+                        float d2 = 0;   // to the face's box
+                        for (int i = 0; i < 3; ++i) {
+                                const float e = std::max(std::max(lo[i] - view[i], view[i] - hi[i]), 0.0f);
+                                d2 += e * e;
+                        }
+                        const float pixel = view[3] * std::max(std::sqrt(d2), 1e-3f * edge);
+                        float texel = edge / float(1 << std::max(r.ulog2, r.vlog2));
+                        while (drop < std::max(r.ulog2, r.vlog2) && 2 * texel <= view[4] * pixel)
+                                texel *= 2, ++drop;
+                }
+                rul[f] = std::max(r.ulog2 - drop, 0), rvl[f] = std::max(r.vlog2 - drop, 0);
+                d->drop.push_back(static_cast<unsigned char>(std::max(r.ulog2, r.vlog2) - std::max(rul[f], rvl[f])));
+                full += (1LL << r.ulog2) << r.vlog2, kept += (1LL << rul[f]) << rvl[f];
+        }
         int np = 0;
         void *h = osd_build(npos / 3, pos, nfc, vcount, vidx, 0, nullptr, nullptr, 0, nullptr, nullptr, isolation, &np);
         if (!h)
@@ -63,14 +113,13 @@ void *disp_open(const char *ptx, int isolation, long long *counts) {
         osd_take_exact(h, d->cp.data(), d->fm.data(), d->greg.data(), d->sq.data(), d->face.data());
 
         for (int f = 0; f < nfc; ++f) {   // per face: plane + residual nodes from 4 x 4-texel cells up (Xu, Zhou, Budge 2026)
-                const Ptex::Res r = tex->getFaceInfo(f).res;
-                const int ul = r.ulog2, vl = r.vlog2, w = 1 << ul, hh = 1 << vl;
+                const int ul = rul[f], vl = rvl[f], w = 1 << ul, hh = 1 << vl;
                 d->hdr.insert(d->hdr.end(), {static_cast<int>(d->pyr.size()), ul, vl});
                 std::vector<float> lvl(static_cast<size_t>(w) * hh);
                 float px[4];
                 for (int y = 0; y < hh; ++y)
                         for (int x = 0; x < w; ++x) {
-                                tex->getPixel(f, x, y, px, 0, 1);
+                                tex->getPixel(f, x, y, px, 0, 1, Ptex::Res(ul, vl));
                                 lvl[static_cast<size_t>(y) * w + x] = std::round(std::min(std::max(px[0], 0.0f), 1.0f) * 255.0f);
                         }
                 auto height = [&](float X, float Y) {   // the bilinear height at texel position (X, Y), clamped like face_height
@@ -123,15 +172,14 @@ void *disp_open(const char *ptx, int isolation, long long *counts) {
         void *pt = ptex_open(ptx);   // oiio.cc: Ptex chains with the neighbours' texels in the borders (rotation-aware)
         std::vector<unsigned char> rgb;
         for (int f = 0; pt && f < nfc; ++f) {
-                const Ptex::Res r = tex->getFaceInfo(f).res;
                 size_t texels = 0;
-                for (int ul = r.ulog2, vl = r.vlog2;; ul = std::max(ul - 1, 0), vl = std::max(vl - 1, 0)) {
+                for (int ul = rul[f], vl = rvl[f];; ul = std::max(ul - 1, 0), vl = std::max(vl - 1, 0)) {
                         texels += static_cast<size_t>((1 << ul) + 2) * ((1 << vl) + 2);
                         if (ul == 0 && vl == 0)
                                 break;
                 }
                 rgb.resize(texels * 3);
-                ptex_read_face(pt, f, r.ulog2, r.vlog2, rgb.data());
+                ptex_read_face(pt, f, rul[f], rvl[f], rgb.data());
                 d->chain_off.push_back(static_cast<int>(d->chain.size()));
                 for (size_t i = 0; i < texels; ++i)
                         d->chain.push_back(rgb[i * 3]);   // uint8 data: channel 0 is the height byte
@@ -141,48 +189,54 @@ void *disp_open(const char *ptx, int isolation, long long *counts) {
         // Each face's diagonal border texel such that its four corner texels average to the vertex's height, the mean of the
         // corner texels of all faces around it: then all of them agree at the vertex and on the half texel of edge beside it.
         auto texel = [&](int f, int x, int y) -> unsigned char & {
-                const int w = 1 << tex->getFaceInfo(f).res.ulog2;
+                const int w = 1 << rul[f];
                 return d->chain[d->chain_off[f] + static_cast<size_t>(y + 1) * (w + 2) + x + 1];
         };
         auto corner = [&](int f, int c, int ox, int oy) {   // (ox, oy): 0 for the texel inside, 1 one texel out
-                const Ptex::Res r = tex->getFaceInfo(f).res;
-                const int w = 1 << r.ulog2, h = 1 << r.vlog2;
+                const int w = 1 << rul[f], h = 1 << rvl[f];
                 const int x = (c == 1 || c == 2) ? w - 1 + ox : -ox, y = c >= 2 ? h - 1 + oy : -oy;
                 return std::pair<int, int>(x, y);
         };
-        for (int f = 0; !d->chain_off.empty() && f < nfc; ++f)
-                for (int c = 0; c < 4; ++c) {
-                        int sum = 0, n = 0, g = f, k = c;
-                        bool closed = false;
-                        for (int step = 0; step < 32; ++step) {   // around the vertex: across edge k, which starts at corner k
-                                const Ptex::FaceInfo &gi = tex->getFaceInfo(g);
-                                if (gi.isSubface())
-                                        break;
-                                const auto p = corner(g, k, 0, 0);
-                                sum += texel(g, p.first, p.second); ++n;
-                                const int af = gi.adjface(k), ae = gi.adjedge(k);
-                                if (af < 0)
-                                        break;
-                                g = af; k = (ae + 1) % 4;
-                                if (g == f && k == c) {
-                                        closed = true;
-                                        break;
+        auto vertex_fix = [&] {
+                for (int f = 0; !d->chain_off.empty() && f < nfc; ++f)
+                        for (int c = 0; c < 4; ++c) {
+                                int sum = 0, n = 0, g = f, k = c;
+                                bool closed = false;
+                                for (int step = 0; step < 32; ++step) {   // around the vertex: across edge k, which starts at corner k
+                                        const Ptex::FaceInfo &gi = tex->getFaceInfo(g);
+                                        if (gi.isSubface())
+                                                break;
+                                        const auto p = corner(g, k, 0, 0);
+                                        sum += texel(g, p.first, p.second); ++n;
+                                        const int af = gi.adjface(k), ae = gi.adjedge(k);
+                                        if (af < 0)
+                                                break;
+                                        g = af; k = (ae + 1) % 4;
+                                        if (g == f && k == c) {
+                                                closed = true;
+                                                break;
+                                        }
                                 }
+                                if (!closed)
+                                        continue;
+                                const auto p = corner(f, c, 0, 0), a = corner(f, c, 1, 0), b = corner(f, c, 0, 1), q = corner(f, c, 1, 1);
+                                const int dv = int(std::lround(4.0 * sum / n - texel(f, p.first, p.second) - texel(f, a.first, a.second) - texel(f, b.first, b.second)));
+                                texel(f, q.first, q.second) = static_cast<unsigned char>(std::min(std::max(dv, 0), 255));
                         }
-                        if (!closed)
-                                continue;
-                        const auto p = corner(f, c, 0, 0), a = corner(f, c, 1, 0), b = corner(f, c, 0, 1), q = corner(f, c, 1, 1);
-                        const int dv = int(std::lround(4.0 * sum / n - texel(f, p.first, p.second) - texel(f, a.first, a.second) - texel(f, b.first, b.second)));
-                        texel(f, q.first, q.second) = static_cast<unsigned char>(std::min(std::max(dv, 0), 255));
-                }
-        counts[0] = np;
-        counts[1] = nfc;
-        counts[2] = static_cast<long long>(d->pyr.size());
-        counts[3] = static_cast<long long>(d->chain.size());
+        };
+        vertex_fix();
+        if (view && view[4] > 0)
+                std::printf("height levels for the view: %lld of %lld texels kept (%.1f%%)\n", kept, full, 100.0 * kept / std::max(full, 1LL));
         return d.release();
 }
 
 // The Gregory data (fm 12 floats, greg 1 byte a patch); call before disp_take, which frees everything.
+// Per face the finest height levels left out for the view (1 byte a face); call before disp_take.
+void disp_take_drop(void *h, unsigned char *drop) {
+        auto *d = static_cast<Disp *>(h);
+        std::memcpy(drop, d->drop.data(), d->drop.size());
+}
+
 void disp_take_gregory(void *h, float *fm, unsigned char *greg) {
         auto *d = static_cast<Disp *>(h);
         std::memcpy(fm, d->fm.data(), d->fm.size() * sizeof(float));
