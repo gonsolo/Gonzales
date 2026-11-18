@@ -14,7 +14,7 @@ from std.builtin.device_passable import DevicePassable, DeviceTypeEncoder
 from std.math import ceildiv
 from gonzales.core.geometry import Vec3f, cross, dot
 from gonzales.scene.shapes.patches import BezierPatch
-from gonzales.scene.shapes.displaced_patches import DispSurface, patch_box, sub_box, sub_count, patch_at, intersect_displaced, displaced_normal, displaced_point, displaced_point_n, chain_color, corner_grid, corner_words, corner_step
+from gonzales.scene.shapes.displaced_patches import DispSurface, patch_box, sub_box, sub_count, patch_at, intersect_displaced, displaced_normal, displaced_point, displaced_point_n, chain_color, corner_grid, corner_words, corner_step, weld_corner_grid
 from gonzales.scene.accel.xert import XeRayDesc, xert_alignment, xert_build_blas_geoms, xert_free
 from std.memory import OpaquePointer
 from std.sys.info import is_gpu
@@ -940,6 +940,8 @@ def main() raises:
     def fill_grid(p: Int) {imm}:
         corner_grid(d_g, p, plo[p], cst, cgrid.unsafe_offset(cw * p))
     parallelize(fill_grid, np)
+    if getenv("WELD") != "0":
+        weld_corner_grid(np, gn, cgrid)
     print("sub-square corner grid:", (gn + 1) * (gn + 1), "points a patch,", ncg * 4 // 1024, "KiB")
     if getenv("EDGE_GAP") == "1":
         _edge_gap(DispSurface(patches, sq, face, hdr, pyr, Float32(0), eye, pixel, chain_off, chain, fm, greg, _grid_levels(), _leaf_mode(), cgrid), np)

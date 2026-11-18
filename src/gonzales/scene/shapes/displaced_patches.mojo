@@ -735,6 +735,29 @@ def _oct16(v: Float32) -> UInt16:
     return UInt16(Int(round(min(max(v, Float32(-1)), Float32(1)) * Float32(32767))) + 32768)
 
 
+def _oct_enc(nv: Vec3f) -> Tuple[UInt16, UInt16]:
+    """A unit normal as two 16-bit octahedral codes; (0, 0) for none."""
+    var l1 = abs(nv.x) + abs(nv.y) + abs(nv.z)
+    if l1 == Float32(0):
+        return (UInt16(0), UInt16(0))
+    var u = nv.x / l1; var v = nv.y / l1
+    if nv.z < Float32(0):
+        var uu = (Float32(1) - abs(v)) * (Float32(1) if u >= Float32(0) else Float32(-1))
+        v = (Float32(1) - abs(u)) * (Float32(1) if v >= Float32(0) else Float32(-1)); u = uu
+    return (_oct16(u), _oct16(v))
+
+
+@always_inline
+def _oct_dec(e0: UInt16, e1: UInt16) -> Vec3f:
+    var u = (Float32(e0) - Float32(32768)) * Float32(1.0 / 32767); var v = (Float32(e1) - Float32(32768)) * Float32(1.0 / 32767)
+    var z = Float32(1) - abs(u) - abs(v)
+    if z < Float32(0):
+        var uu = (Float32(1) - abs(v)) * (Float32(1) if u >= Float32(0) else Float32(-1))
+        v = (Float32(1) - abs(u)) * (Float32(1) if v >= Float32(0) else Float32(-1)); u = uu
+    var r = Float32(0) if e0 == UInt16(0) and e1 == UInt16(0) else Float32(1) / sqrt(u * u + v * v + z * z)
+    return Vec3f(u * r, v * r, z * r)
+
+
 def corner_grid(d: DispSurface, pi: Int, lo: Vec3f, step: Float32, dst: _F32):
     """Patch pi's grid points into dst, rows along t: positions as global multiples of step (so patches sharing
     a point store the same one), unit normals octahedral; (0, 0) is a degenerate normal."""
@@ -748,15 +771,70 @@ def corner_grid(d: DispSurface, pi: Int, lo: Vec3f, step: Float32, dst: _F32):
             q[unsafe_offset=o] = UInt16(min(max(Int(round(g[0].x / step) - k.x), 0), 65535))
             q[unsafe_offset=o + 1] = UInt16(min(max(Int(round(g[0].y / step) - k.y), 0), 65535))
             q[unsafe_offset=o + 2] = UInt16(min(max(Int(round(g[0].z / step) - k.z), 0), 65535))
-            var nv = g[1]; var l1 = abs(nv.x) + abs(nv.y) + abs(nv.z)
-            if l1 == Float32(0):
-                q[unsafe_offset=o + 3] = UInt16(0); q[unsafe_offset=o + 4] = UInt16(0)
+            var e = _oct_enc(g[1]); q[unsafe_offset=o + 3] = e[0]; q[unsafe_offset=o + 4] = e[1]
+
+
+def weld_corner_grid(np: Int, n: Int, grid: _F32) raises:
+    """Points on shared patch edges (edges matched by their end points) get one position and their mean normal:
+    the two patches' bicubics agree there only up to rounding, which the 16-bit grid can turn into a step."""
+    var cw = corner_words(n); var m = (n + 1) * (n + 1)
+    var parent = List[Int32](length=np * m, fill=Int32(-1)); var joined = List[Bool](length=np * m, fill=False)
+    def find(par: List[Int32], x: Int) -> Int:
+        var r = x
+        while Int(par[r]) >= 0:
+            r = Int(par[r])
+        return r
+    def gpos(p: Int, o: Int) {imm} -> Tuple[Int, Int, Int]:
+        var g = grid.unsafe_offset(p * cw); var st = g[unsafe_offset=3]; var q = g.unsafe_offset(4).bitcast[UInt16]()
+        return (Int(g[unsafe_offset=0] / st) + Int(q[unsafe_offset=5 * o]), Int(g[unsafe_offset=1] / st) + Int(q[unsafe_offset=5 * o + 1]),
+                Int(g[unsafe_offset=2] / st) + Int(q[unsafe_offset=5 * o + 2]))
+    def edge_pt(e: Int, k: Int) {imm} -> Int:   # grid index of point k along edge e (counter-clockwise from corner e)
+        var ij = (k, 0) if e == 0 else ((n, k) if e == 1 else ((n - k, n) if e == 2 else (0, n - k)))
+        return ij[1] * (n + 1) + ij[0]
+    def key(p: Tuple[Int, Int, Int]) -> String:
+        return String(p[0] // 64) + "," + String(p[1] // 64) + "," + String(p[2] // 64)
+    var ends = Dict[String, Int]()
+    for p in range(np):
+        for e in range(4):
+            var ka = key(gpos(p, edge_pt(e, 0))); var kb = key(gpos(p, edge_pt(e, n)))
+            var ek = ka + "|" + kb if ka < kb else kb + "|" + ka
+            if ek not in ends:
+                ends[ek] = p * 4 + e
                 continue
-            var u = nv.x / l1; var v = nv.y / l1
-            if nv.z < Float32(0):
-                var uu = (Float32(1) - abs(v)) * (Float32(1) if u >= Float32(0) else Float32(-1))
-                v = (Float32(1) - abs(u)) * (Float32(1) if v >= Float32(0) else Float32(-1)); u = uu
-            q[unsafe_offset=o + 3] = _oct16(u); q[unsafe_offset=o + 4] = _oct16(v)
+            var p2 = ends[ek] // 4; var e2 = ends[ek] % 4
+            var same = key(gpos(p2, edge_pt(e2, 0))) == ka
+            for k in range(n + 1):
+                var x1 = p * m + edge_pt(e, k); var x2 = p2 * m + edge_pt(e2, k if same else n - k)
+                joined[x1] = True; joined[x2] = True
+                var r1 = find(parent, x1); var r2 = find(parent, x2)
+                if r1 != r2:
+                    parent[r1] = Int32(r2)
+    var slot = Dict[Int, Int](); var sp = List[Int](); var sn = List[Vec3f]()   # per group: x, y, z sums and count; normal sum
+    for x in range(np * m):
+        if not joined[x]:
+            continue
+        var r = find(parent, x); var p = x // m; var o = x % m
+        if r not in slot:
+            slot[r] = len(sn); sp.append(0); sp.append(0); sp.append(0); sp.append(0); sn.append(Vec3f(0, 0, 0))
+        var s = slot[r]; var gp = gpos(p, o); var q = grid.unsafe_offset(p * cw + 4).bitcast[UInt16]()
+        sp[4 * s] += gp[0]; sp[4 * s + 1] += gp[1]; sp[4 * s + 2] += gp[2]; sp[4 * s + 3] += 1
+        sn[s] = sn[s] + _oct_dec(q[unsafe_offset=5 * o + 3], q[unsafe_offset=5 * o + 4])
+    var moved = 0
+    for x in range(np * m):
+        if not joined[x]:
+            continue
+        var s = slot[find(parent, x)]; var p = x // m; var o = x % m
+        var g = grid.unsafe_offset(p * cw); var st = g[unsafe_offset=3]; var q = g.unsafe_offset(4).bitcast[UInt16]()
+        var c = Float64(sp[4 * s + 3])
+        for a in range(3):
+            var v = UInt16(min(max(Int(round(Float64(sp[4 * s + a]) / c)) - Int(g[unsafe_offset=a] / st), 0), 65535))
+            if v != q[unsafe_offset=5 * o + a]:
+                moved += 1
+            q[unsafe_offset=5 * o + a] = v
+        var nl = sqrt(dot(sn[s], sn[s]))
+        var e = _oct_enc(sn[s] * (Float32(1) / nl) if nl > Float32(0) else Vec3f(0, 0, 0))
+        q[unsafe_offset=5 * o + 3] = e[0]; q[unsafe_offset=5 * o + 4] = e[1]
+    print("welded edge grid points:", len(sn), "groups,", len(ends), "edge keys,", moved, "coordinates moved")
 
 
 def _bl_frame(d: DispSurface, pi: Int, k: Int, org: Vec3f) -> BLFrame:
@@ -773,14 +851,8 @@ def _bl_frame(d: DispSurface, pi: Int, k: Int, org: Vec3f) -> BLFrame:
         var o = 5 * ((kv + (1 if c >= 2 else 0)) * (n + 1) + ku + (1 if c == 1 or c == 2 else 0))
         f.px[c] = (b.x + Float32(q[unsafe_offset=o]) * st) - org.x; f.py[c] = (b.y + Float32(q[unsafe_offset=o + 1]) * st) - org.y
         f.pz[c] = (b.z + Float32(q[unsafe_offset=o + 2]) * st) - org.z
-        var e0 = q[unsafe_offset=o + 3]; var e1 = q[unsafe_offset=o + 4]
-        var u = (Float32(e0) - Float32(32768)) * Float32(1.0 / 32767); var v = (Float32(e1) - Float32(32768)) * Float32(1.0 / 32767)
-        var z = Float32(1) - abs(u) - abs(v)
-        if z < Float32(0):
-            var uu = (Float32(1) - abs(v)) * (Float32(1) if u >= Float32(0) else Float32(-1))
-            v = (Float32(1) - abs(u)) * (Float32(1) if v >= Float32(0) else Float32(-1)); u = uu
-        var r = Float32(0) if e0 == UInt16(0) and e1 == UInt16(0) else Float32(1) / sqrt(u * u + v * v + z * z)
-        f.nx[c] = u * r; f.ny[c] = v * r; f.nz[c] = z * r
+        var nv = _oct_dec(q[unsafe_offset=o + 3], q[unsafe_offset=o + 4])
+        f.nx[c] = nv.x; f.ny[c] = nv.y; f.nz[c] = nv.z
     return f
 
 
