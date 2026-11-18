@@ -15,6 +15,7 @@ from std.math import ceildiv
 from gonzales.core.geometry import Vec3f, cross, dot
 from gonzales.scene.shapes.patches import BezierPatch
 from gonzales.scene.shapes.displaced_patches import DispSurface, Levels, make_levels, prim_patch, prim_total, corner_off, patch_level, LEVELS, patch_box, sub_box, patch_at, intersect_displaced, displaced_normal, displaced_point, displaced_point_n, chain_color, _bl_frame, _bl_point, corner_grid, corner_words, corner_step, weld_corner_grid, face_height
+from gonzales.scene.shapes.disp_build import DispOptions, DispMesh, load_disp_mesh, disp_bounds, _cstr
 from gonzales.scene.accel.xert import XeRayDesc, xert_alignment, xert_build_blas_geoms, xert_free
 from std.memory import OpaquePointer
 from std.sys.info import is_gpu
@@ -461,38 +462,6 @@ def _hw_render(ctx: DeviceContext, mut bufs: List[DeviceBuffer[DType.uint8]], d:
         for k in range(W * H):
             steps[k // W] += Int(hs[k]); maxs[k // W] = max(maxs[k // W], Int(hs[k]))
     tb.unsafe_free(); gn.unsafe_free(); ext.unsafe_free(); bounds.unsafe_free()
-
-
-def _patch_levels(np: Int, patches: Pointer[BezierPatch, MutUntrackedOrigin], sq: Pointer[Float32, MutUntrackedOrigin],
-                  face: Pointer[Int32, MutUntrackedOrigin], hdr: Pointer[Int32, MutUntrackedOrigin], fdrop: Pointer[UInt8, MutUntrackedOrigin],
-                  view: Pointer[Float32, MutUntrackedOrigin]) raises -> List[Int]:
-    """Each patch's sub-square level: GRID=1..64 for all, else about TPS (default 5) texels a sub-square side, no smaller
-    than PPS (default 0.5) pixels at the patch's distance from the camera (0: off), but at least LMIN (default 2: 4 x 4; coarser
-    sub-squares make the walk inside them long)."""
-    var g = getenv("GRID"); var tps = _env_f("TPS", Float32(5)); var lmin = Int(_env_f("LMIN", Float32(2))); var pps = _env_f("PPS", Float32(0.5))
-    var lev = List[Int](length=np, fill=0)
-    for p in range(np):
-        var l = 0
-        if g.byte_length() > 0:
-            while (1 << (l + 1)) <= atol(g):
-                l += 1
-        else:
-            var f = Int(face[unsafe_offset=p])
-            var side = sq[unsafe_offset=3 * p + 2] * Float32(1 << (max(Int(hdr[unsafe_offset=3 * f + 1]), Int(hdr[unsafe_offset=3 * f + 2])) + Int(fdrop[unsafe_offset=f])))
-            while l < LEVELS - 1 and Float32(1 << (l + 1)) * tps <= side * Float32(1.41421356):
-                l += 1
-            if pps > Float32(0):   # the patch's control box in pixels at its nearest point to the eye
-                var b = patches[unsafe_offset=p]
-                var lo = Vec3f(b.x.reduce_min(), b.y.reduce_min(), b.z.reduce_min()); var hi = Vec3f(b.x.reduce_max(), b.y.reduce_max(), b.z.reduce_max())
-                var eye = Vec3f(view[unsafe_offset=0], view[unsafe_offset=1], view[unsafe_offset=2])
-                var dx = max(max(lo.x - eye.x, eye.x - hi.x), Float32(0)); var dy = max(max(lo.y - eye.y, eye.y - hi.y), Float32(0))
-                var dz = max(max(lo.z - eye.z, eye.z - hi.z), Float32(0)); var e = hi - lo; var ext = sqrt(dot(e, e))
-                var px = ext / (view[unsafe_offset=3] * max(sqrt(dx * dx + dy * dy + dz * dz), Float32(1e-3) * ext))
-                while l > 0 and px / Float32(1 << l) < pps:
-                    l -= 1
-            l = max(l, min(lmin, LEVELS - 1))
-        lev[p] = l
-    return lev^
 
 
 def _leaf_mode() -> Int32:
@@ -979,76 +948,32 @@ def main() raises:
     var out_dir = String("/tmp/claude-1000/-home-gonsolo-work-moana-3060-paper/5a168d33-8d85-45d2-a94f-7e6bdd0ebff6/scratchpad/rock/")
     var ss = Int(_env_f("SS", Float32(1)))   # SS=4: 4 x 4 samples per 960 x 720 pixel, as a larger image
     var W = 960 * ss; var H = 720 * ss
-    var counts = unsafe_alloc[Int64](4)
     var ptx = getenv("PTX", PTX)   # another displacement Ptex (its cage in the meta data)
-    var cname = unsafe_alloc[UInt8](ptx.byte_length() + 1)
-    for i in range(ptx.byte_length()):
-        cname[unsafe_offset=i] = ptx.unsafe_ptr()[unsafe_offset=i]
-    cname[unsafe_offset=ptx.byte_length()] = UInt8(0)
-    var view = unsafe_alloc[Float32](5)   # LOD=k: keep a face's finer height levels only while its texels are >= k pixels
-    view[unsafe_offset=4] = _env_f("LOD", Float32(0))
-    if view[unsafe_offset=4] > Float32(0) or _env_f("PPS", Float32(0.5)) > Float32(0):   # the camera below, from the cage's box
-        var bb = unsafe_alloc[Float32](6)
-        if external_call["disp_bounds", Int32](cname, bb) == 0:
-            raise Error("cannot read " + ptx)
-        var b0 = Vec3f(bb[unsafe_offset=0], bb[unsafe_offset=1], bb[unsafe_offset=2]); var b1 = Vec3f(bb[unsafe_offset=3], bb[unsafe_offset=4], bb[unsafe_offset=5])
-        var cc = (b0 + b1) * Float32(0.5); var e = b1 - b0; var dg = sqrt(dot(e, e)); var nr = _env_f("CAM_DIST", Float32(1.1))
-        view[unsafe_offset=0] = cc.x + _env_f("CAM_X", Float32(0.45)) * dg * nr; view[unsafe_offset=1] = cc.y + _env_f("CAM_Y", Float32(0.55)) * dg * nr
-        view[unsafe_offset=2] = cc.z + _env_f("CAM_Z", Float32(0.7)) * dg * nr
-        view[unsafe_offset=3] = Float32(2) * tan(_env_f("FOV", Float32(40)) * Float32(3.14159265) / Float32(360)) / Float32(960)
-    var hd = external_call["disp_open", Int](cname, Int32(2), counts, view)
-    if hd == 0:
-        raise Error("cannot read " + ptx)
-    var np = Int(counts[0]); var nf = Int(counts[1]); var npyr = Int(counts[2])
-    var cpf = unsafe_alloc[Float32](48 * np)
-    var sq = unsafe_alloc[Float32](3 * np)
-    var face = unsafe_alloc[Int32](np)
-    var hdr = unsafe_alloc[Int32](3 * nf)
-    var pyr = unsafe_alloc[UInt8](npyr)
-    var cbox = unsafe_alloc[Float32](6)
-    var nchain = Int(counts[3])
-    var chain_off = unsafe_alloc[Int32](nf)
-    var chain = unsafe_alloc[UInt8](max(nchain, 1))
-    external_call["disp_take_chains", NoneType](hd, chain_off, chain)
-    var fm = unsafe_alloc[Float32](12 * np)
-    var greg = unsafe_alloc[UInt8](np)
-    external_call["disp_take_gregory", NoneType](hd, fm, greg)
-    var fdrop = unsafe_alloc[UInt8](nf)
-    external_call["disp_take_drop", NoneType](hd, fdrop)
-    external_call["disp_take", NoneType](hd, cpf, sq, face, hdr, pyr, cbox)
-    var patches = unsafe_alloc[BezierPatch](np)
-    for p in range(np):
-        var x = SIMD[DType.float32, 16](0); var y = SIMD[DType.float32, 16](0); var z = SIMD[DType.float32, 16](0)
-        for k in range(16):
-            x[k] = cpf[unsafe_offset=48 * p + 3 * k]; y[k] = cpf[unsafe_offset=48 * p + 3 * k + 1]; z[k] = cpf[unsafe_offset=48 * p + 3 * k + 2]
-        patches[unsafe_offset=p] = BezierPatch(x, y, z)
-    var plev = _patch_levels(np, patches, sq, face, hdr, fdrop, view)   # from the full resolution: dropped height levels keep the grid
-    var perm = List[Int](capacity=np)
-    for l in range(LEVELS):   # patches sorted by level: a primitive's patch follows from its index (prim_patch)
-        for p in range(np):
-            if plev[p] == l:
-                perm.append(p)
-    var patches2 = unsafe_alloc[BezierPatch](np); var sq2 = unsafe_alloc[Float32](3 * np); var face2 = unsafe_alloc[Int32](np)
-    var fm2 = unsafe_alloc[Float32](12 * np); var greg2 = unsafe_alloc[UInt8](np); var slev = List[Int](capacity=np)
-    for i in range(np):
-        var p = perm[i]
-        patches2[unsafe_offset=i] = patches[unsafe_offset=p]; face2[unsafe_offset=i] = face[unsafe_offset=p]; greg2[unsafe_offset=i] = greg[unsafe_offset=p]
-        for c in range(3):
-            sq2[unsafe_offset=3 * i + c] = sq[unsafe_offset=3 * p + c]
-        for c in range(12):
-            fm2[unsafe_offset=12 * i + c] = fm[unsafe_offset=12 * p + c]
-        slev.append(plev[p])
-    patches = patches2; sq = sq2; face = face2; fm = fm2; greg = greg2
-    var lvt = make_levels(slev)
+    var g_env = getenv("GRID"); var grid = -1
+    if g_env.byte_length() > 0:
+        grid = 0
+        while (1 << (grid + 1)) <= atol(g_env):
+            grid += 1
+    var o = DispOptions(Vec3f(0, 0, 0), Float32(0), _env_f("LOD", Float32(0)), _env_f("PPS", Float32(0.5)), _env_f("TPS", Float32(5)),
+                        Int(_env_f("LMIN", Float32(2))), grid, getenv("WELD") != "0")
+    if o.lod > Float32(0) or o.pps > Float32(0):   # the camera below, from the cage's box: LOD and PPS use it
+        var bb = disp_bounds(ptx)
+        var cc = (bb[0] + bb[1]) * Float32(0.5); var e = bb[1] - bb[0]; var dg = sqrt(dot(e, e)); var nr = _env_f("CAM_DIST", Float32(1.1))
+        o.eye = Vec3f(cc.x + _env_f("CAM_X", Float32(0.45)) * dg * nr, cc.y + _env_f("CAM_Y", Float32(0.55)) * dg * nr, cc.z + _env_f("CAM_Z", Float32(0.7)) * dg * nr)
+        o.pixel = Float32(2) * tan(_env_f("FOV", Float32(40)) * Float32(3.14159265) / Float32(360)) / Float32(960)
+    var dm = load_disp_mesh(ptx, o)
+    var np = dm.np; var nf = dm.nf; var npyr = dm.npyr; var nchain = dm.nchain
+    var patches = dm.patches; var sq = dm.sq; var face = dm.face; var hdr = dm.hdr; var pyr = dm.pyr
+    var chain_off = dm.chain_off; var chain = dm.chain; var fm = dm.fm; var greg = dm.greg; var lvt = dm.lv
+    var cgrid = dm.corners; var ncg = dm.ncg
     var lcount = String()
     for l in range(LEVELS):
         lcount += String(" ", Int(lvt.patch[l + 1] - lvt.patch[l]), "@", 1 << l)
-    print("sub-square levels (patches @ n x n):", lcount, ";", Int(lvt.prim[LEVELS]), "primitives")
+    print("sub-square levels (patches @ n x n):", lcount, ";", dm.prims(), "primitives")
     var texels = 0
     for f in range(nf):
         texels += (1 << Int(hdr[unsafe_offset=3 * f + 1])) * (1 << Int(hdr[unsafe_offset=3 * f + 2]))
-    var blo = Vec3f(cbox[unsafe_offset=0], cbox[unsafe_offset=1], cbox[unsafe_offset=2])
-    var bhi = Vec3f(cbox[unsafe_offset=3], cbox[unsafe_offset=4], cbox[unsafe_offset=5])
+    var blo = dm.lo; var bhi = dm.hi
     print("rock:", np, "patches,", nf, "faces,", texels, "texels,", npyr, "pyramid bytes; box", blo.x, blo.y, blo.z, "..", bhi.x, bhi.y, bhi.z)
     print("bordered height chains:", nchain, "bytes =", Float32(nchain) / Float32(texels), "x the plain heights (", texels, "bytes ); height nodes (planes + residuals, 4 x 4-texel cells up)", npyr, "bytes")
 
@@ -1083,19 +1008,6 @@ def main() raises:
         if external_call["disp_color_open", Int32](cc) == 0:
             raise Error("cannot read " + col_path)
 
-    var ncg = Int(lvt.corner[LEVELS])
-    var cgrid = unsafe_alloc[Float32](ncg)
-    var d_g = DispSurface(patches, sq, face, hdr, pyr, Float32(0), Vec3f(0, 0, 0), Float32(0), chain_off, chain, fm, greg, lvt, _leaf_mode(), cgrid)
-    var plo = List[Vec3f](capacity=np); var pext = Float32(0)
-    for p in range(np):
-        var b = patch_box(d_g, p); plo.append(b[0])
-        pext = max(pext, max(b[1].x - b[0].x, max(b[1].y - b[0].y, b[1].z - b[0].z)))
-    var cst = corner_step(pext)
-    def fill_grid(p: Int) {imm}:
-        corner_grid(d_g, p, plo[p], cst, cgrid.unsafe_offset(corner_off(lvt, p)))
-    parallelize(fill_grid, np)
-    if getenv("WELD") != "0":
-        weld_corner_grid(np, lvt, cgrid)
     print("sub-square corner grid:", ncg * 4 // 1024, "KiB")
     if getenv("EDGE_GAP") == "1":
         _edge_gap(DispSurface(patches, sq, face, hdr, pyr, Float32(0), eye, pixel, chain_off, chain, fm, greg, lvt, _leaf_mode(), cgrid), np)
@@ -1252,6 +1164,7 @@ def main() raises:
                   "Mrays/s, steps/ray", Float32(tot) / Float32(W * H), "(max per pixel row", mx, "), memory", mem // 1024, "KiB")
         elif scene == 4:
             var sz = unsafe_alloc[Int32](3)
+            var cname = _cstr(ptx)
             _ = external_call["disp_cage", Int32](cname, Int(0), Int(0), Int(0), sz)
             var cpos = List[Float32](length=3 * Int(sz[0]), fill=0)
             var ccnt = List[Int32](length=Int(sz[1]), fill=0)
