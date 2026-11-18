@@ -346,7 +346,7 @@ def render_hw[M: Int](accel: MutPointer[UInt8, MutAnyOrigin], d: DispSurface, tr
                 s = (gi + hh.s + hh.u) * inv_n; t = (gj + hh.u) * inv_n
             else:              # (i, j) (i+1, j+1) (i, j+1)
                 s = (gi + hh.s) * inv_n; t = (gj + hh.s + hh.u) * inv_n
-            size = d.pixel * hh.t / ext[unsafe_offset=p]   # the footprint in patch units
+        size = d.pixel * hh.t / ext[unsafe_offset=p]   # shade at the pixel footprint in patch units, not the leaf size
         var n = displaced_normal(d, p, s, t, max(size, Float32(1.0 / 512.0)))
         if dot(n, dir) > Float32(0):
             n = -n
