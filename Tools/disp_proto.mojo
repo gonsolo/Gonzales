@@ -465,8 +465,9 @@ def _hw_render(ctx: DeviceContext, mut bufs: List[DeviceBuffer[DType.uint8]], d:
 
 def _patch_levels(np: Int, sq: Pointer[Float32, MutUntrackedOrigin], face: Pointer[Int32, MutUntrackedOrigin],
                   hdr: Pointer[Int32, MutUntrackedOrigin]) raises -> List[Int]:
-    """Each patch's sub-square level: GRID=1..64 for all, else about TPS (default 5) texels a sub-square side."""
-    var g = getenv("GRID"); var tps = _env_f("TPS", Float32(5))
+    """Each patch's sub-square level: GRID=1..64 for all, else about TPS (default 5) texels a sub-square side but at
+    least LMIN (default 2: 4 x 4; coarser sub-squares make the walk inside them long)."""
+    var g = getenv("GRID"); var tps = _env_f("TPS", Float32(5)); var lmin = Int(_env_f("LMIN", Float32(2)))
     var lev = List[Int](length=np, fill=0)
     for p in range(np):
         var l = 0
@@ -478,6 +479,7 @@ def _patch_levels(np: Int, sq: Pointer[Float32, MutUntrackedOrigin], face: Point
             var side = sq[unsafe_offset=3 * p + 2] * Float32(1 << max(Int(hdr[unsafe_offset=3 * f + 1]), Int(hdr[unsafe_offset=3 * f + 2])))
             while l < LEVELS - 1 and Float32(1 << (l + 1)) * tps <= side * Float32(1.41421356):
                 l += 1
+            l = max(l, min(lmin, LEVELS - 1))
         lev[p] = l
     return lev^
 
