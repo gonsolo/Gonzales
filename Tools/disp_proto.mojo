@@ -896,7 +896,8 @@ def run_demo(patches: Pointer[BezierPatch, MutUntrackedOrigin], sq: Pointer[Floa
 
 def main() raises:
     var out_dir = String("/tmp/claude-1000/-home-gonsolo-work-moana-3060-paper/5a168d33-8d85-45d2-a94f-7e6bdd0ebff6/scratchpad/rock/")
-    var W = 960; var H = 720
+    var ss = Int(_env_f("SS", Float32(1)))   # SS=4: 4 x 4 samples per 960 x 720 pixel, as a larger image
+    var W = 960 * ss; var H = 720 * ss
     var counts = unsafe_alloc[Int64](4)
     var ptx = String(PTX)
     var cname = unsafe_alloc[UInt8](ptx.byte_length() + 1)
@@ -952,7 +953,7 @@ def main() raises:
     var tan_h = tan(fov * Float32(0.5))
     var light = right * Float32(0.75) + up * Float32(0.55) - fwd * Float32(0.25)
     light = light * (Float32(1) / sqrt(dot(light, light)))
-    var pixel = Float32(2) * tan_h / Float32(W) * _env_f("FOOTPRINT", Float32(1))
+    var pixel = Float32(2) * tan_h / Float32(W) * Float32(ss) * _env_f("FOOTPRINT", Float32(1))
     var exag = _env_f("EXAG", Float32(8))
     var only = getenv("ONLY")
     var spp_n = Int(sqrt(_env_f("SPP", Float32(1))) + Float32(0.5))   # SPP=64: 8 x 8
