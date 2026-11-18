@@ -14,7 +14,7 @@ from std.builtin.device_passable import DevicePassable, DeviceTypeEncoder
 from std.math import ceildiv
 from gonzales.core.geometry import Vec3f, cross, dot
 from gonzales.scene.shapes.patches import BezierPatch
-from gonzales.scene.shapes.displaced_patches import DispSurface, patch_box, sub_box, sub_count, patch_at, intersect_displaced, displaced_normal, displaced_point, displaced_point_n, chain_color, corner_grid, corner_words, corner_step, weld_corner_grid
+from gonzales.scene.shapes.displaced_patches import DispSurface, patch_box, sub_box, sub_count, patch_at, intersect_displaced, displaced_normal, displaced_point, displaced_point_n, chain_color, corner_grid, corner_words, corner_step, weld_corner_grid, face_height
 from gonzales.scene.accel.xert import XeRayDesc, xert_alignment, xert_build_blas_geoms, xert_free
 from std.memory import OpaquePointer
 from std.sys.info import is_gpu
@@ -205,6 +205,8 @@ def render_gpu[M: Int](d: DispSurface, nodes: Pointer[BNode, MutUntrackedOrigin]
     dir = dir * (Float32(1) / sqrt(dot(dir, dir)))
     var hh = trace_patches[M](d, nodes, order, cam.eye, dir, cam.prof & 2 != 0)
     steps[unsafe_offset=y * W + x] = Int32(hh.steps)
+    if cam.prof == 4:   # the hit patch and its (s, t) in 8 bits each instead of steps, -1 for none
+        steps[unsafe_offset=y * W + x] = Int32(hh.prim * 65536 + Int(hh.s * Float32(255.99)) * 256 + Int(hh.u * Float32(255.99))) if hh.prim >= 0 else Int32(-1)
     var shade = Float32(0)
     if hh.prim >= 0 and cam.prof != 0:
         shade = Float32(0.5)
@@ -324,6 +326,8 @@ def render_hw[M: Int](accel: MutPointer[UInt8, MutAnyOrigin], d: DispSurface, tr
     dir = dir * (Float32(1) / sqrt(dot(dir, dir)))
     var hh = _rq_trace[M](accel, d, cam.eye, dir, procedural != 0)
     steps[unsafe_offset=y * W + x] = Int32(hh.steps)
+    if cam.prof == 4:   # the hit patch and its (s, t) in 8 bits each instead of steps, -1 for none
+        steps[unsafe_offset=y * W + x] = Int32(hh.prim * 65536 + Int(hh.s * Float32(255.99)) * 256 + Int(hh.u * Float32(255.99))) if hh.prim >= 0 else Int32(-1)
     var shade = Float32(0)
     if hh.prim >= 0:
         var p = hh.prim; var s = hh.s; var t = hh.u; var size = hh.size
@@ -553,6 +557,39 @@ def _edge_gap(d: DispSurface, np: Int) raises:
                     worst_r = max(worst_r, ang); sum_r += Float64(ang); n_r += 1
     print("normal gap across edges touching Gregory patches: max", worst_g, "deg, mean", sum_g / Float64(max(n_g, 1)), "over", n_g, "samples")
     print("normal gap across regular edges: max", worst_r, "deg, mean", sum_r / Float64(max(n_r, 1)), "over", n_r, "samples")
+
+
+def _height_gap(d: DispSurface, np: Int) raises:
+    """Height (bytes) disagreement between the patches sharing a point: patch corners by valence, edge points."""
+    var groups = Dict[String, List[Float32]]()
+    var cs: List[Float32] = [0, 1, 1, 0]; var ct: List[Float32] = [0, 0, 1, 1]
+    for p in range(np):
+        var f = Int(d.face[unsafe_offset=p]); var sz = d.sq[unsafe_offset=3 * p + 2]
+        for e in range(4):
+            for k in range(4):   # the corner, then three points along the edge to the next corner
+                var x = Float32(k) / Float32(4)
+                var s = cs[e] + (cs[(e + 1) % 4] - cs[e]) * x; var tt = ct[e] + (ct[(e + 1) % 4] - ct[e]) * x
+                var a = patch_eval(d.patches[unsafe_offset=p], s, tt)[0]
+                var key = ("c" if k == 0 else "e") + String(Int(a.x * 1000)) + "," + String(Int(a.y * 1000)) + "," + String(Int(a.z * 1000))
+                var h = face_height(d, f, d.sq[unsafe_offset=3 * p] + s * sz, d.sq[unsafe_offset=3 * p + 1] + tt * sz)
+                if key not in groups:
+                    groups[key] = List[Float32]()
+                groups[key].append(h)
+    var n = List[Int](length=8, fill=0); var bad = List[Int](length=8, fill=0); var worst = List[Float32](length=8, fill=Float32(0)); var sum = List[Float64](length=8, fill=Float64(0))
+    for g in groups.items():
+        var m = len(g.value)
+        if m < 2:
+            continue
+        var lo = Float32(1e30); var hi = Float32(-1e30)
+        for h in g.value:
+            lo = min(lo, h); hi = max(hi, h)
+        var c = 0 if g.key.startswith("e") else min(m, 7)
+        n[c] += 1; sum[c] += Float64(hi - lo); worst[c] = max(worst[c], hi - lo)
+        if hi - lo > Float32(0.5):
+            bad[c] += 1
+    for c in range(8):
+        if n[c] > 0:
+            print("height gap", "edge points" if c == 0 else "corners of valence " + String(c), ":", n[c], "points, mean", sum[c] / Float64(n[c]), "max", worst[c], "bytes,", bad[c], "over half a byte")
 
 
 @fieldwise_init
@@ -945,6 +982,7 @@ def main() raises:
     print("sub-square corner grid:", (gn + 1) * (gn + 1), "points a patch,", ncg * 4 // 1024, "KiB")
     if getenv("EDGE_GAP") == "1":
         _edge_gap(DispSurface(patches, sq, face, hdr, pyr, Float32(0), eye, pixel, chain_off, chain, fm, greg, _grid_levels(), _leaf_mode(), cgrid), np)
+        _height_gap(DispSurface(patches, sq, face, hdr, pyr, Float32(0), eye, pixel, chain_off, chain, fm, greg, _grid_levels(), _leaf_mode(), cgrid), np)
         return
     var ngreg = 0
     for p in range(np):
