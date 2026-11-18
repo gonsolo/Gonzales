@@ -53,7 +53,8 @@ int disp_bounds(const char *ptx, float *box) {
 }
 
 // The cage and heights of `ptx` as Bezier patches and pyramids; counts: patches, faces, pyramid bytes. Null on failure.
-// view (eye x, y, z, pixel angle, keep; keep <= 0: off) or null: a face keeps its finer levels only while its texels at its nearest point
+// view (eye x, y, z, pixel angle, keep; keep <= 0: off; then the view cone's axis x, y, z, cosine (< -1: none) and the
+// factor faces outside it count as farther) or null: a face keeps its finer levels only while its texels at its nearest point
 // to the eye are at least `keep` pixels; the coarser level then stands in for the face's resolution everywhere.
 void *disp_open(const char *ptx, int isolation, long long *counts, const float *view) {
         Ptex::String err;
@@ -93,7 +94,19 @@ void *disp_open(const char *ptx, int isolation, long long *counts, const float *
                                 const float e = std::max(std::max(lo[i] - view[i], view[i] - hi[i]), 0.0f);
                                 d2 += e * e;
                         }
-                        const float pixel = view[3] * std::max(std::sqrt(d2), 1e-3f * edge);
+                        float pixel = view[3] * std::max(std::sqrt(d2), 1e-3f * edge);
+                        if (view[8] >= -1) {   // outside the view cone (axis view[5..7], cosine view[8]) a face counts view[9] times farther
+                                float c[3], r = 0;
+                                for (int i = 0; i < 3; ++i)
+                                        c[i] = 0.5f * (lo[i] + hi[i]) - view[i], r += 0.25f * (hi[i] - lo[i]) * (hi[i] - lo[i]);
+                                r = std::sqrt(r);
+                                const float d = std::sqrt(c[0] * c[0] + c[1] * c[1] + c[2] * c[2]);
+                                if (d > r) {
+                                        const float sa = r / d, ca = std::sqrt(std::max(1 - sa * sa, 0.0f)), sh = std::sqrt(std::max(1 - view[8] * view[8], 0.0f));
+                                        if ((c[0] * view[5] + c[1] * view[6] + c[2] * view[7]) / d < view[8] * ca - sh * sa)
+                                                pixel *= view[9];
+                                }
+                        }
                         float texel = edge / float(1 << std::max(r.ulog2, r.vlog2));
                         while (drop < std::max(r.ulog2, r.vlog2) && 2 * texel <= view[4] * pixel)
                                 texel *= 2, ++drop;

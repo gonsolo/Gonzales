@@ -15,8 +15,12 @@ from gonzales.scene.shapes.displaced_patches import DispSurface, SubdivSurface, 
 struct DispOptions(TrivialRegisterPassable):
     """The camera (eye, pixel angle; pixel 0: none) and the level choices: height levels kept down to `lod` pixels
     (0: all), sub-squares about `tps` texels a side but no smaller than `pps` pixels (0: off), at least level `lmin`;
-    `grid` >= 0 fixes the level."""
+    `grid` >= 0 fixes the level. Outside the view cone (axis `fwd`, cosine `cos_cone`; < -1: none) a patch counts as `far`
+    times farther away."""
     var eye: Vec3f
+    var fwd: Vec3f
+    var cos_cone: Float32
+    var far: Float32
     var pixel: Float32
     var lod: Float32
     var pps: Float32
@@ -83,6 +87,18 @@ def _cstr(s: String) -> Pointer[UInt8, MutUntrackedOrigin]:
     return c
 
 
+def in_cone(eye: Vec3f, fwd: Vec3f, cos_cone: Float32, c: Vec3f, r: Float32) -> Bool:
+    """Whether the sphere (c, r) reaches into the view cone from eye along fwd with half-angle cosine cos_cone (< -1: no cone)."""
+    if cos_cone < Float32(-1):
+        return True
+    var v = c - eye; var d = sqrt(dot(v, v))
+    if d <= r:
+        return True
+    var sa = r / d; var ca = sqrt(max(Float32(1) - sa * sa, Float32(0)))
+    var sh = sqrt(max(Float32(1) - cos_cone * cos_cone, Float32(0)))
+    return dot(v, fwd) / d >= cos_cone * ca - sh * sa
+
+
 def disp_bounds(ptx: String) raises -> Tuple[Vec3f, Vec3f]:
     """The cage's box, from the meta data only."""
     var c = _cstr(ptx); var bb = unsafe_alloc[Float32](6)
@@ -114,6 +130,8 @@ def disp_levels(np: Int, patches: Pointer[BezierPatch, MutUntrackedOrigin], sq: 
                 var dx = max(max(lo.x - o.eye.x, o.eye.x - hi.x), Float32(0)); var dy = max(max(lo.y - o.eye.y, o.eye.y - hi.y), Float32(0))
                 var dz = max(max(lo.z - o.eye.z, o.eye.z - hi.z), Float32(0)); var e = hi - lo; var ext = sqrt(dot(e, e))
                 var px = ext / (o.pixel * max(sqrt(dx * dx + dy * dy + dz * dz), Float32(1e-3) * ext))
+                if not in_cone(o.eye, o.fwd, o.cos_cone, (lo + hi) * Float32(0.5), Float32(0.5) * ext):
+                    px /= o.far
                 while l > 0 and px / Float32(1 << l) < o.pps:
                     l -= 1
             l = max(l, min(o.lmin, LEVELS - 1))
@@ -125,9 +143,11 @@ def load_disp_mesh(ptx: String, o: DispOptions) raises -> DispMesh:
     """The displaced mesh of `ptx` for options `o`."""
     var c = _cstr(ptx)
     var counts = unsafe_alloc[Int64](4)
-    var view = unsafe_alloc[Float32](5)
+    var view = unsafe_alloc[Float32](10)
     view[unsafe_offset=0] = o.eye.x; view[unsafe_offset=1] = o.eye.y; view[unsafe_offset=2] = o.eye.z
     view[unsafe_offset=3] = o.pixel; view[unsafe_offset=4] = o.lod if o.pixel > Float32(0) else Float32(0)
+    view[unsafe_offset=5] = o.fwd.x; view[unsafe_offset=6] = o.fwd.y; view[unsafe_offset=7] = o.fwd.z
+    view[unsafe_offset=8] = o.cos_cone; view[unsafe_offset=9] = o.far
     var hd = external_call["disp_open", Int](c, Int32(2), counts, view)
     c.unsafe_free(); view.unsafe_free()
     if hd == 0:

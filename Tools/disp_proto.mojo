@@ -954,7 +954,7 @@ def main() raises:
         grid = 0
         while (1 << (grid + 1)) <= atol(g_env):
             grid += 1
-    var o = DispOptions(Vec3f(0, 0, 0), Float32(0), _env_f("LOD", Float32(0)), _env_f("PPS", Float32(0.5)), _env_f("TPS", Float32(5)),
+    var o = DispOptions(Vec3f(0, 0, 0), Vec3f(0, 0, 0), Float32(-2), Float32(1), Float32(0), _env_f("LOD", Float32(0)), _env_f("PPS", Float32(0.5)), _env_f("TPS", Float32(5)),
                         Int(_env_f("LMIN", Float32(2))), grid, getenv("WELD") != "0")
     if o.lod > Float32(0) or o.pps > Float32(0):   # the camera below, from the cage's box: LOD and PPS use it
         var bb = disp_bounds(ptx)

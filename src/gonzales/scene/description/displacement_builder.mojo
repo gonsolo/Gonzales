@@ -5,12 +5,12 @@ from std.os import getenv
 from std.time import perf_counter_ns
 from std.memory.alloc import unsafe_alloc
 from gonzales.core.diagnostics import warn_unsupported_in
-from gonzales.core.geometry import Vec3f, cross
+from gonzales.core.geometry import Vec3f, cross, dot
 from gonzales.scene.appearance.materials import GpuTexture
 from gonzales.scene.description.lexer import ParameterDictionary
 from gonzales.scene.description.parse_types import SceneParseState, MeshAccum
 from gonzales.scene.description.material_builder import _imagemap_affine
-from gonzales.scene.shapes.disp_build import DispOptions, DispMesh, load_disp_mesh, disp_bounds, empty_disp_mesh
+from gonzales.scene.shapes.disp_build import DispOptions, DispMesh, load_disp_mesh, disp_bounds, empty_disp_mesh, in_cone
 from gonzales.scene.shapes.displaced_patches import SubdivSurface
 from gonzales.scene.shapes.displacement import DisplacedMesh, DisplacedTri, Rmip, displaced_tri, load_height_map
 
@@ -120,10 +120,15 @@ def _world_eye(w2c: Array[Float32, 16]) -> Vec3f:
     return Vec3f(Float32(a[3]), Float32(a[7]), Float32(a[11]))
 
 
-def subdiv_camera(s: Pointer[SceneParseState, MutUntrackedOrigin]) -> Tuple[Vec3f, Float32]:
-    """The eye and a pixel's angle along the shorter film axis."""
-    var short = Float32(min(Int(s[unsafe_offset=0].film_w), Int(s[unsafe_offset=0].film_h)))
-    return (_world_eye(s[unsafe_offset=0].cam2w_raw), Float32(2) * tan(s[unsafe_offset=0].camera_fov * Float32(3.14159265 / 360.0)) / short)
+def subdiv_camera(s: Pointer[SceneParseState, MutUntrackedOrigin]) -> Tuple[Vec3f, Float32, Vec3f, Float32]:
+    """The eye, a pixel's angle along the shorter film axis, the view direction and the cosine of half the diagonal view."""
+    var w = Float32(s[unsafe_offset=0].film_w); var h = Float32(s[unsafe_offset=0].film_h)
+    var short = min(w, h); var aspect = max(w, h) / max(short, Float32(1))
+    var tan_h = tan(s[unsafe_offset=0].camera_fov * Float32(3.14159265 / 360.0))
+    ref m = s[unsafe_offset=0].cam2w_raw   # world to camera: the camera's +z is its rotation's third row
+    var f = Vec3f(m[2], m[6], m[10]); f = f * (Float32(1) / sqrt(max(dot(f, f), Float32(1e-30))))
+    var tan_d = tan_h * sqrt(Float32(1) + aspect * aspect)
+    return (_world_eye(m), Float32(2) * tan_h / short, f, Float32(1) / sqrt(Float32(1) + tan_d * tan_d))
 
 
 def _cage_layout(ma: MeshAccum) -> Bool:
@@ -195,6 +200,13 @@ def _box_dist(p: Vec3f, b: Tuple[Vec3f, Vec3f]) -> Float32:
     return sqrt(dx * dx + dy * dy + dz * dz)
 
 
+def _view_dist(e: Vec3f, f: Vec3f, cos_cone: Float32, b: Tuple[Vec3f, Vec3f], far: Float32) -> Float32:
+    """The box's distance from eye e, times far when it is outside the view cone."""
+    var c = (b[0] + b[1]) * Float32(0.5); var x = b[1] - b[0]
+    var d = _box_dist(e, b)
+    return d if in_cone(e, f, cos_cone, c, Float32(0.5) * sqrt(dot(x, x))) else d * far
+
+
 def load_subdiv_meshes(s: Pointer[SceneParseState, MutUntrackedOrigin]):
     """Loads every recorded subdiv file for the eye nearest to its cage among the instances that place it (in their object
     space; the world for a mesh outside an object): that instance needs the finest heights and sub-squares."""
@@ -209,6 +221,8 @@ def load_subdiv_meshes(s: Pointer[SceneParseState, MutUntrackedOrigin]):
         except:
             boxes.append((Vec3f(0, 0, 0), Vec3f(0, 0, 0)))
     var best_d = List[Float32](length=n, fill=Float32(3e38)); var best_e = List[Vec3f](length=n, fill=cam[0])
+    var best_f = List[Vec3f](length=n, fill=cam[2])
+    comptime FAR = Float32(16)   # outside the view a cage counts this much farther: secondary rays only
     var nt = len(s[unsafe_offset=0].object_mesh_start)
     var files_of = List[List[Int]]()   # per template the files of its meshes
     for _ in range(nt):
@@ -223,20 +237,25 @@ def load_subdiv_meshes(s: Pointer[SceneParseState, MutUntrackedOrigin]):
                 t = j
                 break
         if t < 0:   # in the world
-            var d = _box_dist(cam[0], boxes[k])
+            var d = _view_dist(cam[0], cam[2], cam[3], boxes[k], FAR)
             if d < best_d[k]:
-                best_d[k] = d; best_e[k] = cam[0]
+                best_d[k] = d; best_e[k] = cam[0]; best_f[k] = cam[2]
         elif k not in files_of[t]:
             files_of[t].append(k)
     for j in range(len(s[unsafe_offset=0].instance_template_idx)):
         var t = Int(s[unsafe_offset=0].instance_template_idx[j])
         if t < 0 or t >= nt or len(files_of[t]) == 0:
             continue
-        var e = _xform(s[unsafe_offset=0].instance_world_to_obj, 16 * j, cam[0])
+        ref wo = s[unsafe_offset=0].instance_world_to_obj
+        var e = _xform(wo, 16 * j, cam[0])
+        var o = 16 * j
+        var f = Vec3f(wo[o] * cam[2].x + wo[o + 4] * cam[2].y + wo[o + 8] * cam[2].z, wo[o + 1] * cam[2].x + wo[o + 5] * cam[2].y + wo[o + 9] * cam[2].z,
+                      wo[o + 2] * cam[2].x + wo[o + 6] * cam[2].y + wo[o + 10] * cam[2].z)
+        f = f * (Float32(1) / sqrt(max(dot(f, f), Float32(1e-30))))
         for k in files_of[t]:
-            var d = _box_dist(e, boxes[k])
+            var d = _view_dist(e, f, cam[3], boxes[k], FAR)
             if d < best_d[k]:
-                best_d[k] = d; best_e[k] = e
+                best_d[k] = d; best_e[k] = e; best_f[k] = f
     var lod = Float32(0.25)
     var le = getenv("GONZALES_SUBDIV_LOD")
     if le.byte_length() > 0:
@@ -249,7 +268,7 @@ def load_subdiv_meshes(s: Pointer[SceneParseState, MutUntrackedOrigin]):
         s[unsafe_offset=0].subdiv_eye.append(best_e[k])
         var t0 = perf_counter_ns()
         try:
-            var m = load_disp_mesh(file, DispOptions(best_e[k], cam[1], lod, Float32(0.5), Float32(5), 2, -1, True))
+            var m = load_disp_mesh(file, DispOptions(best_e[k], best_f[k], cam[3], FAR, cam[1], lod, Float32(0.5), Float32(5), 2, -1, True))
             var mb = Float64(m.nchain + m.npyr + 4 * m.ncg + m.np * (64 * 3 + 12 + 4 + 48 + 1)) / Float64(1 << 20)
             print("subdiv displacement:", file, ":", m.np, "patches,", m.prims(), "sub-squares,", m.texels, "texels kept,",
                   Int(mb), "MiB host data,", Float64(Int(perf_counter_ns()) - Int(t0)) * 1e-9, "s")
