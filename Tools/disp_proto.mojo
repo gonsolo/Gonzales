@@ -1064,6 +1064,14 @@ def main() raises:
                 with st_b.map_to_host() as hs:
                     for k in range(W * H):
                         steps[k // W] += Int(hs[k]); maxs[k // W] = max(maxs[k // W], Int(hs[k]))
+                    var so = getenv("STEPS_OUT")   # per-pixel steps as text rows, for SIMD utilisation
+                    if so.byte_length() > 0:
+                        with open(so, "w") as sf:
+                            for y in range(H):
+                                var row = String()
+                                for x in range(W):
+                                    row += String(Int(hs[y * W + x])) + " "
+                                sf.write(row + "\n")
                 _ = len(bufs); _ = len(nodes); _ = len(order)
             elif getenv("SERIAL") == "1":
                 for y in range(H):
