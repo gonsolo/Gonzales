@@ -463,11 +463,13 @@ def _hw_render(ctx: DeviceContext, mut bufs: List[DeviceBuffer[DType.uint8]], d:
     tb.unsafe_free(); gn.unsafe_free(); ext.unsafe_free(); bounds.unsafe_free()
 
 
-def _patch_levels(np: Int, sq: Pointer[Float32, MutUntrackedOrigin], face: Pointer[Int32, MutUntrackedOrigin],
-                  hdr: Pointer[Int32, MutUntrackedOrigin], fdrop: Pointer[UInt8, MutUntrackedOrigin]) raises -> List[Int]:
-    """Each patch's sub-square level: GRID=1..64 for all, else about TPS (default 5) texels a sub-square side but at
-    least LMIN (default 2: 4 x 4; coarser sub-squares make the walk inside them long)."""
-    var g = getenv("GRID"); var tps = _env_f("TPS", Float32(5)); var lmin = Int(_env_f("LMIN", Float32(2)))
+def _patch_levels(np: Int, patches: Pointer[BezierPatch, MutUntrackedOrigin], sq: Pointer[Float32, MutUntrackedOrigin],
+                  face: Pointer[Int32, MutUntrackedOrigin], hdr: Pointer[Int32, MutUntrackedOrigin], fdrop: Pointer[UInt8, MutUntrackedOrigin],
+                  view: Pointer[Float32, MutUntrackedOrigin]) raises -> List[Int]:
+    """Each patch's sub-square level: GRID=1..64 for all, else about TPS (default 5) texels a sub-square side, no smaller
+    than PPS (default 0.5) pixels at the patch's distance from the camera (0: off), but at least LMIN (default 2: 4 x 4; coarser
+    sub-squares make the walk inside them long)."""
+    var g = getenv("GRID"); var tps = _env_f("TPS", Float32(5)); var lmin = Int(_env_f("LMIN", Float32(2))); var pps = _env_f("PPS", Float32(0.5))
     var lev = List[Int](length=np, fill=0)
     for p in range(np):
         var l = 0
@@ -479,6 +481,15 @@ def _patch_levels(np: Int, sq: Pointer[Float32, MutUntrackedOrigin], face: Point
             var side = sq[unsafe_offset=3 * p + 2] * Float32(1 << (max(Int(hdr[unsafe_offset=3 * f + 1]), Int(hdr[unsafe_offset=3 * f + 2])) + Int(fdrop[unsafe_offset=f])))
             while l < LEVELS - 1 and Float32(1 << (l + 1)) * tps <= side * Float32(1.41421356):
                 l += 1
+            if pps > Float32(0):   # the patch's control box in pixels at its nearest point to the eye
+                var b = patches[unsafe_offset=p]
+                var lo = Vec3f(b.x.reduce_min(), b.y.reduce_min(), b.z.reduce_min()); var hi = Vec3f(b.x.reduce_max(), b.y.reduce_max(), b.z.reduce_max())
+                var eye = Vec3f(view[unsafe_offset=0], view[unsafe_offset=1], view[unsafe_offset=2])
+                var dx = max(max(lo.x - eye.x, eye.x - hi.x), Float32(0)); var dy = max(max(lo.y - eye.y, eye.y - hi.y), Float32(0))
+                var dz = max(max(lo.z - eye.z, eye.z - hi.z), Float32(0)); var e = hi - lo; var ext = sqrt(dot(e, e))
+                var px = ext / (view[unsafe_offset=3] * max(sqrt(dx * dx + dy * dy + dz * dz), Float32(1e-3) * ext))
+                while l > 0 and px / Float32(1 << l) < pps:
+                    l -= 1
             l = max(l, min(lmin, LEVELS - 1))
         lev[p] = l
     return lev^
@@ -976,7 +987,7 @@ def main() raises:
     cname[unsafe_offset=ptx.byte_length()] = UInt8(0)
     var view = unsafe_alloc[Float32](5)   # LOD=k: keep a face's finer height levels only while its texels are >= k pixels
     view[unsafe_offset=4] = _env_f("LOD", Float32(0))
-    if view[unsafe_offset=4] > Float32(0):   # the camera below, from the cage's box
+    if view[unsafe_offset=4] > Float32(0) or _env_f("PPS", Float32(0.5)) > Float32(0):   # the camera below, from the cage's box
         var bb = unsafe_alloc[Float32](6)
         if external_call["disp_bounds", Int32](cname, bb) == 0:
             raise Error("cannot read " + ptx)
@@ -1011,7 +1022,7 @@ def main() raises:
         for k in range(16):
             x[k] = cpf[unsafe_offset=48 * p + 3 * k]; y[k] = cpf[unsafe_offset=48 * p + 3 * k + 1]; z[k] = cpf[unsafe_offset=48 * p + 3 * k + 2]
         patches[unsafe_offset=p] = BezierPatch(x, y, z)
-    var plev = _patch_levels(np, sq, face, hdr, fdrop)   # from the full resolution: dropped height levels keep the grid
+    var plev = _patch_levels(np, patches, sq, face, hdr, fdrop, view)   # from the full resolution: dropped height levels keep the grid
     var perm = List[Int](capacity=np)
     for l in range(LEVELS):   # patches sorted by level: a primitive's patch follows from its index (prim_patch)
         for p in range(np):
