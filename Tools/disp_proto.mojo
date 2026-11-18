@@ -14,7 +14,7 @@ from std.builtin.device_passable import DevicePassable, DeviceTypeEncoder
 from std.math import ceildiv
 from gonzales.core.geometry import Vec3f, cross, dot
 from gonzales.scene.shapes.patches import BezierPatch
-from gonzales.scene.shapes.displaced_patches import DispSurface, patch_box, sub_box, sub_count, patch_at, intersect_displaced, displaced_normal, displaced_point, displaced_point_n, chain_color, corner_grid, corner_words, corner_step, weld_corner_grid, face_height
+from gonzales.scene.shapes.displaced_patches import DispSurface, patch_box, sub_box, sub_count, patch_at, intersect_displaced, displaced_normal, displaced_point, displaced_point_n, chain_color, _bl_frame, _bl_point, corner_grid, corner_words, corner_step, weld_corner_grid, face_height
 from gonzales.scene.accel.xert import XeRayDesc, xert_alignment, xert_build_blas_geoms, xert_free
 from std.memory import OpaquePointer
 from std.sys.info import is_gpu
@@ -559,6 +559,62 @@ def _edge_gap(d: DispSurface, np: Int) raises:
     print("normal gap across regular edges: max", worst_r, "deg, mean", sum_r / Float64(max(n_r, 1)), "over", n_r, "samples")
 
 
+def _geo_err(d: DispSurface, np: Int, pixel: Float32, eye: Vec3f) raises:
+    """Our surface (bilinear base, blended normals, welded grid) against the exact displaced limit surface at the same
+    (s, t), 3 x 3 points a sub-square, in pixels of the camera (all points, visible or not)."""
+    var n = 1 << (Int(d.sub_levels) // 2)
+    var acc = unsafe_alloc[Float64](8 * np)   # base sum, max, total sum, max, samples, over 0.1 px; Gregory: max, over 0.1 px
+    def one(p: Int) {imm}:
+        var f = Int(d.face[unsafe_offset=p]); var u0 = d.sq[unsafe_offset=3 * p]; var v0 = d.sq[unsafe_offset=3 * p + 1]; var sz = d.sq[unsafe_offset=3 * p + 2]
+        var sb = Float64(0); var mb = Float64(0); var stt = Float64(0); var mt = Float64(0); var cnt = Float64(0); var big = Float64(0)
+        for k in range(n * n):
+            var fr = _bl_frame(d, p, k, Vec3f(0, 0, 0))
+            var s0 = Float32(k % n) / Float32(n); var t0 = Float32(k // n) / Float32(n)
+            for j in range(3):
+                for i in range(3):
+                    var s = s0 + (Float32(i) + Float32(0.5)) / Float32(3 * n); var t = t0 + (Float32(j) + Float32(0.5)) / Float32(3 * n)
+                    var h = face_height(d, f, u0 + s * sz, v0 + t * sz)
+                    var P = patch_eval(patch_at(d, p, s, t), s, t)[0]
+                    var X = displaced_point(d, p, s, t)
+                    var B = _bl_point(d, fr, s0, t0, Float32(n), s, t, Float32(0))
+                    var Y = _bl_point(d, fr, s0, t0, Float32(n), s, t, h)
+                    var ex = X - eye; var px = Float64(pixel * sqrt(dot(ex, ex)))
+                    var db = B - P; var dt = Y - X
+                    var eb = Float64(sqrt(dot(db, db))) / px; var et = Float64(sqrt(dot(dt, dt))) / px
+                    sb += eb; mb = max(mb, eb); stt += et; mt = max(mt, et); cnt += 1; big += Float64(1) if et > 0.1 else Float64(0)
+        var g = d.greg[unsafe_offset=p] != 0
+        acc[unsafe_offset=8 * p] = sb; acc[unsafe_offset=8 * p + 1] = mb; acc[unsafe_offset=8 * p + 2] = stt
+        acc[unsafe_offset=8 * p + 3] = mt; acc[unsafe_offset=8 * p + 4] = cnt; acc[unsafe_offset=8 * p + 5] = big
+        acc[unsafe_offset=8 * p + 6] = mt if g else Float64(0); acc[unsafe_offset=8 * p + 7] = big if g else Float64(0)
+    parallelize(one, np)
+    var r = List[Float64](length=8, fill=Float64(0))
+    for p in range(np):
+        for c in range(8):
+            r[c] = max(r[c], acc[unsafe_offset=8 * p + c]) if c == 1 or c == 3 or c == 6 else r[c] + acc[unsafe_offset=8 * p + c]
+    var wp = 0
+    for p in range(np):
+        if acc[unsafe_offset=8 * p + 3] > acc[unsafe_offset=8 * wp + 3]:
+            wp = p
+    if getenv("GEO_WORST") == "1":   # the worst patch's samples: where and why
+        var f = Int(d.face[unsafe_offset=wp]); var sz = d.sq[unsafe_offset=3 * wp + 2]
+        var best = Float32(0); var bs = Float32(0); var bt = Float32(0)
+        for j in range(3 * n):
+            for i in range(3 * n):
+                var s = (Float32(i) + Float32(0.5)) / Float32(3 * n); var t = (Float32(j) + Float32(0.5)) / Float32(3 * n)
+                var k = (j // 3) * n + i // 3
+                var fr = _bl_frame(d, wp, k, Vec3f(0, 0, 0))
+                var h = face_height(d, f, d.sq[unsafe_offset=3 * wp] + s * sz, d.sq[unsafe_offset=3 * wp + 1] + t * sz)
+                var dt = _bl_point(d, fr, Float32(i // 3) / Float32(n), Float32(j // 3) / Float32(n), Float32(n), s, t, h) - displaced_point(d, wp, s, t)
+                var e = sqrt(dot(dt, dt))
+                if e > best:
+                    best = e; bs = s; bt = t
+        var ev = patch_eval(patch_at(d, wp, bs, bt), bs, bt); var nv = cross(ev[1], ev[2])
+        print("worst patch", wp, "face", f, "greg", d.greg[unsafe_offset=wp], "at s t", bs, bt, "err", best, "|du x dv|", sqrt(dot(nv, nv)),
+              "|du|", sqrt(dot(ev[1], ev[1])), "|dv|", sqrt(dot(ev[2], ev[2])), "h", face_height(d, f, d.sq[unsafe_offset=3 * wp] + bs * sz, d.sq[unsafe_offset=3 * wp + 1] + bt * sz))
+    print("geometric error vs the exact displaced limit surface, in pixels:", Int(r[4]), "samples; base mean", r[0] / r[4], "max", r[1],
+          "; displaced mean", r[2] / r[4], "max", r[3], ";", 100 * r[5] / r[4], "% over 0.1 px; Gregory patches: max", r[6], ",", 100 * r[7] / max(r[5], 1), "% of those over 0.1 px")
+
+
 def _height_gap(d: DispSurface, np: Int) raises:
     """Height (bytes) disagreement between the patches sharing a point: patch corners by valence, edge points."""
     var groups = Dict[String, List[Float32]]()
@@ -984,6 +1040,9 @@ def main() raises:
     if getenv("EDGE_GAP") == "1":
         _edge_gap(DispSurface(patches, sq, face, hdr, pyr, Float32(0), eye, pixel, chain_off, chain, fm, greg, _grid_levels(), _leaf_mode(), cgrid), np)
         _height_gap(DispSurface(patches, sq, face, hdr, pyr, Float32(0), eye, pixel, chain_off, chain, fm, greg, _grid_levels(), _leaf_mode(), cgrid), np)
+        return
+    if getenv("GEO_ERR") == "1":
+        _geo_err(DispSurface(patches, sq, face, hdr, pyr, exag / Float32(255), eye, pixel, chain_off, chain, fm, greg, _grid_levels(), _leaf_mode(), cgrid), np, pixel, eye)
         return
     var ngreg = 0
     for p in range(np):
