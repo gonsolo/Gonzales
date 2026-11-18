@@ -465,9 +465,9 @@ def _hw_render(ctx: DeviceContext, mut bufs: List[DeviceBuffer[DType.uint8]], d:
 
 
 def _grid_levels() -> Int32:
-    """GRID=4/8/16/32: sub-squares a patch side as BVH primitives (default 16)."""
+    """GRID=4/8/16/32: sub-squares a patch side as BVH primitives (default 32)."""
     var g = getenv("GRID")
-    return Int32(4) if g == "4" else (Int32(6) if g == "8" else (Int32(10) if g == "32" else Int32(8)))
+    return Int32(4) if g == "4" else (Int32(6) if g == "8" else (Int32(8) if g == "16" else Int32(10)))
 
 
 def _leaf_mode() -> Int32:
