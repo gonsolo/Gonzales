@@ -955,7 +955,7 @@ def main() raises:
     var ss = Int(_env_f("SS", Float32(1)))   # SS=4: 4 x 4 samples per 960 x 720 pixel, as a larger image
     var W = 960 * ss; var H = 720 * ss
     var counts = unsafe_alloc[Int64](4)
-    var ptx = String(PTX)
+    var ptx = getenv("PTX", PTX)   # another displacement Ptex (its cage in the meta data)
     var cname = unsafe_alloc[UInt8](ptx.byte_length() + 1)
     for i in range(ptx.byte_length()):
         cname[unsafe_offset=i] = ptx.unsafe_ptr()[unsafe_offset=i]
