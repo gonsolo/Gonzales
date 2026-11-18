@@ -90,35 +90,11 @@ def height_range(d: DispSurface, f: Int, u0: Float32, u1: Float32, v0: Float32, 
     var y0 = min(max(Int(floor(v0 * Float32(h) - Float32(0.5))), -1), h)
     var y1 = min(max(Int(floor(v1 * Float32(h) - Float32(0.5))) + 1, -1), h)
     var off = Int(d.chain_off[unsafe_offset=f])
-    if x1 - x0 <= 4 and y1 - y0 <= 4:   # exact: piecewise bilinear extremes lie at the corners, where texel-centre lines cross the edges, and at centres inside
+    if x1 - x0 <= 4 and y1 - y0 <= 4:   # the covering texels: bilinear heights stay inside their four texels' range
         var lo = Float32(1e30); var hi = Float32(-1e30)
-        for c in range(4):
-            var hv = face_height(d, f, u0 if c % 2 == 0 else u1, v0 if c < 2 else v1)
-            lo = min(lo, hv); hi = max(hi, hv)
-        var fy0 = min(max(v0 * Float32(h) - Float32(0.5), Float32(-0.5)), Float32(h) - Float32(0.5))
-        var fy1 = min(max(v1 * Float32(h) - Float32(0.5), Float32(-0.5)), Float32(h) - Float32(0.5))
-        var fx0 = min(max(u0 * Float32(w) - Float32(0.5), Float32(-0.5)), Float32(w) - Float32(0.5))
-        var fx1 = min(max(u1 * Float32(w) - Float32(0.5), Float32(-0.5)), Float32(w) - Float32(0.5))
-        for x in range(max(x0, -1), min(x1, w) + 1):   # centre columns between the edges: their crossings with v0 and v1
-            if Float32(x) <= fx0 or Float32(x) >= fx1:
-                continue
-            for e in range(2):
-                var fy = fy0 if e == 0 else fy1
-                var yb = min(Int(floor(fy)), h - 1); var ty = fy - Float32(yb)
-                var hv = _texel(d, off, w, x, yb) * (Float32(1) - ty) + _texel(d, off, w, x, yb + 1) * ty
-                lo = min(lo, hv); hi = max(hi, hv)
-        for y in range(max(y0, -1), min(y1, h) + 1):   # centre rows: crossings with u0 and u1, and the centres inside
-            if Float32(y) <= fy0 or Float32(y) >= fy1:
-                continue
-            for e in range(2):
-                var fx = fx0 if e == 0 else fx1
-                var xb = min(Int(floor(fx)), w - 1); var tx = fx - Float32(xb)
-                var hv = _texel(d, off, w, xb, y) * (Float32(1) - tx) + _texel(d, off, w, xb + 1, y) * tx
-                lo = min(lo, hv); hi = max(hi, hv)
-            for x in range(max(x0, -1), min(x1, w) + 1):
-                if Float32(x) <= fx0 or Float32(x) >= fx1:
-                    continue
-                var t = _texel(d, off, w, x, y)
+        for y in range(y0, y1 + 1):
+            for x in range(x0, x1 + 1):
+                var t = _texel(d, off, w, min(max(x, -1), w), min(max(y, -1), h))
                 lo = min(lo, t); hi = max(hi, t)
         return (lo, hi)
     var edge = _border_range(d, off, w, h, x0, x1, y0, y1)
