@@ -15,6 +15,62 @@ comptime _F32 = Pointer[Float32, MutUntrackedOrigin]
 comptime NODE_B = 6   # bytes a height node (src/oiio/disp.cc)
 
 
+comptime LEVELS = 7   # sub-square levels 0..6: 1 x 1 .. 64 x 64 a patch
+
+
+@fieldwise_init
+struct Levels(TrivialRegisterPassable):
+    """Patches sorted by level l (2^l x 2^l sub-squares); per level its first patch, primitive and corner grid float.
+    Entries past the last level hold the totals."""
+    var patch: SIMD[DType.int32, 8]
+    var prim: SIMD[DType.int32, 8]
+    var corner: SIMD[DType.int32, 8]
+
+
+def make_levels(lev: List[Int]) -> Levels:
+    """Levels of patches already sorted by their level lev[p]."""
+    var c = List[Int](length=8, fill=0)
+    for l in lev:
+        c[l] += 1
+    var pa = SIMD[DType.int32, 8](0); var pr = SIMD[DType.int32, 8](0); var co = SIMD[DType.int32, 8](0)
+    for l in range(1, 8):
+        var n = 1 << (l - 1)
+        pa[l] = pa[l - 1] + Int32(c[l - 1]); pr[l] = pr[l - 1] + Int32(c[l - 1] * n * n); co[l] = co[l - 1] + Int32(c[l - 1] * corner_words(n))
+    return Levels(pa, pr, co)
+
+
+@always_inline
+def _class_of(v: SIMD[DType.int32, 8], x: Int) -> Int:
+    var c = 0
+    comptime for l in range(1, LEVELS):
+        if Int(v[l]) <= x:
+            c = l
+    return c
+
+
+@always_inline
+def prim_patch(d: DispSurface, prim: Int) -> Tuple[Int, Int, Int]:
+    """Primitive prim: its patch, sub-square k (row * n + column) and level."""
+    var l = _class_of(d.lv.prim, prim); var loc = prim - Int(d.lv.prim[l])
+    return (Int(d.lv.patch[l]) + (loc >> (2 * l)), loc & ((1 << (2 * l)) - 1), l)
+
+
+@always_inline
+def patch_level(d: DispSurface, pi: Int) -> Int:
+    return _class_of(d.lv.patch, pi)
+
+
+@always_inline
+def corner_off(lv: Levels, pi: Int) -> Int:
+    var l = _class_of(lv.patch, pi)
+    return Int(lv.corner[l]) + (pi - Int(lv.patch[l])) * corner_words(1 << l)
+
+
+@always_inline
+def prim_total(d: DispSurface) -> Int:
+    return Int(d.lv.prim[LEVELS])
+
+
 @fieldwise_init
 struct DispSurface(TrivialRegisterPassable, DevicePassable):
     """Patches with their Ptex face and square (u0, v0, size), the faces' height nodes, the height scale and the camera."""
@@ -39,7 +95,7 @@ struct DispSurface(TrivialRegisterPassable, DevicePassable):
     var chain: _U8
     var fm: _F32         # per patch: the Fm interior points (1,1), (2,1), (2,2), (1,2), 12 floats; patches hold Fp there
     var greg: _U8        # per patch: 1 for a Gregory patch, 2 for an end cap fitted as Bezier
-    var sub_levels: Int32  # the BVH's primitives: a patch's sub-squares at this halving depth (4: 4 x 4, 6: 8 x 8, 8: 16 x 16)
+    var lv: Levels         # the BVH's primitives: each patch's 2^l x 2^l sub-squares
     var leaf_mode: Int32   # 0: box leaves no larger than the footprint; 1: exact bilinear leaves at a texel or a pixel; 2: at a texel only;
                            # 3: as 1, cells walked in the sub-square's affine (s, t, h) frame; 4: as 1, every box cropped from the patch
                            # 5 (6: at a texel only): the sub-square's base bilinear through its limit corners
@@ -345,15 +401,9 @@ def _leaf_size(lo: Vec3f, hi: Vec3f, cam: Vec3f, pixel: Float32) -> Tuple[Float3
 
 
 @always_inline
-def sub_count(d: DispSurface) -> Int:
-    """Primitives (sub-squares) a patch."""
-    return 1 << Int(d.sub_levels)
-
-
-@always_inline
-def sub_square(d: DispSurface, k: Int) -> Tuple[Float32, Float32, Float32, UInt64]:
-    """Sub-square k of a patch (k = row * n + column): its corner (u0, v0), its size, and the halving path that reaches it."""
-    var la = Int(d.sub_levels) // 2; var n = 1 << la
+def sub_square(la: Int, k: Int) -> Tuple[Float32, Float32, Float32, UInt64]:
+    """Sub-square k of a level-la patch (k = row * n + column): its corner (u0, v0), its size, and the halving path that reaches it."""
+    var n = 1 << la
     var ku = k % n; var kv = k // n
     var path = UInt64(0)
     for i in range(la):   # even depths split u, odd ones v, the coarsest first
@@ -364,8 +414,12 @@ def sub_square(d: DispSurface, k: Int) -> Tuple[Float32, Float32, Float32, UInt6
 
 
 def sub_box(d: DispSurface, prim: Int) -> Tuple[Vec3f, Vec3f]:
-    """The world box of primitive prim = patch * sub_count + sub-square."""
-    var pi = prim // sub_count(d); var sq = sub_square(d, prim % sub_count(d))
+    """The world box of primitive prim: the bilinear base's box in leaf modes 5 and 6 (what the walk tests), else the bicubic's."""
+    var pk = prim_patch(d, prim); var pi = pk[0]; var sq = sub_square(pk[2], pk[1])
+    if d.leaf_mode >= 5:
+        var bb = _bl_box(d, pi, Int(d.face[unsafe_offset=pi]), _bl_frame(d, pi, pk[1], Vec3f(0, 0, 0)), sq[0], sq[1], Float32(1) / sq[2],
+                         (sq[0], sq[1], sq[2], sq[2]))
+        return (bb[0], bb[1])
     var b = displaced_box(d, pi, d.patches[unsafe_offset=pi], Vec3f(0, 0, 0), sq[0], sq[0] + sq[2], sq[1], sq[1] + sq[2])
     return (b[0], b[1])
 
@@ -520,13 +574,13 @@ def _fine_box(d: DispSurface, pi: Int, fr: FineFrame, s0: Float32, t0: Float32, 
 def _intersect_fine(d: DispSurface, prim: Int, org: Vec3f, dir: Vec3f, t_max: Float32) -> Tuple[Bool, Float32, Float32, Float32, Int, Float32]:
     """intersect_displaced with exact leaves for a Bezier patch, its boxes from the sub-square's bilinear frame: no crops
     and no normal ranges per step, and no per-depth state beyond the halving path."""
-    var pi = prim // sub_count(d); var sq = sub_square(d, prim % sub_count(d))
+    var pk = prim_patch(d, prim); var pi = pk[0]; var sq = sub_square(pk[2], pk[1])
     var src = d.patches[unsafe_offset=pi]
     var o = BezierPatch(src.x - org.x, src.y - org.y, src.z - org.z)
     var cam = d.cam - org
     var inv = Vec3f(Float32(1) / dir.x, Float32(1) / dir.y, Float32(1) / dir.z)
     var best = t_max; var hit = False; var hs = Float32(0); var ht = Float32(0); var hsz = Float32(1)
-    var depth = Int(d.sub_levels); var steps = 0
+    var depth = 2 * pk[2]; var steps = 0
     var path = sq[3]; var pend = UInt64(0)
     var dom = (sq[0], sq[1], sq[2], sq[2])
     var f = Int(d.face[unsafe_offset=pi])
@@ -596,7 +650,7 @@ def _intersect_hf(d: DispSurface, prim: Int, org: Vec3f, dir: Vec3f, t_max: Floa
     that frame (the bicubic's deviation from the bilinear, the bilinear's twist, |h| times the normals' spread), which pads
     every cell. Cells are the halvings of the sub-square, each a box [a] x [b] x [height range] in the frame; leaves are exact.
     Nc is the corner normals' mean."""
-    var pi = prim // sub_count(d); var sq = sub_square(d, prim % sub_count(d))
+    var pk = prim_patch(d, prim); var pi = pk[0]; var sq = sub_square(pk[2], pk[1])
     var S = sq[2]
     var src = d.patches[unsafe_offset=pi]
     var o = BezierPatch(src.x - org.x, src.y - org.y, src.z - org.z)
@@ -631,7 +685,7 @@ def _intersect_hf(d: DispSurface, prim: Int, org: Vec3f, dir: Vec3f, t_max: Floa
     var cam = d.cam - org
     var ext = max(_len(ba), _len(bb))   # the base's extent per sub-square unit
     var best = t_max; var hit = False; var hs = Float32(0); var ht = Float32(0); var hsz = Float32(1)
-    var depth = Int(d.sub_levels); var steps = 0
+    var depth = 2 * pk[2]; var steps = 0
     var path = sq[3]; var pend = UInt64(0)
     var dom = (sq[0], sq[1], S, S)
     var cur_hit = _hf_cell(d, f, u0, v0, psz, sq[0], sq[1], S, dom, lo, linv, pad, best)
@@ -717,8 +771,9 @@ def grid_vertex(d: DispSurface, pi: Int, i: Int, j: Int, n: Int) -> Tuple[Vec3f,
 
 
 def corner_words(n: Int) -> Int:
-    """Floats per patch in DispSurface.corners: origin and step, then 5 x u16 per grid point."""
-    return 4 + (5 * (n + 1) * (n + 1) + 1) // 2
+    """Floats per patch in DispSurface.corners: origin, step, the edges' coarser neighbours (4 bits each: log2 ratio),
+    then 5 x u16 per grid point."""
+    return 5 + (5 * (n + 1) * (n + 1) + 1) // 2
 
 
 def corner_step(extent: Float32) -> Float32:
@@ -761,10 +816,11 @@ def _oct_dec(e0: UInt16, e1: UInt16) -> Vec3f:
 def corner_grid(d: DispSurface, pi: Int, lo: Vec3f, step: Float32, dst: _F32):
     """Patch pi's grid points into dst, rows along t: positions as global multiples of step (so patches sharing
     a point store the same one), unit normals octahedral; (0, 0) is a degenerate normal."""
-    var n = 1 << (Int(d.sub_levels) // 2)
+    var n = 1 << patch_level(d, pi)
     var k = Vec3f(floor(lo.x / step), floor(lo.y / step), floor(lo.z / step))
     dst[unsafe_offset=0] = k.x * step; dst[unsafe_offset=1] = k.y * step; dst[unsafe_offset=2] = k.z * step; dst[unsafe_offset=3] = step
-    var q = dst.unsafe_offset(4).bitcast[UInt16]()
+    dst.unsafe_offset(4).bitcast[UInt32]()[unsafe_offset=0] = UInt32(0)
+    var q = dst.unsafe_offset(5).bitcast[UInt16]()
     for j in range(n + 1):
         for i in range(n + 1):
             var g = grid_vertex(d, pi, i, j, n); var o = 5 * (j * (n + 1) + i)
@@ -774,57 +830,77 @@ def corner_grid(d: DispSurface, pi: Int, lo: Vec3f, step: Float32, dst: _F32):
             var e = _oct_enc(g[1]); q[unsafe_offset=o + 3] = e[0]; q[unsafe_offset=o + 4] = e[1]
 
 
-def weld_corner_grid(np: Int, n: Int, grid: _F32) raises:
+@always_inline
+def _edge_idx(n: Int, e: Int, k: Int) -> Int:
+    """Grid index of point k along edge e of an n x n grid (counter-clockwise from corner e)."""
+    var ij = (k, 0) if e == 0 else ((n, k) if e == 1 else ((n - k, n) if e == 2 else (0, n - k)))
+    return ij[1] * (n + 1) + ij[0]
+
+
+def weld_corner_grid(np: Int, lv: Levels, grid: _F32) raises:
     """Points on shared patch edges (edges matched by their end points) get one position and their mean normal:
-    the two patches' bicubics agree there only up to rounding, which the 16-bit grid can turn into a step."""
-    var cw = corner_words(n); var m = (n + 1) * (n + 1)
-    var parent = List[Int32](length=np * m, fill=Int32(-1)); var joined = List[Bool](length=np * m, fill=False)
+    the two patches' bicubics agree there only up to rounding, which the 16-bit grid can turn into a step. Where the
+    neighbour is coarser, only its points are welded and the edge word tells _bl_frame to interpolate the others."""
+    var pb = List[Int](length=np + 1, fill=0)   # first point id of each patch
+    for p in range(np):
+        var n = 1 << _class_of(lv.patch, p); pb[p + 1] = pb[p] + (n + 1) * (n + 1)
+    var parent = List[Int32](length=pb[np], fill=Int32(-1)); var joined = List[Bool](length=pb[np], fill=False)
     def find(par: List[Int32], x: Int) -> Int:
         var r = x
         while Int(par[r]) >= 0:
             r = Int(par[r])
         return r
     def gpos(p: Int, o: Int) {imm} -> Tuple[Int, Int, Int]:
-        var g = grid.unsafe_offset(p * cw); var st = g[unsafe_offset=3]; var q = g.unsafe_offset(4).bitcast[UInt16]()
+        var g = grid.unsafe_offset(corner_off(lv, p)); var st = g[unsafe_offset=3]; var q = g.unsafe_offset(5).bitcast[UInt16]()
         return (Int(g[unsafe_offset=0] / st) + Int(q[unsafe_offset=5 * o]), Int(g[unsafe_offset=1] / st) + Int(q[unsafe_offset=5 * o + 1]),
                 Int(g[unsafe_offset=2] / st) + Int(q[unsafe_offset=5 * o + 2]))
-    def edge_pt(e: Int, k: Int) {imm} -> Int:   # grid index of point k along edge e (counter-clockwise from corner e)
-        var ij = (k, 0) if e == 0 else ((n, k) if e == 1 else ((n - k, n) if e == 2 else (0, n - k)))
-        return ij[1] * (n + 1) + ij[0]
     def key(p: Tuple[Int, Int, Int]) -> String:
         return String(p[0] // 64) + "," + String(p[1] // 64) + "," + String(p[2] // 64)
     var ends = Dict[String, Int]()
+    var mixed = 0
     for p in range(np):
+        var n = 1 << _class_of(lv.patch, p)
         for e in range(4):
-            var ka = key(gpos(p, edge_pt(e, 0))); var kb = key(gpos(p, edge_pt(e, n)))
+            var ka = key(gpos(p, _edge_idx(n, e, 0))); var kb = key(gpos(p, _edge_idx(n, e, n)))
             var ek = ka + "|" + kb if ka < kb else kb + "|" + ka
             if ek not in ends:
                 ends[ek] = p * 4 + e
                 continue
-            var p2 = ends[ek] // 4; var e2 = ends[ek] % 4
-            var same = key(gpos(p2, edge_pt(e2, 0))) == ka
-            for k in range(n + 1):
-                var x1 = p * m + edge_pt(e, k); var x2 = p2 * m + edge_pt(e2, k if same else n - k)
+            var p2 = ends[ek] // 4; var e2 = ends[ek] % 4; var n2 = 1 << _class_of(lv.patch, p2)
+            var same = key(gpos(p2, _edge_idx(n2, e2, 0))) == ka
+            var nc = min(n, n2)
+            for kc in range(nc + 1):
+                var x1 = pb[p] + _edge_idx(n, e, kc * (n // nc)); var x2 = pb[p2] + _edge_idx(n2, e2, (kc if same else nc - kc) * (n2 // nc))
                 joined[x1] = True; joined[x2] = True
                 var r1 = find(parent, x1); var r2 = find(parent, x2)
                 if r1 != r2:
                     parent[r1] = Int32(r2)
+            if n != n2:   # the finer side interpolates its points between the coarser one's
+                var pf = p if n > n2 else p2; var ef = e if n > n2 else e2; var r = max(n, n2) // nc; var b = 0
+                while (1 << b) < r:
+                    b += 1
+                var w = grid.unsafe_offset(corner_off(lv, pf) + 4).bitcast[UInt32]()
+                w[unsafe_offset=0] = w[unsafe_offset=0] | UInt32(b << (4 * ef)); mixed += 1
     var slot = Dict[Int, Int](); var sp = List[Int](); var sn = List[Vec3f]()   # per group: x, y, z sums and count; normal sum
-    for x in range(np * m):
+    var owner = List[Int32](length=pb[np], fill=Int32(0))
+    for p in range(np):
+        for x in range(pb[p], pb[p + 1]):
+            owner[x] = Int32(p)
+    for x in range(pb[np]):
         if not joined[x]:
             continue
-        var r = find(parent, x); var p = x // m; var o = x % m
+        var r = find(parent, x); var p = Int(owner[x]); var o = x - pb[p]
         if r not in slot:
             slot[r] = len(sn); sp.append(0); sp.append(0); sp.append(0); sp.append(0); sn.append(Vec3f(0, 0, 0))
-        var s = slot[r]; var gp = gpos(p, o); var q = grid.unsafe_offset(p * cw + 4).bitcast[UInt16]()
+        var s = slot[r]; var gp = gpos(p, o); var q = grid.unsafe_offset(corner_off(lv, p) + 5).bitcast[UInt16]()
         sp[4 * s] += gp[0]; sp[4 * s + 1] += gp[1]; sp[4 * s + 2] += gp[2]; sp[4 * s + 3] += 1
         sn[s] = sn[s] + _oct_dec(q[unsafe_offset=5 * o + 3], q[unsafe_offset=5 * o + 4])
     var moved = 0
-    for x in range(np * m):
+    for x in range(pb[np]):
         if not joined[x]:
             continue
-        var s = slot[find(parent, x)]; var p = x // m; var o = x % m
-        var g = grid.unsafe_offset(p * cw); var st = g[unsafe_offset=3]; var q = g.unsafe_offset(4).bitcast[UInt16]()
+        var s = slot[find(parent, x)]; var p = Int(owner[x]); var o = x - pb[p]
+        var g = grid.unsafe_offset(corner_off(lv, p)); var st = g[unsafe_offset=3]; var q = g.unsafe_offset(5).bitcast[UInt16]()
         var c = Float64(sp[4 * s + 3])
         for a in range(3):
             var v = UInt16(min(max(Int(round(Float64(sp[4 * s + a]) / c)) - Int(g[unsafe_offset=a] / st), 0), 65535))
@@ -834,25 +910,43 @@ def weld_corner_grid(np: Int, n: Int, grid: _F32) raises:
         var nl = sqrt(dot(sn[s], sn[s]))
         var e = _oct_enc(sn[s] * (Float32(1) / nl) if nl > Float32(0) else Vec3f(0, 0, 0))
         q[unsafe_offset=5 * o + 3] = e[0]; q[unsafe_offset=5 * o + 4] = e[1]
-    print("welded edge grid points:", len(sn), "groups,", len(ends), "edge keys,", moved, "coordinates moved")
+    print("welded edge grid points:", len(sn), "groups,", len(ends), "edge keys,", moved, "coordinates moved,", mixed, "edges to a coarser patch")
 
 
 def _bl_frame(d: DispSurface, pi: Int, k: Int, org: Vec3f) -> BLFrame:
-    """Sub-square k's corners from the patch's grid: neighbouring sub-squares read the same points and normals."""
-    var n = 1 << (Int(d.sub_levels) // 2)
-    var ku = k % n; var kv = k // n
+    """Sub-square k's corners from the patch's grid: neighbouring sub-squares read the same points and normals. On an edge
+    to a coarser patch the points between the coarse ones are interpolated from them, as the coarse side sees its edge."""
+    var l = patch_level(d, pi); var n = 1 << l
+    var ku = k & (n - 1); var kv = k >> l
     var f = BLFrame(SIMD[DType.float32, 4](0), SIMD[DType.float32, 4](0), SIMD[DType.float32, 4](0), SIMD[DType.float32, 4](0),
                     SIMD[DType.float32, 4](0), SIMD[DType.float32, 4](0))
-    var g = d.corners.unsafe_offset(pi * corner_words(n))
+    var g = d.corners.unsafe_offset(corner_off(d.lv, pi))
     var st = g[unsafe_offset=3]
     var b = Vec3f(g[unsafe_offset=0], g[unsafe_offset=1], g[unsafe_offset=2])
-    var q = g.unsafe_offset(4).bitcast[UInt16]()
+    var ew = g.unsafe_offset(4).bitcast[UInt32]()[unsafe_offset=0]
+    var q = g.unsafe_offset(5).bitcast[UInt16]()
     comptime for c in range(4):   # b + q st is exact, the same float in every patch that stores the point
         var o = 5 * ((kv + (1 if c >= 2 else 0)) * (n + 1) + ku + (1 if c == 1 or c == 2 else 0))
         f.px[c] = (b.x + Float32(q[unsafe_offset=o]) * st) - org.x; f.py[c] = (b.y + Float32(q[unsafe_offset=o + 1]) * st) - org.y
         f.pz[c] = (b.z + Float32(q[unsafe_offset=o + 2]) * st) - org.z
         var nv = _oct_dec(q[unsafe_offset=o + 3], q[unsafe_offset=o + 4])
         f.nx[c] = nv.x; f.ny[c] = nv.y; f.nz[c] = nv.z
+    if ew != UInt32(0):
+        comptime for c in range(4):
+            var i = ku + (1 if c == 1 or c == 2 else 0); var j = kv + (1 if c >= 2 else 0)
+            var e = 0 if j == 0 else (1 if i == n else (2 if j == n else (3 if i == 0 else -1)))
+            if e >= 0:
+                var kk = i if e == 0 else (j if e == 1 else (n - i if e == 2 else n - j))
+                var r = 1 << Int((ew >> UInt32(4 * e)) & UInt32(15)); var m = kk & (r - 1)
+                if m != 0:
+                    var o0 = 5 * _edge_idx(n, e, kk - m); var o1 = 5 * _edge_idx(n, e, kk - m + r); var a = Float32(m) / Float32(r)
+                    var p0 = Vec3f((b.x + Float32(q[unsafe_offset=o0]) * st) - org.x, (b.y + Float32(q[unsafe_offset=o0 + 1]) * st) - org.y,
+                                   (b.z + Float32(q[unsafe_offset=o0 + 2]) * st) - org.z)
+                    var p1 = Vec3f((b.x + Float32(q[unsafe_offset=o1]) * st) - org.x, (b.y + Float32(q[unsafe_offset=o1 + 1]) * st) - org.y,
+                                   (b.z + Float32(q[unsafe_offset=o1 + 2]) * st) - org.z)
+                    var n0 = _oct_dec(q[unsafe_offset=o0 + 3], q[unsafe_offset=o0 + 4]); var n1 = _oct_dec(q[unsafe_offset=o1 + 3], q[unsafe_offset=o1 + 4])
+                    f.px[c] = p0.x + (p1.x - p0.x) * a; f.py[c] = p0.y + (p1.y - p0.y) * a; f.pz[c] = p0.z + (p1.z - p0.z) * a
+                    f.nx[c] = n0.x + (n1.x - n0.x) * a; f.ny[c] = n0.y + (n1.y - n0.y) * a; f.nz[c] = n0.z + (n1.z - n0.z) * a
     return f
 
 
@@ -919,16 +1013,16 @@ def _bl_leaf(d: DispSurface, pi: Int, f: Int, fr: BLFrame, s0q: Float32, t0q: Fl
 def _intersect_bl(d: DispSurface, prim: Int, org: Vec3f, dir: Vec3f, t_max: Float32) -> Tuple[Bool, Float32, Float32, Float32, Int, Float32]:
     """The sub-square's base as the bilinear patch through its limit corners, displaced along the bilinear blend of their
     unit normals: X = B + h N. Neighbours share the corners, so their edges agree; no bicubic is touched after entry."""
-    var pi = prim // sub_count(d); var sq = sub_square(d, prim % sub_count(d))
+    var pk = prim_patch(d, prim); var pi = pk[0]; var sq = sub_square(pk[2], pk[1])
     var S = sq[2]; var inv_s = Float32(1) / S
     var f = Int(d.face[unsafe_offset=pi])
     var texels = d.sq[unsafe_offset=3 * pi + 2] * Float32(1 << max(Int(d.hdr[unsafe_offset=3 * f + 1]), Int(d.hdr[unsafe_offset=3 * f + 2])))
-    var kq = prim % sub_count(d)
+    var kq = pk[1]
     var fr = _bl_frame(d, pi, kq, org)
     var cam = d.cam - org
     var inv = Vec3f(Float32(1) / dir.x, Float32(1) / dir.y, Float32(1) / dir.z)
     var best = t_max; var hit = False; var hs = Float32(0); var ht = Float32(0); var hsz = Float32(1)
-    var depth = Int(d.sub_levels); var steps = 0
+    var depth = 2 * pk[2]; var steps = 0
     var path = sq[3]; var pend = UInt64(0)
     var dom = (sq[0], sq[1], S, S)
     var lo0 = Vec3f(fr.px.reduce_min(), fr.py.reduce_min(), fr.pz.reduce_min()); var hi0 = Vec3f(fr.px.reduce_max(), fr.py.reduce_max(), fr.pz.reduce_max())
@@ -978,7 +1072,7 @@ def _intersect_bl(d: DispSurface, prim: Int, org: Vec3f, dir: Vec3f, t_max: Floa
 
 
 def intersect_displaced[M: Int = -1](d: DispSurface, prim: Int, org: Vec3f, dir: Vec3f, t_max: Float32) -> Tuple[Bool, Float32, Float32, Float32, Int, Float32]:
-    """The nearest hit of primitive prim (patch * sub_count + sub-square) before t_max: (hit, t, s, t, steps, the leaf square's size).
+    """The nearest hit of primitive prim (a patch's sub-square, prim_patch) before t_max: (hit, t, s, t, steps, the leaf square's size).
     M = 5 compiles only the bilinear-base walk (leaf modes 5 and 6).
     Box leaves end where the displaced box is no larger than the footprint; exact leaves where the undisplaced square reaches a
     texel or the footprint, and intersect the bilinear patch through its four displaced corners, so the depth does not grow with
@@ -987,19 +1081,19 @@ def intersect_displaced[M: Int = -1](d: DispSurface, prim: Int, org: Vec3f, dir:
         return _intersect_bl(d, prim, org, dir, t_max)
     if d.leaf_mode >= 5:
         return _intersect_bl(d, prim, org, dir, t_max)
-    if d.greg[unsafe_offset=prim // sub_count(d)] != 1:   # Gregory patches keep the cropping loop
+    if d.greg[unsafe_offset=prim_patch(d, prim)[0]] != 1:   # Gregory patches keep the cropping loop
         if d.leaf_mode == 1 or d.leaf_mode == 2:
             return _intersect_fine(d, prim, org, dir, t_max)
         if d.leaf_mode == 3:
             return _intersect_hf(d, prim, org, dir, t_max)
-    var pi = prim // sub_count(d); var sq = sub_square(d, prim % sub_count(d))
+    var pk = prim_patch(d, prim); var pi = pk[0]; var sq = sub_square(pk[2], pk[1])
     var src = d.patches[unsafe_offset=pi]
     var o = BezierPatch(src.x - org.x, src.y - org.y, src.z - org.z)   # anchored at the ray origin
     var cam = d.cam - org
     var inv = Vec3f(Float32(1) / dir.x, Float32(1) / dir.y, Float32(1) / dir.z)
     var best = t_max; var hit = False; var hs = Float32(0); var ht = Float32(0); var hsz = Float32(1)
     var nlo = Array[Vec3f, PATCH_MAX_DEPTH + 1](fill=Vec3f(-1, -1, -1)); var nhi = Array[Vec3f, PATCH_MAX_DEPTH + 1](fill=Vec3f(1, 1, 1))
-    var depth = Int(d.sub_levels); var steps = 0
+    var depth = 2 * pk[2]; var steps = 0
     var path = sq[3]; var pend = UInt64(0)
     var dom = (sq[0], sq[1], sq[2], sq[2])
     var f = Int(d.face[unsafe_offset=pi])

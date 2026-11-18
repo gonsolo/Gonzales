@@ -14,7 +14,7 @@ from std.builtin.device_passable import DevicePassable, DeviceTypeEncoder
 from std.math import ceildiv
 from gonzales.core.geometry import Vec3f, cross, dot
 from gonzales.scene.shapes.patches import BezierPatch
-from gonzales.scene.shapes.displaced_patches import DispSurface, patch_box, sub_box, sub_count, patch_at, intersect_displaced, displaced_normal, displaced_point, displaced_point_n, chain_color, _bl_frame, _bl_point, corner_grid, corner_words, corner_step, weld_corner_grid, face_height
+from gonzales.scene.shapes.displaced_patches import DispSurface, Levels, make_levels, prim_patch, prim_total, corner_off, patch_level, LEVELS, patch_box, sub_box, patch_at, intersect_displaced, displaced_normal, displaced_point, displaced_point_n, chain_color, _bl_frame, _bl_point, corner_grid, corner_words, corner_step, weld_corner_grid, face_height
 from gonzales.scene.accel.xert import XeRayDesc, xert_alignment, xert_build_blas_geoms, xert_free
 from std.memory import OpaquePointer
 from std.sys.info import is_gpu
@@ -123,12 +123,12 @@ def trace_patches[M: Int = -1](d: DispSurface, nodes: Pointer[BNode, MutUntracke
                 if boxes_only:
                     var bt = _box_t(nd.lo, nd.hi, org, inv, h.t)
                     if bt[0] and bt[1] < h.t:
-                        h.t = bt[1]; h.prim = prim // sub_count(d); h.steps += 1
+                        h.t = bt[1]; h.prim = prim_patch(d, prim)[0]; h.steps += 1
                     continue
                 var r = intersect_displaced[M](d, prim, org, dir, h.t)
                 h.steps += r[4]
                 if r[0] and r[1] < h.t:
-                    h.t = r[1]; h.prim = prim // sub_count(d); h.s = r[2]; h.u = r[3]; h.size = r[5]
+                    h.t = r[1]; h.prim = prim_patch(d, prim)[0]; h.s = r[2]; h.u = r[3]; h.size = r[5]
         elif sp < TOP_STACK - 2:
             var na = nodes[unsafe_offset=Int(nd.a)]; var nb = nodes[unsafe_offset=Int(nd.b)]
             var ta = _box_t(na.lo, na.hi, org, inv, h.t); var tb = _box_t(nb.lo, nb.hi, org, inv, h.t)
@@ -144,15 +144,14 @@ def trace_patches[M: Int = -1](d: DispSurface, nodes: Pointer[BNode, MutUntracke
 
 def _sub_bvh(d: DispSurface, np: Int, mut nodes: List[BNode], mut order: List[Int32]):
     """The BVH over every patch's sub-squares for the surface's height scale (boxes in parallel)."""
-    var nsub = sub_count(d)
-    var n = np * nsub
+    var n = prim_total(d)
     var lo = List[Vec3f](length=n, fill=Vec3f(0, 0, 0)); var hi = List[Vec3f](length=n, fill=Vec3f(0, 0, 0))
     var lo_p = lo.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin](); var hi_p = hi.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
-    def boxes(p: Int) {imm}:
-        for k in range(nsub):
-            var b = sub_box(d, p * nsub + k)
-            lo_p[unsafe_offset=p * nsub + k] = b[0]; hi_p[unsafe_offset=p * nsub + k] = b[1]
-    parallelize(boxes, np)
+    def boxes(c: Int) {imm}:
+        for k in range(c * 4096, min(n, c * 4096 + 4096)):
+            var b = sub_box(d, k)
+            lo_p[unsafe_offset=k] = b[0]; hi_p[unsafe_offset=k] = b[1]
+    parallelize(boxes, (n + 4095) // 4096)
     nodes.clear(); order.clear()
     for i in range(n):
         order.append(Int32(i))
@@ -296,7 +295,7 @@ def _rq_trace[M: Int](accel: MutPointer[UInt8, MutAnyOrigin], d: DispSurface, or
             var r = intersect_displaced[M](d, prim, org, dir, h.t)
             h.steps += r[4]
             if r[0] and r[1] < h.t:
-                h.t = r[1]; h.prim = prim // sub_count(d); h.s = r[2]; h.u = r[3]; h.size = r[5]
+                h.t = r[1]; h.prim = prim_patch(d, prim)[0]; h.s = r[2]; h.u = r[3]; h.size = r[5]
                 var uv = SIMD[DType.float32, 2](r[2], r[3])
                 external_call["intel_ray_query_commit_potential_hit_override", NoneType](q, r[1], Pointer(to=uv))
             external_call["intel_ray_query_start_traversal", NoneType](q)
@@ -410,14 +409,14 @@ def _hw_render(ctx: DeviceContext, mut bufs: List[DeviceBuffer[DType.uint8]], d:
         t1 = perf_counter_ns()
         vb.unsafe_free(); ib.unsafe_free(); vp.unsafe_free(); ip.unsafe_free(); nvp.unsafe_free(); ntp.unsafe_free(); vo.unsafe_free()
     else:
-        var npr = np * sub_count(d); nprim = npr
+        var npr = prim_total(d); nprim = npr
         var pb = unsafe_alloc[Float32](6 * npr)
-        def boxes(p: Int) {imm}:
-            for k in range(sub_count(d)):
-                var b = sub_box(d, p * sub_count(d) + k); var o = 6 * (p * sub_count(d) + k)
+        def boxes(c: Int) {imm}:
+            for k in range(c * 4096, min(npr, c * 4096 + 4096)):
+                var b = sub_box(d, k); var o = 6 * k
                 pb[unsafe_offset=o] = b[0].x; pb[unsafe_offset=o + 1] = b[0].y; pb[unsafe_offset=o + 2] = b[0].z
                 pb[unsafe_offset=o + 3] = b[1].x; pb[unsafe_offset=o + 4] = b[1].y; pb[unsafe_offset=o + 5] = b[1].z
-        parallelize(boxes, np)
+        parallelize(boxes, (npr + 4095) // 4096)
         t0 = perf_counter_ns()
         rtas = xert_build_blas_geoms(0, Pointer[Pointer[Float32, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
                                      Pointer[Int64, MutUntrackedOrigin].unsafe_dangling(), Pointer[Pointer[UInt32, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
@@ -464,10 +463,23 @@ def _hw_render(ctx: DeviceContext, mut bufs: List[DeviceBuffer[DType.uint8]], d:
     tb.unsafe_free(); gn.unsafe_free(); ext.unsafe_free(); bounds.unsafe_free()
 
 
-def _grid_levels() -> Int32:
-    """GRID=4/8/16/32: sub-squares a patch side as BVH primitives (default 32)."""
-    var g = getenv("GRID")
-    return Int32(4) if g == "4" else (Int32(6) if g == "8" else (Int32(8) if g == "16" else Int32(10)))
+def _patch_levels(np: Int, sq: Pointer[Float32, MutUntrackedOrigin], face: Pointer[Int32, MutUntrackedOrigin],
+                  hdr: Pointer[Int32, MutUntrackedOrigin]) raises -> List[Int]:
+    """Each patch's sub-square level: GRID=1..64 for all, else about TPS (default 5) texels a sub-square side."""
+    var g = getenv("GRID"); var tps = _env_f("TPS", Float32(5))
+    var lev = List[Int](length=np, fill=0)
+    for p in range(np):
+        var l = 0
+        if g.byte_length() > 0:
+            while (1 << (l + 1)) <= atol(g):
+                l += 1
+        else:
+            var f = Int(face[unsafe_offset=p])
+            var side = sq[unsafe_offset=3 * p + 2] * Float32(1 << max(Int(hdr[unsafe_offset=3 * f + 1]), Int(hdr[unsafe_offset=3 * f + 2])))
+            while l < LEVELS - 1 and Float32(1 << (l + 1)) * tps <= side * Float32(1.41421356):
+                l += 1
+        lev[p] = l
+    return lev^
 
 
 def _leaf_mode() -> Int32:
@@ -562,11 +574,11 @@ def _edge_gap(d: DispSurface, np: Int) raises:
 def _geo_err(d: DispSurface, np: Int, pixel: Float32, eye: Vec3f) raises:
     """Our surface (bilinear base, blended normals, welded grid) against the exact displaced limit surface at the same
     (s, t), 3 x 3 points a sub-square, in pixels of the camera (all points, visible or not)."""
-    var n = 1 << (Int(d.sub_levels) // 2)
     var acc = unsafe_alloc[Float64](8 * np)   # base sum, max, total sum, max, samples, over 0.1 px; Gregory: max, over 0.1 px
     def one(p: Int) {imm}:
         var f = Int(d.face[unsafe_offset=p]); var u0 = d.sq[unsafe_offset=3 * p]; var v0 = d.sq[unsafe_offset=3 * p + 1]; var sz = d.sq[unsafe_offset=3 * p + 2]
         var sb = Float64(0); var mb = Float64(0); var stt = Float64(0); var mt = Float64(0); var cnt = Float64(0); var big = Float64(0)
+        var n = 1 << patch_level(d, p)
         for k in range(n * n):
             var fr = _bl_frame(d, p, k, Vec3f(0, 0, 0))
             var s0 = Float32(k % n) / Float32(n); var t0 = Float32(k // n) / Float32(n)
@@ -596,7 +608,7 @@ def _geo_err(d: DispSurface, np: Int, pixel: Float32, eye: Vec3f) raises:
         if acc[unsafe_offset=8 * p + 3] > acc[unsafe_offset=8 * wp + 3]:
             wp = p
     if getenv("GEO_WORST") == "1":   # the worst patch's samples: where and why
-        var f = Int(d.face[unsafe_offset=wp]); var sz = d.sq[unsafe_offset=3 * wp + 2]
+        var f = Int(d.face[unsafe_offset=wp]); var sz = d.sq[unsafe_offset=3 * wp + 2]; var n = 1 << patch_level(d, wp)
         var best = Float32(0); var bs = Float32(0); var bt = Float32(0)
         for j in range(3 * n):
             for i in range(3 * n):
@@ -718,14 +730,14 @@ def demo_gpu[M: Int, HWT: Bool](d: DispSurface, nodes: Pointer[BNode, MutUntrack
 
 def _proc_rtas(ctx: DeviceContext, d: DispSurface, np: Int) raises -> DeviceBuffer[DType.uint8]:
     """Our sub-squares' boxes as procedural primitives in an Intel RTAS, on the device."""
-    var npr = np * sub_count(d)
+    var npr = prim_total(d)
     var pb = unsafe_alloc[Float32](6 * npr)
-    def boxes(p: Int) {imm}:
-        for k in range(sub_count(d)):
-            var b = sub_box(d, p * sub_count(d) + k); var o = 6 * (p * sub_count(d) + k)
+    def boxes(c: Int) {imm}:
+        for k in range(c * 4096, min(npr, c * 4096 + 4096)):
+            var b = sub_box(d, k); var o = 6 * k
             pb[unsafe_offset=o] = b[0].x; pb[unsafe_offset=o + 1] = b[0].y; pb[unsafe_offset=o + 2] = b[0].z
             pb[unsafe_offset=o + 3] = b[1].x; pb[unsafe_offset=o + 4] = b[1].y; pb[unsafe_offset=o + 5] = b[1].z
-    parallelize(boxes, np)
+    parallelize(boxes, (npr + 4095) // 4096)
     var size = Int64(0); var bounds = unsafe_alloc[Float32](6)
     var rtas = xert_build_blas_geoms(0, Pointer[Pointer[Float32, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
                                      Pointer[Int64, MutUntrackedOrigin].unsafe_dangling(), Pointer[Pointer[UInt32, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
@@ -763,7 +775,7 @@ def _demo_upload(ctx: DeviceContext, nb_buf: DeviceBuffer[DType.uint8], or_buf: 
 def run_demo(patches: Pointer[BezierPatch, MutUntrackedOrigin], sq: Pointer[Float32, MutUntrackedOrigin], face: Pointer[Int32, MutUntrackedOrigin],
              hdr: Pointer[Int32, MutUntrackedOrigin], pyr: Pointer[UInt8, MutUntrackedOrigin], npyr: Int, chain_off: Pointer[Int32, MutUntrackedOrigin],
              chain: Pointer[UInt8, MutUntrackedOrigin], nchain: Int, fm: Pointer[Float32, MutUntrackedOrigin], greg: Pointer[UInt8, MutUntrackedOrigin],
-             np: Int, nf: Int, blo: Vec3f, bhi: Vec3f, out_dir: String, cgrid: Pointer[Float32, MutUntrackedOrigin], ncg: Int) raises:
+             np: Int, nf: Int, blo: Vec3f, bhi: Vec3f, out_dir: String, cgrid: Pointer[Float32, MutUntrackedOrigin], ncg: Int, lvt: Levels) raises:
     """INTERACTIVE=1: fly around the rock in the Vulkan viewer; DEMO_FRAMES=N: N frames along an orbit without a window."""
     var W = Int(_env_f("W", Float32(960))); var H = Int(_env_f("H", Float32(540)))
     var frames_env = getenv("DEMO_FRAMES")
@@ -797,7 +809,7 @@ def run_demo(patches: Pointer[BezierPatch, MutUntrackedOrigin], sq: Pointer[Floa
     var dhdr = _up(ctx, bufs, hdr, 3 * nf); var dpyr = _up(ctx, bufs, pyr, npyr); var doff = _up(ctx, bufs, chain_off, nf)
     var dchain = _up(ctx, bufs, chain, nchain); var dfm = _up(ctx, bufs, fm, 12 * np); var dgreg = _up(ctx, bufs, greg, np)
     var dcg = _up(ctx, bufs, cgrid, ncg)
-    var host_d = DispSurface(patches, sq, face, hdr, pyr, exag / Float32(255), Vec3f(0, 0, 0), Float32(0), chain_off, chain, fm, greg, _grid_levels(), _leaf_mode(), cgrid)
+    var host_d = DispSurface(patches, sq, face, hdr, pyr, exag / Float32(255), Vec3f(0, 0, 0), Float32(0), chain_off, chain, fm, greg, lvt, _leaf_mode(), cgrid)
     var nodes = List[BNode](); var order = List[Int32]()
     var use_hw = getenv("HW") != "0" and xert_alignment() != 0   # the top level in Intel's RTAS (HW=0: our BVH)
     var accel_buf = ctx.enqueue_create_buffer[DType.uint8](64)
@@ -889,7 +901,7 @@ def run_demo(patches: Pointer[BezierPatch, MutUntrackedOrigin], sq: Pointer[Floa
             eye = Vec3f(cs[unsafe_offset=0].position.x, cs[unsafe_offset=0].position.y, cs[unsafe_offset=0].position.z)
             fwd = cs[unsafe_offset=0].direction
         if rebuild:
-            host_d = DispSurface(patches, sq, face, hdr, pyr, exag / Float32(255), Vec3f(0, 0, 0), Float32(0), chain_off, chain, fm, greg, _grid_levels(), _leaf_mode(), cgrid)
+            host_d = DispSurface(patches, sq, face, hdr, pyr, exag / Float32(255), Vec3f(0, 0, 0), Float32(0), chain_off, chain, fm, greg, lvt, _leaf_mode(), cgrid)
             if use_hw:
                 accel_buf = _proc_rtas(ctx, host_d, np)
             else:
@@ -907,7 +919,7 @@ def run_demo(patches: Pointer[BezierPatch, MutUntrackedOrigin], sq: Pointer[Floa
         var right = cross(fwd, world_up)
         right = right * (Float32(1) / sqrt(dot(right, right)))
         var up = cross(right, fwd)
-        var dd = DispSurface(dpat, dsq, dface, dhdr, dpyr, exag / Float32(255), eye, Float32(2) * tan_h / Float32(rw), doff, dchain, dfm, dgreg, _grid_levels(), _leaf_mode(), dcg)
+        var dd = DispSurface(dpat, dsq, dface, dhdr, dpyr, exag / Float32(255), eye, Float32(2) * tan_h / Float32(rw), doff, dchain, dfm, dgreg, lvt, _leaf_mode(), dcg)
         var cam = DCam(eye, fwd, right, up, light, tan_h, exposure, Int32(rw), Int32(rh), Int32(frame), Int32(headlight), Int32(1 if color_on else 0))
         var t0 = perf_counter_ns()
         var acc_d = accel_buf.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutAnyOrigin]()
@@ -984,6 +996,28 @@ def main() raises:
         for k in range(16):
             x[k] = cpf[unsafe_offset=48 * p + 3 * k]; y[k] = cpf[unsafe_offset=48 * p + 3 * k + 1]; z[k] = cpf[unsafe_offset=48 * p + 3 * k + 2]
         patches[unsafe_offset=p] = BezierPatch(x, y, z)
+    var plev = _patch_levels(np, sq, face, hdr)
+    var perm = List[Int](capacity=np)
+    for l in range(LEVELS):   # patches sorted by level: a primitive's patch follows from its index (prim_patch)
+        for p in range(np):
+            if plev[p] == l:
+                perm.append(p)
+    var patches2 = unsafe_alloc[BezierPatch](np); var sq2 = unsafe_alloc[Float32](3 * np); var face2 = unsafe_alloc[Int32](np)
+    var fm2 = unsafe_alloc[Float32](12 * np); var greg2 = unsafe_alloc[UInt8](np); var slev = List[Int](capacity=np)
+    for i in range(np):
+        var p = perm[i]
+        patches2[unsafe_offset=i] = patches[unsafe_offset=p]; face2[unsafe_offset=i] = face[unsafe_offset=p]; greg2[unsafe_offset=i] = greg[unsafe_offset=p]
+        for c in range(3):
+            sq2[unsafe_offset=3 * i + c] = sq[unsafe_offset=3 * p + c]
+        for c in range(12):
+            fm2[unsafe_offset=12 * i + c] = fm[unsafe_offset=12 * p + c]
+        slev.append(plev[p])
+    patches = patches2; sq = sq2; face = face2; fm = fm2; greg = greg2
+    var lvt = make_levels(slev)
+    var lcount = String()
+    for l in range(LEVELS):
+        lcount += String(" ", Int(lvt.patch[l + 1] - lvt.patch[l]), "@", 1 << l)
+    print("sub-square levels (patches @ n x n):", lcount, ";", Int(lvt.prim[LEVELS]), "primitives")
     var texels = 0
     for f in range(nf):
         texels += (1 << Int(hdr[unsafe_offset=3 * f + 1])) * (1 << Int(hdr[unsafe_offset=3 * f + 2]))
@@ -1023,26 +1057,26 @@ def main() raises:
         if external_call["disp_color_open", Int32](cc) == 0:
             raise Error("cannot read " + col_path)
 
-    var gn = 1 << (Int(_grid_levels()) // 2); var cw = corner_words(gn); var ncg = cw * np
+    var ncg = Int(lvt.corner[LEVELS])
     var cgrid = unsafe_alloc[Float32](ncg)
-    var d_g = DispSurface(patches, sq, face, hdr, pyr, Float32(0), Vec3f(0, 0, 0), Float32(0), chain_off, chain, fm, greg, _grid_levels(), _leaf_mode(), cgrid)
+    var d_g = DispSurface(patches, sq, face, hdr, pyr, Float32(0), Vec3f(0, 0, 0), Float32(0), chain_off, chain, fm, greg, lvt, _leaf_mode(), cgrid)
     var plo = List[Vec3f](capacity=np); var pext = Float32(0)
     for p in range(np):
         var b = patch_box(d_g, p); plo.append(b[0])
         pext = max(pext, max(b[1].x - b[0].x, max(b[1].y - b[0].y, b[1].z - b[0].z)))
     var cst = corner_step(pext)
     def fill_grid(p: Int) {imm}:
-        corner_grid(d_g, p, plo[p], cst, cgrid.unsafe_offset(cw * p))
+        corner_grid(d_g, p, plo[p], cst, cgrid.unsafe_offset(corner_off(lvt, p)))
     parallelize(fill_grid, np)
     if getenv("WELD") != "0":
-        weld_corner_grid(np, gn, cgrid)
-    print("sub-square corner grid:", (gn + 1) * (gn + 1), "points a patch,", ncg * 4 // 1024, "KiB")
+        weld_corner_grid(np, lvt, cgrid)
+    print("sub-square corner grid:", ncg * 4 // 1024, "KiB")
     if getenv("EDGE_GAP") == "1":
-        _edge_gap(DispSurface(patches, sq, face, hdr, pyr, Float32(0), eye, pixel, chain_off, chain, fm, greg, _grid_levels(), _leaf_mode(), cgrid), np)
-        _height_gap(DispSurface(patches, sq, face, hdr, pyr, Float32(0), eye, pixel, chain_off, chain, fm, greg, _grid_levels(), _leaf_mode(), cgrid), np)
+        _edge_gap(DispSurface(patches, sq, face, hdr, pyr, Float32(0), eye, pixel, chain_off, chain, fm, greg, lvt, _leaf_mode(), cgrid), np)
+        _height_gap(DispSurface(patches, sq, face, hdr, pyr, Float32(0), eye, pixel, chain_off, chain, fm, greg, lvt, _leaf_mode(), cgrid), np)
         return
     if getenv("GEO_ERR") == "1":
-        _geo_err(DispSurface(patches, sq, face, hdr, pyr, exag / Float32(255), eye, pixel, chain_off, chain, fm, greg, _grid_levels(), _leaf_mode(), cgrid), np, pixel, eye)
+        _geo_err(DispSurface(patches, sq, face, hdr, pyr, exag / Float32(255), eye, pixel, chain_off, chain, fm, greg, lvt, _leaf_mode(), cgrid), np, pixel, eye)
         return
     var ngreg = 0
     for p in range(np):
@@ -1050,7 +1084,7 @@ def main() raises:
     print("Gregory patches:", ngreg, "of", np, "(", np * (size_of[BezierPatch]() + 16) + ngreg * 48, "patch bytes incl. Fm )")
 
     if getenv("INTERACTIVE") == "1" or getenv("DEMO_FRAMES").byte_length() > 0:
-        run_demo(patches, sq, face, hdr, pyr, npyr, chain_off, chain, nchain, fm, greg, np, nf, blo, bhi, out_dir, cgrid, ncg)
+        run_demo(patches, sq, face, hdr, pyr, npyr, chain_off, chain, nchain, fm, greg, np, nf, blo, bhi, out_dir, cgrid, ncg, lvt)
         return
 
     var lo_b = List[Vec3f](); var hi_b = List[Vec3f]()
@@ -1059,7 +1093,7 @@ def main() raises:
         if only.byte_length() > 0 and only != name:
             continue
         var scale = Float32(0) if scene == 0 else (Float32(1) / Float32(255) if scene == 1 else exag / Float32(255))
-        var d = DispSurface(patches, sq, face, hdr, pyr, scale, eye, pixel, chain_off, chain, fm, greg, _grid_levels(), _leaf_mode(), cgrid)
+        var d = DispSurface(patches, sq, face, hdr, pyr, scale, eye, pixel, chain_off, chain, fm, greg, lvt, _leaf_mode(), cgrid)
         var img = List[Float32](length=W * H, fill=Float32(0))
         var rgb = List[Float32](length=3 * W * H, fill=Float32(0))
         var hitmask = List[UInt8](length=W * H, fill=UInt8(0))
@@ -1072,7 +1106,7 @@ def main() raises:
             if getenv("REF_HW").byte_length() == 0 and getenv("HW") != "1":
                 _sub_bvh(d, np, nodes, order)
             mem = np * (size_of[BezierPatch]() + 16) + len(nodes) * size_of[BNode]() + 4 * len(order) + (npyr if scene > 0 else 0)
-            print("BVH:", np * sub_count(d), "sub-squares,", len(nodes), "nodes,", (len(nodes) * size_of[BNode]() + 4 * len(order)) // 1024, "KiB")
+            print("BVH:", prim_total(d), "sub-squares,", len(nodes), "nodes,", (len(nodes) * size_of[BNode]() + 4 * len(order)) // 1024, "KiB")
             var tb = perf_counter_ns()
             var np_ptr = nodes.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
             var or_ptr = order.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
@@ -1120,7 +1154,7 @@ def main() raises:
                 var nchain_b = nchain
                 var dd = DispSurface(_up(ctx, bufs, patches, np), _up(ctx, bufs, sq, 3 * np), _up(ctx, bufs, face, np), _up(ctx, bufs, hdr, 3 * nf),
                                      _up(ctx, bufs, pyr, npyr), scale, eye, pixel, _up(ctx, bufs, chain_off, nf), _up(ctx, bufs, chain, nchain_b),
-                                     _up(ctx, bufs, fm, 12 * np), _up(ctx, bufs, greg, np), _grid_levels(), _leaf_mode(), _up(ctx, bufs, cgrid, ncg))
+                                     _up(ctx, bufs, fm, 12 * np), _up(ctx, bufs, greg, np), lvt, _leaf_mode(), _up(ctx, bufs, cgrid, ncg))
                 var nd_d = _up(ctx, bufs, nodes.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin](), len(nodes))
                 var or_d = _up(ctx, bufs, order.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin](), len(order))
                 var img_b = ctx.enqueue_create_buffer[DType.float32](W * H)
