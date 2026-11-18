@@ -34,7 +34,7 @@ from gonzales.core.spectrum import SpectralHandle
 from gonzales.core.sampling import gaussian_norm, ThinLens
 from gonzales.scene.shapes.ply import load_ply
 from gonzales.scene.shapes.ply_prefetch import PlyPrefetch, scan_plys, load_all_plys
-from gonzales.scene.description.displacement_builder import apply_shape_displacement, apply_subdiv_displacement, subdiv_host_surface
+from gonzales.scene.description.displacement_builder import apply_shape_displacement, apply_subdiv_displacement, subdiv_host_surface, load_subdiv_meshes
 from gonzales.scene.shapes.displacement import DisplacedMesh, DisplacedTri
 from gonzales.scene.shapes.patches import BezierPatch
 from gonzales.scene.shapes.displaced_patches import SubdivSurface
@@ -2467,6 +2467,8 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
                  psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin],
                  verbose: Bool = False,
                  curves_apart: Bool = False):     # the curves stay out of the BVHs: the GPU builds their clusters
+
+    load_subdiv_meshes(s)   # displaced subdivision meshes, now that the instances are known
 
     # ---- Camera matrices ----
     var c2w = unsafe_alloc[Float32](16)

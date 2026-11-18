@@ -1,5 +1,5 @@
 from std.collections import Array
-from gonzales.core.geometry import RGB
+from gonzales.core.geometry import RGB, Vec3f
 from gonzales.scene.shapes.displacement import DisplacedMesh, Rmip
 from gonzales.scene.shapes.disp_build import DispMesh
 from std.os.path import exists
@@ -364,6 +364,7 @@ struct SceneParseState(Movable):
     var subdiv_meshes: List[DispMesh]
     var subdiv_files:  List[String]
     var subdiv_scale:  List[Float32]
+    var subdiv_eye:    List[Vec3f]    # the eye each was loaded for, in its object space
     var alpha_mask_files: List[String]
     var alpha_mask_data:  List[Pointer[UInt8, MutUntrackedOrigin]]
     var alpha_mask_w:     List[Int32]
@@ -562,6 +563,7 @@ struct SceneParseState(Movable):
         self.subdiv_meshes = List[DispMesh]()
         self.subdiv_files  = List[String]()
         self.subdiv_scale  = List[Float32]()
+        self.subdiv_eye    = List[Vec3f]()
         self.disp_maps = List[Rmip]()
         self.alpha_mask_files = List[String]()
         self.alpha_mask_data  = List[Pointer[UInt8, MutUntrackedOrigin]]()

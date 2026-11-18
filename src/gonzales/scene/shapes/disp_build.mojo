@@ -63,6 +63,18 @@ struct DispMesh(Copyable, Movable):
         return Int(self.lv.prim[LEVELS])
 
 
+def empty_disp_mesh() -> DispMesh:
+    """A mesh that failed to load: no patches."""
+    var lv = Levels(SIMD[DType.int32, 8](0), SIMD[DType.int32, 8](0), SIMD[DType.int32, 8](0))
+    return DispMesh(0, 0, 0, 0, 0, 0, Pointer[BezierPatch, MutUntrackedOrigin].unsafe_dangling(), Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+                    Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(), Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
+                    Pointer[UInt8, MutUntrackedOrigin].unsafe_dangling(), Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
+                    Pointer[UInt8, MutUntrackedOrigin].unsafe_dangling(), Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+                    Pointer[UInt8, MutUntrackedOrigin].unsafe_dangling(), Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+                    Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(), Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(), lv,
+                    Vec3f(0, 0, 0), Vec3f(0, 0, 0))
+
+
 def _cstr(s: String) -> Pointer[UInt8, MutUntrackedOrigin]:
     var c = unsafe_alloc[UInt8](s.byte_length() + 1)
     for i in range(s.byte_length()):

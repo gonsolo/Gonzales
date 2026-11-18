@@ -1,6 +1,6 @@
 """pbrt's shape-level `"texture displacement"`: the mesh just stored becomes displaced triangles (PrimId.type 9)
 over the texture's height map instead of pbrt's pre-tessellation to "edgelength" (see scene/shapes/displacement.mojo)."""
-from std.math import sqrt, abs, tan, min
+from std.math import sqrt, abs, tan, min, max
 from std.os import getenv
 from std.time import perf_counter_ns
 from std.memory.alloc import unsafe_alloc
@@ -10,7 +10,7 @@ from gonzales.scene.appearance.materials import GpuTexture
 from gonzales.scene.description.lexer import ParameterDictionary
 from gonzales.scene.description.parse_types import SceneParseState, MeshAccum
 from gonzales.scene.description.material_builder import _imagemap_affine
-from gonzales.scene.shapes.disp_build import DispOptions, DispMesh, load_disp_mesh
+from gonzales.scene.shapes.disp_build import DispOptions, DispMesh, load_disp_mesh, disp_bounds, empty_disp_mesh
 from gonzales.scene.shapes.displaced_patches import SubdivSurface
 from gonzales.scene.shapes.displacement import DisplacedMesh, DisplacedTri, Rmip, displaced_tri, load_height_map
 
@@ -144,16 +144,17 @@ def _cage_layout(ma: MeshAccum) -> Bool:
 
 def subdiv_host_surface(s: Pointer[SceneParseState, MutUntrackedOrigin], k: Int) -> Pointer[SubdivSurface, MutUntrackedOrigin]:
     """Subdiv mesh k's surface for a TriangleMesh (host data; gpu/scene.mojo uploads it). Ptex bytes are heights / 255."""
+    if k >= len(s[unsafe_offset=0].subdiv_meshes) or s[unsafe_offset=0].subdiv_meshes[k].np == 0:   # not loaded: the cage stays
+        return Pointer[SubdivSurface, MutUntrackedOrigin].unsafe_dangling()
     var cam = subdiv_camera(s)
     var p = unsafe_alloc[SubdivSurface](1)
-    p[unsafe_offset=0] = s[unsafe_offset=0].subdiv_meshes[k].subdiv(s[unsafe_offset=0].subdiv_scale[k] / Float32(255), cam[0], cam[1])
+    p[unsafe_offset=0] = s[unsafe_offset=0].subdiv_meshes[k].subdiv(s[unsafe_offset=0].subdiv_scale[k] / Float32(255), s[unsafe_offset=0].subdiv_eye[k], cam[1])
     return p
 
 
 def apply_subdiv_displacement(s: Pointer[SceneParseState, MutUntrackedOrigin]):
     """GONZALES_SUBDIV_DISP=1: a mesh whose material has a Ptex "texture displacement" is that Ptex's cage; its displaced
-    Catmull-Clark surface (scene/shapes/disp_build.mojo) is loaded once per file for the camera. The camera is taken in the
-    mesh's own space, right only for meshes placed with the identity (TODO: per instance)."""
+    Catmull-Clark surface (scene/shapes/disp_build.mojo) loads after the parse, once per file (load_subdiv_meshes)."""
     if getenv("GONZALES_SUBDIV_DISP") != "1":
         return
     var mi = Int(s[unsafe_offset=0].cur_attr.mat_idx)
@@ -162,38 +163,97 @@ def apply_subdiv_displacement(s: Pointer[SceneParseState, MutUntrackedOrigin]):
     var file = s[unsafe_offset=0].named_materials[mi].disp_ptex_file
     if file.byte_length() == 0:
         return
+    ref ma = s[unsafe_offset=0].meshes[len(s[unsafe_offset=0].meshes) - 1]
+    if not _cage_layout(ma):
+        print("subdiv displacement:", file, ": the mesh is not two triangles a Ptex face in face order - it keeps its bump map")
+        return
+    for i in range(16):   # the cage is in the Ptex's own coordinates
+        if abs(s[unsafe_offset=0].ctm[i] - (Float32(1) if i % 5 == 0 else Float32(0))) > Float32(1e-6):
+            print("subdiv displacement:", file, ": the shape is transformed - it keeps its bump map")
+            return
     var k = -1
     for i in range(len(s[unsafe_offset=0].subdiv_files)):
         if s[unsafe_offset=0].subdiv_files[i] == file:
             k = i
             break
-    ref ma = s[unsafe_offset=0].meshes[len(s[unsafe_offset=0].meshes) - 1]
-    if not _cage_layout(ma):
-        print("subdiv displacement:", file, ": the mesh is not two triangles a Ptex face in face order - it keeps its bump map")
-        return
     if k < 0:
-        var cam = subdiv_camera(s)
-        var pixel = cam[1]
-        var lod = Float32(0.25); var pps = Float32(0.5)
-        var e = getenv("GONZALES_SUBDIV_LOD")
-        if e.byte_length() > 0:
-            try:
-                lod = Float32(atof(e))
-            except:
-                pass
-        var o = DispOptions(cam[0], pixel, lod, pps, Float32(5), 2, -1, True)
-        var t0 = perf_counter_ns()
-        var m: DispMesh
-        try:
-            m = load_disp_mesh(file, o)
-        except err:
-            print("subdiv displacement:", file, ":", err, "- the mesh keeps its bump map")
-            return
-        var mb = Float64(m.nchain + m.npyr + 4 * m.ncg + m.np * (64 * 3 + 12 + 4 + 48 + 1)) / Float64(1 << 20)
-        print("subdiv displacement:", file, ":", m.np, "patches,", m.prims(), "sub-squares,", m.texels, "texels kept,",
-              Int(mb), "MiB host data,", Float64(Int(perf_counter_ns()) - Int(t0)) * 1e-9, "s")
-        s[unsafe_offset=0].subdiv_meshes.append(m^)
         s[unsafe_offset=0].subdiv_files.append(file)
         s[unsafe_offset=0].subdiv_scale.append(s[unsafe_offset=0].named_materials[mi].disp_ptex_scale)
         k = len(s[unsafe_offset=0].subdiv_files) - 1
     ma.subdiv_idx = Int32(k)
+
+
+def _xform(m: List[Float32], o: Int, p: Vec3f) -> Vec3f:
+    """Column-major 4 x 4 matrix m[o .. o + 16] times point p."""
+    return Vec3f(m[o] * p.x + m[o + 4] * p.y + m[o + 8] * p.z + m[o + 12], m[o + 1] * p.x + m[o + 5] * p.y + m[o + 9] * p.z + m[o + 13],
+                 m[o + 2] * p.x + m[o + 6] * p.y + m[o + 10] * p.z + m[o + 14])
+
+
+def _box_dist(p: Vec3f, b: Tuple[Vec3f, Vec3f]) -> Float32:
+    var dx = max(max(b[0].x - p.x, p.x - b[1].x), Float32(0)); var dy = max(max(b[0].y - p.y, p.y - b[1].y), Float32(0))
+    var dz = max(max(b[0].z - p.z, p.z - b[1].z), Float32(0))
+    return sqrt(dx * dx + dy * dy + dz * dz)
+
+
+def load_subdiv_meshes(s: Pointer[SceneParseState, MutUntrackedOrigin]):
+    """Loads every recorded subdiv file for the eye nearest to its cage among the instances that place it (in their object
+    space; the world for a mesh outside an object): that instance needs the finest heights and sub-squares."""
+    var n = len(s[unsafe_offset=0].subdiv_files)
+    if n == 0 or len(s[unsafe_offset=0].subdiv_meshes) == n:
+        return
+    var cam = subdiv_camera(s)
+    var boxes = List[Tuple[Vec3f, Vec3f]]()
+    for k in range(n):
+        try:
+            boxes.append(disp_bounds(s[unsafe_offset=0].subdiv_files[k]))
+        except:
+            boxes.append((Vec3f(0, 0, 0), Vec3f(0, 0, 0)))
+    var best_d = List[Float32](length=n, fill=Float32(3e38)); var best_e = List[Vec3f](length=n, fill=cam[0])
+    var nt = len(s[unsafe_offset=0].object_mesh_start)
+    var files_of = List[List[Int]]()   # per template the files of its meshes
+    for _ in range(nt):
+        files_of.append(List[Int]())
+    for i in range(len(s[unsafe_offset=0].meshes)):
+        var k = Int(s[unsafe_offset=0].meshes[i].subdiv_idx)
+        if k < 0:
+            continue
+        var t = -1
+        for j in range(nt):
+            if Int(s[unsafe_offset=0].object_mesh_start[j]) <= i and i < Int(s[unsafe_offset=0].object_mesh_end[j]):
+                t = j
+                break
+        if t < 0:   # in the world
+            var d = _box_dist(cam[0], boxes[k])
+            if d < best_d[k]:
+                best_d[k] = d; best_e[k] = cam[0]
+        elif k not in files_of[t]:
+            files_of[t].append(k)
+    for j in range(len(s[unsafe_offset=0].instance_template_idx)):
+        var t = Int(s[unsafe_offset=0].instance_template_idx[j])
+        if t < 0 or t >= nt or len(files_of[t]) == 0:
+            continue
+        var e = _xform(s[unsafe_offset=0].instance_world_to_obj, 16 * j, cam[0])
+        for k in files_of[t]:
+            var d = _box_dist(e, boxes[k])
+            if d < best_d[k]:
+                best_d[k] = d; best_e[k] = e
+    var lod = Float32(0.25)
+    var le = getenv("GONZALES_SUBDIV_LOD")
+    if le.byte_length() > 0:
+        try:
+            lod = Float32(atof(le))
+        except:
+            pass
+    for k in range(n):
+        var file = s[unsafe_offset=0].subdiv_files[k]
+        s[unsafe_offset=0].subdiv_eye.append(best_e[k])
+        var t0 = perf_counter_ns()
+        try:
+            var m = load_disp_mesh(file, DispOptions(best_e[k], cam[1], lod, Float32(0.5), Float32(5), 2, -1, True))
+            var mb = Float64(m.nchain + m.npyr + 4 * m.ncg + m.np * (64 * 3 + 12 + 4 + 48 + 1)) / Float64(1 << 20)
+            print("subdiv displacement:", file, ":", m.np, "patches,", m.prims(), "sub-squares,", m.texels, "texels kept,",
+                  Int(mb), "MiB host data,", Float64(Int(perf_counter_ns()) - Int(t0)) * 1e-9, "s")
+            s[unsafe_offset=0].subdiv_meshes.append(m^)
+        except err:
+            print("subdiv displacement:", file, ":", err)
+            s[unsafe_offset=0].subdiv_meshes.append(empty_disp_mesh())
