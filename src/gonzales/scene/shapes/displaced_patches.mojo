@@ -1284,3 +1284,46 @@ def chain_color(d: DispSurface, rgb: _U8, rgb_off: _I32, pi: Int, s: Float32, t:
           + (_rgb_texel(rgb, off, w, x0, y0 + 1) * (Float32(1) - tx) + _rgb_texel(rgb, off, w, x0 + 1, y0 + 1) * tx) * ty
     var k = Float32(1) / Float32(255)
     return Vec3f(pow(c.x * k, Float32(2.2)), pow(c.y * k, Float32(2.2)), pow(c.z * k, Float32(2.2)))   # 8-bit colour is gamma 2.2
+
+
+@fieldwise_init
+struct SubdivSurface(TrivialRegisterPassable):
+    """A Ptex-displaced mesh on its TriangleMesh (the cage, two triangles a Ptex face): the surface and, per Ptex face f,
+    its patches face_patch[face_off[f] .. face_off[f + 1]], to find a hit's patch from its face and (u, v)."""
+    var d: DispSurface
+    var face_off: _I32
+    var face_patch: _I32
+    var nf: Int64       # array sizes, for the upload (gpu/scene.mojo)
+    var npyr: Int64
+    var nchain: Int64
+
+
+def subdiv_patch_at(sub: SubdivSurface, f: Int, u: Float32, v: Float32) -> Tuple[Int, Float32, Float32]:
+    """The patch of Ptex face f that holds face (u, v), and (s, t) on it."""
+    var k0 = Int(sub.face_off[unsafe_offset=f]); var k1 = Int(sub.face_off[unsafe_offset=f + 1])
+    var p = Int(sub.face_patch[unsafe_offset=k0])
+    for k in range(k0, k1):
+        var q = Int(sub.face_patch[unsafe_offset=k])
+        var u0 = sub.d.sq[unsafe_offset=3 * q]; var v0 = sub.d.sq[unsafe_offset=3 * q + 1]; var sz = sub.d.sq[unsafe_offset=3 * q + 2]
+        if u >= u0 and u <= u0 + sz and v >= v0 and v <= v0 + sz:
+            p = q
+            break
+    var u0 = sub.d.sq[unsafe_offset=3 * p]; var v0 = sub.d.sq[unsafe_offset=3 * p + 1]; var sz = sub.d.sq[unsafe_offset=3 * p + 2]
+    return (p, min(max((u - u0) / sz, Float32(0)), Float32(1)), min(max((v - v0) / sz, Float32(0)), Float32(1)))
+
+
+def subdiv_hit_normal(sub: SubdivSurface, f: Int, u: Float32, v: Float32, t_hit: Float32) -> Vec3f:
+    """The displaced surface's normal at Ptex face f's (u, v), its heights filtered to a pixel at distance t_hit."""
+    var r = subdiv_patch_at(sub, f, u, v)
+    var b = sub.d.patches[unsafe_offset=r[0]]
+    var e = Vec3f(b.x.reduce_max() - b.x.reduce_min(), b.y.reduce_max() - b.y.reduce_min(), b.z.reduce_max() - b.z.reduce_min())
+    var step = max(sub.d.pixel * t_hit / max(sqrt(dot(e, e)), Float32(1e-12)), Float32(1.0 / 512.0))
+    return displaced_normal(sub.d, r[0], r[1], r[2], step)
+
+
+def subdiv_tri_normal(sub: Pointer[SubdivSurface, MutUntrackedOrigin], bv: Int, b1: Float32, b2: Float32, t_hit: Float32) -> Vec3f:
+    """The normal at a hit reported as cage triangle bv // 3 (scene/accel/xert.mojo): Ptex face tri // 2, face (u, v) from the
+    barycentrics, (0,0) (1,0) (1,1) for the face's first triangle and (0,0) (1,1) (0,1) for its second."""
+    var tri = bv // 3
+    var upper = tri % 2 == 1
+    return subdiv_hit_normal(sub[unsafe_offset=0], tri // 2, b1 if upper else b1 + b2, b1 + b2 if upper else b2, t_hit)

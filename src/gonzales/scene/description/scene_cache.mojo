@@ -123,6 +123,8 @@ def _unsupported(ref s: ParsedScene_Mojo) -> String:
     for mi in range(Int(s.mesh_count)):
         if _is_real_ptr(s.meshes[unsafe_offset=mi].patches):
             return "Bezier patches"
+        if _is_real_ptr(s.meshes[unsafe_offset=mi].subdiv):
+            return "displaced subdivision meshes"
     return String("")
 
 

@@ -8,9 +8,10 @@ from gonzales.core.diagnostics import warn_unsupported_in
 from gonzales.core.geometry import Vec3f, cross
 from gonzales.scene.appearance.materials import GpuTexture
 from gonzales.scene.description.lexer import ParameterDictionary
-from gonzales.scene.description.parse_types import SceneParseState
+from gonzales.scene.description.parse_types import SceneParseState, MeshAccum
 from gonzales.scene.description.material_builder import _imagemap_affine
 from gonzales.scene.shapes.disp_build import DispOptions, DispMesh, load_disp_mesh
+from gonzales.scene.shapes.displaced_patches import SubdivSurface
 from gonzales.scene.shapes.displacement import DisplacedMesh, DisplacedTri, Rmip, displaced_tri, load_height_map
 
 
@@ -119,6 +120,36 @@ def _world_eye(w2c: Array[Float32, 16]) -> Vec3f:
     return Vec3f(Float32(a[3]), Float32(a[7]), Float32(a[11]))
 
 
+def subdiv_camera(s: Pointer[SceneParseState, MutUntrackedOrigin]) -> Tuple[Vec3f, Float32]:
+    """The eye and a pixel's angle along the shorter film axis."""
+    var short = Float32(min(Int(s[unsafe_offset=0].film_w), Int(s[unsafe_offset=0].film_h)))
+    return (_world_eye(s[unsafe_offset=0].cam2w_raw), Float32(2) * tan(s[unsafe_offset=0].camera_fov * Float32(3.14159265 / 360.0)) / short)
+
+
+def _cage_layout(ma: MeshAccum) -> Bool:
+    """Moana's Ptex cages: Ptex face f is triangles 2f, 2f + 1 with face uv (0,0) (1,0) (1,1) and (0,0) (1,1) (0,1)."""
+    var nt = len(ma.vert_idxs) // 3
+    if nt == 0 or nt % 2 != 0 or len(ma.ptex_faces) != nt or len(ma.uvs) < 2:
+        return False
+    var tu: List[Float32] = [0, 1, 1, 0, 1, 0]; var tv: List[Float32] = [0, 0, 1, 0, 1, 1]
+    for t in range(nt):
+        if Int(ma.ptex_faces[t]) != t // 2:
+            return False
+        for c in range(3):
+            var vi = Int(ma.vert_idxs[3 * t + c])
+            if abs(ma.uvs[2 * vi] - tu[3 * (t % 2) + c]) > Float32(1e-4) or abs(ma.uvs[2 * vi + 1] - tv[3 * (t % 2) + c]) > Float32(1e-4):
+                return False
+    return True
+
+
+def subdiv_host_surface(s: Pointer[SceneParseState, MutUntrackedOrigin], k: Int) -> Pointer[SubdivSurface, MutUntrackedOrigin]:
+    """Subdiv mesh k's surface for a TriangleMesh (host data; gpu/scene.mojo uploads it). Ptex bytes are heights / 255."""
+    var cam = subdiv_camera(s)
+    var p = unsafe_alloc[SubdivSurface](1)
+    p[unsafe_offset=0] = s[unsafe_offset=0].subdiv_meshes[k].subdiv(s[unsafe_offset=0].subdiv_scale[k] / Float32(255), cam[0], cam[1])
+    return p
+
+
 def apply_subdiv_displacement(s: Pointer[SceneParseState, MutUntrackedOrigin]):
     """GONZALES_SUBDIV_DISP=1: a mesh whose material has a Ptex "texture displacement" is that Ptex's cage; its displaced
     Catmull-Clark surface (scene/shapes/disp_build.mojo) is loaded once per file for the camera. The camera is taken in the
@@ -136,9 +167,13 @@ def apply_subdiv_displacement(s: Pointer[SceneParseState, MutUntrackedOrigin]):
         if s[unsafe_offset=0].subdiv_files[i] == file:
             k = i
             break
+    ref ma = s[unsafe_offset=0].meshes[len(s[unsafe_offset=0].meshes) - 1]
+    if not _cage_layout(ma):
+        print("subdiv displacement:", file, ": the mesh is not two triangles a Ptex face in face order - it keeps its bump map")
+        return
     if k < 0:
-        var short = Float32(min(Int(s[unsafe_offset=0].film_w), Int(s[unsafe_offset=0].film_h)))
-        var pixel = Float32(2) * tan(s[unsafe_offset=0].camera_fov * Float32(3.14159265 / 360.0)) / short
+        var cam = subdiv_camera(s)
+        var pixel = cam[1]
         var lod = Float32(0.25); var pps = Float32(0.5)
         var e = getenv("GONZALES_SUBDIV_LOD")
         if e.byte_length() > 0:
@@ -146,7 +181,7 @@ def apply_subdiv_displacement(s: Pointer[SceneParseState, MutUntrackedOrigin]):
                 lod = Float32(atof(e))
             except:
                 pass
-        var o = DispOptions(_world_eye(s[unsafe_offset=0].cam2w_raw), pixel, lod, pps, Float32(5), 2, -1, True)
+        var o = DispOptions(cam[0], pixel, lod, pps, Float32(5), 2, -1, True)
         var t0 = perf_counter_ns()
         var m: DispMesh
         try:
@@ -161,4 +196,4 @@ def apply_subdiv_displacement(s: Pointer[SceneParseState, MutUntrackedOrigin]):
         s[unsafe_offset=0].subdiv_files.append(file)
         s[unsafe_offset=0].subdiv_scale.append(s[unsafe_offset=0].named_materials[mi].disp_ptex_scale)
         k = len(s[unsafe_offset=0].subdiv_files) - 1
-    s[unsafe_offset=0].meshes[len(s[unsafe_offset=0].meshes) - 1].subdiv_idx = Int32(k)
+    ma.subdiv_idx = Int32(k)

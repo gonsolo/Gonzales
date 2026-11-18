@@ -34,9 +34,10 @@ from gonzales.core.spectrum import SpectralHandle
 from gonzales.core.sampling import gaussian_norm, ThinLens
 from gonzales.scene.shapes.ply import load_ply
 from gonzales.scene.shapes.ply_prefetch import PlyPrefetch, scan_plys, load_all_plys
-from gonzales.scene.description.displacement_builder import apply_shape_displacement, apply_subdiv_displacement
+from gonzales.scene.description.displacement_builder import apply_shape_displacement, apply_subdiv_displacement, subdiv_host_surface
 from gonzales.scene.shapes.displacement import DisplacedMesh, DisplacedTri
 from gonzales.scene.shapes.patches import BezierPatch
+from gonzales.scene.shapes.displaced_patches import SubdivSurface
 from gonzales.scene.description.material_builder import _psc_handle_make_named_material, _psc_handle_named_material, _imagemap_affine
 from gonzales.scene.appearance.measured_bsdf import load_measured_brdf_full
 from gonzales.scene.description.light_builder import _psc_handle_area_light_source, handle_light_source
@@ -2801,6 +2802,9 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
             var dm = unsafe_alloc[DisplacedMesh](1)
             dm[unsafe_offset=0] = s[unsafe_offset=0].disp_meshes[Int(ma.disp_idx)]
             meshes[unsafe_offset=i].disp = dm
+        meshes[unsafe_offset=i].subdiv = Pointer[SubdivSurface, MutUntrackedOrigin].unsafe_dangling()
+        if ma.subdiv_idx >= Int32(0):
+            meshes[unsafe_offset=i].subdiv = subdiv_host_surface(s, Int(ma.subdiv_idx))
         meshes[unsafe_offset=i].patches = Pointer[BezierPatch, MutUntrackedOrigin].unsafe_dangling()
         if nt > 0 and len(ma.patch_cp) >= nt * 48:
             var pa = unsafe_alloc[BezierPatch](nt)

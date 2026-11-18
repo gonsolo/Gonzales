@@ -24,6 +24,7 @@ from gonzales.scene.description.pbrt_parser import ParsedScene_Mojo
 from gonzales.scene.appearance.host_textures import decode_host_textures, set_tex_maps
 from gonzales.scene.shapes.displacement import DisplacedMesh, DisplacedTri, Rmip
 from gonzales.scene.shapes.patches import BezierPatch
+from gonzales.scene.shapes.displaced_patches import DispSurface, SubdivSurface, LEVELS
 from gonzales.scene.appearance.ptex_cache import PtexCache, PTEX_QUEUE_CAP
 from gonzales.transport.restir_di import DIReservoir
 from gonzales.integrators.pt.restir_vol import VolReservoir
@@ -332,6 +333,9 @@ struct MeshBuffers(Movable):
         var disp_host_keys = List[Int]()
         var disp_dev = List[Rmip]()
         var disp_temps = List[Pointer[DisplacedMesh, MutUntrackedOrigin]]()
+        var subdiv_keys = List[Int]()
+        var subdiv_dev = List[Pointer[SubdivSurface, MutUntrackedOrigin]]()
+        var disp_temps_sub = List[Pointer[SubdivSurface, MutUntrackedOrigin]]()
         var has_alpha = False
         var keep = _meshes_on_device(s, host_kb)
 
@@ -412,12 +416,37 @@ struct MeshBuffers(Movable):
             if _is_real_ptr(host_mesh.patches):
                 mesh_structs_host[unsafe_offset=i].patches = _gpu_upload_owned[BezierPatch](
                     ctx, alpha_bufs, host_mesh.patches, Int(s.mesh_n_tris[unsafe_offset=i]))
+            if _is_real_ptr(host_mesh.subdiv):   # its arrays once per Ptex, however many meshes share it
+                var hs = host_mesh.subdiv[unsafe_offset=0]
+                var key = Int(hs.d.chain)
+                var found = -1
+                for si in range(len(subdiv_keys)):
+                    if subdiv_keys[si] == key:
+                        found = si
+                if found < 0:
+                    found = len(subdiv_keys)
+                    subdiv_keys.append(key)
+                    var d = hs.d; var np = Int(d.lv.patch[LEVELS]); var nf = Int(hs.nf)
+                    var dd = DispSurface(_gpu_upload_owned[BezierPatch](ctx, alpha_bufs, d.patches, np),
+                        _gpu_upload_owned[Float32](ctx, alpha_bufs, d.sq, 3 * np), _gpu_upload_owned[Int32](ctx, alpha_bufs, d.face, np),
+                        _gpu_upload_owned[Int32](ctx, alpha_bufs, d.hdr, 3 * nf), _gpu_upload_owned[UInt8](ctx, alpha_bufs, d.pyr, max(Int(hs.npyr), 1)),
+                        d.scale, d.cam, d.pixel, _gpu_upload_owned[Int32](ctx, alpha_bufs, d.chain_off, nf),
+                        _gpu_upload_owned[UInt8](ctx, alpha_bufs, d.chain, max(Int(hs.nchain), 1)), _gpu_upload_owned[Float32](ctx, alpha_bufs, d.fm, 12 * np),
+                        _gpu_upload_owned[UInt8](ctx, alpha_bufs, d.greg, np), d.lv, d.leaf_mode,
+                        _gpu_upload_owned[Float32](ctx, alpha_bufs, d.corners, max(Int(d.lv.corner[LEVELS]), 1)))
+                    var tmp = unsafe_alloc[SubdivSurface](1)
+                    tmp[unsafe_offset=0] = SubdivSurface(dd, _gpu_upload_owned[Int32](ctx, alpha_bufs, hs.face_off, nf + 1),
+                        _gpu_upload_owned[Int32](ctx, alpha_bufs, hs.face_patch, max(np, 1)), hs.nf, hs.npyr, hs.nchain)
+                    disp_temps_sub.append(tmp)
+                    subdiv_dev.append(_gpu_upload_owned[SubdivSurface](ctx, alpha_bufs, tmp, 1))
+                mesh_structs_host[unsafe_offset=i].subdiv = subdiv_dev[found]
 
         # Upload mesh struct array
         var meshes_buf = _gpu_upload_array[TriangleMesh](ctx, mesh_structs_host, Int(s.mesh_count))
         ctx.synchronize()   # mesh_structs_host is freed next
         mesh_structs_host.unsafe_free()
         for t in disp_temps: t.unsafe_free()
+        for t in disp_temps_sub: t.unsafe_free()
         return Self(meshes_buf=meshes_buf^, mesh_count=Int(s.mesh_count), points_bufs=points_bufs^,
                     faceIndices_bufs=face_bufs^, vertexIndices_bufs=vert_bufs^, uv_bufs=uv_bufs^,
                     nrm_bufs=nrm_bufs^, alpha_bufs=alpha_bufs^, host_bufs=host_bufs^, has_alpha=has_alpha, host_kb=host_kb)
@@ -1226,7 +1255,7 @@ struct XertPieces(Movable):
             var curves = Int(s.blas_primid_counts[unsafe_offset=t]) > 0 and rec.type == PrimKind.merged_blas and rec.id2 > Int64(0)
             var disp = False
             for i in range(m0, m1):
-                disp = disp or _is_real_ptr(s.meshes[unsafe_offset=i].disp) or _is_real_ptr(s.meshes[unsafe_offset=i].patches)
+                disp = disp or _is_real_ptr(s.meshes[unsafe_offset=i].disp) or _is_real_ptr(s.meshes[unsafe_offset=i].patches) or _is_real_ptr(s.meshes[unsafe_offset=i].subdiv)
             if n_inst[t] == 0 or n_inst[t] > 4 or tris <= 16 * XERT_PIECE_TRIS or curves or disp:   # pieces hold no procedural leaves
                 continue
             var rest = 0

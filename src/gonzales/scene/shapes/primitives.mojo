@@ -10,6 +10,7 @@ from std.memory import bitcast
 from gonzales.core.geometry import Point3f, Vec3f, RGB, _is_real_ptr, cross, dot
 from gonzales.scene.shapes.displacement import DisplacedMesh
 from gonzales.scene.shapes.patches import BezierPatch
+from gonzales.scene.shapes.displaced_patches import SubdivSurface
 
 # ── Scene primitives ───────────────────────────────────────────────────────────
 
@@ -141,6 +142,8 @@ struct TriangleMesh(TrivialRegisterPassable):
     var disp: Pointer[DisplacedMesh, MutUntrackedOrigin]
     # One Bezier patch a triangle (PrimId.type 10): triangle k stands in for patch k, its barycentrics are the patch's (u, v).
     var patches: Pointer[BezierPatch, MutUntrackedOrigin]
+    # A Ptex-displaced Catmull-Clark surface (GONZALES_SUBDIV_DISP): the mesh is its cage, two triangles a Ptex face; dangling if none.
+    var subdiv: Pointer[SubdivSurface, MutUntrackedOrigin]
 
     def __init__(
         out self,
@@ -169,6 +172,7 @@ struct TriangleMesh(TrivialRegisterPassable):
         self.emit_two_sided = 0
         self.disp = Pointer[DisplacedMesh, MutUntrackedOrigin].unsafe_dangling()
         self.patches = Pointer[BezierPatch, MutUntrackedOrigin].unsafe_dangling()
+        self.subdiv = Pointer[SubdivSurface, MutUntrackedOrigin].unsafe_dangling()
 
 @always_inline
 def surface_prim(p: PrimId) -> PrimId:

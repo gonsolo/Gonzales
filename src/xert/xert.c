@@ -79,7 +79,7 @@ int64_t xert_scene_n_meshes(void) { return scene.n_meshes; }
 int32_t xert_shadow_slots(void) { return scene.shadow_slots; }
 int32_t xert_alpha(void) { return scene.alpha; }
 
-static uint64_t proc_tables[8] = {0, 0, 0, 0, 0, 0, INT32_MAX, 0};
+static uint64_t proc_tables[10] = {0, 0, 0, 0, 0, 0, INT32_MAX, 0, 0, 0};
 
 void xert_set_procs(uint64_t curves, uint64_t leaves, uint64_t leaf_base, uint64_t inst_blas, uint64_t materials,
                     uint64_t meshes) {
@@ -91,6 +91,10 @@ void xert_set_procs(uint64_t curves, uint64_t leaves, uint64_t leaf_base, uint64
   proc_tables[7] = meshes;
 }
 
+void xert_set_subdiv(uint64_t table) {   // displaced subdivision meshes per structure (scene/accel/xert.mojo XeProcs.subdiv)
+  proc_tables[9] = table;
+}
+
 void xert_set_pieces(uint64_t records, int64_t base) {
   proc_tables[5] = records;
   proc_tables[6] = (uint64_t)base;
@@ -98,7 +102,7 @@ void xert_set_pieces(uint64_t records, int64_t base) {
 
 uint64_t xert_proc_table(int32_t which) {   // 8: the builder keeps 64-byte instance leaves with the user id in their first half
   if (which == 8) return getenv("RTBUILD_INSTANCE_LEAF64") != NULL;
-  return which >= 0 && which < 8 ? proc_tables[which] : 0;
+  return which >= 0 && which < 10 ? proc_tables[which] : 0;
 }
 
 static struct {

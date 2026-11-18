@@ -7,8 +7,8 @@ from std.memory.alloc import unsafe_alloc
 from max.algorithm import parallelize
 from gonzales.core.geometry import Vec3f, dot
 from gonzales.scene.shapes.patches import BezierPatch
-from gonzales.scene.shapes.displaced_patches import DispSurface, Levels, LEVELS, make_levels, patch_box, corner_off, \
-    corner_step, corner_grid, weld_corner_grid
+from gonzales.scene.shapes.displaced_patches import DispSurface, SubdivSurface, Levels, LEVELS, make_levels, patch_box, \
+    corner_off, corner_step, corner_grid, weld_corner_grid
 
 
 @fieldwise_init
@@ -45,6 +45,8 @@ struct DispMesh(Copyable, Movable):
     var fm: Pointer[Float32, MutUntrackedOrigin]
     var greg: Pointer[UInt8, MutUntrackedOrigin]
     var corners: Pointer[Float32, MutUntrackedOrigin]
+    var face_off: Pointer[Int32, MutUntrackedOrigin]     # per Ptex face its patches in face_patch (nf + 1)
+    var face_patch: Pointer[Int32, MutUntrackedOrigin]
     var lv: Levels
     var lo: Vec3f
     var hi: Vec3f
@@ -52,6 +54,10 @@ struct DispMesh(Copyable, Movable):
     def surface(self, scale: Float32, cam: Vec3f, pixel: Float32, leaf_mode: Int32) -> DispSurface:
         return DispSurface(self.patches, self.sq, self.face, self.hdr, self.pyr, scale, cam, pixel, self.chain_off, self.chain,
                            self.fm, self.greg, self.lv, leaf_mode, self.corners)
+
+    def subdiv(self, scale: Float32, cam: Vec3f, pixel: Float32) -> SubdivSurface:
+        return SubdivSurface(self.surface(scale, cam, pixel, Int32(5)), self.face_off, self.face_patch, Int64(self.nf),
+                             Int64(self.npyr), Int64(self.nchain))
 
     def prims(self) -> Int:
         return Int(self.lv.prim[LEVELS])
@@ -156,7 +162,18 @@ def load_disp_mesh(ptx: String, o: DispOptions) raises -> DispMesh:
         texels += (1 << Int(hdr[unsafe_offset=3 * f + 1])) * (1 << Int(hdr[unsafe_offset=3 * f + 2]))
     var ncg = Int(lv.corner[LEVELS])
     var cg = unsafe_alloc[Float32](max(ncg, 1))
-    var m = DispMesh(np, nf, npyr, nchain, ncg, texels, p2, sq2, face2, hdr, pyr, chain_off, chain, fm2, greg2, cg, lv,
+    var foff = unsafe_alloc[Int32](nf + 1); var fpat = unsafe_alloc[Int32](max(np, 1))   # patches by Ptex face
+    for f in range(nf + 1):
+        foff[unsafe_offset=f] = Int32(0)
+    for p in range(np):
+        foff[unsafe_offset=Int(face2[unsafe_offset=p]) + 1] += 1
+    for f in range(nf):
+        foff[unsafe_offset=f + 1] += foff[unsafe_offset=f]
+    var fill_at = List[Int32](length=nf, fill=Int32(0))
+    for p in range(np):
+        var f = Int(face2[unsafe_offset=p])
+        fpat[unsafe_offset=Int(foff[unsafe_offset=f]) + Int(fill_at[f])] = Int32(p); fill_at[f] += 1
+    var m = DispMesh(np, nf, npyr, nchain, ncg, texels, p2, sq2, face2, hdr, pyr, chain_off, chain, fm2, greg2, cg, foff, fpat, lv,
                      Vec3f(cbox[unsafe_offset=0], cbox[unsafe_offset=1], cbox[unsafe_offset=2]), Vec3f(cbox[unsafe_offset=3], cbox[unsafe_offset=4], cbox[unsafe_offset=5]))
     cbox.unsafe_free()
     var d = m.surface(Float32(0), Vec3f(0, 0, 0), Float32(0), Int32(5))
