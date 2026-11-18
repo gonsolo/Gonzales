@@ -3,6 +3,7 @@
 #include <Ptexture.h>
 #include <algorithm>
 #include <cstdio>
+#include <cstdlib>
 #include <cmath>
 #include <cstring>
 #include <memory>
@@ -225,6 +226,48 @@ void *disp_open(const char *ptx, int isolation, long long *counts, const float *
                         }
         };
         vertex_fix();
+        // Along an edge between faces of different resolution, the finer face's border texels are set so that its edge heights
+        // (the mean of edge and border texel) follow the coarser face's edge heights, which the surfaces meet at.
+        auto edge_n = [&](int f, int e) { return 1 << (e % 2 == 0 ? rul[f] : rvl[f]); };
+        auto edge_at = [&](int f, int e, int j, int out) -> unsigned char & {   // texel j along edge e (counter-clockwise); out: 1 for the border
+                const int w = 1 << rul[f], h = 1 << rvl[f];
+                if (e == 0) return texel(f, j, out ? -1 : 0);
+                if (e == 1) return texel(f, out ? w : w - 1, j);
+                if (e == 2) return texel(f, w - 1 - j, out ? h : h - 1);
+                return texel(f, out ? -1 : 0, h - 1 - j);
+        };
+        int mixed_edges = 0, clamped = 0, worst = 0;
+        for (int f = 0; !d->chain_off.empty() && f < nfc; ++f) {
+                const Ptex::FaceInfo &fi = tex->getFaceInfo(f);
+                if (fi.isSubface())
+                        continue;
+                for (int e = 0; e < 4; ++e) {
+                        const int a = fi.adjface(e), ae = fi.adjedge(e);
+                        if (a < 0 || tex->getFaceInfo(a).isSubface())
+                                continue;
+                        const int nf = edge_n(f, e), na = edge_n(a, ae);
+                        if (nf <= na || (getenv("DISP_EDGE") && getenv("DISP_EDGE")[0] == '0'))
+                                continue;
+                        ++mixed_edges;
+                        for (int j = 0; j < nf; ++j) {   // the neighbour's edge runs the other way
+                                const float x = std::min(std::max((1.0f - (j + 0.5f) / nf) * na - 0.5f, -0.5f), na - 0.5f);   // -1, na: the corners
+                                const int i0 = std::min(int(std::floor(x)), na - 1), i1 = i0 + 1;
+                                const float t = x - i0;
+                                const float e0 = 0.5f * (edge_at(a, ae, i0, 0) + edge_at(a, ae, i0, 1)), e1 = 0.5f * (edge_at(a, ae, i1, 0) + edge_at(a, ae, i1, 1));
+                                const float target = e0 + (e1 - e0) * t;
+                                const int want = int(std::lround(2.0f * target - edge_at(f, e, j, 0)));
+                                clamped += want < 0 || want > 255; worst = std::max(worst, std::max(-want, want - 255));
+                                edge_at(f, e, j, 1) = static_cast<unsigned char>(std::min(std::max(want, 0), 255));
+                        }
+                }
+        }
+        counts[0] = np;
+        counts[1] = nfc;
+        counts[2] = static_cast<long long>(d->pyr.size());
+        counts[3] = static_cast<long long>(d->chain.size());
+        vertex_fix();   // again, with the finer faces' new border texels
+        if (mixed_edges > 0 && getenv("DISP_VERBOSE"))
+                std::printf("edges between faces of different resolution: %d, %d border texels clamped (worst by %d)\n", mixed_edges, clamped, worst);
         if (view && view[4] > 0)
                 std::printf("height levels for the view: %lld of %lld texels kept (%.1f%%)\n", kept, full, 100.0 * kept / std::max(full, 1LL));
         return d.release();
