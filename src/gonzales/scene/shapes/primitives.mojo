@@ -91,20 +91,25 @@ struct Instance(TrivialRegisterPassable):
 
     @always_inline
     def obj_to_world(self) -> SIMD[DType.float32, 16]:
-        # Inverse of an affine map: invert the 3x3 by cofactors, then carry the translation through it.
-        var a = self.c0x; var b = self.c1x; var c = self.c2x
-        var d = self.c0y; var e = self.c1y; var f = self.c2y
-        var g = self.c0z; var h = self.c1z; var i = self.c2z
-        var co00 = e * i - f * h; var co01 = f * g - d * i; var co02 = d * h - e * g
-        var inv_det = Float32(1) / (a * co00 + b * co01 + c * co02)
-        var r00 = co00 * inv_det; var r01 = (c * h - b * i) * inv_det; var r02 = (b * f - c * e) * inv_det
-        var r10 = co01 * inv_det; var r11 = (a * i - c * g) * inv_det; var r12 = (c * d - a * f) * inv_det
-        var r20 = co02 * inv_det; var r21 = (b * g - a * h) * inv_det; var r22 = (a * e - b * d) * inv_det
-        var tx = -(r00 * self.c3x + r01 * self.c3y + r02 * self.c3z)
-        var ty = -(r10 * self.c3x + r11 * self.c3y + r12 * self.c3z)
-        var tz = -(r20 * self.c3x + r21 * self.c3y + r22 * self.c3z)
-        return SIMD[DType.float32, 16](
-            r00, r10, r20, Float32(0), r01, r11, r21, Float32(0), r02, r12, r22, Float32(0), tx, ty, tz, Float32(1))
+        return affine_inverse(self.world_to_obj())
+
+
+@always_inline
+def affine_inverse(m: SIMD[DType.float32, 16]) -> SIMD[DType.float32, 16]:
+    """Inverse of an affine map: invert the 3x3 by cofactors, then carry the translation through it."""
+    var a = m[0]; var b = m[4]; var c = m[8]
+    var d = m[1]; var e = m[5]; var f = m[9]
+    var g = m[2]; var h = m[6]; var i = m[10]
+    var co00 = e * i - f * h; var co01 = f * g - d * i; var co02 = d * h - e * g
+    var inv_det = Float32(1) / (a * co00 + b * co01 + c * co02)
+    var r00 = co00 * inv_det; var r01 = (c * h - b * i) * inv_det; var r02 = (b * f - c * e) * inv_det
+    var r10 = co01 * inv_det; var r11 = (a * i - c * g) * inv_det; var r12 = (c * d - a * f) * inv_det
+    var r20 = co02 * inv_det; var r21 = (b * g - a * h) * inv_det; var r22 = (a * e - b * d) * inv_det
+    var tx = -(r00 * m[12] + r01 * m[13] + r02 * m[14])
+    var ty = -(r10 * m[12] + r11 * m[13] + r12 * m[14])
+    var tz = -(r20 * m[12] + r21 * m[13] + r22 * m[14])
+    return SIMD[DType.float32, 16](
+        r00, r10, r20, Float32(0), r01, r11, r21, Float32(0), r02, r12, r22, Float32(0), tx, ty, tz, Float32(1))
 
 
 struct TriangleMesh(TrivialRegisterPassable):
