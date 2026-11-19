@@ -27,7 +27,7 @@ from gonzales.scene.appearance.lights import area_light_pick_triangle, area_ligh
 from gonzales.scene.shapes.curves import Curve, curve_at, curve_piece_endpoints, _curve_perp_axis
 from gonzales.scene.accel.bvh import traverse_dispatch, any_hit_dispatch
 from gonzales.scene.accel.bvh import SceneView, curve_radius, _hair_sample_dir_u, _scene_bounding_sphere, _sample_disk_perpendicular, _sample_infinite_light_dir, _eval_infinite_light_and_pdf, _hair_precompute, LightSample, _sample_distant_light_nee, _sample_point_light_nee, _sample_sphere_light_nee, _sample_infinite_light_nee, light_path_pick, light_path_pick_pdf
-from gonzales.transport.glossy_sms import (SMSChain, GLOSSY_SMS_MIN_PDF, GSMS_DEBUG, glossy_sms_lobe, glossy_sms_solve, glossy_sms_mis,
+from gonzales.transport.glossy_sms import (SMSChain, GLOSSY_SMS_MIN_PDF, glossy_sms_lobe, glossy_sms_solve, glossy_sms_mis,
     glossy_sms_reproduce, glossy_sms_t_chain)
 from gonzales.transport.sms import mnee_orthonormal_basis, sms_vertex_init
 from gonzales.transport.manifold import _mnee_chain_transmittance, _mnee_pass
@@ -775,7 +775,8 @@ def _sppm_trace_visible_point[use_gpu: Bool](
     var gs_dir = Vec3f(Float32(0))
     var gs_med = Int32(-1)
     var gs_n = 0
-    var dbg = RGB(Float32(0))   # GSMS_DEBUG's only radiance
+    var dbg = RGB(Float32(0))   # GONZALES_GSMS_DEBUG's only radiance
+    var gsms_dbg = sd.dbg.gsms
     while bounce < max_charged + TERMINAL_SEGMENT_GRACE_ROUNDS and n_events < max_charged + SSS_WALK_ROUNDS + TERMINAL_SEGMENT_GRACE_ROUNDS:
         n_events += 1
         # Charged up front, and the two subsurface-exempt branches below undo
@@ -894,9 +895,8 @@ def _sppm_trace_visible_point[use_gpu: Bool](
                     if gs_shared:
                         w_gs = _sppm_gsms_bsdf_weight(sd, gs_x0, gs_pdf, gs_dir, gs_n, hit.to_simd(), inter, gs_med, vp.wavelengths)
                     var le_h = vp.beta * _film_rgb(al_h.emission, vp.wavelengths, sd)
-                    comptime if GSMS_DEBUG >= 2:
-                        if gs_shared:
-                            dbg += le_h * (w_gs if GSMS_DEBUG == 2 else Float32(1))
+                    if gsms_dbg >= Int32(2) and gs_shared:
+                        dbg += le_h * (w_gs if gsms_dbg == Int32(2) else Float32(1))
                     vp.env += le_h * (_after_glossy_weight(glossy_pdf, pdf_l) * w_gs)
             break
 
@@ -954,7 +954,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
                             sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65,
                             _sppm_gsms(sd, bsdf_g, hit.to_simd(), cur_med_idx, vp.wavelengths, pcg), vp.wavelengths)
                         vp.env += vp.beta * RGB(gr, gg, gb)
-                        comptime if GSMS_DEBUG == 1:
+                        if gsms_dbg == Int32(1):
                             dbg += vp.beta * RGB(gr, gg, gb)
                     var s_v = bsdf_g.sample(pcg.next_float(), pcg.next_float(), pcg.next_float(), pcg.next_float(),
                         LobeTables(sd.materials, sd.curves, sd.measuredBrdfs, sd.spectral, sd.mediums), vp.wavelengths)
@@ -1121,7 +1121,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
         else:
             break  # area_light, etc.
 
-    comptime if GSMS_DEBUG != 0:
+    if gsms_dbg != Int32(0):
         vp.env = dbg
         vp.valid = Int32(0)
     return vp

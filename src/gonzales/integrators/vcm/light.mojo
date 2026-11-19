@@ -18,7 +18,7 @@ from gonzales.integrators.sppm.sppm import _cosine_hemisphere_sample, sample_are
 from gonzales.scene.appearance.lights import area_light_side_pdf
 from gonzales.core.spectrum import SampledWavelengths, SpectralSample, spec_refl, spec_illum
 from gonzales.scene.shapes.geom_normal import _geom_normal
-from gonzales.paths.vcm.vertex import _VCM_SSS_CAMERA_ONLY, _vcm_walk_limit, _BDPT_MAX_VERTS, BDPTVertex, _null_vertex, VCM_GSMS_ARRIVAL
+from gonzales.paths.vcm.vertex import _vcm_walk_limit, _BDPT_MAX_VERTS, BDPTVertex, _null_vertex, VCM_GSMS_ARRIVAL
 from gonzales.transport.glossy_sms import GLOSSY_SMS_MIN_PDF
 from gonzales.paths.vcm.eval import _bdpt_vertex_mis_scoped, _vcm_mnee_light_dvcm, _vcm_gsms_on, _vcm_gsms_light_dvcm
 from gonzales.paths.vcm.strategy import VcmStrategies, _vcm_keep, _vcm_eta_scale, _vcm_fibre_scale
@@ -443,12 +443,11 @@ def _bdpt_light_path_bounce[use_gpu: Bool, defer_walk: Bool = False](
         var walks = False
         var dvcm_in = st.dvcm; var dvc_in = st.dvc; var dvm_in = st.dvm; var med_in = st.cur_med_idx
         var entry_eta = Float32(0)
-        comptime if not _VCM_SSS_CAMERA_ONLY:
-            if sss_walks_below(mat, inter, med_in):
-                entry_eta = _vcm_skin_arrival(sd, inter, mat, hit, ray_dir, mis_vm_weight_factor, pcg, lvc, lp_idx, st,
-                                              dvcm_in, dvc_in, dvm_in)
-                if st.n_verts >= _BDPT_MAX_VERTS:
-                    return False   # the arrival took the last slot: whatever follows is past the cache
+        if not sd.dbg.vcm_sss_camera_only and sss_walks_below(mat, inter, med_in):
+            entry_eta = _vcm_skin_arrival(sd, inter, mat, hit, ray_dir, mis_vm_weight_factor, pcg, lvc, lp_idx, st,
+                                          dvcm_in, dvc_in, dvm_in)
+            if st.n_verts >= _BDPT_MAX_VERTS:
+                return False   # the arrival took the last slot: whatever follows is past the cache
         if mat.uses_lobe():
             if not mat.has_lobe():
                 return False   # e.g. a measured table that failed to load
@@ -523,7 +522,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool, defer_walk: Bool = False](
             return False   # unhandled material type
 
         if walks:
-            comptime if _VCM_SSS_CAMERA_ONLY:
+            if sd.dbg.vcm_sss_camera_only:   # research: only camera paths walk subsurface interiors
                 return False
             comptime if defer_walk:
                 _vcm_sss_walk_suspend(sd, inter, mat, mat_idx, hit, ray_dir, st.rd, st.wl, pcg, st.current_dielectric_ior,

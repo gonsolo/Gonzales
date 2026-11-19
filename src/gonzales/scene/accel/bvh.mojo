@@ -11,6 +11,7 @@ from std.bit import count_trailing_zeros
 from gonzales.core.transform import Mat4
 from gonzales.core.geometry import dot, cross, Point3f, Point2f, Vec3f, Frame, RGB, PI, TWO_PI, INV_PI, safe_sqrt, _is_real_ptr, store_vec3, _atan2f, point3f, fast_sincos
 from gonzales.core.sampling import ThinLens
+from gonzales.core.env import DebugSwitches
 from gonzales.scene.appearance.materials import Material, fr_dielectric, MeasuredBRDF
 from gonzales.scene.appearance.materials import GpuTexture, NormalSlopeMap
 from gonzales.scene.shapes.primitives import (
@@ -325,6 +326,7 @@ struct SceneView(TrivialRegisterPassable, DevicePassable):
     # CPU-only 4-wide collapse of bvh2Nodes (build_bvh4); BVH4.none() = use the BVH2.
     var bvh4: BVH4
     var sharedCtx: Pointer[UInt8, MutUntrackedOrigin]   # the driver's ShadeContext, for its Intel scene; dangling on the CPU
+    var dbg: DebugSwitches
 
 # ── Infinite/distant-light emission + NEE sampling (shared by bdpt_*.mojo and
 #    sppm.mojo — lives here, not shading.mojo, to avoid an import cycle:

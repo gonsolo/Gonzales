@@ -1,7 +1,6 @@
 # BDPT/VCM path vertex and the shared depth/storage limits.
 # Part of the BDPT/VCM machinery that used to be one file (bdpt_*.mojo).
 
-from std.sys import get_defined_int
 from gonzales.core.geometry import RGB, Point3f, Vec3f
 from gonzales.transport.render_state import PDF_VOL_PHASE_HIT
 from gonzales.scene.appearance.materials import LobeKind
@@ -20,8 +19,6 @@ def _vcm_walk_limit(max_depth: Int32) -> Int:
     """Bounces a subpath may walk: glass bounces count, so a scene asking for more must get more."""
     return max(_BDPT_MAX_DEPTH, Int(max_depth))
 
-# Research switch: only camera paths walk a subsurface interior.
-comptime _VCM_SSS_CAMERA_ONLY = get_defined_int["VCM_SSS_CAMERA_ONLY", 0]() != 0
 comptime _BDPT_MAX_VERTS = 10  # max non-delta vertices per subpath. NOT light-only,
                                 # despite the name: it caps how many vertices a light
                                 # subpath stores in the shared cache (_bdpt_light_path_bounce)

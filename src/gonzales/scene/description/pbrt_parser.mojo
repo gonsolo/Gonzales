@@ -1,6 +1,6 @@
 from std.collections import Array
 from std.ffi import external_call
-from gonzales.core.env import env_str, env_int
+from gonzales.core.env import env_str, env_int, DebugSwitches
 from std.time import perf_counter_ns
 from std.memory.alloc import unsafe_alloc
 from std.memory import unsafe_memcpy
@@ -4719,6 +4719,7 @@ def mojo_parsed_scene_descriptor(
         if psc[unsafe_offset=0].materials[unsafe_offset=mi].is_specular_glass():
             any_glass = True
     sd[unsafe_offset=0].hasGlass        = Int32(3) if any_glass else Int32(0)   # bit 0: MNEE, bit 1: glossy SMS
+    sd[unsafe_offset=0].dbg             = DebugSwitches.from_env()
     sd[unsafe_offset=0].lens            = ThinLens(psc[unsafe_offset=0].camera_lens_radius, psc[unsafe_offset=0].camera_focal_distance)
     sd[unsafe_offset=0].filterGlossy    = Float32(0)
     sd[unsafe_offset=0].clamp           = SIMD[DType.float32, 2](0)

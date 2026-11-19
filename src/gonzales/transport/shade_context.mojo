@@ -11,6 +11,7 @@ from gonzales.scene.appearance.media import Medium, MediumInterface, Grid, NvdbG
 from gonzales.scene.shapes.curves import Curve
 from gonzales.scene.appearance.footprint import CameraFootprint
 from gonzales.scene.accel.bvh import BVH2Node, BVH4, SceneView
+from gonzales.core.env import DebugSwitches
 from gonzales.transport.guide import GuideGrid, null_guide
 from gonzales.core.spectrum import SpectralHandle, SpectralSample
 from gonzales.transport.restir_gi import GIReservoirIO, gi_reservoir_io_null
@@ -161,6 +162,7 @@ struct ShadeContext:
     var clamp: SIMD[DType.float32, 2]   # SceneView.clamp
     var cycles: SIMD[DType.int32, 4]    # SceneView.cycles
     var xe: XeScene                     # Intel ray tracing for shadow rays without a deferral slot; accel dangling elsewhere
+    var dbg: DebugSwitches              # SceneView.dbg
 
 
 @always_inline
@@ -196,4 +198,4 @@ def _shade_context(
             distant_lights=sd.distantLights, distant_count=Int(sd.distantLightCount),
             point_lights=sd.pointLights, point_count=Int(sd.pointLightCount),
             infinite_lights=sd.infiniteLights, infinite_count=Int(sd.infiniteLightCount),
-            spheres=sd.spheres, sphere_count=Int(sd.sphereCount), light_sampler=sd.lightSampler), filter_glossy=sd.filterGlossy, clamp=sd.clamp, cycles=sd.cycles, xe=xe)
+            spheres=sd.spheres, sphere_count=Int(sd.sphereCount), light_sampler=sd.lightSampler), filter_glossy=sd.filterGlossy, clamp=sd.clamp, cycles=sd.cycles, xe=xe, dbg=sd.dbg)

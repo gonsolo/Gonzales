@@ -15,7 +15,7 @@ from gonzales.scene.shapes.primitives import Instance, Intersection, PrimId, Sph
 from gonzales.core.sampling import FILTER_LUT_N, fill_filter_lut, ThinLens
 from gonzales.transport.render_state import FilmDims, FilterParams, PathState, ShadowTask, SHADOW_SLOTS
 from gonzales.scene.appearance.materials import GpuTexture, NormalSlopeMap
-from gonzales.core.env import env_str, env_on
+from gonzales.core.env import env_str, env_on, DebugSwitches
 from std.os.path import exists, getsize
 from gonzales.core.spectrum import SpectralHandle
 from gonzales.scene.accel.rtcore import rtcore_device_free, rtcore_host_register, rtcore_device_total
@@ -1030,6 +1030,7 @@ struct GpuSceneHandle(Movable):
     var filter_glossy: Float32
     var clamp: SIMD[DType.float32, 2]           # SceneView.clamp
     var cycles: SIMD[DType.int32, 4]            # SceneView.cycles
+    var dbg: DebugSwitches                      # SceneView.dbg
     var curve_root: Int32
     var curve_bvh: CurveBvh
     var curve_bvh_bufs: List[DeviceBuffer[DType.uint8]]
@@ -1095,6 +1096,7 @@ struct GpuSceneHandle(Movable):
             walkBvhOfMesh=typed_ptr[Int32](self.walk_bvh.of_mesh_buf) if self.walk_bvh.n > 0 else Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
             bvh4=BVH4.none(),
             sharedCtx=self.shade_ctx_buf.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
+            dbg=self.dbg,
         )
 
 def gpu_available() -> Bool:
@@ -1660,6 +1662,7 @@ def gpu_upload_scene(
                 material_count=Int(s.material_count),
                 has_glass_material=has_glass_mat,
                 bench=_bench_counters(),
+                dbg=DebugSwitches.from_env(),
                 suppress_buf=_gpu_placeholder(ctx),
                 gsms_buf=_gpu_placeholder(ctx),
                 gsms_cap=0,

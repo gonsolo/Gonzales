@@ -11,6 +11,7 @@ from gonzales.transport.guide import null_guide
 from gonzales.transport.render_state import ShadowTask, SuppressTask, PathState
 from gonzales.transport.restir_gi import gi_reservoir_io_null
 from gonzales.transport.shade_context import ShadeContext, LightContext, GIPendingX1
+from gonzales.core.env import DebugSwitches
 
 # ── Shared ShadeContext fixture ─────────────────────────────────────────────
 # Every field a test does not pass is a dangling sentinel or off, so a new
@@ -64,5 +65,5 @@ def make_shade_context(
         medium_ifaces=Pointer[MediumInterface, MutUntrackedOrigin].unsafe_dangling(),
         grids=Pointer[Grid, MutUntrackedOrigin].unsafe_dangling(), nvdb_grids=Pointer[NvdbGrid, MutUntrackedOrigin].unsafe_dangling(),
         filter_glossy=Float32(0), clamp=SIMD[DType.float32, 2](0), cycles=SIMD[DType.int32, 4](0),
-        xe=xe_scene_none(),
+        xe=xe_scene_none(), dbg=DebugSwitches.none(),
     )

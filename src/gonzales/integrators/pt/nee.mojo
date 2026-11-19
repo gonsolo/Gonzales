@@ -23,7 +23,7 @@ from gonzales.transport.texturing import _get_tri_verts
 from gonzales.transport.shade_context import ShadeContext
 from gonzales.transport.manifold import _emitter_face_normal, _mnee_chain, _mnee_bsdf_over_light, _mnee_chain_t_eta, _mnee_first_probe, _mnee_reproduce, _sms_solve_from_probe, _mnee_chain_transmittance, _mnee_pass
 from gonzales.core.spectrum import SpectralSample
-from gonzales.transport.glossy_sms import (GSMS_DEBUG, GLOSSY_SMS_MAX_TRIALS, GsmsTask, gsms_park, glossy_sms_stage, glossy_sms_root,
+from gonzales.transport.glossy_sms import (GLOSSY_SMS_MAX_TRIALS, GsmsTask, gsms_park, glossy_sms_stage, glossy_sms_root,
     glossy_sms_root_pos, glossy_sms_trials, glossy_sms_mis, glossy_sms_reproduce, glossy_sms_t_chain)
 from gonzales.transport.sms import mnee_orthonormal_basis
 from gonzales.integrators.pt.common import _to_spec_illum, _clamped, _to_spec_diffuse_lit, _emitter_invisible, _shadow_inline, _shadow_blocked, _shadow_contribute
@@ -530,7 +530,7 @@ def _glossy_sms_nee(
     var (ldu, ldv) = mnee_orthonormal_basis(du, dv)
     var tab = LobeTables(ctx.materials, ctx.curves, ctx.measured_brdfs, ctx.spectral, ctx.mediums)
     var wl = path_ptr[].wavelengths
-    comptime if GSMS_DEBUG == 6:
+    if ctx.dbg.gsms == Int32(6):
         if path_ptr[].specularBounce == Int8(1):   # reached through the camera's glass only
             path_ptr[].estimate += SpectralSample(Float32(1)) * glossy_sms_stage(ctx, hit_point, bsdf, tab, wl, y, ldu, ldv, pcg)
         return
@@ -557,7 +557,7 @@ def _glossy_sms_nee(
                                               Int32(path_ptr[].bounce), Int32(0), Int32(GLOSSY_SMS_MAX_TRIALS)), verts):
             return
     c = c * glossy_sms_trials(ctx, hit_point, bsdf, tab, wl, y, ldu, ldv, pcg, glossy_sms_root_pos(verts, n), n)
-    comptime if GSMS_DEBUG == 1:
+    if ctx.dbg.gsms == Int32(1):
         path_ptr[].estimate += c
     path_ptr[].estimate += _clamped(ctx, c, Int(path_ptr[].bounce))
 

@@ -31,9 +31,9 @@ comptime GLOSSY_SMS_STRAIGHT: Float32 = Float32(0.25)   # share of seeds aimed s
 comptime _OFF: Float32 = Float32(2e-4)
 # A re-traced chain lands on its light point when it misses by at most sqrt(_LAND2) of the distance from x0.
 comptime _LAND2: Float32 = Float32(1e-7)
-# DEBUG (-D GSMS_DEBUG=n): only glossy SMS (1), only BSDF chain paths from glossy vertices with their MIS share (2) or
-# unweighted (3); 1 + 2 must match 3. Everything else contributes nothing. 6: glossy_sms_stage's success rate.
-comptime GSMS_DEBUG: Int = get_defined_int["GSMS_DEBUG", 0]()
+# DEBUG (GONZALES_GSMS_DEBUG=n, ShadeContext.dbg.gsms): only glossy SMS (1), only BSDF chain paths from glossy vertices
+# with their MIS share (2) or unweighted (3); 1 + 2 must match 3. Everything else contributes nothing. 6: glossy_sms_stage's
+# success rate.
 
 comptime SMSChain = Array[SMSVertex, MAX_SMS_VERTICES]
 comptime SMSRoot = Array[Vec3f, MAX_SMS_VERTICES]   # a solved chain's vertex positions
@@ -195,9 +195,9 @@ def glossy_sms_stage(
     ctx: ShadeContext, x0: Vec3f, bsdf: BSDF, tab: LobeTables, wl: SampledWavelengths,
     y: Vec3f, ldu: Vec3f, ldv: Vec3f, mut pcg: PCG32,
 ) -> Float32:
-    """DEBUG (GSMS_DEBUG=6): 1 when a solve finds a root with a share (GSMS_STAGE=2) or one try does (else)."""
+    """DEBUG (GONZALES_GSMS_DEBUG=6): 1 when a solve finds a root with a share (GONZALES_GSMS_STAGE=2) or one try does."""
     var verts = SMSChain(fill=sms_vertex_init())
-    comptime if get_defined_int["GSMS_STAGE", 0]() == 2:
+    if ctx.dbg.gsms_stage == Int32(2):
         return Float32(1) if glossy_sms_solve(ctx, x0, bsdf, tab, wl, y, ldu, ldv, pcg, verts)[0] else Float32(0)
     return Float32(1) if _glossy_sms_try(ctx, x0, bsdf, tab, wl, y, ldu, ldv, pcg, verts)[0] else Float32(0)
 

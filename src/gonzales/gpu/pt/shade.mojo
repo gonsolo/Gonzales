@@ -13,7 +13,7 @@ from gonzales.core.rng import PCG32
 from gonzales.integrators.pt.materials import _shade_sss_exit, shade_coated_diffuse, shade_conductor, shade_dielectric, shade_diffuse, shade_diffuse_transmission, shade_hair, shade_interface, shade_measured, shade_thin_dielectric
 from gonzales.integrators.pt.shading import shade_nee_core
 from gonzales.integrators.pt.nee import _mnee_bsdf_weight, _glossy_sms_bsdf_weight
-from gonzales.transport.glossy_sms import (GSMS_DEBUG, GLOSSY_SMS_MAX_TRIALS, SMSRoot, gsms_queue_count, gsms_queue_task, gsms_queue_long,
+from gonzales.transport.glossy_sms import (GLOSSY_SMS_MAX_TRIALS, SMSRoot, gsms_queue_count, gsms_queue_task, gsms_queue_long,
     gsms_queue_root, gsms_trial_rng, glossy_sms_refinds)
 from gonzales.transport.bxdf import LobeTables
 from gonzales.integrators.pt.common import _clamped
@@ -91,10 +91,11 @@ def resolve_suppress_gpu(
     var hp = Vec3f(path_ptr[].ray.origin.x, path_ptr[].ray.origin.y, path_ptr[].ray.origin.z) \
              + Vec3f(path_ptr[].ray.direction.x, path_ptr[].ray.direction.y, path_ptr[].ray.direction.z) * inter.tHit
     var w = _mnee_bsdf_weight(ctx, path_ptr, inter, hp) if kind == Int32(1) else _glossy_sms_bsdf_weight(ctx, path_ptr, inter, hp)
-    comptime if GSMS_DEBUG != 0:
-        if GSMS_DEBUG == 1 or kind != Int32(2):
+    var dbg = ctx.dbg.gsms
+    if dbg != Int32(0):
+        if dbg == Int32(1) or kind != Int32(2):
             return
-        if GSMS_DEBUG == 3:
+        if dbg == Int32(3):
             w = Float32(1)
     if w > Float32(0.0):
         path_ptr[].estimate += tasks[unsafe_offset=tid].contrib * w
@@ -378,7 +379,7 @@ def finish_gsms_gpu(paths: Pointer[PathState, MutUntrackedOrigin], sd: SceneView
         return
     var task = gsms_queue_task(gsms_queue, t)[]
     var c = task.c * Float32(min(Int(task.first) + 1, GLOSSY_SMS_MAX_TRIALS))
-    comptime if GSMS_DEBUG != 1:
+    if sd.dbg.gsms != Int32(1):
         c = _clamped(_shade_context(sd, Pointer[UInt32, MutUntrackedOrigin].unsafe_dangling()), c, Int(task.bounce))
     # atomic: a path may have parked a root at several bounces
     var e = Pointer(to=paths.unsafe_offset(Int(task.path))[].estimate).unsafe_bitcast[Float32]().unsafe_origin_cast[MutUntrackedOrigin]()

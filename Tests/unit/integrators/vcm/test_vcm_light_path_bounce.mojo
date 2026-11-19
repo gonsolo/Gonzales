@@ -19,6 +19,7 @@
 
 from std.memory.alloc import unsafe_alloc
 from std.testing import assert_true, TestSuite
+from gonzales.core.env import DebugSwitches
 from gonzales.scene.shapes.curves import CurveBvh
 from gonzales.core.sampling import ThinLens
 from gonzales.scene.appearance.footprint import CameraFootprint
@@ -157,6 +158,7 @@ def _build_scene() -> SceneView:
         Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
         BVH4.none(),
         Pointer[UInt8, MutUntrackedOrigin].unsafe_dangling(),
+        DebugSwitches.none(),
     )
 
 # Both subpath halves of a VCM pass share one hero-wavelength set (see

@@ -26,6 +26,9 @@ comptime ENV_SWITCHES: List[EnvSwitch] = [
     EnvSwitch("GONZALES_NO_DENOISE", "set: --interactive-frames output is not denoised"),
     EnvSwitch("GONZALES_NO_MNEE", "set: the GPU path tracer runs no MNEE through smooth glass"),
     EnvSwitch("GONZALES_VCM_NO_EXIT", "set: VCM without exit merging (the original VCM's strategies on skin)"),
+    EnvSwitch("GONZALES_VCM_SSS_CAMERA_ONLY", "1: only VCM camera paths walk subsurface interiors (research)"),
+    EnvSwitch("GONZALES_GSMS_DEBUG", "glossy SMS alone (1), BSDF chain paths from glossy vertices with (2) or without (3) their MIS share; 6: solve success rate"),
+    EnvSwitch("GONZALES_GSMS_STAGE", "with GONZALES_GSMS_DEBUG=6: 2 counts full solves with a share, else single tries"),
     EnvSwitch("GONZALES_NO_SW_SHADOW", "set: the software BVH traces shadow rays inline instead of deferring them"),
     EnvSwitch("GONZALES_SSS_RT", "0: subsurface walk segments traced in software instead of on the RT cores"),
     EnvSwitch("GONZALES_TEX_SPP", "Ptex streaming footprint as at N samples a pixel (default 16; 1 = the pixel's own)"),
@@ -122,6 +125,27 @@ def env_registered(name: String) -> Bool:
         if name == known:
             return True
     return False
+
+
+# Research switches, read once at setup; kernels see them through SceneView.dbg and ShadeContext.dbg.
+@fieldwise_init
+struct DebugSwitches(TrivialRegisterPassable):
+    var gsms: Int32                 # GONZALES_GSMS_DEBUG
+    var gsms_stage: Int32           # GONZALES_GSMS_STAGE
+    var vcm_sss_camera_only: Bool   # GONZALES_VCM_SSS_CAMERA_ONLY
+
+    @staticmethod
+    def none() -> Self:
+        return Self(Int32(0), Int32(0), False)
+
+    @staticmethod
+    def from_env() -> Self:
+        try:
+            return Self(Int32(env_int["GONZALES_GSMS_DEBUG"](0)), Int32(env_int["GONZALES_GSMS_STAGE"](0)),
+                        env_int["GONZALES_VCM_SSS_CAMERA_ONLY"](0) != 0)
+        except:
+            print("Warning: GONZALES_GSMS_DEBUG, GONZALES_GSMS_STAGE, GONZALES_VCM_SSS_CAMERA_ONLY take integers; ignored", file=stderr)
+            return Self.none()
 
 
 # Warns once for each GONZALES_* or GZ_* variable at startup that is no switch (a typo).

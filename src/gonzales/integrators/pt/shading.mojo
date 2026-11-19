@@ -16,6 +16,7 @@ from gonzales.scene.appearance.lights import AreaLight, DistantLight, PointLight
 from gonzales.scene.appearance.media import Medium, MediumInterface, Grid, NvdbGrid
 from gonzales.scene.shapes.curves import Curve
 from gonzales.core.rng import PCG32
+from gonzales.core.env import DebugSwitches
 from gonzales.scene.appearance.footprint import CameraFootprint
 from gonzales.scene.accel.bvh import BVH2Node, BVH4, traverse_dispatch, _equal_area_sphere_to_square
 from gonzales.core.sampling import power_heuristic
@@ -30,7 +31,7 @@ from gonzales.transport.shade_context import GIPendingX1, LightContext, ShadeCon
 from gonzales.transport.manifold import _emitter_face_normal
 from gonzales.integrators.pt.common import area_light_hit_cos, curve_light_hit, _geom_normal_and_ray, _clamped, _to_spec_illum
 from gonzales.integrators.pt.nee import _mnee_bsdf_weight, _glossy_sms_bsdf_weight
-from gonzales.transport.glossy_sms import glossy_sms_live, GSMS_DEBUG, GLOSSY_SMS_MIN_PDF
+from gonzales.transport.glossy_sms import glossy_sms_live, GLOSSY_SMS_MIN_PDF
 from gonzales.transport.manifold import _mnee_first_probe
 from gonzales.integrators.pt.materials import shade_diffuse_transmission, _shade_sss_exit, shade_coated_diffuse, shade_dielectric, shade_thin_dielectric, shade_conductor, shade_measured, shade_hair, shade_diffuse, shade_interface
 from gonzales.scene.shapes.primitives import PrimKind
@@ -57,7 +58,7 @@ def shade_core(
     var mat_idx = Int(inter.primId.materialIndex)
     var mat = materials[unsafe_offset=mat_idx]
 
-    if mat.type == MatKind.area_light and GSMS_DEBUG == 0:
+    if mat.type == MatKind.area_light:
         path_ptr[].estimate += path_ptr[].throughput * rgb_illuminant_to_spectral_sample(
             spectral.coeffs, spectral.res, spectral.cie_x, spectral.cie_y,
             spectral.cie_z, spectral.d65,
@@ -456,9 +457,8 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
             var edir = Vec3f(path_ptr[].ray.direction.x, path_ptr[].ray.direction.y, path_ptr[].ray.direction.z)
             e_front = area_light_hit_cos(inter, ctx.meshes, ctx.instances, edir) > Float32(0.0)
         if path_ptr[].bounce == 0 or path_ptr[].specularBounce == Int8(1):
-            comptime if GSMS_DEBUG >= 2:
-                if e_front and shared_with == 2:
-                    path_ptr[].estimate += path_ptr[].throughput * _to_spec_illum(ctx, emission, path_ptr[].wavelengths) * (mnee_w_b if GSMS_DEBUG == 2 else Float32(1))
+            if ctx.dbg.gsms >= Int32(2) and e_front and shared_with == 2:
+                path_ptr[].estimate += path_ptr[].throughput * _to_spec_illum(ctx, emission, path_ptr[].wavelengths) * (mnee_w_b if ctx.dbg.gsms == Int32(2) else Float32(1))
             if e_front and mnee_w_b > Float32(0.0) and not (path_ptr[].bounce == 0 and mat.lamp_hidden()):
                 path_ptr[].estimate += _clamped(ctx, path_ptr[].throughput * _to_spec_illum(ctx, emission, path_ptr[].wavelengths) * mnee_w_b, Int(path_ptr[].bounce) - 1)
         else:
@@ -645,6 +645,7 @@ def cpu_shade_context(
     filter_glossy: Float32 = Float32(0),
     clamp: SIMD[DType.float32, 2] = SIMD[DType.float32, 2](0),
     cycles: SIMD[DType.int32, 4] = SIMD[DType.int32, 4](0),
+    dbg: DebugSwitches = DebugSwitches.none(),
 ) -> ShadeContext:
     """The per-render-invariant ShadeContext of the CPU wavefront; build once, set path_idx per path."""
     return ShadeContext(
@@ -665,7 +666,7 @@ def cpu_shade_context(
             distant_lights=distantLights, distant_count=distantLightCount,
             point_lights=pointLights, point_count=pointLightCount,
             infinite_lights=infiniteLights, infinite_count=infiniteLightCount,
-            spheres=spheres, sphere_count=sphereCount, light_sampler=light_sampler), filter_glossy=filter_glossy, clamp=clamp, cycles=cycles, xe=xe_scene_none())
+            spheres=spheres, sphere_count=sphereCount, light_sampler=light_sampler), filter_glossy=filter_glossy, clamp=clamp, cycles=cycles, xe=xe_scene_none(), dbg=dbg)
 
 
 @always_inline

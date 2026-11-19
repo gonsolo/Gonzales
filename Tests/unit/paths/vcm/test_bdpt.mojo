@@ -14,6 +14,7 @@
 from std.math import abs
 from std.memory.alloc import unsafe_alloc
 from std.testing import assert_true, TestSuite
+from gonzales.core.env import DebugSwitches
 from gonzales.scene.shapes.curves import CurveBvh
 from gonzales.core.sampling import ThinLens
 from gonzales.scene.appearance.footprint import CameraFootprint
@@ -147,6 +148,7 @@ def _dummy_sd() -> SceneView:
         Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
         BVH4.none(),
         Pointer[UInt8, MutUntrackedOrigin].unsafe_dangling(),
+        DebugSwitches.none(),
     )
 
 # ── _pdf_solid_to_area ────────────────────────────────────────────────────────
@@ -368,6 +370,7 @@ def test_bdpt_connect_to_cache_sums_one_paired_light_path() raises:
         Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
         BVH4.none(),
         Pointer[UInt8, MutUntrackedOrigin].unsafe_dangling(),
+        DebugSwitches.none(),
     )
 
     var cv = BDPTVertex(

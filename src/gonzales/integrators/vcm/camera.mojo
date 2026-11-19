@@ -37,7 +37,7 @@ from gonzales.core.spectrum import (
     SampledWavelengths, SpectralSample, spec_refl, spec_refl_unbounded, spec_illum,
     rgb_bands_to_spectral_sample,
 )
-from gonzales.paths.vcm.vertex import _VCM_SSS_CAMERA_ONLY, _VOL_PHASE_HIT, _vcm_walk_limit, BDPTVertex, _null_vertex
+from gonzales.paths.vcm.vertex import _VOL_PHASE_HIT, _vcm_walk_limit, BDPTVertex, _null_vertex
 from gonzales.paths.vcm.nee import _bdpt_simple_light_count, _bdpt_sample_simple_light, _bdpt_nee_contribute
 from gonzales.paths.vcm.eval import (
     _vcm_sphere_slot, _vcm_infinite_slot, _vcm_nee_surface, _vertex_ctx, _bdpt_vertex_mis_scoped, _vcm_mnee,
@@ -285,9 +285,7 @@ def _vcm_est_rr(beta: SpectralSample, mut pcg: PCG32) -> Float32:
 @always_inline
 def _vcm_skin_arrival_here(ref sd: SceneView, mat: Material, inter: Intersection, med_in: Int32) -> Bool:
     """Does a light path store a skin arrival at this hit (light.mojo's _vcm_skin_arrival)?"""
-    comptime if _VCM_SSS_CAMERA_ONLY:
-        return False
-    if sd.vcmExitMerge == Int32(0):
+    if sd.dbg.vcm_sss_camera_only or sd.vcmExitMerge == Int32(0):
         return False
     return sss_walks_below(mat, inter, med_in)
 
@@ -304,7 +302,8 @@ def _vcm_sss_walk[use_gpu: Bool, adjoint: Bool = False](
     light walk, see sss_hop."""
     var gn = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
     var ex = sss_hop[use_gpu, adjoint](sd, mat, inter, hit.to_simd(), gn, rd, wl, pcg, outside_ior)
-    _vcm_sss_walk_carries(ex, abs(dot(-ray_dir, gn)), mis_vc, beta, dvcm, dvc, dvm, dvcm_in, dvc_in, dvm_in, entry_eta)
+    _vcm_sss_walk_carries(ex, abs(dot(-ray_dir, gn)), mis_vc, beta, dvcm, dvc, dvm, dvcm_in, dvc_in, dvm_in, entry_eta,
+                          sd.dbg.vcm_sss_camera_only)
     return ex
 
 
@@ -346,14 +345,14 @@ def _vcm_sss_walk_resume[use_gpu: Bool, adjoint: Bool = False](
     var r = resume[unsafe_offset=slot]
     var ex = sss_walker_exit(sd, ps, walker_inter[unsafe_offset=slot])
     sss_hop_tint[use_gpu, adjoint](sd, sd.materials[unsafe_offset=Int(r.mat_idx)], r.inter, ex, wl)
-    _vcm_sss_walk_carries(ex, r.cos_e, mis_vc, beta, dvcm, dvc, dvm, r.dvcm, r.dvc, r.dvm, r.entry_eta)
+    _vcm_sss_walk_carries(ex, r.cos_e, mis_vc, beta, dvcm, dvc, dvm, r.dvcm, r.dvc, r.dvm, r.entry_eta, sd.dbg.vcm_sss_camera_only)
     return (ex, r)
 
 
 @always_inline
 def _vcm_sss_walk_carries(
     ex: SssExit, cos_e: Float32, mis_vc: Float32, mut beta: SpectralSample, mut dvcm: Float32, mut dvc: Float32,
-    mut dvm: Float32, dvcm_in: Float32, dvc_in: Float32, dvm_in: Float32, entry_eta: Float32,
+    mut dvm: Float32, dvcm_in: Float32, dvc_in: Float32, dvm_in: Float32, entry_eta: Float32, camera_only: Bool,
 ):
     """A finished walk's weight and MIS carries, see _vcm_sss_walk."""
     if ex.ok:
@@ -362,7 +361,7 @@ def _vcm_sss_walk_carries(
         var inv_t = Float32(1) / max(Float32(1) - fr_dielectric(cos_e, ex.eta), Float32(1e-6))
         var pdf_rev = cos_e * INV_PI
         dvcm = Float32(0)
-        comptime if _VCM_SSS_CAMERA_ONLY:
+        if camera_only:
             dvc = Float32(0)
             dvm = Float32(0)
             return

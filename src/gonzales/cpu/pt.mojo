@@ -248,7 +248,7 @@ def render_tile[Osp: Origin[mut=True], Oc2w: Origin[mut=True]](
         gi_pending=gi_pending_buf, gi_io=gi_io,
         nmaps=scene.normalSlopeMaps,
         textures=scene.gpuTextures, n_textures=Int(scene.gpuTextureCount),
-        has_glass=scene.hasGlass != Int32(0), bvh4=scene.bvh4, filter_glossy=scene.filterGlossy, clamp=scene.clamp, cycles=scene.cycles)
+        has_glass=scene.hasGlass != Int32(0), bvh4=scene.bvh4, filter_glossy=scene.filterGlossy, clamp=scene.clamp, cycles=scene.cycles, dbg=scene.dbg)
     shade_ctx.n_mediums = Int(scene.mediumCount)
     shade_ctx.mediums = scene.mediums
     shade_ctx.medium_ifaces = scene.mediumInterfaces
