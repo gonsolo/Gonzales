@@ -1246,6 +1246,7 @@ def test_spheres[O: Origin[mut=True]](
     n_spheres: Int,
     ray: Ray,
     result: Pointer[Intersection, O],
+    *, motion: MotionTable,
 ):
     """Test all analytical spheres against the ray, updating result if closer.
     Sets primId.type = 4 and primId.id1 = sphere_index on a sphere hit.
@@ -1254,7 +1255,8 @@ def test_spheres[O: Origin[mut=True]](
     if result[unsafe_offset=0].hit != Int8(0):
         t_max = result[unsafe_offset=0].tHit
     for i in range(n_spheres):
-        var t = ray_sphere_hit(spheres[unsafe_offset=i].center, spheres[unsafe_offset=i].radius, ray, Float32(1e-4), t_max)
+        var sph = motion.sphere(spheres, i)
+        var t = ray_sphere_hit(sph.center, sph.radius, ray, Float32(1e-4), t_max)
         if t > Float32(0.0):
             t_max = t
             result[unsafe_offset=0].hit = Int8(1)
@@ -1948,7 +1950,8 @@ def traverse_bvh2_core[Or: Origin[mut=True]](
     var sphereHit = False
     var sphereIdx = -1
     for i in range(n_spheres):
-        var t = ray_sphere_hit(spheres[unsafe_offset=i].center, spheres[unsafe_offset=i].radius, ray, Float32(1e-4), localTHit)
+        var sph = motion.sphere(spheres, i)
+        var t = ray_sphere_hit(sph.center, sph.radius, ray, Float32(1e-4), localTHit)
         if t > Float32(0.0):
             localTHit = t
             sphereHit = True
@@ -2229,14 +2232,15 @@ def any_hit_bvh2_core[wide_on: Bool = True](
     # was silently rejecting essentially every solved caustic path in
     # `sphere_sms.xml` (see project_sms_restir_phase6 memory).
     for i in range(n_spheres):
+        var sph = motion.sphere(spheres, i)
         if ignore_sphere_radius >= Float32(0.0):
-            var sc = Vec3f(spheres[unsafe_offset=i].center.x, spheres[unsafe_offset=i].center.y, spheres[unsafe_offset=i].center.z)
+            var sc = Vec3f(sph.center.x, sph.center.y, sph.center.z)
             var dc = sc - ignore_sphere_center
-            if abs(spheres[unsafe_offset=i].radius - ignore_sphere_radius) < Float32(1e-4) and dot(dc, dc) < Float32(1e-4):
+            if abs(sph.radius - ignore_sphere_radius) < Float32(1e-4) and dot(dc, dc) < Float32(1e-4):
                 continue
-        if _shadow_is_null_material(materials, Int64(spheres[unsafe_offset=i].materialIndex)):
+        if _shadow_is_null_material(materials, Int64(sph.materialIndex)):
             continue
-        if ray_sphere_hit(spheres[unsafe_offset=i].center, spheres[unsafe_offset=i].radius, ray, Float32(1e-4), tMax) > Float32(0.0):
+        if ray_sphere_hit(sph.center, sph.radius, ray, Float32(1e-4), tMax) > Float32(0.0):
             return True
     var rdir = Vec3f(Float32(1.0) / ray.direction.x, Float32(1.0) / ray.direction.y, Float32(1.0) / ray.direction.z)
     var org = Vec3f(ray.origin.x, ray.origin.y, ray.origin.z)
@@ -2789,7 +2793,8 @@ def traverse_bvh4_core[Or: Origin[mut=True]](
     var sphereHit = False
     var sphereIdx = -1
     for i in range(n_spheres):
-        var t = ray_sphere_hit(spheres[unsafe_offset=i].center, spheres[unsafe_offset=i].radius, ray, Float32(1e-4), localTHit)
+        var sph = motion.sphere(spheres, i)
+        var t = ray_sphere_hit(sph.center, sph.radius, ray, Float32(1e-4), localTHit)
         if t > Float32(0.0):
             localTHit = t
             sphereHit = True
@@ -2826,14 +2831,15 @@ def any_hit_bvh4_core(
 ) -> Bool:
     """BVH4 twin of any_hit_bvh2_core. Children are visited unordered."""
     for i in range(n_spheres):
+        var sph = motion.sphere(spheres, i)
         if ignore_sphere_radius >= Float32(0.0):
-            var sc = Vec3f(spheres[unsafe_offset=i].center.x, spheres[unsafe_offset=i].center.y, spheres[unsafe_offset=i].center.z)
+            var sc = Vec3f(sph.center.x, sph.center.y, sph.center.z)
             var dc = sc - ignore_sphere_center
-            if abs(spheres[unsafe_offset=i].radius - ignore_sphere_radius) < Float32(1e-4) and dot(dc, dc) < Float32(1e-4):
+            if abs(sph.radius - ignore_sphere_radius) < Float32(1e-4) and dot(dc, dc) < Float32(1e-4):
                 continue
-        if _shadow_is_null_material(materials, Int64(spheres[unsafe_offset=i].materialIndex)):
+        if _shadow_is_null_material(materials, Int64(sph.materialIndex)):
             continue
-        if ray_sphere_hit(spheres[unsafe_offset=i].center, spheres[unsafe_offset=i].radius, ray, Float32(1e-4), tMax) > Float32(0.0):
+        if ray_sphere_hit(sph.center, sph.radius, ray, Float32(1e-4), tMax) > Float32(0.0):
             return True
     var rdir = Vec3f(Float32(1.0) / ray.direction.x, Float32(1.0) / ray.direction.y, Float32(1.0) / ray.direction.z)
     var ox = F4(ray.origin.x)
@@ -3428,7 +3434,7 @@ def render_aux_buffers[Osc: Origin[mut=True], Onm: Origin[mut=True], Oc2w: Origi
         var dl = dir.length()
         if dl > Float32(0): dir = dir / dl
 
-        var ray = Ray(org, dir)
+        var ray = sd.motion.at(sd.lens.mid_time()).camera_ray(Ray(org, dir))
         # A scene with literally zero mesh/curve/instance primitives (e.g.
         # clouds.pbrt -- one analytic sphere plus a heterogeneous medium, no
         # mesh Shape at all) still has *some* bvh2Nodes/primIds allocation,
@@ -3441,7 +3447,7 @@ def render_aux_buffers[Osc: Origin[mut=True], Onm: Origin[mut=True], Oc2w: Origi
         else:
             isects[unsafe_offset=i] = Intersection(PrimId(-1, -1, 0, -1, 0, 0, 0, 0), Float32(1e38), 0.0, 0.0, Int8(0), 0, 0, 0)
         if Int(sd.sphereCount) > 0:
-            test_spheres(sd.spheres, Int(sd.sphereCount), ray, isects.unsafe_offset(i))
+            test_spheres(sd.spheres, Int(sd.sphereCount), ray, isects.unsafe_offset(i), motion=sd.motion.at(sd.lens.mid_time()))
 
         var normal = Vec3f(Float32(0), Float32(0), Float32(1))   # background
         var d  = Float32(1e38)
@@ -3453,7 +3459,7 @@ def render_aux_buffers[Osc: Origin[mut=True], Onm: Origin[mut=True], Oc2w: Origi
                 # Sphere: normal = normalize(hit_point - center)
                 var si  = Int(isects[unsafe_offset=i].primId.id1)
                 if si >= 0 and si < Int(sd.sphereCount):
-                    normal = sphere_outward_normal(org + dir*d, sd.spheres[unsafe_offset=si].center)
+                    normal = sphere_outward_normal(org + dir*d, sd.motion.at(sd.lens.mid_time()).sphere(sd.spheres, si).center)
             elif typ == Int(PrimKind.curve):
                 # Native curve: reconstruct the geometric normal the same way
                 # shade_hair does (shading.mojo) — h/v come straight from

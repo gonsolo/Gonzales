@@ -365,7 +365,7 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
     # to run its "interface" material's pass-through logic).
     if inter.primId.type == PrimKind.sphere and ctx.lights.sphere_count > 0:
         var sph_idx = Int(inter.primId.id1)
-        var sph = ctx.lights.spheres[unsafe_offset=sph_idx]
+        var sph = ctx.motion.at(path_ptr[].time).sphere(ctx.lights.spheres, sph_idx)
         if sph.isAreaLight == Int8(1):
             if path_ptr[].bounce == 0 or path_ptr[].specularBounce == Int8(1):
                 path_ptr[].estimate += _clamped(ctx, path_ptr[].throughput * _to_spec_illum(ctx, sph.emission, path_ptr[].wavelengths), Int(path_ptr[].bounce) - 1)

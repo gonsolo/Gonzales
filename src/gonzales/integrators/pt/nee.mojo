@@ -43,6 +43,7 @@ def _nee_simple_light_count(ctx: ShadeContext) -> Int:
 @always_inline
 def _nee_sample_simple_light(
     ctx: ShadeContext, i: Int, hit_point: Vec3f, mut pcg: PCG32,
+    *, motion: MotionTable,
 ) -> Tuple[LightSample, Float32]:
     """The i-th distant/point/sphere light, plus the shadow-ray tmax to use for
     it. One place that knows which sampler each type needs and which tmax
@@ -66,7 +67,7 @@ def _nee_sample_simple_light(
         var d = ls_p.dist * Float32(0.9999)
         return (ls_p^, d)
     var si = i - nd - np_
-    var ls_s = _sample_sphere_light_nee(ctx.lights.spheres[unsafe_offset=si], ctx.lights.sphere_count, hit_point, pcg)
+    var ls_s = _sample_sphere_light_nee(motion.sphere(ctx.lights.spheres, si), ctx.lights.sphere_count, hit_point, pcg)
     var d = ls_s.dist * Float32(0.9999)
     return (ls_s^, d)
 
@@ -99,7 +100,7 @@ def _nee_loop_simple[enqueue_shadow: Bool, defer_only: Bool = False](
     _sample_infinite_light_nee) — folding those in here would be a behavior
     change, not a refactor. See project_light_bxdf_interfaces memory."""
     for li in range(_nee_simple_light_count(ctx)):
-        var res = _nee_sample_simple_light(ctx, li, hit_point, pcg)
+        var res = _nee_sample_simple_light(ctx, li, hit_point, pcg, motion=ctx.motion.at(path_ptr[].time))
         var ls = res[0].copy()
         var tmax = res[1]
         var w = _nee_weight_simple_spectral(ls, mat_kind, alb, alpha, normal, wo, ctx.spectral.coeffs, ctx.spectral.res, ctx.spectral.cie_x, ctx.spectral.cie_y, ctx.spectral.cie_z, ctx.spectral.d65, path_ptr[].wavelengths, LobeTables(ctx.materials, ctx.curves, ctx.measured_brdfs, ctx.spectral, ctx.mediums)) * lobe_w
@@ -138,7 +139,7 @@ def _lobe_nee_with[L: NeeLobe, enqueue_shadow: Bool, defer_only: Bool = False](
     var tab = LobeTables(ctx.materials, ctx.curves, ctx.measured_brdfs, ctx.spectral, ctx.mediums)
     _lobe_nee_one[L, enqueue_shadow, defer_only](path_ptr, ctx, bsdf, tab, hit_point, ls_area, ls_area.dist * Float32(0.9999), side_n)
     for li in range(_nee_simple_light_count(ctx)):
-        var res = _nee_sample_simple_light(ctx, li, hit_point, pcg)
+        var res = _nee_sample_simple_light(ctx, li, hit_point, pcg, motion=ctx.motion.at(path_ptr[].time))
         _lobe_nee_one[L, enqueue_shadow, defer_only](path_ptr, ctx, bsdf, tab, hit_point, res[0].copy(), res[1], side_n)
     for inf_i in range(ctx.lights.infinite_count):
         var u = u_env if inf_i == 0 and has_u_env else Point2f(pcg.next_float(), pcg.next_float())

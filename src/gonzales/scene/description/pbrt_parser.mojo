@@ -133,6 +133,7 @@ struct ParsedScene_Mojo:
     var infinite_count:   Int32
     var spheres:          Pointer[Sphere, MutUntrackedOrigin]
     var sphere_count:     Int32
+    var sphere_motion:    Pointer[Int32, MutUntrackedOrigin]   # per sphere: index into motions, -1 static
     var curves:           Pointer[Curve, MutUntrackedOrigin]
     var curve_count:      Int32
     var mediums:          Pointer[Medium, MutUntrackedOrigin]
@@ -162,6 +163,7 @@ struct ParsedScene_Mojo:
     var instance_motion:  Pointer[Int32, MutUntrackedOrigin]            # per instance: index into motions, -1 static
     var motions:          Pointer[InstanceMotion, MutUntrackedOrigin]
     var motion_count:     Int32
+    var camera_motion:    Int32   # the camera's record in motions, -1 static
     var transform_times:  SIMD[DType.float32, 2]   # pbrt's TransformTimes
     var shutter:          SIMD[DType.float32, 2]   # the camera's shutteropen, shutterclose
     # Mesh-index range [start, end) each template's BLAS spans, into the SAME
@@ -186,7 +188,7 @@ struct ParsedScene_Mojo:
     def motion_table(self) -> MotionTable:
         if self.motion_count == Int32(0):
             return MotionTable.none()
-        return MotionTable(self.instance_motion, self.motions, self.motion_count,
+        return MotionTable(self.instance_motion, self.sphere_motion, self.motions, self.motion_count, self.camera_motion,
                            self.transform_times[0], self.transform_times[1], Float32(0))
 
     def sample_clamp(self) -> Float32:
@@ -411,7 +413,7 @@ def _psc_handle_camera(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
     # Copy current CTM into cam2w_raw
     for i in range(16): s[unsafe_offset=0].cam2w_raw[i] = s[unsafe_offset=0].ctm[i]
     if ctm_moving(s[unsafe_offset=0]):
-        print("Warning: a moving camera is not supported; it stays at its start transform.")
+        _psc_push_camera_motion(s)
     var params = _psc_collect_params(handle)
     s[unsafe_offset=0].shutter = SIMD[DType.float32, 2](params.get_float("shutteropen", Float32(0)),
                                                         params.get_float("shutterclose", Float32(1)))
@@ -1022,6 +1024,7 @@ def handle_sphere_shape(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
     s[unsafe_offset=0].spheres_r.append(radius)
     s[unsafe_offset=0].spheres_mat.append(s[unsafe_offset=0].cur_attr.mat_idx)
     s[unsafe_offset=0].spheres_inside_med.append(s[unsafe_offset=0].cur_attr.inside_medium)
+    s[unsafe_offset=0].spheres_motion.append(Int32(-1))
 
     # If this sphere is the inside boundary of a "cloud" medium whose scene
     # file never gave it explicit p0/p1 bounds, size the medium's baked
@@ -2068,13 +2071,42 @@ def _psc_push_motion(s: Pointer[SceneParseState, MutUntrackedOrigin], base: Poin
     for ci in range(16): s[unsafe_offset=0].motion_mats.append(Float64(base[unsafe_offset=ci]))
     return k
 
-def _psc_make_moving(s: Pointer[SceneParseState, MutUntrackedOrigin], mesh_start: Int, curve_start: Int):
+def _psc_push_camera_motion(s: Pointer[SceneParseState, MutUntrackedOrigin]):
+    """The camera's world-from-camera at start and end, acting after the start camera-from-world: a camera ray of the
+    start camera, moved to its time."""
+    var w0 = unsafe_alloc[Float32](16); var w1 = unsafe_alloc[Float32](16)
+    _ = matrix_invert(s[unsafe_offset=0].ctm.unsafe_ptr(), w0)
+    _ = matrix_invert(s[unsafe_offset=0].ctm_end.unsafe_ptr(), w1)
+    # A mirrored camera (Scale -1 1 1) has no rotation to slerp: interpolate W·F and undo F in the base.
+    var det = w0[unsafe_offset=0] * (w0[unsafe_offset=5] * w0[unsafe_offset=10] - w0[unsafe_offset=9] * w0[unsafe_offset=6]) \
+            - w0[unsafe_offset=4] * (w0[unsafe_offset=1] * w0[unsafe_offset=10] - w0[unsafe_offset=9] * w0[unsafe_offset=2]) \
+            + w0[unsafe_offset=8] * (w0[unsafe_offset=1] * w0[unsafe_offset=6] - w0[unsafe_offset=5] * w0[unsafe_offset=2])
+    var f = Float64(-1) if det < Float32(0) else Float64(1)
+    s[unsafe_offset=0].camera_motion = Int32(len(s[unsafe_offset=0].motion_mats) // 48)
+    for ci in range(16): s[unsafe_offset=0].motion_mats.append(Float64(w0[unsafe_offset=ci]) * (f if ci < 4 else Float64(1)))
+    for ci in range(16): s[unsafe_offset=0].motion_mats.append(Float64(w1[unsafe_offset=ci]) * (f if ci < 4 else Float64(1)))
+    for ci in range(16): s[unsafe_offset=0].motion_mats.append(Float64(s[unsafe_offset=0].ctm[ci]) * (f if ci % 4 == 0 else Float64(1)))
+    w0.unsafe_free(); w1.unsafe_free()
+
+def _psc_make_moving(s: Pointer[SceneParseState, MutUntrackedOrigin], mesh_start: Int, curve_start: Int, sphere_start: Int):
     """A shape under an animated CTM: its meshes and curves, baked with the start CTM, become a template with one
-    moving instance."""
+    moving instance; its spheres, at their start, move by the motion relative to the start."""
     var mesh_end = len(s[unsafe_offset=0].meshes)
     var curve_end = len(s[unsafe_offset=0].curves_mat)
-    if s[unsafe_offset=0].cur_attr.is_alight or (mesh_end == mesh_start and curve_end == curve_start):
-        print("Warning: only meshes and curves that are not lights can move; a shape stays at its start transform.")
+    var sphere_end = len(s[unsafe_offset=0].spheres_cx)
+    if sphere_end > sphere_start:
+        var inv_s = unsafe_alloc[Float32](16)
+        _ = matrix_invert(s[unsafe_offset=0].ctm.unsafe_ptr(), inv_s)
+        var k = _psc_push_motion(s, inv_s)
+        for i in range(sphere_start, sphere_end):
+            s[unsafe_offset=0].spheres_motion[i] = k
+        inv_s.unsafe_free()
+    if mesh_end == mesh_start and curve_end == curve_start:
+        if sphere_end == sphere_start:
+            print("Warning: only meshes, curves and spheres can move; a shape stays at its start transform.")
+        return
+    if s[unsafe_offset=0].cur_attr.is_alight:
+        print("Warning: moving area lights are not supported; a shape stays at its start transform.")
         return
     for i in range(mesh_start, mesh_end):
         s[unsafe_offset=0].meshes[i].is_object_template = True
@@ -2169,9 +2201,10 @@ def parse_scene_file(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
             var moving = s[unsafe_offset=0].object_depth == 0 and ctm_moving(s[unsafe_offset=0])
             var mesh_start = len(s[unsafe_offset=0].meshes)
             var curve_start = len(s[unsafe_offset=0].curves_mat)
+            var sphere_start = len(s[unsafe_offset=0].spheres_cx)
             handle_shape(handle, s)
             if moving:
-                _psc_make_moving(s, mesh_start, curve_start)
+                _psc_make_moving(s, mesh_start, curve_start, sphere_start)
         elif _psc_streq(kw_buf, "AttributeBegin"):
             _psc_handle_attribute_begin(s)
         elif _psc_streq(kw_buf, "AttributeEnd"):
@@ -3930,6 +3963,7 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
     psc[unsafe_offset=0].instance_motion  = inst_motion
     psc[unsafe_offset=0].motions          = motions
     psc[unsafe_offset=0].motion_count     = Int32(n_motion)
+    psc[unsafe_offset=0].camera_motion    = s[unsafe_offset=0].camera_motion
     psc[unsafe_offset=0].transform_times  = s[unsafe_offset=0].transform_times
     psc[unsafe_offset=0].shutter          = s[unsafe_offset=0].shutter
     psc[unsafe_offset=0].template_mesh_start = template_mesh_start
@@ -4173,6 +4207,10 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
     else:
         psc[unsafe_offset=0].spheres = Pointer[Sphere, MutUntrackedOrigin].unsafe_dangling()
     psc[unsafe_offset=0].sphere_count = Int32(ns)
+    var sph_motion = unsafe_alloc[Int32](max(ns, 1))
+    for i in range(ns):
+        sph_motion[unsafe_offset=i] = s[unsafe_offset=0].spheres_motion[i]
+    psc[unsafe_offset=0].sphere_motion = sph_motion
 
     # ---- Native curves (hair/fur) ----
     # n_pieces per curve (flatness-adaptive) was already computed above for
@@ -4693,6 +4731,7 @@ def mojo_parsed_free(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin]):
     psc[unsafe_offset=0].blas_primid_counts.unsafe_free()
     psc[unsafe_offset=0].instances.unsafe_free()
     psc[unsafe_offset=0].instance_motion.unsafe_free()
+    psc[unsafe_offset=0].sphere_motion.unsafe_free()
     psc[unsafe_offset=0].motions.unsafe_free()
     psc[unsafe_offset=0].template_mesh_start.unsafe_free()
     psc[unsafe_offset=0].template_mesh_end.unsafe_free()

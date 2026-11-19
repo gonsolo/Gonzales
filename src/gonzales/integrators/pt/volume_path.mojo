@@ -416,7 +416,7 @@ def _volume_area_light_nee(
                     exit_ptr[unsafe_offset=0].hit = Int8(0)
                     traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, shad_ray,
                                        shad_tmax, exit_ptr, sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances, motion=sd.motion.at(path_ptr[].time))
-                    test_spheres(sd.spheres, n_spheres, shad_ray, exit_ptr)
+                    test_spheres(sd.spheres, n_spheres, shad_ray, exit_ptr, motion=sd.motion.at(path_ptr[].time))
                     # test_spheres ignores shad_tmax (it bounds only by
                     # an already-recorded closer hit), so a sphere past
                     # the light would otherwise set t_med > dist and
@@ -766,7 +766,7 @@ def _sample_medium_core(
                 scatter_w, wo_v, medv, pcg, sd)
         for sph_i in range(n_spheres):
             if sd.spheres[unsafe_offset=sph_i].isAreaLight == Int8(1):
-                _volume_nee_light(path_ptr, _sample_sphere_light_nee(sd.spheres[unsafe_offset=sph_i], n_spheres, scatter_w, pcg),
+                _volume_nee_light(path_ptr, _sample_sphere_light_nee(sd.motion.at(path_ptr[].time).sphere(sd.spheres, sph_i), n_spheres, scatter_w, pcg),
                     scatter_w, wo_v, medv, pcg, sd)
         for inf_i in range(Int(sd.infiniteLightCount)):
             _volume_nee_light(path_ptr,

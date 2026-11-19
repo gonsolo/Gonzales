@@ -1,8 +1,8 @@
 # pbrt-v4's AnimatedTransform for moving instances: matrices are 16 floats, column-major (flat[col*4 + row]).
 from std.math import sqrt, sin, cos, asin, abs, min, max
 from std.builtin.device_passable import DevicePassable, DeviceTypeEncoder
-from gonzales.core.geometry import _is_real_ptr
-from gonzales.scene.shapes.primitives import Instance, affine_inverse
+from gonzales.core.geometry import _is_real_ptr, Ray, Point3f, Vec3f
+from gonzales.scene.shapes.primitives import Instance, Sphere, affine_inverse
 
 comptime M64 = SIMD[DType.float64, 16]
 comptime M32 = SIMD[DType.float32, 16]
@@ -160,12 +160,14 @@ struct InstanceMotion(TrivialRegisterPassable):
 
 @fieldwise_init
 struct MotionTable(TrivialRegisterPassable, DevicePassable):
-    """The scene's moving instances (`index`: instance -> record, -1 static), pbrt's TransformTimes [t0, t1] and the
-    time a path places them at. count == 0: nothing moves."""
+    """The scene's moving instances (`index`: instance -> record, -1 static), the camera's record (-1 static), pbrt's
+    TransformTimes [t0, t1] and the time a path places them at. count == 0: nothing moves."""
     comptime device_type: AnyType = Self
     var index: Pointer[Int32, MutUntrackedOrigin]
+    var sphere_index: Pointer[Int32, MutUntrackedOrigin]   # sphere -> record, -1 static
     var records: Pointer[InstanceMotion, MutUntrackedOrigin]
     var count: Int32
+    var camera: Int32
     var t0: Float32
     var t1: Float32
     var time: Float32
@@ -180,8 +182,9 @@ struct MotionTable(TrivialRegisterPassable, DevicePassable):
     @staticmethod
     def none() -> MotionTable:
         return MotionTable(Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
+                           Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
                            Pointer[InstanceMotion, MutUntrackedOrigin].unsafe_dangling(),
-                           Int32(0), Float32(0), Float32(1), Float32(0))
+                           Int32(0), Int32(-1), Float32(0), Float32(1), Float32(0))
 
     @always_inline
     def at(self, time: Float32) -> MotionTable:
@@ -194,6 +197,34 @@ struct MotionTable(TrivialRegisterPassable, DevicePassable):
         if self.t1 > self.t0:
             return min(max((self.time - self.t0) / (self.t1 - self.t0), Float32(0)), Float32(1))
         return Float32(0)
+
+    @always_inline
+    def sphere(self, spheres: Pointer[Sphere, MutUntrackedOrigin], k: Int) -> Sphere:
+        """Sphere k placed at this table's time."""
+        var sph = spheres[unsafe_offset=k]
+        if self.count == Int32(0):
+            return sph
+        var mi = self.sphere_index[unsafe_offset=k]
+        if mi < Int32(0):
+            return sph
+        var m = self.records[unsafe_offset=Int(mi)].obj_to_world(self.dt())
+        var c = sph.center
+        sph.center = Point3f(m[0] * c.x + m[4] * c.y + m[8] * c.z + m[12], m[1] * c.x + m[5] * c.y + m[9] * c.z + m[13],
+                             m[2] * c.x + m[6] * c.y + m[10] * c.z + m[14])
+        sph.radius *= sqrt(m[0] * m[0] + m[1] * m[1] + m[2] * m[2])
+        return sph
+
+    @always_inline
+    def camera_ray(self, ray: Ray) -> Ray:
+        """A ray of the start camera, carried along with the camera to this table's time."""
+        if self.camera < Int32(0):
+            return ray
+        var m = self.records[unsafe_offset=Int(self.camera)].obj_to_world(self.dt())
+        var o = ray.origin; var d = ray.direction
+        var mo = Point3f(m[0] * o.x + m[4] * o.y + m[8] * o.z + m[12], m[1] * o.x + m[5] * o.y + m[9] * o.z + m[13],
+                         m[2] * o.x + m[6] * o.y + m[10] * o.z + m[14])
+        var md = Vec3f(m[0] * d.x + m[4] * d.y + m[8] * d.z, m[1] * d.x + m[5] * d.y + m[9] * d.z, m[2] * d.x + m[6] * d.y + m[10] * d.z)
+        return Ray(mo, md * (Float32(1) / sqrt(md.x * md.x + md.y * md.y + md.z * md.z)))
 
     @always_inline
     def instance(self, instances: Pointer[Instance, MutUntrackedOrigin], k: Int) -> Instance:

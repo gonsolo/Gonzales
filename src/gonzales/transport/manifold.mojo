@@ -386,7 +386,7 @@ def _sms_vertex_geom_from_hit(
     var mat = ctx.materials[unsafe_offset=Int(inter.primId.materialIndex)]
     var ior = mat.albedo.r
     if inter.primId.type == PrimKind.sphere:
-        var sph = ctx.lights.spheres[unsafe_offset=Int(inter.primId.id1)]
+        var sph = motion.sphere(ctx.lights.spheres, Int(inter.primId.id1))
         var hit_pt = ray_org + shadow_dir * inter.tHit
         var center = Vec3f(sph.center.x, sph.center.y, sph.center.z)
         var to_hit = hit_pt - center

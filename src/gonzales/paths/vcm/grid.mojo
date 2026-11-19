@@ -246,7 +246,7 @@ def _camera_typical_distance(
                 traverse_dispatch(sd.bvh4, sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, Float32(1e38), isects.unsafe_offset(0),
                                    sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances, motion=MotionTable.none())
             if Int(sd.sphereCount) > 0:
-                test_spheres(sd.spheres, Int(sd.sphereCount), ray, isects.unsafe_offset(0))
+                test_spheres(sd.spheres, Int(sd.sphereCount), ray, isects.unsafe_offset(0), motion=MotionTable.none())
             if isects[unsafe_offset=0].hit != Int8(0):
                 hits.append(isects[unsafe_offset=0].tHit)
     isects.unsafe_free()

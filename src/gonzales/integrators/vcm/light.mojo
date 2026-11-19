@@ -582,7 +582,7 @@ def _bdpt_trace_light_path[use_gpu: Bool](
         scratch[unsafe_offset=0].hit = Int8(0)
         traverse_dispatch(sd.bvh4, sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, Float32(1e38), scratch,
                            sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances, motion=MotionTable.none())
-        test_spheres(sd.spheres, Int(sd.sphereCount), ray, scratch)
+        test_spheres(sd.spheres, Int(sd.sphereCount), ray, scratch, motion=MotionTable.none())
         # A miss is handled inside the step (returns False).
         if not _bdpt_light_path_bounce[use_gpu](
             sd, pcg, has_med, scratch[unsafe_offset=0], lvc, lp_idx,

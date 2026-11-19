@@ -247,6 +247,7 @@ def _usd_lights(s: Pointer[SceneParseState, MutUntrackedOrigin], d: PythonObject
         s[unsafe_offset=0].spheres_r.append(q[unsafe_offset=3])
         s[unsafe_offset=0].spheres_mat.append(light_mat)
         s[unsafe_offset=0].spheres_inside_med.append(s[unsafe_offset=0].cur_attr.inside_medium)
+        s[unsafe_offset=0].spheres_motion.append(Int32(-1))
         s[unsafe_offset=0].spheres_outside_med.append(s[unsafe_offset=0].cur_attr.outside_medium)
         s[unsafe_offset=0].spheres_al.append(True)
         s[unsafe_offset=0].spheres_rgb.append(RGB(q[unsafe_offset=4], q[unsafe_offset=5], q[unsafe_offset=6]))

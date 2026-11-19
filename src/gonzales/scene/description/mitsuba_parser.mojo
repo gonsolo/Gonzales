@@ -792,6 +792,7 @@ def _mit_process_sphere(tags: List[MitsubaTag], shape_idx: Int, end: Int,
     s_ptr[unsafe_offset=0].spheres_r.append(radius)
     s_ptr[unsafe_offset=0].spheres_mat.append(mat_idx_result)
     s_ptr[unsafe_offset=0].spheres_inside_med.append(Int32(-1))
+    s_ptr[unsafe_offset=0].spheres_motion.append(Int32(-1))
     s_ptr[unsafe_offset=0].spheres_outside_med.append(Int32(-1))
     s_ptr[unsafe_offset=0].spheres_al.append(em[0])
     s_ptr[unsafe_offset=0].spheres_rgb.append(em[1])

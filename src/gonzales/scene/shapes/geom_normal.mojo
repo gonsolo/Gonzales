@@ -40,7 +40,7 @@ def _geom_normal(
     refraction before _shading_normal_at's own fix). See
     project_mesh_only_geometry_assumption memory."""
     if inter.primId.type == PrimKind.sphere and _is_real_ptr[Sphere](spheres):
-        return sphere_outward_normal(Point3f(hit[0], hit[1], hit[2]), spheres[unsafe_offset=Int(inter.primId.id1)].center)
+        return sphere_outward_normal(Point3f(hit[0], hit[1], hit[2]), motion.sphere(spheres, Int(inter.primId.id1)).center)
     var (mi, bv) = inter.primId.triangle()
     if mi < 0:
         return Vec3f(Float32(0), Float32(1), Float32(0))
@@ -91,7 +91,7 @@ def _shading_normal_at(
     regardless of where it was struck -- silently destroying any caustic it
     should cast."""
     if inter.primId.type == PrimKind.sphere and _is_real_ptr[Sphere](spheres):
-        return sphere_outward_normal(hit, spheres[unsafe_offset=Int(inter.primId.id1)].center)
+        return sphere_outward_normal(hit, motion.sphere(spheres, Int(inter.primId.id1)).center)
     var (mi, bv) = inter.primId.triangle()
     if mi < 0:
         return Vec3f(Float32(0), Float32(1), Float32(0))

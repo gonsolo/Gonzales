@@ -278,7 +278,7 @@ def _bdpt_light_path_intersect_gpu(
     results[unsafe_offset=tid].hit = Int8(0)
     traverse_dispatch(sd.bvh4, sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, Float32(1e38), results.unsafe_offset(tid),
                         sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances, motion=MotionTable.none())
-    test_spheres(sd.spheres, Int(sd.sphereCount), ray, results.unsafe_offset(tid))
+    test_spheres(sd.spheres, Int(sd.sphereCount), ray, results.unsafe_offset(tid), motion=MotionTable.none())
 
 @__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
 @__llvm_metadata(`nvvm.minctasm`=SIMDLength(MINCTA_VCM_LBOUNCE))
@@ -392,7 +392,7 @@ def _bdpt_camera_path_intersect_gpu(
     results[unsafe_offset=tid].hit = Int8(0)
     traverse_dispatch(sd.bvh4, sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, Float32(1e38), results.unsafe_offset(tid),
                         sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances, motion=MotionTable.none())
-    test_spheres(sd.spheres, Int(sd.sphereCount), ray, results.unsafe_offset(tid))
+    test_spheres(sd.spheres, Int(sd.sphereCount), ray, results.unsafe_offset(tid), motion=MotionTable.none())
 
 @__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
 @__llvm_metadata(`nvvm.minctasm`=SIMDLength(MINCTA_VCM_CBOUNCE))

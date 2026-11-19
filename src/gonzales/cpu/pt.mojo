@@ -208,6 +208,8 @@ def render_tile[Osp: Origin[mut=True], Oc2w: Origin[mut=True]](
                     sobol_pixel_part=pixel_sobol,
                     lens=sp.lens,
                 )
+                var time = camera_sample_time(sp.lens, sobol_idx, sobol_seed, matrices)
+                ray = scene.motion.at(time).camera_ray(ray)
                 paths[unsafe_offset=idx] = PathState(
                     ray,
                     SpectralSample(Float32(1.0)),
@@ -232,7 +234,7 @@ def render_tile[Osp: Origin[mut=True], Oc2w: Origin[mut=True]](
                     Int8(0),   # ns_spec
                     Vec3f(Float32(0.0)), Float32(0.0),   # gl_dir, gl_pdf
                     SssWalk.none(),
-                    camera_sample_time(sp.lens, sobol_idx, sobol_seed, matrices),
+                    time,
                 )
                 pixel_idx_buf[unsafe_offset=idx] = this_pixel_idx
                 idx += 1
@@ -299,7 +301,7 @@ def render_tile[Osp: Origin[mut=True], Oc2w: Origin[mut=True]](
                                scene.blasNodesArr, scene.blasPrimIdsArr, scene.instances,
                                motion=scene.motion.at(paths[unsafe_offset=i].time))
             if scene.sphereCount > 0:
-                test_spheres(scene.spheres, Int(scene.sphereCount), paths[unsafe_offset=i].ray, intersections.unsafe_offset(i))
+                test_spheres(scene.spheres, Int(scene.sphereCount), paths[unsafe_offset=i].ray, intersections.unsafe_offset(i), motion=scene.motion.at(paths[unsafe_offset=i].time))
             # Same per-bounce cone growth the GPU does in accumulate_cone_gpu,
             # including the specular-chain gate (see that kernel's comment).
             if intersections[unsafe_offset=i].hit != Int8(0) and paths[unsafe_offset=i].cone_len >= Float32(0.0):

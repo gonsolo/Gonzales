@@ -272,6 +272,7 @@ def gen_primary_rays_wavefront_gpu(
     count_dp: Int64, n_pixels_dp: Int64,
     filter_lut: Pointer[Float32, MutUntrackedOrigin],
     lens_radius: Float32, focal_distance: Float32, shutter_open: Float32, shutter_close: Float32, timed: Int32,
+    motion: MotionTable,   # moves the camera
     # Ptex demand paging, ptex_mode 2: slot ti renders sample redo_si[ti] of its pixel, or nothing if that is < 0.
     redo_si: Pointer[Int32, MutUntrackedOrigin] = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
     ptex_mode: Int32 = Int32(0),
@@ -305,6 +306,8 @@ def gen_primary_rays_wavefront_gpu(
         filter_type, filter_lut,
         lens=lens,
     )
+    var time = camera_sample_time(lens, sobol_idx, sobol_seed, sobol_matrices)
+    ray = motion.at(time).camera_ray(ray)
     paths[unsafe_offset=ti] = PathState(
         ray,
         SpectralSample(Float32(1.0)),
@@ -329,7 +332,7 @@ def gen_primary_rays_wavefront_gpu(
         Int8(0),   # ns_spec
         Vec3f(Float32(0.0)), Float32(0.0),   # gl_dir, gl_pdf
         SssWalk.none(),
-        camera_sample_time(lens, sobol_idx, sobol_seed, sobol_matrices),
+        time,
     )
 
 
@@ -566,7 +569,7 @@ def traverse_paths_gpu[rare_on: Bool, alpha_on: Bool, count_on: Bool = False](
     )
     comptime if count_on:
         return
-    test_spheres(sd.spheres, n_spheres, paths[unsafe_offset=tid].ray, results.unsafe_offset(tid))
+    test_spheres(sd.spheres, n_spheres, paths[unsafe_offset=tid].ray, results.unsafe_offset(tid), motion=sd.motion.at(paths[unsafe_offset=tid].time))
     # accumulate_cone_gpu, folded in when no curve pass follows (that pass
     # rewrites tHit, so the cone must wait for it).
     if fuse_cone != Int32(0):
@@ -767,7 +770,7 @@ def vulkaninterop_test_spheres_gpu(
         return
     if paths[unsafe_offset=tid].active == 0:
         return
-    test_spheres(spheres, n_spheres, paths[unsafe_offset=tid].ray, inter.unsafe_offset(tid))
+    test_spheres(spheres, n_spheres, paths[unsafe_offset=tid].ray, inter.unsafe_offset(tid), motion=MotionTable.none())
 
 # Host driver: enqueues pack -> interop ray-query dispatch -> unpack, ALL
 # on ctx.stream() in strict program order, with NO ctx.synchronize()
@@ -1117,7 +1120,7 @@ def rtcore_spheres_from_rays_gpu(
     var idx = tid * 8
     var ray = Ray(Point3f(rays[unsafe_offset=idx], rays[unsafe_offset=idx + 1], rays[unsafe_offset=idx + 2]),
                   Vec3f(rays[unsafe_offset=idx + 4], rays[unsafe_offset=idx + 5], rays[unsafe_offset=idx + 6]))
-    test_spheres(spheres, Int(n_spheres_dp), ray, inter.unsafe_offset(tid))
+    test_spheres(spheres, Int(n_spheres_dp), ray, inter.unsafe_offset(tid), motion=MotionTable.none())
 
 comptime CURVE_BLOCK: Int = get_defined_int["CURVE_BLOCK", 32]()
 
@@ -1447,9 +1450,10 @@ def any_hit_bvh2_gpu[curves_on: Bool, inst_on: Bool, alpha_on: Bool](
     motion: MotionTable,
 ) -> Bool:
     for i in range(Int(sd.sphereCount)):
-        if _shadow_is_null_material(sd.materials, Int64(sd.spheres[unsafe_offset=i].materialIndex)):
+        var sph = motion.sphere(sd.spheres, i)
+        if _shadow_is_null_material(sd.materials, Int64(sph.materialIndex)):
             continue
-        if ray_sphere_hit(sd.spheres[unsafe_offset=i].center, sd.spheres[unsafe_offset=i].radius, ray, Float32(1e-4), tMax) > Float32(0.0):
+        if ray_sphere_hit(sph.center, sph.radius, ray, Float32(1e-4), tMax) > Float32(0.0):
             return True
     var rdir = Vec3f(Float32(1.0) / ray.direction.x, Float32(1.0) / ray.direction.y, Float32(1.0) / ray.direction.z)
     var org = Vec3f(ray.origin.x, ray.origin.y, ray.origin.z)
@@ -1635,7 +1639,8 @@ def shadow_survivors_kernel(
             var task = tasks[unsafe_offset=t]
             var ray = Ray(Point3f(task.origin.x, task.origin.y, task.origin.z), Vec3f(task.direction.x, task.direction.y, task.direction.z))
             for k in range(Int(n_spheres_dp)):
-                if ray_sphere_hit(sd.spheres[unsafe_offset=k].center, sd.spheres[unsafe_offset=k].radius, ray, Float32(1e-4), task.tmax) > Float32(0.0):
+                var sph = sd.motion.at(task.time).sphere(sd.spheres, k)
+                if ray_sphere_hit(sph.center, sph.radius, ray, Float32(1e-4), task.tmax) > Float32(0.0):
                     keep = False
                     break
     var slot = t % SHADOW_SLOTS
@@ -2050,6 +2055,7 @@ def gen_primary_rays_gpu(
     filter_type: Int32,
     count_dp: Int64,
     lens_radius: Float32, focal_distance: Float32, shutter_open: Float32, shutter_close: Float32, timed: Int32,
+    motion: MotionTable,   # moves the camera
 ):
     var fw = Int(fw_dp)
     var count = Int(count_dp)
@@ -2068,6 +2074,8 @@ def gen_primary_rays_gpu(
         filter_type,
         lens=lens,
     )
+    var time = camera_sample_time(lens, sobol_idx, sobol_seed, sobol_matrices)
+    ray = motion.at(time).camera_ray(ray)
     paths[unsafe_offset=tid] = PathState(
         ray,
         SpectralSample(Float32(1.0)),
@@ -2092,7 +2100,7 @@ def gen_primary_rays_gpu(
         Int8(0),   # ns_spec
         Vec3f(Float32(0.0)), Float32(0.0),   # gl_dir, gl_pdf
         SssWalk.none(),
-        camera_sample_time(lens, sobol_idx, sobol_seed, sobol_matrices),
+        time,
     )
 
 
@@ -2193,12 +2201,12 @@ def gen_aux_buffers_gpu(
     if dl > Float32(0): dir = dir / dl
     var org = Point3f(c2w[unsafe_offset=12], c2w[unsafe_offset=13], c2w[unsafe_offset=14])
 
-    var ray = Ray(org, dir)
+    var ray = motion.camera_ray(Ray(org, dir))
     if hits_traced == Int32(0):
         var dummy_id = PrimId(Int64(-1), Int64(-1), Int64(0), Int32(-1), PrimKind.triangle, Int8(0), Int8(0), Int8(0))
         isects_tmp[unsafe_offset=tid] = Intersection(dummy_id, Float32(1e38), Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0))
         traverse_bvh2_core(bvh2Nodes, primIds, meshes, curves, ray, Float32(1e38), isects_tmp.unsafe_offset(tid), blasNodesArr, blasPrimIdsArr, instances, motion=motion)
-    test_spheres(spheres, n_spheres, ray, isects_tmp.unsafe_offset(tid))
+    test_spheres(spheres, n_spheres, ray, isects_tmp.unsafe_offset(tid), motion=motion)
 
     var normal = Vec3f(Float32(0), Float32(0), Float32(1))
     var d = Float32(1e38)
@@ -2208,7 +2216,7 @@ def gen_aux_buffers_gpu(
         var typ = Int(isects_tmp[unsafe_offset=tid].primId.type)
         if typ == Int(PrimKind.sphere):
             var si = Int(isects_tmp[unsafe_offset=tid].primId.id1)
-            normal = sphere_outward_normal(org + dir*d, spheres[unsafe_offset=si].center)
+            normal = sphere_outward_normal(org + dir*d, motion.sphere(spheres, si).center)
         elif typ == Int(PrimKind.curve):
             # Approximate outward normal for the denoiser G-buffer: h alone
             # (stored in isects_tmp.u) doesn't uniquely fix the azimuthal sign,

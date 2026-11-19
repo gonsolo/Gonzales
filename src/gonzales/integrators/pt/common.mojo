@@ -199,8 +199,9 @@ def _sphere_geom_normal_and_ray(
     path_ptr: Pointer[PathState, MutUntrackedOrigin],
     inter: Intersection,
     spheres: Pointer[Sphere, MutUntrackedOrigin],
+    motion: MotionTable,
 ) -> Tuple[Vec3f, Vec3f, Vec3f]:
-    var sph = spheres[unsafe_offset=Int(inter.primId.id1)]
+    var sph = motion.sphere(spheres, Int(inter.primId.id1))
     var rd = Vec3f(path_ptr[].ray.direction.x, path_ptr[].ray.direction.y, path_ptr[].ray.direction.z)
     var ro = Vec3f(path_ptr[].ray.origin.x, path_ptr[].ray.origin.y, path_ptr[].ray.origin.z)
     var hit = ro + rd * inter.tHit
@@ -311,7 +312,7 @@ def _hit_geom(
         var crv = _curve_geom_normal_and_ray(path_ptr, inter, curves, instances, motion=motion)
         return (True, True, crv[0], crv[1], crv[2], meshes[unsafe_offset=0], 0, 0, 0)
     if inter.primId.type == PrimKind.sphere:
-        var sph_r = _sphere_geom_normal_and_ray(path_ptr, inter, spheres)
+        var sph_r = _sphere_geom_normal_and_ray(path_ptr, inter, spheres, motion)
         return (True, True, sph_r[0], sph_r[1], sph_r[2], meshes[unsafe_offset=0], 0, 0, 0)
     var (mesh, v0, v1, v2, ok) = _get_tri_verts(inter, meshes)
     if not ok:

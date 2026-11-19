@@ -94,7 +94,7 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
         scratch[unsafe_offset=0].hit = Int8(0)
         traverse_dispatch(sd.bvh4, sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, Float32(1e38), scratch,
                            sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances, motion=MotionTable.none())
-        test_spheres(sd.spheres, Int(sd.sphereCount), ray, scratch)
+        test_spheres(sd.spheres, Int(sd.sphereCount), ray, scratch, motion=MotionTable.none())
         # A miss (including its infinite-light escape credit) is handled
         # inside the step, so the old top-of-loop miss block is gone.
         if not _bdpt_camera_path_bounce[use_gpu](

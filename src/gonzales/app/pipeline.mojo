@@ -1588,7 +1588,7 @@ def debug_trace_pixel(
         traverse_bvh2_core(psc[unsafe_offset=0].bvh_nodes, psc[unsafe_offset=0].prim_ids, psc[unsafe_offset=0].meshes, psc[unsafe_offset=0].curves, ray, Float32(1.0e38), inter,
                             psc[unsafe_offset=0].blas_nodes_arr, psc[unsafe_offset=0].blas_primids_arr, psc[unsafe_offset=0].instances, motion=MotionTable.none())
         if psc[unsafe_offset=0].sphere_count > 0:
-            test_spheres(psc[unsafe_offset=0].spheres, Int(psc[unsafe_offset=0].sphere_count), ray, inter)
+            test_spheres(psc[unsafe_offset=0].spheres, Int(psc[unsafe_offset=0].sphere_count), ray, inter, motion=MotionTable.none())
         if inter[unsafe_offset=0].hit == Int8(0):
             # envmap miss
             if psc[unsafe_offset=0].infinite_count > 0:

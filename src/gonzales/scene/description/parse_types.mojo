@@ -236,6 +236,7 @@ struct SceneParseState(Movable):
     var ctm_end_stack: List[Array[Float32, 16]]
     var transform_times: SIMD[DType.float32, 2]
     var shutter:         SIMD[DType.float32, 2]   # the camera's shutteropen, shutterclose
+    var camera_motion:   Int32                    # the camera's record in motion_mats, -1 static
 
     # Attribute stack (material, area-light, medium per nesting level)
     var attr_stack: List[AttributeState]
@@ -286,6 +287,7 @@ struct SceneParseState(Movable):
     var spheres_al:  List[Bool]
     var spheres_rgb: List[RGB]
     var spheres_inside_med:  List[Int32]
+    var spheres_motion:      List[Int32]   # index into motion_mats, -1 static
     var spheres_outside_med: List[Int32]
 
     # Homogeneous / heterogeneous media
@@ -487,6 +489,7 @@ struct SceneParseState(Movable):
         self.ctm_end_stack = List[Array[Float32, 16]]()
         self.transform_times = SIMD[DType.float32, 2](0, 1)
         self.shutter = SIMD[DType.float32, 2](0, 1)
+        self.camera_motion = Int32(-1)
 
         self.cur_attr  = AttributeState(Int32(-1), False,
                              RGB(Float32(0),Float32(0),Float32(0)),
@@ -521,6 +524,7 @@ struct SceneParseState(Movable):
         self.spheres_al  = List[Bool]()
         self.spheres_rgb = List[RGB]()
         self.spheres_inside_med  = List[Int32]()
+        self.spheres_motion      = List[Int32]()
         self.spheres_outside_med = List[Int32]()
 
         self.med_names    = List[String]()

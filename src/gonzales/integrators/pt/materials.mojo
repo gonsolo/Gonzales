@@ -174,7 +174,7 @@ def _shade_principled[enqueue_shadow: Bool, defer_only: Bool](
     var ls_area = _sample_area_light_nee_u(ctx, hit_point, ss.light, ss.bary1, ss.bary2, pcg)
     _principled_nee[enqueue_shadow, defer_only](path_ptr, ctx, hit_point, ls_area, ls_area.dist * Float32(0.9999), normal, wo, Rd, f0, a, ps)
     for li in range(_nee_simple_light_count(ctx)):
-        var res = _nee_sample_simple_light(ctx, li, hit_point, pcg)
+        var res = _nee_sample_simple_light(ctx, li, hit_point, pcg, motion=ctx.motion.at(path_ptr[].time))
         _principled_nee[enqueue_shadow, defer_only](path_ptr, ctx, hit_point, res[0].copy(), res[1], normal, wo, Rd, f0, a, ps)
     for inf_i in range(ctx.lights.infinite_count):
         var ls_inf = _sample_infinite_light_nee(ctx.lights.infinite_lights[unsafe_offset=inf_i], Point2f(ss.env1, ss.env2) if inf_i == 0 else Point2f(pcg.next_float(), pcg.next_float()), point3f(hit_point))
@@ -532,7 +532,7 @@ def shade_dielectric[use_gpu: Bool, enqueue_shadow: Bool](
         # GeomContext-builders comment a few hundred lines down) before any
         # normal-map perturbation, which itself also needs the true outward
         # direction as its base frame.
-        var sph = ctx.lights.spheres[unsafe_offset=Int(inter.primId.id1)]
+        var sph = ctx.motion.at(path_ptr[].time).sphere(ctx.lights.spheres, Int(inter.primId.id1))
         var center = Vec3f(sph.center.x, sph.center.y, sph.center.z)
         var hit_point_raw = ray_org + ray_dir * inter.tHit
         var true_normal = hit_point_raw - center

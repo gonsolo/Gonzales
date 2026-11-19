@@ -905,7 +905,8 @@ struct GpuSceneHandle(Movable):
     var instances_buf: DeviceBuffer[DType.uint8]
     var n_instances: Int
     var instances_ext: Int          # device address of instance records kept elsewhere (the RT-core TLAS); 0: instances_buf
-    var motion_index_buf: DeviceBuffer[DType.uint8]   # MotionTable.index and .records
+    var motion_index_buf: DeviceBuffer[DType.uint8]   # MotionTable.index, .sphere_index and .records
+    var motion_sphere_buf: DeviceBuffer[DType.uint8]
     var motion_buf: DeviceBuffer[DType.uint8]
     var motion: MotionTable         # its count and TransformTimes; the pointers are the two buffers above
     var meshes: MeshBuffers
@@ -1078,8 +1079,9 @@ struct GpuSceneHandle(Movable):
             walkBvhOfMesh=typed_ptr[Int32](self.walk_bvh.of_mesh_buf) if self.walk_bvh.n > 0 else Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
             bvh4=BVH4.none(),
             sharedCtx=self.shade_ctx_buf.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
-            motion=MotionTable(typed_ptr[Int32](self.motion_index_buf), typed_ptr[InstanceMotion](self.motion_buf),
-                               self.motion.count, self.motion.t0, self.motion.t1, Float32(0)) if self.motion.count > 0 else MotionTable.none(),
+            motion=MotionTable(typed_ptr[Int32](self.motion_index_buf), typed_ptr[Int32](self.motion_sphere_buf),
+                               typed_ptr[InstanceMotion](self.motion_buf),
+                               self.motion.count, self.motion.camera, self.motion.t0, self.motion.t1, Float32(0)) if self.motion.count > 0 else MotionTable.none(),
         )
 
 def gpu_available() -> Bool:
@@ -1550,6 +1552,7 @@ def gpu_upload_scene(
                 print("Warning: motion blur needs the instance records on the GPU; moving instances stay at their start.")
                 motion = MotionTable.none()
             var motion_index_buf = _gpu_upload_array[Int32](ctx, s.instance_motion, n_inst if motion.count > 0 else 0)
+            var motion_sphere_buf = _gpu_upload_array[Int32](ctx, s.sphere_motion, Int(s.sphere_count) if motion.count > 0 else 0)
             var motion_buf = _gpu_upload_array[InstanceMotion](ctx, s.motions, Int(motion.count))
             var host_plan = _host_plan(ctx, s, n_pixels)
             var meshes = MeshBuffers.upload(ctx, s, host_plan[0])
@@ -1647,6 +1650,7 @@ def gpu_upload_scene(
                 n_instances=Int(s.instance_count),
                 instances_ext=instances_ext,
                 motion_index_buf=motion_index_buf^,
+                motion_sphere_buf=motion_sphere_buf^,
                 motion_buf=motion_buf^,
                 motion=motion,
                 meshes=meshes^,
