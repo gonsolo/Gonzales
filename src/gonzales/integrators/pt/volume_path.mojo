@@ -77,7 +77,7 @@ def _volume_nee_light(
     var e_tmax = max(ls.dist - Float32(0.0002), Float32(0.0)) * Float32(0.9995)
     if any_hit_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, e_ray, e_tmax,
                          sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances, sd.spheres, n_spheres,
-                         materials=sd.materials):
+                         materials=sd.materials, motion=sd.motion.at(path_ptr[].time)):
         return
     # Ratio-track transmittance, but only across the span the ray actually
     # spends inside the density grid -- see nvdb_ray_range's docstring for why
@@ -95,7 +95,7 @@ def _volume_nee_light(
             Float32(0), Float32(0), Float32(0), Int8(0), 0, 0, 0)
         traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, e_ray, ls.dist,
                            Pointer(to=exit_i), sd.blasNodesArr, sd.blasPrimIdsArr,
-                           sd.instances, sd.spheres, n_spheres)
+                           sd.instances, sd.spheres, n_spheres, motion=sd.motion.at(path_ptr[].time))
         var span = ls.dist if exit_i.hit == Int8(0) else exit_i.tHit
         var st = medv.sigma_t(path_ptr[].wavelengths)   # per lane: red's sigma_t for all of them tinted chromatic media
         var Th = SpectralSample(exp(-st.v0 * span), exp(-st.v1 * span), exp(-st.v2 * span), exp(-st.v3 * span))
@@ -406,7 +406,7 @@ def _volume_area_light_nee(
                 var shad_org = point3f(resolve_pt + shadow_dir * Float32(0.0002))
                 var shad_ray = Ray(shad_org, vec3f(shadow_dir))
                 var shad_tmax = max(dist - Float32(0.0002), Float32(0.0)) * Float32(0.9995)
-                if not any_hit_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, shad_ray, shad_tmax, sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances, sd.spheres, n_spheres, materials=sd.materials):
+                if not any_hit_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, shad_ray, shad_tmax, sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances, sd.spheres, n_spheres, materials=sd.materials, motion=sd.motion.at(path_ptr[].time)):
                     # Both medium kinds attenuate only up to the medium's own boundary, the first interface surface.
                     var t_med = dist
                     var _exit_inter = Array[Intersection, 1](fill=Intersection(
@@ -415,7 +415,7 @@ def _volume_area_light_nee(
                     var exit_ptr = _exit_inter.unsafe_ptr()   # tracked: keeps _exit_inter alive while read
                     exit_ptr[unsafe_offset=0].hit = Int8(0)
                     traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, shad_ray,
-                                       shad_tmax, exit_ptr, sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances)
+                                       shad_tmax, exit_ptr, sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances, motion=sd.motion.at(path_ptr[].time))
                     test_spheres(sd.spheres, n_spheres, shad_ray, exit_ptr)
                     # test_spheres ignores shad_tmax (it bounds only by
                     # an already-recorded closer hit), so a sphere past

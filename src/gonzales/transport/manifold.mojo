@@ -5,6 +5,7 @@ from gonzales.core.geometry import Point3f, Vec3f, dot, cross, offset_eps, _is_r
 from gonzales.scene.appearance.materials import fr_dielectric
 from gonzales.scene.appearance.materials import normal_slope_map_none
 from gonzales.scene.shapes.primitives import Intersection, PrimId, TriangleMesh, Instance, mesh_normal
+from gonzales.scene.shapes.motion import MotionTable
 from gonzales.core.geometry import Ray
 from gonzales.scene.shapes.primitives import mesh_pos
 from gonzales.core.rng import PCG32
@@ -46,6 +47,7 @@ def _emitter_face_normal(
     p0: Vec3f, p1: Vec3f, p2: Vec3f,
     instance_idx: Int32 = Int32(-1),
     instances: Pointer[Instance, MutUntrackedOrigin] = Pointer[Instance, MutUntrackedOrigin].unsafe_dangling(),
+    motion: MotionTable = MotionTable.none(),
 ) -> Vec3f:
     var gn = cross(p1 - p0, p2 - p0)
     if not _is_real_ptr(mesh.normals):
@@ -56,7 +58,7 @@ def _emitter_face_normal(
     var n2 = mesh_normal(mesh, v2)
     var sn = n0 * w0 + n1 * bu + n2 * bv
     if instance_idx >= Int32(0):
-        sn = transform_normal(Mat4(instances[unsafe_offset=Int(instance_idx)].world_to_obj()), sn)
+        sn = transform_normal(Mat4(motion.instance(instances, Int(instance_idx)).world_to_obj()), sn)
     if dot(sn, sn) <= Float32(1e-12):
         return gn
     if dot(gn, sn) < Float32(0.0):
@@ -91,6 +93,7 @@ def _interp_vertex_normal(
     bu: Float32, bv: Float32,
     instance_idx: Int32 = Int32(-1),
     instances: Pointer[Instance, MutUntrackedOrigin] = Pointer[Instance, MutUntrackedOrigin].unsafe_dangling(),
+    motion: MotionTable = MotionTable.none(),
 ) -> Vec3f:
     """The mesh's own interpolated per-vertex normal N, unit length, in world
     space and NOT flipped toward anything; the zero vector when the mesh has
@@ -104,7 +107,7 @@ def _interp_vertex_normal(
     var n2 = mesh_normal(mesh, v2)
     var sn = n0 * w0 + n1 * bu + n2 * bv
     if instance_idx >= Int32(0):
-        sn = transform_normal(Mat4(instances[unsafe_offset=Int(instance_idx)].world_to_obj()), sn)
+        sn = transform_normal(Mat4(motion.instance(instances, Int(instance_idx)).world_to_obj()), sn)
     var slen = dot(sn, sn)
     if slen <= Float32(1e-12):
         return Vec3f(Float32(0.0))
@@ -351,7 +354,7 @@ def _sms_vertex_from_hit(
     var mi = ctx.materials[unsafe_offset=Int(inter.primId.materialIndex)].medium_interface_idx
     if ok and mi >= Int32(0) and ctx.n_mediums > 0:
         var iface = ctx.medium_ifaces[unsafe_offset=Int(mi)]
-        var gn = _geom_normal(inter, ctx.meshes, ctx.instances, ctx.lights.spheres, ray_org + shadow_dir * inter.tHit)
+        var gn = _geom_normal(inter, ctx.meshes, ctx.instances, ctx.lights.spheres, ray_org + shadow_dir * inter.tHit, ctx.motion)
         v.med_in = iface.toward(-shadow_dir, gn)
         v.med_out = iface.toward(shadow_dir, gn)
     return (v, ok)
@@ -484,7 +487,7 @@ def _sms_probe_glass_chain(
         var pk_store = Array[Intersection, 1](fill=dummy_inter)
         traverse_dispatch(ctx.bvh4, ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves, pk_ray, pk_tmax, pk_store.unsafe_ptr(),
                            ctx.blasNodesArr, ctx.blasPrimIdsArr, ctx.instances,
-                           ctx.lights.spheres, ctx.lights.sphere_count)
+                           ctx.lights.spheres, ctx.lights.sphere_count, motion=ctx.motion)
         var pk_inter = pk_store[0]
         if pk_inter.hit == Int8(0) or (pk_inter.primId.type != PrimKind.triangle and pk_inter.primId.type != PrimKind.sphere):
             break
@@ -524,7 +527,7 @@ def _mnee_first_probe(
     var probe_store = Array[Intersection, 1](fill=dummy_inter)
     traverse_dispatch(ctx.bvh4, ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves, probe_ray, probe_tmax, probe_store.unsafe_ptr(),
                        ctx.blasNodesArr, ctx.blasPrimIdsArr, ctx.instances,
-                       ctx.lights.spheres, ctx.lights.sphere_count)
+                       ctx.lights.spheres, ctx.lights.sphere_count, motion=ctx.motion)
     var probe_inter = probe_store[0]
     # A solid sphere is not MNEE's: one refraction misses the exit surface and the exact BSDF path is no
     # longer suppressed at the emitter hit, so plain sampling covers it (PT read 1.4-1.9% under pbrt otherwise).
@@ -600,7 +603,7 @@ def _sms_solve_from_probe(
         var probe2_store = Array[Intersection, 1](fill=dummy_inter)
         traverse_dispatch(ctx.bvh4, ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves, probe2_ray, probe2_rem, probe2_store.unsafe_ptr(),
                    ctx.blasNodesArr, ctx.blasPrimIdsArr, ctx.instances,
-                   ctx.lights.spheres, ctx.lights.sphere_count)
+                   ctx.lights.spheres, ctx.lights.sphere_count, motion=ctx.motion)
         probe2_inter = probe2_store[0]
     var has_second_glass = False
     if probe2_inter.hit != Int8(0) and (probe2_inter.primId.type == PrimKind.triangle or probe2_inter.primId.type == PrimKind.sphere):
@@ -917,6 +920,6 @@ def _mnee_chain(
     if any_hit_dispatch(ctx.bvh4, ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves, vis_ray, wo_len * Float32(0.999),
                           ctx.blasNodesArr, ctx.blasPrimIdsArr, ctx.instances,
                           ctx.lights.spheres, ctx.lights.sphere_count,
-                          ign_center, ign_radius, materials=ctx.materials):
+                          ign_center, ign_radius, materials=ctx.materials, motion=ctx.motion):
         return fail^
     return (True, True, n, verts.copy(), _probe_res[4], g, cos_s_x0)

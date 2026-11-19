@@ -66,7 +66,7 @@ def _first_hit(ctx: ShadeContext, org: Vec3f, dir: Vec3f, tmax: Float32) -> Inte
     var store = Array[Intersection, 1](fill=Intersection(dummy_prim, tmax, Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0)))
     traverse_dispatch(ctx.bvh4, ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves,
                       Ray(Point3f(o[0], o[1], o[2]), Vec3f(dir[0], dir[1], dir[2])), tmax, store.unsafe_ptr(),
-                      ctx.blasNodesArr, ctx.blasPrimIdsArr, ctx.instances, ctx.lights.spheres, ctx.lights.sphere_count)
+                      ctx.blasNodesArr, ctx.blasPrimIdsArr, ctx.instances, ctx.lights.spheres, ctx.lights.sphere_count, motion=ctx.motion)
     return store[0]
 
 

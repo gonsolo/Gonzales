@@ -39,7 +39,7 @@ def shade_diffuse_transmission[use_gpu: Bool, enqueue_shadow: Bool](
 ):
     var mat = ctx.materials[unsafe_offset=Int(inter.primId.materialIndex)]
     var (ok, is_sphere, normal, ray_dir, ray_org, mesh, v0, v1, v2) = _hit_geom(
-        path_ptr, inter, ctx.meshes, ctx.lights.spheres, inter.primId.instanceIdx, ctx.instances, ctx.curves)
+        path_ptr, inter, ctx.meshes, ctx.lights.spheres, inter.primId.instanceIdx, ctx.instances, ctx.curves, ctx.motion.at(path_ptr[].time))
     if not ok:
         path_ptr[].active = 0
         return
@@ -48,9 +48,9 @@ def shade_diffuse_transmission[use_gpu: Bool, enqueue_shadow: Bool](
     if not is_sphere:
         # 146 corpus diffusetransmission materials carry "texture displacement"
         # (foliage cards in sanmiguel, etc).
-        var (tri_dt, fp_dt) = _pt_hit_footprint(path_ptr, mat, ctx.cam_fp, ctx.instances, mesh, v0, v1, v2, inter, ray_org, ray_dir, ctx.textures, ctx.n_textures)
+        var (tri_dt, fp_dt) = _pt_hit_footprint(path_ptr, mat, ctx.cam_fp, ctx.instances, mesh, v0, v1, v2, inter, ray_org, ray_dir, ctx.textures, ctx.n_textures, ctx.motion.at(path_ptr[].time))
         dt_fp_width = fp_dt.width
-        normal = _shading_normal(mesh, v0, v1, v2, inter.u, inter.v, geo_n, inter.primId.instanceIdx, ctx.instances)
+        normal = _shading_normal(mesh, v0, v1, v2, inter.u, inter.v, geo_n, inter.primId.instanceIdx, ctx.instances, ctx.motion.at(path_ptr[].time))
         normal = _apply_surface_maps[use_gpu](mat, v0, v1, v2, mesh, inter, normal, geo_n,
             tri_dt, fp_dt, ctx.tex_filenames, ctx.textures, ctx.n_textures)
         normal = face_toward(normal, -ray_dir)   # reflect lobe on wo's side
@@ -81,7 +81,7 @@ def shade_diffuse_transmission[use_gpu: Bool, enqueue_shadow: Bool](
     # Offset along the GEOMETRIC normal, to the chosen lobe's side (pbrt's
     # OffsetRayOrigin): the shading normal can point into the surface.
     var off_n = geo_n if dot(bounce_normal, -ray_dir) > Float32(0.0) else -geo_n
-    var extra_off = _curve_extra_offset(inter, ctx.curves, ctx.instances)
+    var extra_off = _curve_extra_offset(inter, ctx.curves, ctx.instances, ctx.motion.at(path_ptr[].time))
     if dot(bounce_normal, -ray_dir) <= Float32(0.0):
         extra_off *= Float32(2.05)   # a transmitted ray must clear the far wall of the tube
     var hit_point = offset_point(ray_org + ray_dir * inter.tHit, off_n) + off_n * extra_off
@@ -232,7 +232,7 @@ def _principled_nee[enqueue_shadow: Bool, defer_only: Bool](
     var inline_shadow = False
     comptime if not defer_only:
         inline_shadow = _shadow_inline(ctx, null_guide())
-        if inline_shadow and _shadow_blocked(ctx, hit_point, ls.wi, tmax):
+        if inline_shadow and _shadow_blocked(ctx, hit_point, ls.wi, tmax, path_ptr[].time):
             return
     var w = cos_i
     if not ls.is_delta:
@@ -361,12 +361,12 @@ def _shade_sss_exit[enqueue_shadow: Bool](
     """Where a random walk leaves the surface: a white Lambertian facing out, as Cycles' legacy walk exits."""
     path_ptr[].sss.exiting = Int32(0)
     var (ok, is_sphere, geo_normal, ray_dir, ray_org, mesh, v0, v1, v2) = _hit_geom(
-        path_ptr, inter, ctx.meshes, ctx.lights.spheres, inter.primId.instanceIdx, ctx.instances, ctx.curves)
+        path_ptr, inter, ctx.meshes, ctx.lights.spheres, inter.primId.instanceIdx, ctx.instances, ctx.curves, ctx.motion.at(path_ptr[].time))
     if not ok or is_sphere:
         path_ptr[].active = 0
         return
     var gn = face_toward(geo_normal, ray_dir)
-    var n = face_toward(_shading_normal(mesh, v0, v1, v2, inter.u, inter.v, geo_normal, inter.primId.instanceIdx, ctx.instances), ray_dir)
+    var n = face_toward(_shading_normal(mesh, v0, v1, v2, inter.u, inter.v, geo_normal, inter.primId.instanceIdx, ctx.instances, ctx.motion.at(path_ptr[].time)), ray_dir)
     var hit_point = offset_point(ray_org + ray_dir * inter.tHit, gn)
     var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
     var exit_mat = ctx.materials[unsafe_offset=Int(inter.primId.materialIndex)]
@@ -397,7 +397,7 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool, defer_only: Bool =
     mat: Material,
 ):
     var (ok, is_sphere, geo_normal, ray_dir, ray_org, mesh, v0, v1, v2) = _hit_geom(
-        path_ptr, inter, ctx.meshes, ctx.lights.spheres, inter.primId.instanceIdx, ctx.instances, ctx.curves)
+        path_ptr, inter, ctx.meshes, ctx.lights.spheres, inter.primId.instanceIdx, ctx.instances, ctx.curves, ctx.motion.at(path_ptr[].time))
     if not ok:
         path_ptr[].active = 0
         return
@@ -411,17 +411,17 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool, defer_only: Bool =
         alb = mat.albedo
         normal = geo_normal
     else:
-        var (tri_cd, fp_cd) = _pt_hit_footprint(path_ptr, mat, ctx.cam_fp, ctx.instances, mesh, v0, v1, v2, inter, ray_org, ray_dir, ctx.textures, ctx.n_textures)
+        var (tri_cd, fp_cd) = _pt_hit_footprint(path_ptr, mat, ctx.cam_fp, ctx.instances, mesh, v0, v1, v2, inter, ray_org, ray_dir, ctx.textures, ctx.n_textures, ctx.motion.at(path_ptr[].time))
         alb = _tex_lookup[use_gpu](mat, inter, v0, v1, v2, mesh, ctx.tex_filenames, ctx.textures, ctx.n_textures, fp_cd.width)
         tex_alpha = rough_texture_alpha[use_gpu](mat, inter, v0, v1, v2, mesh, ctx.tex_filenames, ctx.textures, ctx.n_textures, fp_cd.width)
         # Use interpolated shading normal (geometric normal still drives hit-point offset)
-        normal = _shading_normal(mesh, v0, v1, v2, inter.u, inter.v, geo_normal, inter.primId.instanceIdx, ctx.instances)
+        normal = _shading_normal(mesh, v0, v1, v2, inter.u, inter.v, geo_normal, inter.primId.instanceIdx, ctx.instances, ctx.motion.at(path_ptr[].time))
         normal = _apply_surface_maps[use_gpu](mat, v0, v1, v2, mesh, inter, normal, geo_normal,
             tri_cd, fp_cd, ctx.tex_filenames, ctx.textures, ctx.n_textures)
         # pbrt's LayeredBxDF is twoSided: see face_toward.
         normal = face_toward(normal, -ray_dir)
 
-    var hit_point = offset_point(ray_org + ray_dir * inter.tHit, geo_normal) + geo_normal * _curve_extra_offset(inter, ctx.curves, ctx.instances)
+    var hit_point = offset_point(ray_org + ray_dir * inter.tHit, geo_normal) + geo_normal * _curve_extra_offset(inter, ctx.curves, ctx.instances, ctx.motion.at(path_ptr[].time))
     var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
 
     if path_ptr[].bounce == 0 or path_ptr[].specularBounce == Int8(1):
@@ -451,7 +451,7 @@ def shade_dielectric[use_gpu: Bool, enqueue_shadow: Bool](
     ctx: ShadeContext,
     mat: Material,
 ):
-    var (ok, is_sphere, geom_normal, ray_dir, ray_org, mesh, v0, v1, v2) = _hit_geom(path_ptr, inter, ctx.meshes, ctx.lights.spheres, instances=ctx.instances, curves=ctx.curves)
+    var (ok, is_sphere, geom_normal, ray_dir, ray_org, mesh, v0, v1, v2) = _hit_geom(path_ptr, inter, ctx.meshes, ctx.lights.spheres, instances=ctx.instances, curves=ctx.curves, motion=ctx.motion.at(path_ptr[].time))
     if not ok:
         path_ptr[].active = 0
         return
@@ -484,7 +484,7 @@ def shade_dielectric[use_gpu: Bool, enqueue_shadow: Bool](
         var dp2 = mesh_pos(mesh, v2)
         var raw_gn = cross(dp1 - dp0, dp2 - dp0)
         if inter.primId.instanceIdx >= Int32(0):
-            raw_gn = transform_normal(Mat4(ctx.instances[unsafe_offset=Int(inter.primId.instanceIdx)].world_to_obj()), raw_gn)
+            raw_gn = transform_normal(Mat4(ctx.motion.at(path_ptr[].time).instance(ctx.instances, Int(inter.primId.instanceIdx)).world_to_obj()), raw_gn)
         var raw_len = dot(raw_gn, raw_gn)
         if raw_len > Float32(0.0):
             raw_gn = raw_gn * (Float32(1.0) / sqrt(raw_len))
@@ -495,7 +495,7 @@ def shade_dielectric[use_gpu: Bool, enqueue_shadow: Bool](
         # Triangle::InteractionFromIntersection) -- not N flipped toward the
         # winding. A mesh wound inward but with outward N (lte-orb's glass
         # shell) otherwise reads every entry as an exit.
-        var ns_out = _interp_vertex_normal(mesh, v0, v1, v2, inter.u, inter.v, inter.primId.instanceIdx, ctx.instances)
+        var ns_out = _interp_vertex_normal(mesh, v0, v1, v2, inter.u, inter.v, inter.primId.instanceIdx, ctx.instances, ctx.motion.at(path_ptr[].time))
         if dot(ns_out, ns_out) > Float32(0.0):
             if dot(raw_gn, ns_out) < Float32(0.0):
                 raw_gn = -raw_gn
@@ -510,7 +510,7 @@ def shade_dielectric[use_gpu: Bool, enqueue_shadow: Bool](
         # entering/exiting test below is `dot(ray_dir, n) < 0`, so flipping the
         # perturbed normal toward the ray would make it tautologically true and
         # bring back the 1/eta^4 loss this branch exists to prevent.
-        var (tri_de, fp_de) = _pt_hit_footprint(path_ptr, mat, ctx.cam_fp, ctx.instances, mesh, v0, v1, v2, inter, ray_org, ray_dir, ctx.textures, ctx.n_textures)
+        var (tri_de, fp_de) = _pt_hit_footprint(path_ptr, mat, ctx.cam_fp, ctx.instances, mesh, v0, v1, v2, inter, ray_org, ray_dir, ctx.textures, ctx.n_textures, ctx.motion.at(path_ptr[].time))
         geom_normal = _apply_surface_maps[use_gpu](mat, v0, v1, v2, mesh, inter, geom_normal, raw_gn,
             tri_de, fp_de, ctx.tex_filenames, ctx.textures, ctx.n_textures)
     else:
@@ -721,7 +721,7 @@ def shade_conductor[use_gpu: Bool, enqueue_shadow: Bool](
     # only (see Material.rough_tex_idx's docstring); falls back to the
     # parsed scalar roughU/V when there's no texture or no UVs.
     var mat_eff = mat
-    var (ok, is_sphere, geo_normal, ray_dir, ray_org, mesh, v0, v1, v2) = _hit_geom(path_ptr, inter, ctx.meshes, ctx.lights.spheres, instances=ctx.instances, curves=ctx.curves)
+    var (ok, is_sphere, geo_normal, ray_dir, ray_org, mesh, v0, v1, v2) = _hit_geom(path_ptr, inter, ctx.meshes, ctx.lights.spheres, instances=ctx.instances, curves=ctx.curves, motion=ctx.motion.at(path_ptr[].time))
     if not ok:
         path_ptr[].active = 0
         return
@@ -741,7 +741,7 @@ def shade_conductor[use_gpu: Bool, enqueue_shadow: Bool](
                 mat_eff.roughU = r
                 mat_eff.roughV = r
         normal = _shading_normal(mesh, v0, v1, v2, inter.u, inter.v, geo_normal)
-        var (tri_co, fp_co) = _pt_hit_footprint(path_ptr, mat, ctx.cam_fp, ctx.instances, mesh, v0, v1, v2, inter, ray_org, ray_dir, ctx.textures, ctx.n_textures)
+        var (tri_co, fp_co) = _pt_hit_footprint(path_ptr, mat, ctx.cam_fp, ctx.instances, mesh, v0, v1, v2, inter, ray_org, ray_dir, ctx.textures, ctx.n_textures, ctx.motion.at(path_ptr[].time))
         if mat_eff.tex_idx != Int32(-1):   # pbrt "reflectance" texture
             mat_eff.albedo = _tex_lookup[use_gpu](mat_eff, inter, v0, v1, v2, mesh, ctx.tex_filenames, ctx.textures, ctx.n_textures, fp_co.width)
         normal = _apply_surface_maps[use_gpu](mat_eff, v0, v1, v2, mesh, inter, normal, geo_normal,
@@ -831,7 +831,7 @@ def shade_measured[use_gpu: Bool, enqueue_shadow: Bool](
     ctx: ShadeContext,
     mat: Material,
 ):
-    var (ok, is_sphere, geo_normal, ray_dir, ray_org, mesh, v0, v1, v2) = _hit_geom(path_ptr, inter, ctx.meshes, ctx.lights.spheres, instances=ctx.instances, curves=ctx.curves)
+    var (ok, is_sphere, geo_normal, ray_dir, ray_org, mesh, v0, v1, v2) = _hit_geom(path_ptr, inter, ctx.meshes, ctx.lights.spheres, instances=ctx.instances, curves=ctx.curves, motion=ctx.motion.at(path_ptr[].time))
     if not ok:
         path_ptr[].active = 0
         return
@@ -844,7 +844,7 @@ def shade_measured[use_gpu: Bool, enqueue_shadow: Bool](
         normal = geo_normal
     else:
         normal = _shading_normal(mesh, v0, v1, v2, inter.u, inter.v, geo_normal)
-        var (tri_me, fp_me) = _pt_hit_footprint(path_ptr, mat, ctx.cam_fp, ctx.instances, mesh, v0, v1, v2, inter, ray_org, ray_dir, ctx.textures, ctx.n_textures)
+        var (tri_me, fp_me) = _pt_hit_footprint(path_ptr, mat, ctx.cam_fp, ctx.instances, mesh, v0, v1, v2, inter, ray_org, ray_dir, ctx.textures, ctx.n_textures, ctx.motion.at(path_ptr[].time))
         normal = _apply_surface_maps[use_gpu](mat, v0, v1, v2, mesh, inter, normal, geo_normal,
             tri_me, fp_me, ctx.tex_filenames, ctx.textures, ctx.n_textures)
 

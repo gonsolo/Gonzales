@@ -4,6 +4,7 @@ from std.math import exp
 from gonzales.core.geometry import Point3f, Vec3f, dot
 from gonzales.scene.appearance.materials import Material, MatKind
 from gonzales.scene.shapes.primitives import Intersection, PrimId, TriangleMesh, Sphere, Instance
+from gonzales.scene.shapes.motion import MotionTable
 from gonzales.core.geometry import Ray
 from gonzales.scene.shapes.curves import Curve
 from gonzales.scene.appearance.media import Medium, MediumInterface, Grid, NvdbGrid, medium_sigma_t_spectral, medium_ratio_track
@@ -39,6 +40,7 @@ def shadow_transmittance(
     mediums: Pointer[Medium, MutUntrackedOrigin], medium_ifaces: Pointer[MediumInterface, MutUntrackedOrigin],
     grids: Pointer[Grid, MutUntrackedOrigin], nvdb_grids: Pointer[NvdbGrid, MutUntrackedOrigin],
     spectral: SpectralHandle, wl: SampledWavelengths, mut pcg: PCG32,
+    motion: MotionTable = MotionTable.none(),
 ) -> SpectralSample:
     """Walk the segment through interface surfaces, tracking the current medium; black if an opaque surface blocks it."""
     var T = SpectralSample(Float32(1.0))
@@ -54,7 +56,7 @@ def shadow_transmittance(
             break
         var ray = Ray(Point3f(o[0], o[1], o[2]), dir)
         inter_mem[unsafe_offset=0].hit = Int8(0)
-        traverse_bvh2_core(bvh2Nodes, primIds, meshes, curves, ray, remaining, inter_mem, blasNodesArr, blasPrimIdsArr, instances)
+        traverse_bvh2_core(bvh2Nodes, primIds, meshes, curves, ray, remaining, inter_mem, blasNodesArr, blasPrimIdsArr, instances, motion=motion)
         # Analytic spheres are not in the BVH: test them against the sentinel hit at `remaining`.
         var had_bvh_hit = inter_mem[unsafe_offset=0].hit != Int8(0)
         if not had_bvh_hit:
@@ -79,7 +81,7 @@ def shadow_transmittance(
         var p = o + dir * t_seg
         if mat.medium_interface_idx >= Int32(0):
             var iface = medium_ifaces[unsafe_offset=Int(mat.medium_interface_idx)]
-            cur = iface.toward(dir, _geom_normal(inter, meshes, instances, spheres, p))
+            cur = iface.toward(dir, _geom_normal(inter, meshes, instances, spheres, p, motion))
         o = p + dir * Float32(0.0002)
         remaining = remaining - t_seg - Float32(0.0002)
     return T

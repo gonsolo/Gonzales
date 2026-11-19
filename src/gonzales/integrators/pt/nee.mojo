@@ -166,7 +166,7 @@ def _lobe_nee_one[L: NeeLobe, enqueue_shadow: Bool, defer_only: Bool = False](
     comptime if not defer_only:
         if bsdf.costly():
             inline_shadow = _shadow_inline(ctx, null_guide())
-            if inline_shadow and _shadow_blocked(ctx, org, ls.wi, tmax):
+            if inline_shadow and _shadow_blocked(ctx, org, ls.wi, tmax, path_ptr[].time):
                 return
     var w = bsdf.nee_weight(ls, tab, path_ptr[].wavelengths)
     if w.is_black():
@@ -728,7 +728,7 @@ def sms_resolve(
     if any_hit_dispatch(ctx.bvh4, ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves, vis_ray, wo_len * Float32(0.999),
                           ctx.blasNodesArr, ctx.blasPrimIdsArr, ctx.instances,
                           ctx.lights.spheres, ctx.lights.sphere_count,
-                          ign_center, ign_radius, materials=ctx.materials):
+                          ign_center, ign_radius, materials=ctx.materials, motion=ctx.motion.at(path_ptr[].time)):
         return
     var contrib = _to_spec_diffuse_lit(ctx, alb, res.le, path_ptr[].wavelengths) * (cos_s_x0 * res.state.w)
     path_ptr[].estimate += _clamped(ctx, path_ptr[].throughput * contrib, Int(path_ptr[].bounce))
@@ -891,7 +891,7 @@ def _nee_area_lights[enqueue_shadow: Bool, mnee: Bool = True, defer_only: Bool =
                 if _shadow_inline(ctx, guide_write) and live and al.kind == Int8(0):
                     # A clear straight ray means no glass is in the way, so the MNEE probe is only needed when
                     # something blocks it (the probe's segment lies inside the shadow ray's).
-                    if not _shadow_blocked(ctx, hit_point, shadow_dir, dist * Float32(0.9999)):
+                    if not _shadow_blocked(ctx, hit_point, shadow_dir, dist * Float32(0.9999), path_ptr[].time):
                         path_ptr[].estimate += _clamped(ctx, path_ptr[].throughput * spec_w, Int(path_ptr[].bounce))
                     else:
                         _ = _mnee_area_light_contribute(

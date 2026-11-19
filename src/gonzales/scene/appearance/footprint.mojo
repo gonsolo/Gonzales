@@ -14,6 +14,7 @@
 from std.math import sqrt, abs, max, min
 from gonzales.core.geometry import Vec3f, Point3f, dot, cross, _is_real_ptr
 from gonzales.scene.shapes.primitives import TriangleMesh, Instance, mesh_uv, mesh_has_uvs, mesh_normal
+from gonzales.scene.shapes.motion import MotionTable
 from gonzales.scene.shapes.primitives import mesh_pos
 from gonzales.core.transform import Mat4, transform_normal
 
@@ -66,6 +67,7 @@ struct TriWorld(TrivialRegisterPassable):
 def tri_world(
     mesh: TriangleMesh, v0: Int, v1: Int, v2: Int,
     instance_idx: Int32, instances: Pointer[Instance, MutUntrackedOrigin],
+    motion: MotionTable = MotionTable.none(),
 ) -> TriWorld:
     var p0 = mesh_pos(mesh, v0)
     var p1 = mesh_pos(mesh, v1)
@@ -78,7 +80,7 @@ def tri_world(
         n1 = mesh_normal(mesh, v1)
         n2 = mesh_normal(mesh, v2)
     if instance_idx >= Int32(0):
-        var inst = instances[unsafe_offset=Int(instance_idx)]
+        var inst = motion.instance(instances, Int(instance_idx))
         var m = Mat4(inst.obj_to_world())
         var q0 = m.transform_point(Point3f(p0[0], p0[1], p0[2]))
         var q1 = m.transform_point(Point3f(p1[0], p1[1], p1[2]))
