@@ -22,9 +22,11 @@ from gonzales.scene.shapes.primitives import Instance, PrimId, Sphere, TriangleM
 from gonzales.scene.appearance.materials import GpuTexture, NormalSlopeMap, normal_slope_map_none
 from gonzales.scene.appearance.host_textures import TexPrefetch
 from gonzales.core.fast_io import read_parallel, PARALLEL_MIN
+from gonzales.scene.shapes.displaced_patches import LEVELS, Levels, SubdivSurface
+from gonzales.scene.shapes.patches import BezierPatch
 
 comptime _MAGIC: Int = 0x474E5A53434143
-comptime _FORMAT: Int = 16   # 14: distant and point lights, normal slope maps; 15: alpha masks; 16: TriangleMesh.patches
+comptime _FORMAT: Int = 17   # 14: distant and point lights, normal slope maps; 15: alpha masks; 16: TriangleMesh.patches; 17: subdiv
 
 comptime _Ptr = Pointer[UInt8, MutUntrackedOrigin]
 
@@ -123,8 +125,6 @@ def _unsupported(ref s: ParsedScene_Mojo) -> String:
     for mi in range(Int(s.mesh_count)):
         if _is_real_ptr(s.meshes[unsafe_offset=mi].patches):
             return "Bezier patches"
-        if _is_real_ptr(s.meshes[unsafe_offset=mi].subdiv):
-            return "displaced subdivision meshes"
     return String("")
 
 
@@ -148,7 +148,39 @@ def scene_cache_variant() -> Int:
         for c in usd_view.as_bytes():
             h = (h * 31 + Int(c)) & 0xFFFFFFF
         v += (h + 1) << 34
+    var sd = env_str["GONZALES_SUBDIV_DISP"]()
+    if sd != "" and sd != "0":   # displaced surfaces: their levels and heights follow these settings
+        var h = 0
+        for c in (sd + "@" + env_str["GONZALES_SUBDIV_LOD"]() + "@" + env_str["GONZALES_SUBDIV_PPS"]() + "@" +
+                  env_str["GONZALES_SUBDIV_MINPX"]() + "@" + env_str["GONZALES_SUBDIV_SCALE"]()).as_bytes():
+            h = (h * 31 + Int(c)) & 0xFFFFFFF
+        v = v * 1000003 + h + 1
     return v + 2 * prune
+
+
+# A displaced surface's arrays, as disp_build.upload_surface sends them to the card.
+def _put_subdiv(f: Int, p: Pointer[SubdivSurface, MutUntrackedOrigin]):
+    ref d = p[unsafe_offset=0].d
+    var np = Int(d.lv[].patch[LEVELS]); var nf = Int(p[unsafe_offset=0].nf)
+    _put[SubdivSurface](f, p, 1); _put[Levels](f, d.lv, 1)
+    _put[BezierPatch](f, d.patches, np); _put[Float32](f, d.sq, 3 * np); _put[Int32](f, d.face, np)
+    _put[Int32](f, d.hdr, 3 * nf); _put[UInt8](f, d.pyr, Int(p[unsafe_offset=0].npyr)); _put[Int32](f, d.chain_off, nf)
+    _put[UInt8](f, d.chain, Int(p[unsafe_offset=0].nchain)); _put[Float32](f, d.fm, 12 * np); _put[UInt8](f, d.greg, np)
+    _put[Float32](f, d.corners, Int(d.lv[].corner[LEVELS]))
+    _put[Int32](f, p[unsafe_offset=0].face_off, nf + 1); _put[Int32](f, p[unsafe_offset=0].face_patch, np)
+
+
+def _get_subdiv(f: Int) -> Pointer[SubdivSurface, MutUntrackedOrigin]:
+    var p = _get[SubdivSurface](f, 1)
+    ref d = p[unsafe_offset=0].d
+    d.lv = _get[Levels](f, 1)
+    var np = Int(d.lv[].patch[LEVELS]); var nf = Int(p[unsafe_offset=0].nf)
+    d.patches = _get[BezierPatch](f, np); d.sq = _get[Float32](f, 3 * np); d.face = _get[Int32](f, np)
+    d.hdr = _get[Int32](f, 3 * nf); d.pyr = _get[UInt8](f, Int(p[unsafe_offset=0].npyr)); d.chain_off = _get[Int32](f, nf)
+    d.chain = _get[UInt8](f, Int(p[unsafe_offset=0].nchain)); d.fm = _get[Float32](f, 12 * np); d.greg = _get[UInt8](f, np)
+    d.corners = _get[Float32](f, Int(d.lv[].corner[LEVELS]))
+    p[unsafe_offset=0].face_off = _get[Int32](f, nf + 1); p[unsafe_offset=0].face_patch = _get[Int32](f, np)
+    return p
 
 
 # True when the file is a cache of this format made for another scene: it is kept (delete it to replace it).
@@ -231,6 +263,20 @@ def scene_cache_save(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin], cache_p
         _put_int(f, k)
         if fresh:
             _put[UInt8](f, m.alpha, Int(m.alpha_w) * Int(m.alpha_h))
+    var subs = List[Int]()      # meshes share displaced surfaces (one per Ptex and pose), likewise
+    for i in range(nm):
+        var m = s.meshes[unsafe_offset=i]
+        var k = -1
+        if _is_real_ptr(m.subdiv):
+            for j in range(len(subs)):
+                if subs[j] == Int(m.subdiv):
+                    k = j
+            if k < 0:
+                k = len(subs); subs.append(Int(m.subdiv))
+                _put_int(f, k)
+                _put_subdiv(f, m.subdiv)
+                continue
+        _put_int(f, k)
 
     _put[BVH2Node](f, s.bvh_nodes, max(Int(s.bvh_node_count), 1)); _put[PrimId](f, s.prim_ids, max(Int(s.prim_count), 1))
     var shared = Int(s.bvh_nodes_cpu) == Int(s.bvh_nodes)
@@ -366,6 +412,12 @@ def scene_cache_load(cache_path: _Ptr, scene_path: _Ptr) -> Pointer[ParsedScene_
             masks.append(_get[UInt8](f, Int(s.meshes[unsafe_offset=i].alpha_w) * Int(s.meshes[unsafe_offset=i].alpha_h)))
         if k >= 0:
             s.meshes[unsafe_offset=i].alpha = masks[k]
+    var subs = List[Pointer[SubdivSurface, MutUntrackedOrigin]]()
+    for i in range(nm):
+        var k = _get_int(f)
+        if k == len(subs):
+            subs.append(_get_subdiv(f))
+        s.meshes[unsafe_offset=i].subdiv = subs[k] if k >= 0 else Pointer[SubdivSurface, MutUntrackedOrigin].unsafe_dangling()
 
     s.bvh_nodes = _get[BVH2Node](f, max(Int(s.bvh_node_count), 1)); s.prim_ids = _get[PrimId](f, max(Int(s.prim_count), 1))
     if _get_int(f) == 1:
