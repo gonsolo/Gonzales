@@ -1102,7 +1102,7 @@ def _rt_curve_clusters(handle: Pointer[GpuSceneHandle, MutUntrackedOrigin], psc:
 # what the card has free after the instances and GONZALES_XERT_RESERVE_MB (later buffers and kernel stacks); move_mesh
 # then marks the meshes to copy to the card.
 def _xert_placement(ctx: DeviceContext, psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin], ref pieces: XertPieces, sizes: List[Int],
-                    align: Int, mesh_host_kb: Int, mut move_mesh: List[Bool]) raises -> List[Bool]:
+                    align: Int, mesh_host_kb: Int, mut move_mesh: List[Bool], sd_of: List[Bool]) raises -> List[Bool]:
     var n_blas = len(sizes)
     var nt = Int(psc[unsafe_offset=0].blas_count)
     var n_inst = Int(psc[unsafe_offset=0].instance_count) + n_blas - len(pieces.tmpl) - nt + len(pieces.entry_rec)
@@ -1137,6 +1137,9 @@ def _xert_placement(ctx: DeviceContext, psc: Pointer[ParsedScene_Mojo, MutUntrac
     if auto:
         for b in range(n_blas):
             weighted[b] *= 8.0
+    for b in range(n_blas):   # sub-squares restart traversal per candidate: on the card first
+        if sd_of[b]:
+            weighted[b] = 1e30
     var placed = List[Bool]()
     _ = heat_fill(weighted, bytes, budget, placed)
     var used = 0
@@ -1329,7 +1332,11 @@ def _xert_attach(ctx: DeviceContext, psc: Pointer[ParsedScene_Mojo, MutUntracked
             bounds.unsafe_free()
             return fail
         blas.append(r); sizes.append(Int(size))
-    var on_dev = _xert_placement(ctx, psc, pieces, sizes, align, mesh_host_kb, move_mesh)
+    var sd_of = List[Bool](length=max(n_blas, 1), fill=False)
+    for b in range(n_blas):
+        var e = Int(sd_starts[b + 1]) if b + 1 < len(sd_starts) else len(sd_blocks)
+        sd_of[b] = e > Int(sd_starts[b]) + 1
+    var on_dev = _xert_placement(ctx, psc, pieces, sizes, align, mesh_host_kb, move_mesh, sd_of)
     var offsets = List[Int](length=max(n_blas, 1), fill=0)
     var dev_total = 0
     var host_total = 0
