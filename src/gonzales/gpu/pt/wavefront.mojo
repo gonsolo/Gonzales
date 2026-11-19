@@ -16,7 +16,7 @@ from gonzales.scene.shapes.primitives import mesh_pos, mesh_point, mesh_material
 from gonzales.transport.render_state import PathState, MIN_RAY_PDF_NONE, SssWalk, ShadowTask, SHADOW_SLOTS
 from gonzales.transport.restir_di import DIReservoir, di_reservoir_init
 from gonzales.integrators.pt.restir_vol import VolReservoir, vol_reservoir_init
-from gonzales.core.sampling import gen_primary_ray_state, ThinLens
+from gonzales.core.sampling import gen_primary_ray_state, ThinLens, camera_sample_time
 from gonzales.core.spectrum import SpectralSample, spectral_sample_to_rgb
 from gonzales.core.transform import transform_normal, Mat4
 from gonzales.scene.accel.vulkaninterop import VulkanInteropRtSceneHandle, vulkaninterop_rt_trace
@@ -270,7 +270,7 @@ def gen_primary_rays_wavefront_gpu(
     filter_type: Int32,
     count_dp: Int64, n_pixels_dp: Int64,
     filter_lut: Pointer[Float32, MutUntrackedOrigin],
-    lens_radius: Float32, focal_distance: Float32,
+    lens_radius: Float32, focal_distance: Float32, shutter_open: Float32, shutter_close: Float32, timed: Int32,
     # Ptex demand paging, ptex_mode 2: slot ti renders sample redo_si[ti] of its pixel, or nothing if that is < 0.
     redo_si: Pointer[Int32, MutUntrackedOrigin] = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
     ptex_mode: Int32 = Int32(0),
@@ -295,13 +295,14 @@ def gen_primary_rays_wavefront_gpu(
     if _is_real_ptr(px_active) and px_active[unsafe_offset=px_flat] == UInt8(0):
         skip = True
     var rng_seed = UInt64(rng_seed_hi) << UInt64(32) | UInt64(rng_seed_lo)
+    var lens = ThinLens(lens_radius, focal_distance, SIMD[DType.float32, 2](shutter_open, shutter_close), timed != Int32(0))
     var (ray, pcg_state, pcg_inc, sobol_idx, wavelengths, sobol_seed) = gen_primary_ray_state(
         px, py, si, Int(log2spp), Int(n_base4),
         seed_dim0, seed_dim1, rng_seed, sobol_matrices, r2c, c2w,
         filter_norm_x, filter_sigma, filter_support_x,
         filter_norm_y, filter_support_y,
         filter_type, filter_lut,
-        lens=ThinLens(lens_radius, focal_distance),
+        lens=lens,
     )
     paths[unsafe_offset=ti] = PathState(
         ray,
@@ -315,7 +316,7 @@ def gen_primary_rays_wavefront_gpu(
         Float32(1.0),   # current_dielectric_ior (vacuum)
         Float32(1.0),   # previous_dielectric_ior (vacuum)
         Float32(1.0),   # eta_scale
-        ThinLens(lens_radius, focal_distance).first_dim(), sobol_idx,
+        lens.first_dim(), sobol_idx,
         wavelengths,
         Float32(0.0),   # mis_null_dist
         INV_FOUR_PI,    # lastEnvNeePdf (gated by lastBsdfPdf > 0; set at each scatter)
@@ -327,6 +328,7 @@ def gen_primary_rays_wavefront_gpu(
         Int8(0),   # ns_spec
         Vec3f(Float32(0.0)), Float32(0.0),   # gl_dir, gl_pdf
         SssWalk.none(),
+        camera_sample_time(lens, sobol_idx, sobol_seed, sobol_matrices),
     )
 
 
@@ -2045,7 +2047,7 @@ def gen_primary_rays_gpu(
     filter_norm_y: Float32, filter_support_y: Float32,
     filter_type: Int32,
     count_dp: Int64,
-    lens_radius: Float32, focal_distance: Float32,
+    lens_radius: Float32, focal_distance: Float32, shutter_open: Float32, shutter_close: Float32, timed: Int32,
 ):
     var fw = Int(fw_dp)
     var count = Int(count_dp)
@@ -2055,13 +2057,14 @@ def gen_primary_rays_gpu(
     var px = Int32(tid % fw)
     var py = Int32(tid // fw)
     var rng_seed = UInt64(rng_seed_hi) << UInt64(32) | UInt64(rng_seed_lo)
+    var lens = ThinLens(lens_radius, focal_distance, SIMD[DType.float32, 2](shutter_open, shutter_close), timed != Int32(0))
     var (ray, pcg_state, pcg_inc, sobol_idx, wavelengths, sobol_seed) = gen_primary_ray_state(
         px, py, si, Int(log2spp), Int(n_base4),
         seed_dim0, seed_dim1, rng_seed, sobol_matrices, r2c, c2w,
         filter_norm_x, filter_sigma, filter_support_x,
         filter_norm_y, filter_support_y,
         filter_type,
-        lens=ThinLens(lens_radius, focal_distance),
+        lens=lens,
     )
     paths[unsafe_offset=tid] = PathState(
         ray,
@@ -2075,7 +2078,7 @@ def gen_primary_rays_gpu(
         Float32(1.0),   # current_dielectric_ior (vacuum)
         Float32(1.0),   # previous_dielectric_ior (vacuum)
         Float32(1.0),   # eta_scale
-        ThinLens(lens_radius, focal_distance).first_dim(), sobol_idx,
+        lens.first_dim(), sobol_idx,
         wavelengths,
         Float32(0.0),   # mis_null_dist
         INV_FOUR_PI,    # lastEnvNeePdf (gated by lastBsdfPdf > 0; set at each scatter)
@@ -2087,6 +2090,7 @@ def gen_primary_rays_gpu(
         Int8(0),   # ns_spec
         Vec3f(Float32(0.0)), Float32(0.0),   # gl_dir, gl_pdf
         SssWalk.none(),
+        camera_sample_time(lens, sobol_idx, sobol_seed, sobol_matrices),
     )
 
 

@@ -253,6 +253,7 @@ struct PathState(TrivialRegisterPassable):
     var gl_dir: Vec3f
     var gl_pdf: Float32
     var sss: SssWalk
+    var time: Float32   # the path's time in the shutter interval: moving instances are placed at it
 # <</listing>>
 # PathState layout: 24+12+12+12+4+8+8+1+1+1+1+4+4+4+4+4+4+4+8+20+4+4+4 = 148 bytes (was 144 -- +4 for cone_len);
 # size is computed via size_of[PathState]() everywhere (GPU buffer sizing included), not hardcoded.
@@ -282,7 +283,7 @@ struct ShadowTask(TrivialRegisterPassable):
     var tmax: Float32
     var contrib: SpectralSample   # deferred TRANSPORT, so spectral like throughput
     var active: Int32
-    var _pad: Int32
+    var time: Float32   # the path's: moving instances are placed at it
 
 @fieldwise_init
 struct TileResult(TrivialRegisterPassable):

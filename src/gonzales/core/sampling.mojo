@@ -726,3 +726,13 @@ def gen_primary_ray_state[Oc2w: Origin[mut=True] = MutUntrackedOrigin](
     var wavelengths = sample_wavelengths(u_wave)
 
     return (Ray(Point3f(orgX, orgY, orgZ), Vec3f(dx, dy, dz)), pcg_state, pcg_inc, sobol_idx, wavelengths, sobol_seed)
+
+
+@always_inline
+def camera_sample_time(lens: ThinLens, sobol_idx: UInt64, sobol_seed: UInt32, sobol_matrices: Pointer[UInt32, MutUntrackedOrigin]) -> Float32:
+    """The time of a camera sample in the shutter interval: its own Sobol dimension, the last before the first bounce."""
+    if not lens.timed:
+        return Float32(0)
+    var tdim = Int(lens.first_dim()) - 1
+    var u = sobol_sample_n[1](Int(sobol_idx), tdim, SIMD[DType.uint32, 1](sobol_dim_seed(sobol_seed, tdim)), sobol_matrices)[0]
+    return lens.shutter[0] * (1 - u) + lens.shutter[1] * u

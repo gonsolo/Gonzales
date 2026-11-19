@@ -461,7 +461,7 @@ def _shadow_contribute[enqueue_shadow: Bool, defer_only: Bool = False](
                 ctx.shadow_tasks[unsafe_offset=base + s] = ShadowTask(
                     Point3f(origin[0], origin[1], origin[2]),
                     Vec3f(dir[0], dir[1], dir[2]),
-                    tmax, contrib, Int32(1), Int32(0))
+                    tmax, contrib, Int32(1), path_ptr[].time)
                 return
         return
     comptime if enqueue_shadow:
@@ -475,7 +475,7 @@ def _shadow_contribute[enqueue_shadow: Bool, defer_only: Bool = False](
                     ctx.shadow_tasks[unsafe_offset=base + s] = ShadowTask(
                         Point3f(origin[0], origin[1], origin[2]),
                         Vec3f(dir[0], dir[1], dir[2]),
-                        tmax, contrib, Int32(1), Int32(0))
+                        tmax, contrib, Int32(1), path_ptr[].time)
                     return
     var shadow_ray = Ray(Point3f(origin[0], origin[1], origin[2]), Vec3f(dir[0], dir[1], dir[2]))
     var tr = SpectralSample(Float32(1.0))

@@ -14,7 +14,7 @@ from gonzales.scene.accel.bvh import SceneView, traverse_dispatch, test_spheres
 from gonzales.integrators.pt.shading import cpu_shade_context, shade_core_cpu_nee_ctx
 from gonzales.integrators.pt.common import gi_pending_x1_init
 from gonzales.transport.shade_context import GIPendingX1
-from gonzales.core.sampling import TileSamplerParams, encode_morton2, sobol_index_pixel_part, gen_primary_ray_state
+from gonzales.core.sampling import TileSamplerParams, encode_morton2, sobol_index_pixel_part, gen_primary_ray_state, camera_sample_time
 from gonzales.core.rng import mix_bits_u64
 from gonzales.transport.guide import GuideGrid, guide_merge, null_guide
 from gonzales.core.spectrum import SpectralSample, spectral_sample_to_rgb
@@ -232,6 +232,7 @@ def render_tile[Osp: Origin[mut=True], Oc2w: Origin[mut=True]](
                     Int8(0),   # ns_spec
                     Vec3f(Float32(0.0)), Float32(0.0),   # gl_dir, gl_pdf
                     SssWalk.none(),
+                    camera_sample_time(sp.lens, sobol_idx, sobol_seed, matrices),
                 )
                 pixel_idx_buf[unsafe_offset=idx] = this_pixel_idx
                 idx += 1

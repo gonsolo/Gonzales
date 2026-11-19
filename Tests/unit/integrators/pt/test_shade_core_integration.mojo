@@ -35,7 +35,7 @@ def _dummy_path(ray: Ray, throughput: SpectralSample) -> PathState:
         UInt32(0),   # sobol_seed
         Int8(0),   # ns_spec
         Vec3f(Float32(0.0)), Float32(0.0),   # gl_dir, gl_pdf
-        SssWalk.none(),
+        SssWalk.none(), Float32(0),
     )
 
 # ── shade_core, exercised against a REAL BVH hit (via _scene_fixture) ───────

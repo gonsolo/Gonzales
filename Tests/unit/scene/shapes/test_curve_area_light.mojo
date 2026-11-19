@@ -38,7 +38,7 @@ def _dummy_path(ray: Ray, throughput: SpectralSample) -> PathState:
         UInt32(0),   # sobol_seed
         Int8(0),   # ns_spec
         Vec3f(Float32(0.0)), Float32(0.0),   # gl_dir, gl_pdf
-        SssWalk.none(),
+        SssWalk.none(), Float32(0),
     )
 
 # ── Curve area lights (task #59: glowing_hair.pbrt used to render black) ───
@@ -193,7 +193,7 @@ def test_emissive_curve_bounce_hit_mis_weights_against_its_own_light_pdf() raise
         UInt32(0),   # sobol_seed
         Int8(0),   # ns_spec
         Vec3f(Float32(0.0)), Float32(0.0),   # gl_dir, gl_pdf
-        SssWalk.none(),
+        SssWalk.none(), Float32(0),
     )
     intersections[unsafe_offset=0] = inter
 
