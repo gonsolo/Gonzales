@@ -42,7 +42,7 @@ def shade_diffuse_transmission[use_gpu: Bool, enqueue_shadow: Bool](
 ):
     var mat = ctx.materials[unsafe_offset=Int(inter.primId.materialIndex)]
     var (ok, is_sphere, normal, ray_dir, ray_org, mesh, v0, v1, v2) = _hit_geom(
-        path_ptr, inter, ctx.meshes, ctx.lights.spheres, inter.primId.instanceIdx, ctx.instances, ctx.curves, ctx.motion.at(path_ptr[].time))
+        path_ptr, inter, ctx.meshes, ctx.lights.spheres, inter.primId.instanceIdx, ctx.instances, ctx.curves, motion=ctx.motion.at(path_ptr[].time))
     if not ok:
         path_ptr[].active = 0
         return
@@ -53,7 +53,7 @@ def shade_diffuse_transmission[use_gpu: Bool, enqueue_shadow: Bool](
         # (foliage cards in sanmiguel, etc).
         var (tri_dt, fp_dt) = _pt_hit_footprint(path_ptr, mat, ctx.cam_fp, ctx.instances, mesh, v0, v1, v2, inter, ray_org, ray_dir, ctx.textures, ctx.n_textures, ctx.motion.at(path_ptr[].time))
         dt_fp_width = fp_dt.width
-        normal = _shading_normal(mesh, v0, v1, v2, inter.u, inter.v, geo_n, inter.primId.instanceIdx, ctx.instances, ctx.motion.at(path_ptr[].time))
+        normal = _shading_normal(mesh, v0, v1, v2, inter.u, inter.v, geo_n, inter.primId.instanceIdx, ctx.instances, motion=ctx.motion.at(path_ptr[].time))
         normal = _apply_surface_maps[use_gpu](mat, v0, v1, v2, mesh, inter, normal, geo_n,
             tri_dt, fp_dt, ctx.tex_filenames, ctx.textures, ctx.n_textures)
         normal = face_toward(normal, -ray_dir)   # reflect lobe on wo's side
@@ -84,7 +84,7 @@ def shade_diffuse_transmission[use_gpu: Bool, enqueue_shadow: Bool](
     # Offset along the GEOMETRIC normal, to the chosen lobe's side (pbrt's
     # OffsetRayOrigin): the shading normal can point into the surface.
     var off_n = geo_n if dot(bounce_normal, -ray_dir) > Float32(0.0) else -geo_n
-    var extra_off = _curve_extra_offset(inter, ctx.curves, ctx.instances, ctx.motion.at(path_ptr[].time))
+    var extra_off = _curve_extra_offset(inter, ctx.curves, ctx.instances, motion=ctx.motion.at(path_ptr[].time))
     if dot(bounce_normal, -ray_dir) <= Float32(0.0):
         extra_off *= Float32(2.05)   # a transmitted ray must clear the far wall of the tube
     var hit_point = offset_point(ray_org + ray_dir * inter.tHit, off_n) + off_n * extra_off
@@ -364,12 +364,12 @@ def _shade_sss_exit[enqueue_shadow: Bool](
     """Where a random walk leaves the surface: a white Lambertian facing out, as Cycles' legacy walk exits."""
     path_ptr[].sss.exiting = Int32(0)
     var (ok, is_sphere, geo_normal, ray_dir, ray_org, mesh, v0, v1, v2) = _hit_geom(
-        path_ptr, inter, ctx.meshes, ctx.lights.spheres, inter.primId.instanceIdx, ctx.instances, ctx.curves, ctx.motion.at(path_ptr[].time))
+        path_ptr, inter, ctx.meshes, ctx.lights.spheres, inter.primId.instanceIdx, ctx.instances, ctx.curves, motion=ctx.motion.at(path_ptr[].time))
     if not ok or is_sphere:
         path_ptr[].active = 0
         return
     var gn = face_toward(geo_normal, ray_dir)
-    var n = face_toward(_shading_normal(mesh, v0, v1, v2, inter.u, inter.v, geo_normal, inter.primId.instanceIdx, ctx.instances, ctx.motion.at(path_ptr[].time)), ray_dir)
+    var n = face_toward(_shading_normal(mesh, v0, v1, v2, inter.u, inter.v, geo_normal, inter.primId.instanceIdx, ctx.instances, motion=ctx.motion.at(path_ptr[].time)), ray_dir)
     var hit_point = offset_point(ray_org + ray_dir * inter.tHit, gn)
     var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
     var exit_mat = ctx.materials[unsafe_offset=Int(inter.primId.materialIndex)]
@@ -400,7 +400,7 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool, defer_only: Bool =
     mat: Material,
 ):
     var (ok, is_sphere, geo_normal, ray_dir, ray_org, mesh, v0, v1, v2) = _hit_geom(
-        path_ptr, inter, ctx.meshes, ctx.lights.spheres, inter.primId.instanceIdx, ctx.instances, ctx.curves, ctx.motion.at(path_ptr[].time))
+        path_ptr, inter, ctx.meshes, ctx.lights.spheres, inter.primId.instanceIdx, ctx.instances, ctx.curves, motion=ctx.motion.at(path_ptr[].time))
     if not ok:
         path_ptr[].active = 0
         return
@@ -418,13 +418,13 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool, defer_only: Bool =
         alb = _tex_lookup[use_gpu](mat, inter, v0, v1, v2, mesh, ctx.tex_filenames, ctx.textures, ctx.n_textures, fp_cd.width)
         tex_alpha = rough_texture_alpha[use_gpu](mat, inter, v0, v1, v2, mesh, ctx.tex_filenames, ctx.textures, ctx.n_textures, fp_cd.width)
         # Use interpolated shading normal (geometric normal still drives hit-point offset)
-        normal = _shading_normal(mesh, v0, v1, v2, inter.u, inter.v, geo_normal, inter.primId.instanceIdx, ctx.instances, ctx.motion.at(path_ptr[].time))
+        normal = _shading_normal(mesh, v0, v1, v2, inter.u, inter.v, geo_normal, inter.primId.instanceIdx, ctx.instances, motion=ctx.motion.at(path_ptr[].time))
         normal = _apply_surface_maps[use_gpu](mat, v0, v1, v2, mesh, inter, normal, geo_normal,
             tri_cd, fp_cd, ctx.tex_filenames, ctx.textures, ctx.n_textures)
         # pbrt's LayeredBxDF is twoSided: see face_toward.
         normal = face_toward(normal, -ray_dir)
 
-    var hit_point = offset_point(ray_org + ray_dir * inter.tHit, geo_normal) + geo_normal * _curve_extra_offset(inter, ctx.curves, ctx.instances, ctx.motion.at(path_ptr[].time))
+    var hit_point = offset_point(ray_org + ray_dir * inter.tHit, geo_normal) + geo_normal * _curve_extra_offset(inter, ctx.curves, ctx.instances, motion=ctx.motion.at(path_ptr[].time))
     var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
 
     if path_ptr[].bounce == 0 or path_ptr[].specularBounce == Int8(1):
@@ -498,7 +498,7 @@ def shade_dielectric[use_gpu: Bool, enqueue_shadow: Bool](
         # Triangle::InteractionFromIntersection) -- not N flipped toward the
         # winding. A mesh wound inward but with outward N (lte-orb's glass
         # shell) otherwise reads every entry as an exit.
-        var ns_out = _interp_vertex_normal(mesh, v0, v1, v2, inter.u, inter.v, inter.primId.instanceIdx, ctx.instances, ctx.motion.at(path_ptr[].time))
+        var ns_out = _interp_vertex_normal(mesh, v0, v1, v2, inter.u, inter.v, inter.primId.instanceIdx, ctx.instances, motion=ctx.motion.at(path_ptr[].time))
         if dot(ns_out, ns_out) > Float32(0.0):
             if dot(raw_gn, ns_out) < Float32(0.0):
                 raw_gn = -raw_gn
@@ -1003,7 +1003,7 @@ def _shade_diffuse_nee[use_gpu: Bool, enqueue_shadow: Bool, mnee: Bool = True, d
             # -- harmless, see GIPendingX1's own docstring.
             var snap = ctx.gi_pending[unsafe_offset=ctx.path_idx]
             ctx.gi_pending[unsafe_offset=ctx.path_idx].active = Int8(0)
-            var raw = _gi_generate_recon_candidate(ctx, hit_point, normal, alb, pcg)
+            var raw = _gi_generate_recon_candidate(ctx, hit_point, normal, alb, pcg, motion=ctx.motion.at(path_ptr[].time))
             if raw.valid != Int8(0):
                 var w = gi_target_pdf(snap.hit_point, snap.normal, snap.alb, raw.recon_point, raw.recon_normal, raw.lo)
                 _ = reservoir_update(raw.state, w, pcg.next_float())

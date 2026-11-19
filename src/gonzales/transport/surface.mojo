@@ -1,6 +1,7 @@
 # A ray's hit on a scattering surface as every integrator sees it, and the BSDF there (pbrt's SurfaceInteraction).
 
 from std.math import abs, max, min
+from gonzales.scene.shapes.motion import MotionTable
 from gonzales.core.geometry import offset_eps, face_toward, RGB, Point3f, Vec3f, vec3f, dot
 from gonzales.scene.appearance.materials import Material, MatKind
 from gonzales.scene.shapes.primitives import Intersection
@@ -79,9 +80,9 @@ def surface_hit[use_gpu: Bool](ref sd: SceneView, inter: Intersection, mut mat: 
         gn = cf[3]
         spawn_eps = curve_offset_eps(cf[4])
     elif mat.type == MatKind.dielectric:
-        gn = _shading_normal_at(inter, sd.meshes, sd.instances, sd.spheres, hit)
+        gn = _shading_normal_at(inter, sd.meshes, sd.instances, sd.spheres, hit, motion=MotionTable.none())
     else:
-        gn = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
+        gn = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd(), motion=MotionTable.none())
     # A rough dielectric needs the outward normal: inside vs outside is which side of it wo lies on.
     var outward = mat.type == MatKind.dielectric
     if dot(gn, ray_dir) > Float32(0) and not outward: gn = gn * Float32(-1)

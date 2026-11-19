@@ -9,6 +9,7 @@
 from std.math import abs
 from std.memory.alloc import unsafe_alloc
 from std.testing import assert_true, TestSuite
+from gonzales.scene.shapes.motion import MotionTable
 from gonzales.scene.appearance.footprint import CameraFootprint
 from gonzales.core.geometry import RGB, Point3f, Vec3f
 from gonzales.scene.appearance.materials import Material, MeasuredBRDF
@@ -111,7 +112,7 @@ def test_gi_generate_no_area_lights_returns_invalid() raises:
 
     var pcg = PCG32(UInt64(1), UInt64(1))
     var res = _gi_generate_recon_candidate(ctx, Vec3f(0.0, 0.0, 0.0),
-        Vec3f(0.0, 1.0, 0.0), RGB(Float32(0.8)), pcg)
+        Vec3f(0.0, 1.0, 0.0), RGB(Float32(0.8)), pcg, motion=MotionTable.none())
     assert_true(res.valid == Int8(0))
 
     meshes[unsafe_offset=0].points.unsafe_free(); meshes[unsafe_offset=0].vertexIndices.unsafe_free(); meshes.unsafe_free()
@@ -134,7 +135,7 @@ def test_gi_generate_surface_facing_away_from_light_returns_invalid() raises:
 
     var pcg = PCG32(UInt64(1), UInt64(1))
     var res = _gi_generate_recon_candidate(ctx, Vec3f(0.0, 0.0, 0.0),
-        Vec3f(0.0, -1.0, 0.0), RGB(Float32(0.8)), pcg)
+        Vec3f(0.0, -1.0, 0.0), RGB(Float32(0.8)), pcg, motion=MotionTable.none())
     assert_true(res.valid == Int8(0))
 
     meshes[unsafe_offset=0].points.unsafe_free(); meshes[unsafe_offset=0].vertexIndices.unsafe_free(); meshes.unsafe_free()
@@ -161,7 +162,7 @@ def test_gi_generate_unoccluded_light_gives_valid_positive_lo() raises:
     var hit_point = Vec3f(0.0, 0.0, 0.0)
     var normal = Vec3f(0.0, 1.0, 0.0)
     var pcg = PCG32(UInt64(1), UInt64(1))
-    var res = _gi_generate_recon_candidate(ctx, hit_point, normal, RGB(Float32(0.8)), pcg)
+    var res = _gi_generate_recon_candidate(ctx, hit_point, normal, RGB(Float32(0.8)), pcg, motion=MotionTable.none())
     assert_true(res.valid == Int8(1))
     assert_true(res.recon_is_delta == Int8(0))
     assert_true(_close(res.recon_point[0], hit_point[0]))
@@ -203,7 +204,7 @@ def test_gi_generate_occluded_light_gives_valid_zero_lo() raises:
 
     var pcg = PCG32(UInt64(1), UInt64(1))
     var res = _gi_generate_recon_candidate(ctx, Vec3f(0.0, 0.0, 0.0),
-        Vec3f(0.0, 1.0, 0.0), RGB(Float32(0.8)), pcg)
+        Vec3f(0.0, 1.0, 0.0), RGB(Float32(0.8)), pcg, motion=MotionTable.none())
     assert_true(res.valid == Int8(1))
     assert_true(_close(res.lo.r, Float32(0.0)))
     assert_true(_close(res.lo.g, Float32(0.0)))

@@ -1,5 +1,6 @@
 """Texture lookup and the surface maps applied at a hit."""
 from std.atomic import Atomic
+from gonzales.scene.shapes.motion import MotionTable
 from gonzales.scene.appearance.ptex_cache import PTEX_QUEUE_CAP
 from std.math import sqrt, floor, log2, ceil, abs
 from std.ffi import external_call
@@ -674,7 +675,7 @@ def apply_surface_maps_at_hit[use_gpu: Bool](
     var (mesh, v0, v1, v2, ok) = _get_tri_verts(inter, meshes)
     if not ok:
         return shading_normal
-    var tri = tri_world(mesh, v0, v1, v2, inter.primId.instanceIdx, instances)
+    var tri = tri_world(mesh, v0, v1, v2, inter.primId.instanceIdx, instances, motion=MotionTable.none())
     var fp = hit_uv_footprint(cam, tri, mesh, v0, v1, v2, hit, ray_dir, cone_w)
     return _apply_surface_maps[use_gpu](mat, v0, v1, v2, mesh, inter,
         shading_normal, orient_to, tri, fp,
@@ -696,7 +697,7 @@ def uv_footprint_at_hit(
     var (mesh, v0, v1, v2, ok) = _get_tri_verts(inter, meshes)
     if not ok:
         return UVFootprint.none()
-    return hit_uv_footprint(cam, tri_world(mesh, v0, v1, v2, inter.primId.instanceIdx, instances),
+    return hit_uv_footprint(cam, tri_world(mesh, v0, v1, v2, inter.primId.instanceIdx, instances, motion=MotionTable.none()),
         mesh, v0, v1, v2, hit, ray_dir, cone_w)
 
 

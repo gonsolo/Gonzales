@@ -370,7 +370,7 @@ def resolve_gsms_gpu[long: Bool](sd: SceneView, gsms_queue: Pointer[UInt8, MutUn
         var i = base + lane
         if i < lim:
             var pcg = gsms_trial_rng(task.seed, i)
-            if glossy_sms_refinds(ctx, task.x0, task.bsdf, tab, task.wl, task.y, task.ldu, task.ldv, pcg, root, Int(task.n)):
+            if glossy_sms_refinds(ctx, task.x0, task.bsdf, tab, task.wl, task.y, task.ldu, task.ldv, pcg, root, Int(task.n), motion=sd.motion.at(task.time)):
                 _ = Atomic.min[ordering=Ordering.RELAXED](fst, Int32(i))
 
 

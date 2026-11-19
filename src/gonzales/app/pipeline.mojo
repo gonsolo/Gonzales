@@ -1586,7 +1586,7 @@ def debug_trace_pixel(
         var ray = Ray(Point3f(ox, oy, oz), Vec3f(dx, dy, dz))
         inter[unsafe_offset=0].hit = Int8(0)
         traverse_bvh2_core(psc[unsafe_offset=0].bvh_nodes, psc[unsafe_offset=0].prim_ids, psc[unsafe_offset=0].meshes, psc[unsafe_offset=0].curves, ray, Float32(1.0e38), inter,
-                            psc[unsafe_offset=0].blas_nodes_arr, psc[unsafe_offset=0].blas_primids_arr, psc[unsafe_offset=0].instances)
+                            psc[unsafe_offset=0].blas_nodes_arr, psc[unsafe_offset=0].blas_primids_arr, psc[unsafe_offset=0].instances, motion=MotionTable.none())
         if psc[unsafe_offset=0].sphere_count > 0:
             test_spheres(psc[unsafe_offset=0].spheres, Int(psc[unsafe_offset=0].sphere_count), ray, inter)
         if inter[unsafe_offset=0].hit == Int8(0):
@@ -1625,7 +1625,7 @@ def debug_trace_pixel(
         # triangle normal inline, which is how it went stale twice.
         var mesh_idx = inter[unsafe_offset=0].primId.triangle()[0]
         var gn_v = _geom_normal(inter[unsafe_offset=0], psc[unsafe_offset=0].meshes, psc[unsafe_offset=0].instances, psc[unsafe_offset=0].spheres,
-                               Vec3f(hx, hy, hz))
+                               Vec3f(hx, hy, hz), motion=MotionTable.none())
         var gnx = gn_v.x; var gny = gn_v.y; var gnz = gn_v.z
         if mesh_idx >= 0:
             print("  bounce", bounce, "HIT mesh", mesh_idx, "matType", Int(mat.type), "t", inter[unsafe_offset=0].tHit, "p", hx, hy, hz, "gN", gnx, gny, gnz)
@@ -1655,7 +1655,7 @@ def debug_trace_pixel(
             var rray = Ray(Point3f(hx+nx*Float32(0.001), hy+ny*Float32(0.001), hz+nz*Float32(0.001)), Vec3f(rfx, rfy, rfz))
             var rint = unsafe_alloc[Intersection](1); rint[unsafe_offset=0].hit = Int8(0)
             traverse_bvh2_core(psc[unsafe_offset=0].bvh_nodes, psc[unsafe_offset=0].prim_ids, psc[unsafe_offset=0].meshes, psc[unsafe_offset=0].curves, rray, Float32(1.0e38), rint,
-                                psc[unsafe_offset=0].blas_nodes_arr, psc[unsafe_offset=0].blas_primids_arr, psc[unsafe_offset=0].instances)
+                                psc[unsafe_offset=0].blas_nodes_arr, psc[unsafe_offset=0].blas_primids_arr, psc[unsafe_offset=0].instances, motion=MotionTable.none())
             if rint[unsafe_offset=0].hit == Int8(0) and psc[unsafe_offset=0].infinite_count > 0:
                 var il2 = psc[unsafe_offset=0].infinite_lights[unsafe_offset=0]
                 var w2 = il2.world_to_light
@@ -1707,7 +1707,7 @@ def debug_trace_pixel(
             var rray5 = Ray(Point3f(hx+nx5*Float32(0.001), hy+ny5*Float32(0.001), hz+nz5*Float32(0.001)), Vec3f(rfx5, rfy5, rfz5))
             var rint5 = unsafe_alloc[Intersection](1); rint5[unsafe_offset=0].hit = Int8(0)
             traverse_bvh2_core(psc[unsafe_offset=0].bvh_nodes, psc[unsafe_offset=0].prim_ids, psc[unsafe_offset=0].meshes, psc[unsafe_offset=0].curves, rray5, Float32(1.0e38), rint5,
-                                psc[unsafe_offset=0].blas_nodes_arr, psc[unsafe_offset=0].blas_primids_arr, psc[unsafe_offset=0].instances)
+                                psc[unsafe_offset=0].blas_nodes_arr, psc[unsafe_offset=0].blas_primids_arr, psc[unsafe_offset=0].instances, motion=MotionTable.none())
             if rint5[unsafe_offset=0].hit == Int8(0):
                 print("        COAT REFLECT dir", rfx5, rfy5, rfz5, "-> MISS (no envmap in this scene)")
             else:
@@ -1733,7 +1733,7 @@ def debug_trace_pixel(
             var rray3 = Ray(Point3f(hx+nx3*Float32(0.001), hy+ny3*Float32(0.001), hz+nz3*Float32(0.001)), Vec3f(rfx3, rfy3, rfz3))
             var rint3 = unsafe_alloc[Intersection](1); rint3[unsafe_offset=0].hit = Int8(0)
             traverse_bvh2_core(psc[unsafe_offset=0].bvh_nodes, psc[unsafe_offset=0].prim_ids, psc[unsafe_offset=0].meshes, psc[unsafe_offset=0].curves, rray3, Float32(1.0e38), rint3,
-                                psc[unsafe_offset=0].blas_nodes_arr, psc[unsafe_offset=0].blas_primids_arr, psc[unsafe_offset=0].instances)
+                                psc[unsafe_offset=0].blas_nodes_arr, psc[unsafe_offset=0].blas_primids_arr, psc[unsafe_offset=0].instances, motion=MotionTable.none())
             if rint3[unsafe_offset=0].hit == Int8(0):
                 print("        REFLECT dir", rfx3, rfy3, rfz3, "-> MISS (no envmap in this scene)")
             else:
@@ -1757,7 +1757,7 @@ def debug_trace_pixel(
                 var sray = Ray(Point3f(ox1, oy1, oz1), Vec3f(ldx, ldy, ldz))
                 var occluded = any_hit_bvh2_core(psc[unsafe_offset=0].bvh_nodes, psc[unsafe_offset=0].prim_ids, psc[unsafe_offset=0].meshes, psc[unsafe_offset=0].curves, sray, Float32(2000.0),
                                                   psc[unsafe_offset=0].blas_nodes_arr, psc[unsafe_offset=0].blas_primids_arr, psc[unsafe_offset=0].instances,
-                                                  psc[unsafe_offset=0].spheres, Int(psc[unsafe_offset=0].sphere_count))
+                                                  psc[unsafe_offset=0].spheres, Int(psc[unsafe_offset=0].sphere_count), motion=MotionTable.none())
                 print("        DISTANT", dli, "dir", ldx, ldy, ldz, "cos_s", cos_s, "occluded", Int(occluded))
             for ali in range(Int(psc[unsafe_offset=0].area_light_count)):
                 var al = psc[unsafe_offset=0].area_lights[unsafe_offset=ali]
@@ -1776,7 +1776,7 @@ def debug_trace_pixel(
                 var sray2 = Ray(Point3f(ox1, oy1, oz1), Vec3f(tlx, tly, tlz))
                 var occluded2 = any_hit_bvh2_core(psc[unsafe_offset=0].bvh_nodes, psc[unsafe_offset=0].prim_ids, psc[unsafe_offset=0].meshes, psc[unsafe_offset=0].curves, sray2, tdist * Float32(0.999),
                                                    psc[unsafe_offset=0].blas_nodes_arr, psc[unsafe_offset=0].blas_primids_arr, psc[unsafe_offset=0].instances,
-                                                   psc[unsafe_offset=0].spheres, Int(psc[unsafe_offset=0].sphere_count))
+                                                   psc[unsafe_offset=0].spheres, Int(psc[unsafe_offset=0].sphere_count), motion=MotionTable.none())
                 print("        AREA", ali, "centroid", lcx, lcy, lcz, "dist", tdist, "cos_s", cos_sa, "occluded", Int(occluded2))
             print("        STOP (diffuse probe only, not following further)")
             break
@@ -1897,7 +1897,7 @@ def debug_render_vulkanrt(
                              Vec3f(rays[unsafe_offset=idx+4], rays[unsafe_offset=idx+5], rays[unsafe_offset=idx+6]))
             inter[unsafe_offset=0].hit = Int8(0)
             traverse_bvh2_core(psc[unsafe_offset=0].bvh_nodes, psc[unsafe_offset=0].prim_ids, psc[unsafe_offset=0].meshes, psc[unsafe_offset=0].curves, ray, Float32(1.0e8), inter,
-                                psc[unsafe_offset=0].blas_nodes_arr, psc[unsafe_offset=0].blas_primids_arr, psc[unsafe_offset=0].instances)
+                                psc[unsafe_offset=0].blas_nodes_arr, psc[unsafe_offset=0].blas_primids_arr, psc[unsafe_offset=0].instances, motion=MotionTable.none())
             var cpu_hit = inter[unsafe_offset=0].hit != Int8(0)
             var gpu_hit = out_hit[unsafe_offset=pi] == UInt8(1)
             if cpu_hit: cpu_hits += 1

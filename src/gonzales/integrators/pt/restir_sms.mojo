@@ -37,6 +37,7 @@
 
 from std.collections import Array
 from std.math import sqrt, abs, min
+from gonzales.scene.shapes.motion import MotionTable
 from gonzales.core.geometry import RGB, dot, INV_PI, Vec3f, _is_real_ptr, Point2i, restir_jitter_pixel
 from gonzales.core.reservoir import ReservoirState, reservoir_state_init
 from gonzales.transport.sms import SMSVertex, MAX_SMS_VERTICES, sms_vertex_init, sms_walk, sms_refresh_solved_frames
@@ -154,6 +155,7 @@ def sms_shift(
     src_x0: Vec3f, src_light_point: Vec3f,
     src_ldp_du: Vec3f, src_ldp_dv: Vec3f,
     src_verts: Array[SMSVertex, MAX_SMS_VERTICES], n: Int,
+    *, motion: MotionTable,
 ) -> Tuple[Bool, Array[Vec3f, MAX_SMS_VERTICES], Float32, Float32]:
     """Manifold shift (Hong et al. 2025 Section 5.2): reuse a neighbor's
     (`src`) admissible specular chain at the current pixel (`dst`) by
@@ -184,7 +186,7 @@ def sms_shift(
 
     # ── Forward shift: walk seeded from src's chain, into dst's domain ──
     var _fwd = sms_walk(
-        dst_x0, dst_light_point, src_verts, n, dst_ldp_du, dst_ldp_dv)
+        dst_x0, dst_light_point, src_verts, n, dst_ldp_du, dst_ldp_dv, motion=motion)
     var fwd_ok = _fwd[0]; var fwd_pos = _fwd[1].copy(); var fwd_bsdf = _fwd[2]; var fwd_jac = _fwd[3]
     if not fwd_ok:
         return (False, zero_positions.copy(), Float32(0.0), Float32(0.0))
@@ -194,7 +196,7 @@ def sms_shift(
     for i in range(n):
         back_seed[i].pos = fwd_pos[i]
     var _back = sms_walk(
-        src_x0, src_light_point, back_seed, n, src_ldp_du, src_ldp_dv)
+        src_x0, src_light_point, back_seed, n, src_ldp_du, src_ldp_dv, motion=motion)
     var back_ok = _back[0]; var back_pos = _back[1].copy()
     if not back_ok:
         return (False, zero_positions.copy(), Float32(0.0), Float32(0.0))
@@ -254,6 +256,7 @@ def sms_spatial_combine(
     mut pcg: PCG32,
     sms_io: SMSReservoirIO = sms_reservoir_io_null(),
     pixel_idx: Int = -1,
+    *, motion: MotionTable,
 ):
     """Phase 6's spatial half: fold SMS_SPATIAL_NEIGHBORS neighbouring
     pixels' previous-frame reservoirs into `res`, each carried across by
@@ -334,7 +337,7 @@ def sms_spatial_combine(
         var sh = sms_shift(
             hit_point, dst_light_point, dst_ldp_du, dst_ldp_dv,
             nb_x0, nb.light_point, nb.ldp_du, nb.ldp_dv,
-            nb.verts, n_v)
+            nb.verts, n_v, motion=motion)
         if not sh[0]:
             continue
 
@@ -381,7 +384,7 @@ def sms_spatial_combine(
             var back = sms_shift(
                 n_hit, nb_i.light_point, nb_i.ldp_du, nb_i.ldp_dv,
                 hit_point, res.light_point, res.ldp_du, res.ldp_dv,
-                res.verts, w_v)
+                res.verts, w_v, motion=motion)
             if back[0]:
                 z += nb_m_seen[i]
         z_norm = z

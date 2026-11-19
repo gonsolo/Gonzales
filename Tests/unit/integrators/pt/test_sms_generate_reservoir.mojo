@@ -8,6 +8,7 @@
 from std.math import abs, sqrt
 from std.memory.alloc import unsafe_alloc
 from std.testing import assert_true, TestSuite
+from gonzales.scene.shapes.motion import MotionTable
 from gonzales.scene.appearance.footprint import CameraFootprint
 from gonzales.core.geometry import RGB, Point3f, Vec3f
 from gonzales.scene.appearance.materials import Material, MatKind, MeasuredBRDF
@@ -133,7 +134,7 @@ def test_sms_generate_curve_light_returns_empty() raises:
         ctx, Vec3f(0.0, 0.0, 0.0), Vec3f(0.0, 0.0, 1.0), RGB(Float32(0.8)),
         Vec3f(0.0, 0.0, 1.0), Float32(4.0), Vec3f(0.3, -0.2, 4.0),
         Vec3f(1.0, 0.0, 0.0), Vec3f(0.0, 1.0, 0.0),
-        area_lights[unsafe_offset=0], Float32(1.0), pcg)
+        area_lights[unsafe_offset=0], Float32(1.0), pcg, motion=MotionTable.none())
     assert_true(gen_result[0] == False)
     assert_true(gen_result[1].n_vertices == Int32(0))
     area_lights.unsafe_free(); cdf.unsafe_free()
@@ -161,7 +162,7 @@ def test_sms_generate_no_glass_in_the_way_returns_empty() raises:
         ctx, Vec3f(0.0, 0.0, 0.0), Vec3f(0.0, 0.0, 1.0), RGB(Float32(0.8)),
         Vec3f(0.0, 0.0, 1.0), Float32(4.0), Vec3f(0.3, -0.2, 4.0),
         Vec3f(1.0, 0.0, 0.0), Vec3f(0.0, 1.0, 0.0),
-        area_lights[unsafe_offset=0], Float32(1.0), pcg)
+        area_lights[unsafe_offset=0], Float32(1.0), pcg, motion=MotionTable.none())
     assert_true(gen_result[0] == False)
     assert_true(gen_result[1].n_vertices == Int32(0))
 
@@ -200,7 +201,7 @@ def test_sms_generate_real_glass_produces_a_streamed_candidate() raises:
         ctx, hit_point, normal, RGB(Float32(0.8)),
         shadow_dir, shadow_dist, light_point,
         Vec3f(1.0, 0.0, 0.0), Vec3f(0.0, 1.0, 0.0),
-        area_lights[unsafe_offset=0], Float32(1.0), pcg)
+        area_lights[unsafe_offset=0], Float32(1.0), pcg, motion=MotionTable.none())
     var res = gen_result[1].copy()
 
     assert_true(gen_result[0] == True)
@@ -257,7 +258,7 @@ def test_sms_resolve_on_empty_reservoir_is_a_noop() raises:
         Vec3f(0.0, 0.0, 1.0), Float32(4.0), Vec3f(0.3, -0.2, 4.0),
         Vec3f(1.0, 0.0, 0.0), Vec3f(0.0, 1.0, 0.0),
         AreaLight(Int32(0), Int32(1), RGB(Float32(0.0)), Float32(0.0), Int8(0), Int8(0), Int8(0), Int8(0)),
-        Float32(1.0), pcg_gen0)
+        Float32(1.0), pcg_gen0, motion=MotionTable.none())
     var res = gen_result0[1].copy()
     assert_true(res.n_vertices == Int32(0))
 
@@ -296,7 +297,7 @@ def test_sms_resolve_on_real_glass_adds_positive_contribution() raises:
     var gen_result = sms_generate_reservoir(
         ctx, hit_point, normal, alb, shadow_dir, shadow_dist, light_point,
         Vec3f(1.0, 0.0, 0.0), Vec3f(0.0, 1.0, 0.0),
-        area_lights[unsafe_offset=0], Float32(1.0), pcg_gen)
+        area_lights[unsafe_offset=0], Float32(1.0), pcg_gen, motion=MotionTable.none())
     var res = gen_result[1].copy()
     assert_true(res.n_vertices == Int32(1))
 
@@ -386,7 +387,7 @@ def test_sms_temporal_step_second_frame_accumulates_confidence() raises:
         ctx, hit_point, normal, alb, shadow_dir, shadow_dist, light_point,
         Vec3f(1.0, 0.0, 0.0), Vec3f(0.0, 1.0, 0.0),
         AreaLight(Int32(0), Int32(1), RGB(Float32(0.0)), Float32(0.0), Int8(0), Int8(0), Int8(0), Int8(0)),
-        Float32(1.0), pcg_seed)
+        Float32(1.0), pcg_seed, motion=MotionTable.none())
     buf_a[unsafe_offset=0] = res_empty[1].copy()
     buf_b[unsafe_offset=0] = res_empty[1].copy()
 
@@ -473,7 +474,7 @@ def test_shade_diffuse_nee_sms_wiring_accumulates_confidence_across_frames() rai
         ctx, hit_point, normal, alb, shadow_dir, shadow_dist, Vec3f(0.3, -0.2, 4.0),
         Vec3f(1.0, 0.0, 0.0), Vec3f(0.0, 1.0, 0.0),
         AreaLight(Int32(0), Int32(1), RGB(Float32(0.0)), Float32(0.0), Int8(0), Int8(0), Int8(0), Int8(0)),
-        Float32(1.0), pcg_seed)
+        Float32(1.0), pcg_seed, motion=MotionTable.none())
     buf_a[unsafe_offset=0] = res_empty[1].copy()
     buf_b[unsafe_offset=0] = res_empty[1].copy()
 
@@ -556,7 +557,7 @@ def test_shade_diffuse_nee_sms_io_inactive_at_bounce_1_uses_plain_mnee() raises:
         ctx, hit_point, normal, alb, shadow_dir, shadow_dist, Vec3f(0.3, -0.2, 4.0),
         Vec3f(1.0, 0.0, 0.0), Vec3f(0.0, 1.0, 0.0),
         AreaLight(Int32(0), Int32(1), RGB(Float32(0.0)), Float32(0.0), Int8(0), Int8(0), Int8(0), Int8(0)),
-        Float32(1.0), pcg_seed)
+        Float32(1.0), pcg_seed, motion=MotionTable.none())
     # reservoir_update always increments state.m by 1 whether the candidate
     # was accepted or not (Le=0 here forces rejection, but m still moves to
     # 1.0) -- the seed reservoir's m is 1.0, not 0.0.

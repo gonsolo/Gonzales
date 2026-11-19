@@ -414,7 +414,7 @@ struct XeWalkTracer(WalkTracer, DevicePassable):
     var instance_base_mesh: Pointer[Int32, MutUntrackedOrigin]
 
     @always_inline
-    def trace(self, ref sd: SceneView, walk: SssWalk, ray: Ray, store: Pointer[Intersection, MutUntrackedOrigin]):
+    def trace(self, ref sd: SceneView, walk: SssWalk, ray: Ray, store: Pointer[Intersection, MutUntrackedOrigin], motion: MotionTable):
         var r = SIMD[DType.float32, 8](ray.origin.x, ray.origin.y, ray.origin.z, 0,
                                        ray.direction.x, ray.direction.y, ray.direction.z, 1.0e8)
         var res = bitcast[DType.float32](xert_trace_interop_one(self.sc, r, UInt32(0)))
@@ -562,7 +562,7 @@ def traverse_paths_gpu[rare_on: Bool, alpha_on: Bool, count_on: Bool = False](
     traverse_bvh2_core_defer_curves[rare_on, rare_on, alpha_on, count_on](
         sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, paths[unsafe_offset=tid].ray, Float32(1.0e38), results.unsafe_offset(tid),
         curve_cand_prim.unsafe_offset(tid * CURVE_DEFER_K), curve_cand_count.unsafe_offset(tid),
-        sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances, sd.motion.at(paths[unsafe_offset=tid].time),
+        sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances, motion=sd.motion.at(paths[unsafe_offset=tid].time),
     )
     comptime if count_on:
         return
@@ -1095,7 +1095,7 @@ def rtcore_alpha_fallback_gpu(
     traverse_bvh2_core_defer_curves(
         sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, Float32(1.0e38), inter.unsafe_offset(ot),
         Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(), Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
-        sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances,
+        sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances, motion=MotionTable.none()
     )
     if _is_real_ptr(paths):
         _grow_cone(paths, inter, ot)
@@ -1159,7 +1159,7 @@ def rtcore_curve_clip_gpu[clusters: Bool](
         tmp = Intersection(curve_bvh_prim(sd.curveBvh, h[0]), h[1], h[2], h[3], Int8(1), Int8(0), Int8(0), Int8(0))
     else:
         traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, tmax, Pointer(to=tmp),
-                           sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances, root=max(Int(sd.curveRoot), 0))
+                           sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances, root=max(Int(sd.curveRoot), 0), motion=MotionTable.none())
     if tmp.hit == Int8(0) or tmp.primId.type != PrimKind.curve:
         return
     results[unsafe_offset=idx + 0] = tmp.tHit
@@ -1444,7 +1444,7 @@ def any_hit_bvh2_gpu[curves_on: Bool, inst_on: Bool, alpha_on: Bool](
     sd: SceneView,
     ray: Ray,
     tMax: Float32,
-    motion: MotionTable = MotionTable.none(),
+    motion: MotionTable,
 ) -> Bool:
     for i in range(Int(sd.sphereCount)):
         if _shadow_is_null_material(sd.materials, Int64(sd.spheres[unsafe_offset=i].materialIndex)):
@@ -1673,7 +1673,7 @@ def shadow_curves_kernel(
     var task = tasks[unsafe_offset=t]
     var ray = Ray(Point3f(task.origin.x, task.origin.y, task.origin.z), Vec3f(task.direction.x, task.direction.y, task.direction.z))
     if e < Int32(0):
-        if any_hit_bvh2_core[True](sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, task.tmax, sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances, sd.spheres, Int(n_spheres_dp), materials=sd.materials):
+        if any_hit_bvh2_core[True](sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, task.tmax, sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances, sd.spheres, Int(n_spheres_dp), materials=sd.materials, motion=sd.motion.at(task.time)):
             return
         if _curves_apart(sd) and curve_bvh_occluded(sd.curveBvh, sd.curves, sd.materials, ray, task.tmax):
             return
@@ -1685,7 +1685,7 @@ def shadow_curves_kernel(
     elif sd.curveBvh.n_clusters > Int32(0):
         if curve_bvh_occluded(sd.curveBvh, sd.curves, sd.materials, ray, task.tmax):
             return
-    elif Int(sd.curveCount) > 0 and any_hit_bvh2_core[True](sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, task.tmax, sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances, sd.spheres, 0, materials=sd.materials, root=max(Int(sd.curveRoot), 0)):
+    elif Int(sd.curveCount) > 0 and any_hit_bvh2_core[True](sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, task.tmax, sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances, sd.spheres, 0, materials=sd.materials, root=max(Int(sd.curveRoot), 0), motion=sd.motion.at(task.time)):
         return                                                     # curves are not in the acceleration structure either
     paths[unsafe_offset=t // SHADOW_SLOTS].estimate += task.contrib
 
@@ -1855,7 +1855,7 @@ def vk_alpha_retrace_gpu(
     if mesh.alpha_w <= Int32(0) and mesh.alpha_const >= Float32(1.0):
         return
     traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, paths[unsafe_offset=tid].ray, Float32(1.0e38),
-                       inter.unsafe_offset(tid), sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances)
+                       inter.unsafe_offset(tid), sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances, motion=MotionTable.none())
     if _curves_apart(sd):
         var t = inter[unsafe_offset=tid].tHit if inter[unsafe_offset=tid].hit != Int8(0) else Float32(1.0e38)
         var h = curve_bvh_closest(sd.curveBvh, sd.curves, paths[unsafe_offset=tid].ray, t)

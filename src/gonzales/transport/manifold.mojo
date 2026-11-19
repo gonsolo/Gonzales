@@ -47,7 +47,7 @@ def _emitter_face_normal(
     p0: Vec3f, p1: Vec3f, p2: Vec3f,
     instance_idx: Int32 = Int32(-1),
     instances: Pointer[Instance, MutUntrackedOrigin] = Pointer[Instance, MutUntrackedOrigin].unsafe_dangling(),
-    motion: MotionTable = MotionTable.none(),
+    *, motion: MotionTable,
 ) -> Vec3f:
     var gn = cross(p1 - p0, p2 - p0)
     if not _is_real_ptr(mesh.normals):
@@ -93,7 +93,7 @@ def _interp_vertex_normal(
     bu: Float32, bv: Float32,
     instance_idx: Int32 = Int32(-1),
     instances: Pointer[Instance, MutUntrackedOrigin] = Pointer[Instance, MutUntrackedOrigin].unsafe_dangling(),
-    motion: MotionTable = MotionTable.none(),
+    *, motion: MotionTable,
 ) -> Vec3f:
     """The mesh's own interpolated per-vertex normal N, unit length, in world
     space and NOT flipped toward anything; the zero vector when the mesh has
@@ -348,13 +348,14 @@ def _sms_vertex_from_hit(
     inter: Intersection,
     ray_org: Vec3f,
     shadow_dir: Vec3f,
+    *, motion: MotionTable,
 ) -> Tuple[SMSVertex, Bool]:
     """_sms_vertex_geom_from_hit's vertex, with the media on its two sides as medium_after gives them."""
-    var (v, ok) = _sms_vertex_geom_from_hit(ctx, inter, ray_org, shadow_dir)
+    var (v, ok) = _sms_vertex_geom_from_hit(ctx, inter, ray_org, shadow_dir, motion=motion)
     var mi = ctx.materials[unsafe_offset=Int(inter.primId.materialIndex)].medium_interface_idx
     if ok and mi >= Int32(0) and ctx.n_mediums > 0:
         var iface = ctx.medium_ifaces[unsafe_offset=Int(mi)]
-        var gn = _geom_normal(inter, ctx.meshes, ctx.instances, ctx.lights.spheres, ray_org + shadow_dir * inter.tHit, ctx.motion)
+        var gn = _geom_normal(inter, ctx.meshes, ctx.instances, ctx.lights.spheres, ray_org + shadow_dir * inter.tHit, motion=motion)
         v.med_in = iface.toward(-shadow_dir, gn)
         v.med_out = iface.toward(shadow_dir, gn)
     return (v, ok)
@@ -366,6 +367,7 @@ def _sms_vertex_geom_from_hit(
     inter: Intersection,
     ray_org: Vec3f,
     shadow_dir: Vec3f,
+    *, motion: MotionTable,
 ) -> Tuple[SMSVertex, Bool]:
     """Builds an SMSVertex (flat triangle or curved analytic sphere) from a
     probe intersection along a shadow ray -- the ONE place that decides how
@@ -409,7 +411,7 @@ def _sms_vertex_geom_from_hit(
         var (mesh, v0, v1, v2, _) = _get_tri_verts(inter, ctx.meshes)
         if _is_real_ptr(mesh.normals) and inter.primId.instanceIdx < Int32(0):
             # A smooth mesh: curved, walked on its interpolated normal (sms.mojo's sms_mesh_frame).
-            var ns = _interp_vertex_normal(mesh, v0, v1, v2, inter.u, inter.v)
+            var ns = _interp_vertex_normal(mesh, v0, v1, v2, inter.u, inter.v, motion=motion)
             var eta_m = ior if dot(ns, shadow_dir) <= Float32(0.0) else (Float32(1.0) / ior)
             return sms_vertex_mesh(ctx.meshes, Int(inter.primId.id1), Int(inter.primId.id2), inter.u, inter.v, eta_m, ior)
         var p0 = mesh_pos(mesh, v0)
@@ -457,6 +459,7 @@ def _sms_probe_glass_chain(
     shadow_dir: Vec3f,
     start_remaining: Float32,
     max_count: Int,
+    *, motion: MotionTable,
 ) -> Tuple[Int, Array[Intersection, MAX_SMS_VERTICES], Array[Vec3f, MAX_SMS_VERTICES]]:
     """Probes forward from `start_point` along `shadow_dir` for up to
     `max_count` MORE consecutive dielectric surfaces (Phase 5.1's
@@ -487,7 +490,7 @@ def _sms_probe_glass_chain(
         var pk_store = Array[Intersection, 1](fill=dummy_inter)
         traverse_dispatch(ctx.bvh4, ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves, pk_ray, pk_tmax, pk_store.unsafe_ptr(),
                            ctx.blasNodesArr, ctx.blasPrimIdsArr, ctx.instances,
-                           ctx.lights.spheres, ctx.lights.sphere_count, motion=ctx.motion)
+                           ctx.lights.spheres, ctx.lights.sphere_count, motion=motion)
         var pk_inter = pk_store[0]
         if pk_inter.hit == Int8(0) or (pk_inter.primId.type != PrimKind.triangle and pk_inter.primId.type != PrimKind.sphere):
             break
@@ -515,6 +518,7 @@ def _sms_probe_glass_chain(
 @always_inline
 def _mnee_first_probe(
     ctx: ShadeContext, hit_point: Vec3f, shadow_dir: Vec3f, dist: Float32,
+    *, motion: MotionTable,
 ) -> Tuple[Bool, Intersection]:
     """The MNEE probe toward the light: (the nearest hit is a triangle of a specular glass material, that hit)."""
     var probe_org = hit_point + shadow_dir * Float32(0.0002)
@@ -527,7 +531,7 @@ def _mnee_first_probe(
     var probe_store = Array[Intersection, 1](fill=dummy_inter)
     traverse_dispatch(ctx.bvh4, ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves, probe_ray, probe_tmax, probe_store.unsafe_ptr(),
                        ctx.blasNodesArr, ctx.blasPrimIdsArr, ctx.instances,
-                       ctx.lights.spheres, ctx.lights.sphere_count, motion=ctx.motion)
+                       ctx.lights.spheres, ctx.lights.sphere_count, motion=motion)
     var probe_inter = probe_store[0]
     # A solid sphere is not MNEE's: one refraction misses the exit surface and the exact BSDF path is no
     # longer suppressed at the emitter hit, so plain sampling covers it (PT read 1.4-1.9% under pbrt otherwise).
@@ -548,6 +552,7 @@ def _sms_solve_from_probe(
     ldp_dv_v: Vec3f,
     mut pcg: PCG32,
     probe_inter: Intersection,
+    *, motion: MotionTable,
 ) -> Tuple[Bool, Bool, Int, Array[SMSVertex, MAX_SMS_VERTICES], Float32, Float32, Float32]:
     """Probe for up to MAX_SMS_VERTICES glass surfaces between `hit_point`
     and `light_point` and, if found, solve the resulting specular chain --
@@ -577,7 +582,7 @@ def _sms_solve_from_probe(
     var dummy_inter = Intersection(dummy_prim, dist * Float32(0.9995), Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0))
 
     # --- Extract x1 geometry (triangle or analytic sphere) ---
-    var (v1, v1_ok) = _sms_vertex_from_hit(ctx, probe_inter, probe_org, shadow_dir)
+    var (v1, v1_ok) = _sms_vertex_from_hit(ctx, probe_inter, probe_org, shadow_dir, motion=motion)
     if not v1_ok:
         # Degenerate glass surface: a dielectric IS in the way (so the
         # straight shadow ray is blocked regardless) but no usable manifold
@@ -603,7 +608,7 @@ def _sms_solve_from_probe(
         var probe2_store = Array[Intersection, 1](fill=dummy_inter)
         traverse_dispatch(ctx.bvh4, ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves, probe2_ray, probe2_rem, probe2_store.unsafe_ptr(),
                    ctx.blasNodesArr, ctx.blasPrimIdsArr, ctx.instances,
-                   ctx.lights.spheres, ctx.lights.sphere_count, motion=ctx.motion)
+                   ctx.lights.spheres, ctx.lights.sphere_count, motion=motion)
         probe2_inter = probe2_store[0]
     var has_second_glass = False
     if probe2_inter.hit != Int8(0) and (probe2_inter.primId.type == PrimKind.triangle or probe2_inter.primId.type == PrimKind.sphere):
@@ -618,13 +623,13 @@ def _sms_solve_from_probe(
             # the BSDF keeps the paths of the others (see _mnee_bsdf_weight), so a caster with many roots stays unbiased.
             var w1 = sms_walk(hit_point, light_point, verts1, 1, ldp_du_v, ldp_dv_v,
                 ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves, ctx.blasNodesArr, ctx.blasPrimIdsArr, ctx.instances,
-                ctx.lights.spheres, ctx.lights.sphere_count)
+                ctx.lights.spheres, ctx.lights.sphere_count, motion=motion)
             if not w1[0]:
                 return (True, False, 1, verts1.copy(), Float32(0.0), Float32(0.0), Float32(0.0))
             verts1[0].pos = w1[1][0]
             sms_refresh_solved_frames(verts1, 1)
             if not sms_refresh_mesh_frames(hit_point, verts1, 1, ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves,
-                                           ctx.blasNodesArr, ctx.blasPrimIdsArr, ctx.instances):
+                                           ctx.blasNodesArr, ctx.blasPrimIdsArr, ctx.instances, motion=motion):
                 return (True, False, 1, verts1.copy(), Float32(0.0), Float32(0.0), Float32(0.0))
             return (True, True, 1, verts1.copy(), w1[2], w1[3], Float32(1.0))
         # --- 1-vertex MNEE fast path (flat triangle only, unchanged) ---
@@ -679,7 +684,7 @@ def _sms_solve_from_probe(
         verts1[0].pos = x1_f
         return (True, True, 1, verts1.copy(), bsdf_s, dx1_dxl, Float32(1.0))
 
-    var (v2, v2_ok) = _sms_vertex_from_hit(ctx, probe2_inter, probe2_org, shadow_dir)
+    var (v2, v2_ok) = _sms_vertex_from_hit(ctx, probe2_inter, probe2_org, shadow_dir, motion=motion)
     if not v2_ok:
         return (True, False, 0, zero_verts.copy(), Float32(0.0), Float32(0.0), Float32(0.0))
     var is_sphere2 = sms_curved(v2)
@@ -695,7 +700,7 @@ def _sms_solve_from_probe(
     # real glass) never reaches this, so this branch adds no cost there.
     var _chain_res = _sms_probe_glass_chain(
         ctx, x2_init, shadow_dir, dist - probe2_inter.tHit - probe2_t0,
-        MAX_SMS_VERTICES - 2)
+        MAX_SMS_VERTICES - 2, motion=motion)
     var extra_count = _chain_res[0]
     var extra_hits = _chain_res[1].copy()
     var extra_origins = _chain_res[2].copy()
@@ -722,7 +727,7 @@ def _sms_solve_from_probe(
     verts[1] = v2
     var chain_ok = True
     for k in range(extra_count):
-        var (ek_vert, ek_ok) = _sms_vertex_from_hit(ctx, extra_hits[k], extra_origins[k], shadow_dir)
+        var (ek_vert, ek_ok) = _sms_vertex_from_hit(ctx, extra_hits[k], extra_origins[k], shadow_dir, motion=motion)
         if not ek_ok:
             chain_ok = False; break
         verts[2+k] = ek_vert
@@ -734,7 +739,7 @@ def _sms_solve_from_probe(
     # already established.
     var _walk_res = sms_walk(hit_point, light_point, verts, n_total, ldp_du_v, ldp_dv_v,
         ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves, ctx.blasNodesArr, ctx.blasPrimIdsArr, ctx.instances,
-        ctx.lights.spheres, ctx.lights.sphere_count)
+        ctx.lights.spheres, ctx.lights.sphere_count, motion=motion)
     var sms_ok = _walk_res[0]
     var sms_pos = _walk_res[1].copy()
     var sms_bsdf = _walk_res[2]
@@ -746,7 +751,7 @@ def _sms_solve_from_probe(
         verts[i].pos = sms_pos[i]
     sms_refresh_solved_frames(verts, n_total)
     if not sms_refresh_mesh_frames(hit_point, verts, n_total, ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves,
-                                   ctx.blasNodesArr, ctx.blasPrimIdsArr, ctx.instances):
+                                   ctx.blasNodesArr, ctx.blasPrimIdsArr, ctx.instances, motion=motion):
         return (True, False, n_total, verts.copy(), Float32(0.0), Float32(0.0), Float32(0.0))
     return (True, True, n_total, verts.copy(), sms_bsdf, sms_jac, sms_trials)
 
@@ -838,6 +843,7 @@ def _mnee_bsdf_over_light(p_x0: Float32, t_chain: Float32, g: Float32, p_light: 
 def _mnee_reproduce(
     ctx: ShadeContext, x0: Vec3f, n_spec: Int, last_spec: Vec3f, light_hit: Vec3f, l_du: Vec3f, l_dv: Vec3f,
     mut pcg: PCG32,
+    *, motion: MotionTable,
 ) -> Tuple[Bool, Int, Array[SMSVertex, MAX_SMS_VERTICES], Float32]:
     """Whether MNEE's deterministic solve from x0 to light_hit is the path that got there through n_spec glass
     vertices, the last at last_spec, with the chain and its g. No glass first on the straight segment: MNEE never tries."""
@@ -847,11 +853,11 @@ def _mnee_reproduce(
     if seg_len <= Float32(1e-4):
         return (False, 0, verts^, Float32(0.0))
     var seg_dir = seg * (Float32(1.0) / seg_len)
-    var (glass, probe_inter) = _mnee_first_probe(ctx, x0, seg_dir, seg_len)
+    var (glass, probe_inter) = _mnee_first_probe(ctx, x0, seg_dir, seg_len, motion=motion)
     if not glass:
         return (False, 0, verts^, Float32(0.0))
     var (o_du, o_dv) = mnee_orthonormal_basis(l_du, l_dv)
-    var res = _sms_solve_from_probe(ctx, x0, seg_dir, seg_len, light_hit, o_du, o_dv, pcg, probe_inter)
+    var res = _sms_solve_from_probe(ctx, x0, seg_dir, seg_len, light_hit, o_du, o_dv, pcg, probe_inter, motion=motion)
     var n = res[2]
     verts = res[3].copy()
     if n_spec != n or not res[1]:
@@ -870,6 +876,7 @@ def _mnee_reproduce(
 def _mnee_chain(
     ctx: ShadeContext, normal: Vec3f, hit_point: Vec3f, shadow_dir: Vec3f, dist: Float32,
     light_point: Vec3f, ldp_du_v: Vec3f, ldp_dv_v: Vec3f, mut pcg: PCG32, probe_inter: Intersection,
+    *, motion: MotionTable,
 ) -> Tuple[Bool, Bool, Int, Array[SMSVertex, MAX_SMS_VERTICES], Float32, Float32, Float32]:
     """MNEE's chain from hit_point through the glass the probe found to light_point, shared by the path tracer and VCM:
     (glass found, solved and visible, vertex count, solved vertices, BSDF product, g = dw0/dA_light, cos at hit_point)."""
@@ -883,7 +890,7 @@ def _mnee_chain(
     # emitter vertex inside geometric_term) for the same reason.
     var (l_du, l_dv) = mnee_orthonormal_basis(ldp_du_v, ldp_dv_v)
     var _probe_res = _sms_solve_from_probe(
-        ctx, hit_point, shadow_dir, dist, light_point, l_du, l_dv, pcg, probe_inter)
+        ctx, hit_point, shadow_dir, dist, light_point, l_du, l_dv, pcg, probe_inter, motion=motion)
     var n = _probe_res[2]
     var verts = _probe_res[3].copy()
     var fail = (_probe_res[0], False, n, verts.copy(), Float32(0.0), Float32(0.0), Float32(0.0))
@@ -920,6 +927,6 @@ def _mnee_chain(
     if any_hit_dispatch(ctx.bvh4, ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves, vis_ray, wo_len * Float32(0.999),
                           ctx.blasNodesArr, ctx.blasPrimIdsArr, ctx.instances,
                           ctx.lights.spheres, ctx.lights.sphere_count,
-                          ign_center, ign_radius, materials=ctx.materials, motion=ctx.motion):
+                          ign_center, ign_radius, materials=ctx.materials, motion=motion):
         return fail^
     return (True, True, n, verts.copy(), _probe_res[4], g, cos_s_x0)

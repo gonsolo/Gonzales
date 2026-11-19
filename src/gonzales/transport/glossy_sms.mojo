@@ -5,6 +5,7 @@ from std.math import sqrt, abs
 from std.sys import get_defined_int
 from std.sys.info import size_of
 from std.atomic import Atomic
+from gonzales.scene.shapes.motion import MotionTable
 from gonzales.core.geometry import Point3f, Vec3f, Ray, dot
 from gonzales.core.rng import PCG32
 from gonzales.core.spectrum import SampledWavelengths, SpectralSample
@@ -60,17 +61,17 @@ def _chain_kind(mat: Material) -> Int:
 
 
 @always_inline
-def _first_hit(ctx: ShadeContext, org: Vec3f, dir: Vec3f, tmax: Float32) -> Intersection:
+def _first_hit(ctx: ShadeContext, org: Vec3f, dir: Vec3f, tmax: Float32, *, motion: MotionTable) -> Intersection:
     var o = org + dir * _OFF
     var dummy_prim = PrimId(Int64(-1), Int64(-1), Int64(0), Int32(-1), PrimKind.triangle, Int8(0), Int8(0), Int8(0))
     var store = Array[Intersection, 1](fill=Intersection(dummy_prim, tmax, Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0)))
     traverse_dispatch(ctx.bvh4, ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves,
                       Ray(Point3f(o[0], o[1], o[2]), Vec3f(dir[0], dir[1], dir[2])), tmax, store.unsafe_ptr(),
-                      ctx.blasNodesArr, ctx.blasPrimIdsArr, ctx.instances, ctx.lights.spheres, ctx.lights.sphere_count, motion=ctx.motion)
+                      ctx.blasNodesArr, ctx.blasPrimIdsArr, ctx.instances, ctx.lights.spheres, ctx.lights.sphere_count, motion=motion)
     return store[0]
 
 
-def sms_trace_chain(ctx: ShadeContext, org: Vec3f, dir_in: Vec3f, mut verts: SMSChain) -> Tuple[Int, Intersection, Vec3f, Vec3f]:
+def sms_trace_chain(ctx: ShadeContext, org: Vec3f, dir_in: Vec3f, mut verts: SMSChain, *, motion: MotionTable) -> Tuple[Int, Intersection, Vec3f, Vec3f]:
     """Follows a ray through the chain surfaces by the chain rule: smooth glass refracts unless it reflects totally,
     a smooth skin boundary reflects. Writes the vertices to `verts` and returns (their count, -1 when the ray escapes,
     enters skin or exceeds MAX_SMS_VERTICES; the first other surface hit; the last segment's origin and direction).
@@ -82,7 +83,7 @@ def sms_trace_chain(ctx: ShadeContext, org: Vec3f, dir_in: Vec3f, mut verts: SMS
     var d = dir_in
     var n = 0
     for _k in range(MAX_SMS_VERTICES + 1):
-        var hit = _first_hit(ctx, o, d, Float32(1e30))
+        var hit = _first_hit(ctx, o, d, Float32(1e30), motion=motion)
         if hit.hit == Int8(0):
             return (-1, hit, o, d)
         var kind = 0
@@ -93,7 +94,7 @@ def sms_trace_chain(ctx: ShadeContext, org: Vec3f, dir_in: Vec3f, mut verts: SMS
         if n == MAX_SMS_VERTICES:
             return (-1, hit, o, d)
         var ro = o + d * _OFF
-        var (v, ok) = _sms_vertex_from_hit(ctx, hit, ro, d)
+        var (v, ok) = _sms_vertex_from_hit(ctx, hit, ro, d, motion=motion)
         if not ok:
             return (-1, hit, o, d)
         var nf = v.normal if dot(v.normal, d) < Float32(0) else -v.normal   # toward the side the ray comes from
@@ -115,18 +116,19 @@ def sms_trace_chain(ctx: ShadeContext, org: Vec3f, dir_in: Vec3f, mut verts: SMS
         verts[n] = v
         n += 1
         o = v.pos
-    return (-1, _first_hit(ctx, o, d, Float32(1e30)), o, d)
+    return (-1, _first_hit(ctx, o, d, Float32(1e30), motion=motion), o, d)
 
 
 def sms_chain_lands(
     ctx: ShadeContext, x0: Vec3f, dir: Vec3f, n_spec: Int, y: Vec3f, mut verts: SMSChain,
+    *, motion: MotionTable,
 ) -> Tuple[Bool, Intersection, Int]:
     """Whether re-tracing dir from x0 by the chain rule (into `verts`) crosses n_spec chain vertices and lands on a
     light at y: what makes a chain glossy SMS's. (lands, the surface it ends on, the vertex count traced). A solved
     root must pass it too, not only a BSDF path: a flat vertex is solved on its whole plane, a curved one re-cast from
     its anchor, and a seed's total internal reflection may end up a partial one at the root, which the rule (and so
     the BSDF side) would refract instead."""
-    var tr = sms_trace_chain(ctx, x0, dir, verts)
+    var tr = sms_trace_chain(ctx, x0, dir, verts, motion=motion)
     var n = tr[0]
     var ok = n >= 1 and n == n_spec and tr[1].primId.type == PrimKind.emitter
     if ok:
@@ -150,6 +152,7 @@ def _same_root(x0: Vec3f, a: SMSChain, b: SMSRoot, n: Int) -> Bool:
 def _glossy_sms_try(
     ctx: ShadeContext, x0: Vec3f, bsdf: BSDF, tab: LobeTables, wl: SampledWavelengths,
     y: Vec3f, ldu: Vec3f, ldv: Vec3f, mut pcg: PCG32, mut verts: SMSChain,
+    *, motion: MotionTable,
 ) -> Tuple[Bool, Int, Float32, Float32]:
     """One seed: a direction traced by the chain rule and solved to end at y. The direction is the straight one to y
     (MNEE's seed, for chains in front of the light) with chance GLOSSY_SMS_STRAIGHT, else a lobe sample. A root whose
@@ -164,23 +167,23 @@ def _glossy_sms_try(
         var s = bsdf.sample[want_rev=False](u0, u1, u2, Float32(0), tab, wl)
         dir = s.wi
         valid = s.valid
-    var n = sms_trace_chain(ctx, x0, dir, verts)[0]
+    var n = sms_trace_chain(ctx, x0, dir, verts, motion=motion)[0]
     if not valid or n < 1:
         return (False, 0, Float32(0), Float32(0))
     for _round in range(get_defined_int["GSMS_ROUNDS", 6]()):
         var w = sms_walk(x0, y, verts, n, ldu, ldv, ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves,
-                         ctx.blasNodesArr, ctx.blasPrimIdsArr, ctx.instances, ctx.lights.spheres, ctx.lights.sphere_count)
+                         ctx.blasNodesArr, ctx.blasPrimIdsArr, ctx.instances, ctx.lights.spheres, ctx.lights.sphere_count, motion=motion)
         if not w[0]:
             return (False, 0, Float32(0), Float32(0))
         for i in range(n):
             verts[i].pos = w[1][i]
         sms_refresh_solved_frames(verts, n)
         if not sms_refresh_mesh_frames(x0, verts, n, ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves,
-                                       ctx.blasNodesArr, ctx.blasPrimIdsArr, ctx.instances):
+                                       ctx.blasNodesArr, ctx.blasPrimIdsArr, ctx.instances, motion=motion):
             return (False, 0, Float32(0), Float32(0))
         var d0 = verts[0].pos - x0
         var traced = SMSChain(fill=sms_vertex_init())
-        var la = sms_chain_lands(ctx, x0, d0 * (Float32(1) / sqrt(dot(d0, d0))), n, y, traced)
+        var la = sms_chain_lands(ctx, x0, d0 * (Float32(1) / sqrt(dot(d0, d0))), n, y, traced, motion=motion)
         if la[0]:
             return (True, n, w[2], w[3])
         if la[2] < 1 or la[2] == n:
@@ -194,22 +197,24 @@ def _glossy_sms_try(
 def glossy_sms_stage(
     ctx: ShadeContext, x0: Vec3f, bsdf: BSDF, tab: LobeTables, wl: SampledWavelengths,
     y: Vec3f, ldu: Vec3f, ldv: Vec3f, mut pcg: PCG32,
+    *, motion: MotionTable,
 ) -> Float32:
     """DEBUG (GSMS_DEBUG=6): 1 when a solve finds a root with a share (GSMS_STAGE=2) or one try does (else)."""
     var verts = SMSChain(fill=sms_vertex_init())
     comptime if get_defined_int["GSMS_STAGE", 0]() == 2:
-        return Float32(1) if glossy_sms_solve(ctx, x0, bsdf, tab, wl, y, ldu, ldv, pcg, verts)[0] else Float32(0)
-    return Float32(1) if _glossy_sms_try(ctx, x0, bsdf, tab, wl, y, ldu, ldv, pcg, verts)[0] else Float32(0)
+        return Float32(1) if glossy_sms_solve(ctx, x0, bsdf, tab, wl, y, ldu, ldv, pcg, verts, motion=motion)[0] else Float32(0)
+    return Float32(1) if _glossy_sms_try(ctx, x0, bsdf, tab, wl, y, ldu, ldv, pcg, verts, motion=motion)[0] else Float32(0)
 
 
 def glossy_sms_root(
     ctx: ShadeContext, x0: Vec3f, bsdf: BSDF, tab: LobeTables, wl: SampledWavelengths,
     y: Vec3f, ldu: Vec3f, ldv: Vec3f, mut pcg: PCG32, mut verts: SMSChain,
+    *, motion: MotionTable,
 ) -> Tuple[Bool, Int, Float32, Float32]:
     """A root of the chains from x0 to the light point y, found from a random seed (_glossy_sms_try); none when the
     lobe's density toward it is below GLOSSY_SMS_MIN_PDF. (ok, n, weight, g = dw0/dA_y), the chain in `verts`.
     ldu, ldv: the light's orthonormal tangents."""
-    var first = _glossy_sms_try(ctx, x0, bsdf, tab, wl, y, ldu, ldv, pcg, verts)
+    var first = _glossy_sms_try(ctx, x0, bsdf, tab, wl, y, ldu, ldv, pcg, verts, motion=motion)
     if not first[0]:
         return (False, 0, Float32(0), Float32(0))
     var d0 = verts[0].pos - x0
@@ -228,35 +233,38 @@ def glossy_sms_root_pos(verts: SMSChain, n: Int) -> SMSRoot:
 def glossy_sms_refinds(
     ctx: ShadeContext, x0: Vec3f, bsdf: BSDF, tab: LobeTables, wl: SampledWavelengths,
     y: Vec3f, ldu: Vec3f, ldv: Vec3f, mut pcg: PCG32, root: SMSRoot, n: Int,
+    *, motion: MotionTable,
 ) -> Bool:
     """One re-solve of the reciprocal estimate: whether a fresh seed finds the root `root` again."""
     var other = SMSChain(fill=sms_vertex_init())
-    var k = _glossy_sms_try(ctx, x0, bsdf, tab, wl, y, ldu, ldv, pcg, other)
+    var k = _glossy_sms_try(ctx, x0, bsdf, tab, wl, y, ldu, ldv, pcg, other, motion=motion)
     return k[0] and k[1] == n and _same_root(x0, other, root, n)
 
 
 def glossy_sms_solve(
     ctx: ShadeContext, x0: Vec3f, bsdf: BSDF, tab: LobeTables, wl: SampledWavelengths,
     y: Vec3f, ldu: Vec3f, ldv: Vec3f, mut pcg: PCG32, mut verts: SMSChain,
+    *, motion: MotionTable,
 ) -> Tuple[Bool, Int, Float32, Float32, Float32]:
     """glossy_sms_root and the reciprocal of the chance a seed finds it, estimated by re-seeding until one does
     (Zeltner et al. 2020, Sec. 4.3). (ok, n, weight, g, trial count), the chain in `verts`."""
-    var r = glossy_sms_root(ctx, x0, bsdf, tab, wl, y, ldu, ldv, pcg, verts)
+    var r = glossy_sms_root(ctx, x0, bsdf, tab, wl, y, ldu, ldv, pcg, verts, motion=motion)
     if not r[0]:
         return (False, 0, Float32(0), Float32(0), Float32(0))
-    var trials = glossy_sms_trials(ctx, x0, bsdf, tab, wl, y, ldu, ldv, pcg, glossy_sms_root_pos(verts, r[1]), r[1])
+    var trials = glossy_sms_trials(ctx, x0, bsdf, tab, wl, y, ldu, ldv, pcg, glossy_sms_root_pos(verts, r[1]), r[1], motion=motion)
     return (True, r[1], r[2], r[3], trials)
 
 
 def glossy_sms_trials(
     ctx: ShadeContext, x0: Vec3f, bsdf: BSDF, tab: LobeTables, wl: SampledWavelengths,
     y: Vec3f, ldu: Vec3f, ldv: Vec3f, mut pcg: PCG32, root: SMSRoot, n: Int,
+    *, motion: MotionTable,
 ) -> Float32:
     """The reciprocal estimate: re-solves until one finds `root` again, at most GLOSSY_SMS_MAX_TRIALS."""
     var trials = Float32(0)
     for _t in range(GLOSSY_SMS_MAX_TRIALS):
         trials += Float32(1)
-        if glossy_sms_refinds(ctx, x0, bsdf, tab, wl, y, ldu, ldv, pcg, root, n):
+        if glossy_sms_refinds(ctx, x0, bsdf, tab, wl, y, ldu, ldv, pcg, root, n, motion=motion):
             break
     return trials
 
@@ -282,6 +290,7 @@ struct GsmsTask(TrivialRegisterPassable):
     var bounce: Int32
     var next: Int32    # the next trial index a workgroup takes
     var first: Int32   # the lowest trial index that found the root so far; GLOSSY_SMS_MAX_TRIALS: none
+    var time: Float32  # the path's
 
 
 comptime _GSMS_HEAD = 64
@@ -369,11 +378,12 @@ def glossy_sms_mis(p_dir: Float32, t_chain: Float32, g: Float32, p_area: Float32
 
 def glossy_sms_reproduce(
     ctx: ShadeContext, x0: Vec3f, dir: Vec3f, n_spec: Int, light_hit: Vec3f, light: Intersection, mut verts: SMSChain,
+    *, motion: MotionTable,
 ) -> Tuple[Bool, Float32]:
     """Whether the BSDF path that left x0 along dir and reached light_hit on the triangle `light` through n_spec
     specular vertices is a chain glossy SMS samples (re-traced by the chain rule, it lands there), with g; the chain
     in `verts`."""
-    var la = sms_chain_lands(ctx, x0, dir, n_spec, light_hit, verts)
+    var la = sms_chain_lands(ctx, x0, dir, n_spec, light_hit, verts, motion=motion)
     if not la[0] or la[1].primId.id1 != light.primId.id1:
         return (False, Float32(0))
     var (lmesh, lv0, lv1, lv2, _) = _get_tri_verts(light, ctx.meshes)

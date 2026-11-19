@@ -7,6 +7,7 @@
 from std.math import abs, sqrt, log, exp
 from std.memory.alloc import unsafe_alloc
 from std.testing import assert_true, assert_false, TestSuite
+from gonzales.scene.shapes.motion import MotionTable
 from gonzales.core.geometry import RGB, Vec3f, dot, cross, reflect
 from gonzales.scene.shapes.primitives import PrimId, Intersection, TriangleMesh, encode_normal
 from gonzales.scene.appearance.media import Medium, sample_homogeneous_free_flight
@@ -346,7 +347,7 @@ def test_geom_normal_matches_cross_product_of_the_triangle_edges() raises:
     meshes[unsafe_offset=0] = mesh
 
     var inter = _make_hit(Float32(0.25), Float32(0.25))
-    var n = _geom_normal(inter, meshes)
+    var n = _geom_normal(inter, meshes, motion=MotionTable.none())
     assert_true(_simd_close(n, Vec3f(0.0, 0.0, 1.0)))
 
     meshes[unsafe_offset=0].points.unsafe_free()
@@ -362,7 +363,7 @@ def test_shading_normal_at_falls_back_to_geometric_when_no_vertex_normals() rais
     meshes[unsafe_offset=0] = mesh
 
     var inter = _make_hit(Float32(0.3), Float32(0.3))
-    var sn = _shading_normal_at(inter, meshes)
+    var sn = _shading_normal_at(inter, meshes, motion=MotionTable.none())
     assert_true(_simd_close(sn, Vec3f(0.0, 0.0, 1.0)))
 
     meshes[unsafe_offset=0].points.unsafe_free()
@@ -398,7 +399,7 @@ def test_shading_normal_at_interpolates_per_vertex_normals_barycentrically() rai
     expected = expected * (Float32(1.0) / el)
 
     var inter = _make_hit(u, v)
-    var sn = _shading_normal_at(inter, meshes)
+    var sn = _shading_normal_at(inter, meshes, motion=MotionTable.none())
     assert_true(_simd_close(sn, expected))
 
     meshes[unsafe_offset=0].points.unsafe_free()

@@ -31,7 +31,7 @@ def path_medium_after_shading(path_ptr: Pointer[PathState, MutUntrackedOrigin], 
         return
     var r = path_ptr[].ray
     path_ptr[].current_medium_idx = medium_after(Vec3f(r.direction.x, r.direction.y, r.direction.z), path_ptr[].current_medium_idx,
-                                                 inter, mat, sd, Vec3f(r.origin.x, r.origin.y, r.origin.z))
+                                                 inter, mat, sd, Vec3f(r.origin.x, r.origin.y, r.origin.z), sd.motion.at(path_ptr[].time))
 
 
 @always_inline

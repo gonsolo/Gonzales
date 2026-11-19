@@ -1,6 +1,7 @@
 from std.collections import Array
 from std.math import abs, sqrt, cos, sin
 from std.testing import assert_true, TestSuite
+from gonzales.scene.shapes.motion import MotionTable
 from gonzales.core.geometry import dot, cross, Vec3f, PI
 from gonzales.core.rng import PCG32
 from gonzales.scene.appearance.materials import fr_dielectric
@@ -61,7 +62,7 @@ def _chain(x0: Vec3f, y: Vec3f, tir_x: Float32 = Float32(0)) -> Tuple[Array[SMSV
 
 def _solve(x0: Vec3f, y: Vec3f, var verts: Array[SMSVertex, MAX_SMS_VERTICES], n: Int) -> Tuple[Bool, Array[SMSVertex, MAX_SMS_VERTICES], Float32, Float32]:
     """(ok, solved chain, radiance factor product, g = dw0/dA_y)."""
-    var r = sms_walk(x0, y, verts, n, _v(1, 0, 0), _v(0, 0, 1))
+    var r = sms_walk(x0, y, verts, n, _v(1, 0, 0), _v(0, 0, 1), motion=MotionTable.none())
     if not r[0]:
         return (False, verts^, Float32(0), Float32(0))
     for i in range(n):
@@ -84,7 +85,7 @@ def test_flat_reflection_root_and_g() raises:
     verts[0] = v
     # a lamp tilted against the ray, so its cosine is not trivial
     var ldu = _norm(_v(1, 0, 0.3)); var ldv = _v(0, 1, 0)
-    var r = sms_walk(x0, xL, verts, 1, ldu, ldv)
+    var r = sms_walk(x0, xL, verts, 1, ldu, ldv, motion=MotionTable.none())
     assert_true(r[0])
     var d = r[1][0] - w1[1]
     assert_true(dot(d, d) < Float32(1e-8))
@@ -113,7 +114,7 @@ def test_walk2_reflect_matches_sms_walk() raises:
     var a = sms_vertex_flat(x1i, n1, du, dv, Float32(1.5)); a.refl = Int8(1)
     verts[0] = a
     verts[1] = sms_vertex_flat(x2i, n2, du, dv, Float32(1.33))
-    var r = sms_walk(x0, xL, verts, 2, du, dv)
+    var r = sms_walk(x0, xL, verts, 2, du, dv, motion=MotionTable.none())
     assert_true(r[0])
     var d0 = r[1][0] - w2[1]; var d1 = r[1][1] - w2[2]
     assert_true(dot(d0, d0) < Float32(1e-8) and dot(d1, d1) < Float32(1e-8))

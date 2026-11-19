@@ -3,6 +3,7 @@
 
 from std.math import max, abs, sqrt, cos, sin
 from std.atomic import Atomic
+from gonzales.scene.shapes.motion import MotionTable
 from gonzales.core.geometry import Point3f, Point2f, Vec3f, RGB, dot, cross, PI, _is_real_ptr
 from gonzales.scene.appearance.materials import LobeKind
 from gonzales.scene.shapes.primitives import Intersection, mesh_vi, mesh_pos
@@ -247,7 +248,7 @@ def _vcm_mnee_light_point(
         var lp0 = mesh_pos(lmesh, lv0); var lp1 = mesh_pos(lmesh, lv1); var lp2 = mesh_pos(lmesh, lv2)
         var sr1 = sqrt(pcg.next_float()); var ru2 = pcg.next_float()
         var bu = sr1 * (Float32(1) - ru2); var bv = sr1 * ru2
-        var ln = _emitter_face_normal(lmesh, lv0, lv1, lv2, bu, bv, lp0, lp1, lp2)
+        var ln = _emitter_face_normal(lmesh, lv0, lv1, lv2, bu, bv, lp0, lp1, lp2, motion=MotionTable.none())
         var lnl = sqrt(dot(ln, ln))
         if lnl <= Float32(0):
             return none
@@ -292,10 +293,10 @@ def _vcm_mnee(
         return z
     var shadow_dir = to_light * (Float32(1) / dist)
     var ctx = _shade_context(sd, Pointer[UInt32, MutUntrackedOrigin].unsafe_dangling())
-    var (glass, probe) = _mnee_first_probe(ctx, hit_v, shadow_dir, dist)
+    var (glass, probe) = _mnee_first_probe(ctx, hit_v, shadow_dir, dist, motion=MotionTable.none())
     if not glass:
         return z
-    var c = _mnee_chain(ctx, gn, hit_v, shadow_dir, dist, light_point, l_du, l_dv, pcg, probe)
+    var c = _mnee_chain(ctx, gn, hit_v, shadow_dir, dist, light_point, l_du, l_dv, pcg, probe, motion=MotionTable.none())
     if not c[1]:
         return z
     var n = c[2]
@@ -331,7 +332,7 @@ def _vcm_mnee_hit_term(
     if (sd.hasGlass & Int32(1)) == Int32(0) or n_glass <= 0 or pdf_x0 <= Float32(0):
         return Float32(0)
     var ctx = _shade_context(sd, Pointer[UInt32, MutUntrackedOrigin].unsafe_dangling())
-    var rp = _mnee_reproduce(ctx, x0, n_glass, last_glass, light_hit, l_du, l_dv, pcg)
+    var rp = _mnee_reproduce(ctx, x0, n_glass, last_glass, light_hit, l_du, l_dv, pcg, motion=MotionTable.none())
     if not rp[0] or rp[3] <= Float32(0):
         return Float32(0)
     var t_pass = _mnee_pass(_mnee_chain_transmittance(ctx, x0, rp[2], rp[1], light_hit, cur_med, wl))
@@ -351,7 +352,7 @@ def _vcm_mnee_light_dvcm(
     var ctx = _shade_context(sd, Pointer[UInt32, MutUntrackedOrigin].unsafe_dangling())
     var a = Vec3f(Float32(1), Float32(0), Float32(0)) if abs(ny[0]) < Float32(0.9) else Vec3f(Float32(0), Float32(1), Float32(0))
     var tu = cross(ny, a)
-    var rp = _mnee_reproduce(ctx, x0, n_glass, first_glass, y, tu, cross(ny, tu), pcg)
+    var rp = _mnee_reproduce(ctx, x0, n_glass, first_glass, y, tu, cross(ny, tu), pcg, motion=MotionTable.none())
     if not rp[0] or rp[3] <= Float32(0):
         return Float32(0)
     var (t_ch, eta_ch) = _mnee_chain_t_eta(x0, rp[2], rp[1])
@@ -394,7 +395,7 @@ def _vcm_gsms(
     var bsdf = _vertex_ctx(v)
     var tab = LobeTables(sd.materials, sd.curves, sd.measuredBrdfs, sd.spectral, sd.mediums)
     var verts = Array[SMSVertex, MAX_SMS_VERTICES](fill=sms_vertex_init())
-    var r = glossy_sms_solve(ctx, hit_v, bsdf, tab, wl, y, ldu, ldv, pcg, verts)
+    var r = glossy_sms_solve(ctx, hit_v, bsdf, tab, wl, y, ldu, ldv, pcg, verts, motion=MotionTable.none())
     if not r[0]:
         return z
     var n = r[1]
@@ -433,7 +434,7 @@ def _vcm_gsms_hit_term(
         return Float32(0)
     var ctx = _shade_context(sd, Pointer[UInt32, MutUntrackedOrigin].unsafe_dangling())
     var verts = Array[SMSVertex, MAX_SMS_VERTICES](fill=sms_vertex_init())
-    var rp = glossy_sms_reproduce(ctx, x0, dir0, n_glass, light_hit, light, verts)
+    var rp = glossy_sms_reproduce(ctx, x0, dir0, n_glass, light_hit, light, verts, motion=MotionTable.none())
     if not rp[0] or rp[1] <= Float32(0):
         return Float32(0)
     var t_pass = _mnee_pass(_mnee_chain_transmittance(ctx, x0, verts, n_glass, light_hit, cur_med, wl))
@@ -451,7 +452,7 @@ def _vcm_gsms_light_dvcm(
         return Float32(0)
     var ctx = _shade_context(sd, Pointer[UInt32, MutUntrackedOrigin].unsafe_dangling())
     var verts = Array[SMSVertex, MAX_SMS_VERTICES](fill=sms_vertex_init())
-    if not sms_chain_lands(ctx, x0, dir_in, n_glass, y, verts)[0]:
+    if not sms_chain_lands(ctx, x0, dir_in, n_glass, y, verts, motion=MotionTable.none())[0]:
         return Float32(0)
     var a = Vec3f(Float32(1), Float32(0), Float32(0)) if abs(ny[0]) < Float32(0.9) else Vec3f(Float32(0), Float32(1), Float32(0))
     var tu = cross(ny, a)

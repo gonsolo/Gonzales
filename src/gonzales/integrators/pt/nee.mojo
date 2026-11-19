@@ -2,6 +2,7 @@
 from std.atomic import Atomic
 from std.collections import Array
 from std.math import sqrt
+from gonzales.scene.shapes.motion import MotionTable
 from gonzales.core.geometry import offset_point, RGB, Point3f, Point2f, Vec3f, dot, cross, fast_sincos, TWO_PI, _is_real_ptr
 from gonzales.core.geometry import point3f
 from gonzales.scene.appearance.materials import sss_boundary_lobe
@@ -281,7 +282,7 @@ def _sample_light_point_and_normal(
         # Barycentrics of the sampled point, matching `point` above.
         var b_u = sqrt_r1 * (Float32(1.0) - u2)
         var b_v = sqrt_r1 * u2
-        var lcross = _emitter_face_normal(lmesh, lv0, lv1, lv2, b_u, b_v, lp0, lp1, lp2)
+        var lcross = _emitter_face_normal(lmesh, lv0, lv1, lv2, b_u, b_v, lp0, lp1, lp2, motion=MotionTable.none())
         var normal = lcross
         var lcross_len = dot(lcross, lcross)
         if lcross_len > Float32(0.0):
@@ -354,11 +355,12 @@ def _sms_probe_and_solve(
     ldp_du_v: Vec3f,
     ldp_dv_v: Vec3f,
     mut pcg: PCG32,
+    *, motion: MotionTable,
 ) -> Tuple[Bool, Bool, Int, Array[SMSVertex, MAX_SMS_VERTICES], Float32, Float32, Float32]:
-    var (probe_glass, probe_inter) = _mnee_first_probe(ctx, hit_point, shadow_dir, dist)
+    var (probe_glass, probe_inter) = _mnee_first_probe(ctx, hit_point, shadow_dir, dist, motion=motion)
     if not probe_glass:
         return (False, False, 0, Array[SMSVertex, MAX_SMS_VERTICES](fill=sms_vertex_init()), Float32(0.0), Float32(0.0), Float32(0.0))
-    return _sms_solve_from_probe(ctx, hit_point, shadow_dir, dist, light_point, ldp_du_v, ldp_dv_v, pcg, probe_inter)
+    return _sms_solve_from_probe(ctx, hit_point, shadow_dir, dist, light_point, ldp_du_v, ldp_dv_v, pcg, probe_inter, motion=motion)
 
 
 @always_inline
@@ -392,7 +394,7 @@ def _mnee_bsdf_weight(
     var o = path_ptr[].ray.origin
     var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
     var rp = _mnee_reproduce(ctx, x0, Int(path_ptr[].ns_spec), Vec3f(o.x, o.y, o.z), light_hit,
-                             mesh_pos(lmesh, lv1) - lp0, mesh_pos(lmesh, lv2) - lp0, pcg)
+                             mesh_pos(lmesh, lv1) - lp0, mesh_pos(lmesh, lv2) - lp0, pcg, motion=ctx.motion.at(path_ptr[].time))
     if not rp[0]:
         return Float32(1.0)
     var al_idx = Int(inter.primId.id1)
@@ -470,12 +472,12 @@ def _mnee_area_light_contribute(
         return False
 
     # Most samples see no glass: skip the solver's heavy setup for them (it would return not-found untouched).
-    var (probe_glass, probe_inter) = _mnee_first_probe(ctx, hit_point, shadow_dir, dist)
+    var (probe_glass, probe_inter) = _mnee_first_probe(ctx, hit_point, shadow_dir, dist, motion=ctx.motion.at(path_ptr[].time))
     if not probe_glass:
         return False
 
     var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
-    var c = _mnee_chain(ctx, normal, hit_point, shadow_dir, dist, light_point, ldp_du_v, ldp_dv_v, pcg, probe_inter)
+    var c = _mnee_chain(ctx, normal, hit_point, shadow_dir, dist, light_point, ldp_du_v, ldp_dv_v, pcg, probe_inter, motion=ctx.motion.at(path_ptr[].time))
     path_ptr[].pcgState = pcg.state
     if not c[0]:
         return False
@@ -532,10 +534,10 @@ def _glossy_sms_nee(
     var wl = path_ptr[].wavelengths
     comptime if GSMS_DEBUG == 6:
         if path_ptr[].specularBounce == Int8(1):   # reached through the camera's glass only
-            path_ptr[].estimate += SpectralSample(Float32(1)) * glossy_sms_stage(ctx, hit_point, bsdf, tab, wl, y, ldu, ldv, pcg)
+            path_ptr[].estimate += SpectralSample(Float32(1)) * glossy_sms_stage(ctx, hit_point, bsdf, tab, wl, y, ldu, ldv, pcg, motion=ctx.motion.at(path_ptr[].time))
         return
     var verts = Array[SMSVertex, MAX_SMS_VERTICES](fill=sms_vertex_init())
-    var r = glossy_sms_root(ctx, hit_point, bsdf, tab, wl, y, ldu, ldv, pcg, verts)
+    var r = glossy_sms_root(ctx, hit_point, bsdf, tab, wl, y, ldu, ldv, pcg, verts, motion=ctx.motion.at(path_ptr[].time))
     if not r[0]:
         return
     var n = r[1]
@@ -554,9 +556,9 @@ def _glossy_sms_nee(
     if _is_real_ptr(ctx.gsms_queue):
         var seed = (UInt64(pcg.next_uint()) << 32) | UInt64(pcg.next_uint())
         if gsms_park(ctx.gsms_queue, GsmsTask(c, hit_point, y, ldu, ldv, bsdf, wl, seed, Int32(n), Int32(ctx.path_idx),
-                                              Int32(path_ptr[].bounce), Int32(0), Int32(GLOSSY_SMS_MAX_TRIALS)), verts):
+                                              Int32(path_ptr[].bounce), Int32(0), Int32(GLOSSY_SMS_MAX_TRIALS), path_ptr[].time), verts):
             return
-    c = c * glossy_sms_trials(ctx, hit_point, bsdf, tab, wl, y, ldu, ldv, pcg, glossy_sms_root_pos(verts, n), n)
+    c = c * glossy_sms_trials(ctx, hit_point, bsdf, tab, wl, y, ldu, ldv, pcg, glossy_sms_root_pos(verts, n), n, motion=ctx.motion.at(path_ptr[].time))
     comptime if GSMS_DEBUG == 1:
         path_ptr[].estimate += c
     path_ptr[].estimate += _clamped(ctx, c, Int(path_ptr[].bounce))
@@ -571,7 +573,7 @@ def _glossy_sms_bsdf_weight(
     var x0 = path_ptr[].last_ns_p
     var n = Int(path_ptr[].ns_spec)
     var verts = Array[SMSVertex, MAX_SMS_VERTICES](fill=sms_vertex_init())
-    var rp = glossy_sms_reproduce(ctx, x0, path_ptr[].gl_dir, n, light_hit, inter, verts)
+    var rp = glossy_sms_reproduce(ctx, x0, path_ptr[].gl_dir, n, light_hit, inter, verts, motion=ctx.motion.at(path_ptr[].time))
     if not rp[0]:
         return Float32(1.0)
     var al_idx = Int(inter.primId.id1)
@@ -608,6 +610,7 @@ def sms_generate_reservoir(
     shadow_dir: Vec3f, dist: Float32, light_point: Vec3f,
     ldp_du_v: Vec3f, ldp_dv_v: Vec3f,
     al: AreaLight, inv_pdf_area: Float32, mut pcg: PCG32,
+    *, motion: MotionTable,
 ) -> Tuple[Bool, SMSReservoir]:
     """Phase 6's candidate generation: probe+solve for an admissible
     specular chain toward the given area-light sample (same scope
@@ -635,7 +638,7 @@ def sms_generate_reservoir(
     if al.kind != Int8(0):
         return (False, res^)
     var _probe_res2 = _sms_probe_and_solve(
-        ctx, hit_point, shadow_dir, dist, light_point, ldp_du_v, ldp_dv_v, pcg)
+        ctx, hit_point, shadow_dir, dist, light_point, ldp_du_v, ldp_dv_v, pcg, motion=motion)
     var dielectric_found = _probe_res2[0]
     var solve_ok = _probe_res2[1]
     var n = _probe_res2[2]
@@ -758,7 +761,7 @@ def sms_temporal_step(
     plain single-frame candidate generation + resolve (no persistence)
     when sms_io isn't real -- matches di_temporal_step's own fallback for
     the batch (non-interactive) path."""
-    var gen_result = sms_generate_reservoir(ctx, hit_point, normal, alb, shadow_dir, dist, light_point, ldp_du_v, ldp_dv_v, al, inv_pdf_area, pcg)
+    var gen_result = sms_generate_reservoir(ctx, hit_point, normal, alb, shadow_dir, dist, light_point, ldp_du_v, ldp_dv_v, al, inv_pdf_area, pcg, motion=ctx.motion.at(path_ptr[].time))
     var dielectric_found = gen_result[0]
     var res = gen_result[1].copy()
     var has_temporal = pixel_idx >= 0 and _is_real_ptr(sms_io.read)
@@ -786,7 +789,7 @@ def sms_temporal_step(
     # caller supplied a real G-buffer.
     sms_spatial_combine(
         res, hit_point, normal, alb, light_point, ldp_du_v, ldp_dv_v,
-        pcg, sms_io, pixel_idx)
+        pcg, sms_io, pixel_idx, motion=ctx.motion.at(path_ptr[].time))
 
     sms_resolve(path_ptr, ctx, hit_point, normal, alb, res)
     if has_temporal:

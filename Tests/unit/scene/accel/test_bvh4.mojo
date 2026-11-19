@@ -1,6 +1,7 @@
 from std.math import abs, sqrt
 from std.memory.alloc import unsafe_alloc
 from std.testing import assert_true, assert_equal, TestSuite
+from gonzales.scene.shapes.motion import MotionTable
 from gonzales.core.geometry import Point3f, Vec3f
 from gonzales.scene.appearance.materials import MatKind
 from gonzales.scene.shapes.primitives import Intersection
@@ -66,8 +67,8 @@ def _compare(n_tris: Int, n_rays: Int, seed: UInt64, min_hits: Int = 0, extent: 
             continue
         var ray = Ray(org, Vec3f(dx / len, dy / len, dz / len))
         var tmax = Float32(1e30) if i % 3 != 0 else r.next() * 1.2 * extent
-        traverse_bvh2_core(fx.bvh_nodes, fx.prim_ids, fx.meshes, fx.curves, ray, tmax, res2)
-        traverse_bvh4_core(bvh4, fx.prim_ids, fx.meshes, fx.curves, ray, tmax, res4)
+        traverse_bvh2_core(fx.bvh_nodes, fx.prim_ids, fx.meshes, fx.curves, ray, tmax, res2, motion=MotionTable.none())
+        traverse_bvh4_core(bvh4, fx.prim_ids, fx.meshes, fx.curves, ray, tmax, res4, motion=MotionTable.none())
         var a = res2[unsafe_offset=0]
         var b = res4[unsafe_offset=0]
         if a.hit != b.hit:
@@ -85,8 +86,8 @@ def _compare(n_tris: Int, n_rays: Int, seed: UInt64, min_hits: Int = 0, extent: 
             else:
                 bad += 1        # a different triangle at a different distance is a real mismatch
                 continue
-        var s2 = any_hit_bvh2_core(fx.bvh_nodes, fx.prim_ids, fx.meshes, fx.curves, ray, tmax)
-        var s4 = any_hit_bvh4_core(bvh4, fx.prim_ids, fx.meshes, fx.curves, ray, tmax)
+        var s2 = any_hit_bvh2_core(fx.bvh_nodes, fx.prim_ids, fx.meshes, fx.curves, ray, tmax, motion=MotionTable.none())
+        var s4 = any_hit_bvh4_core(bvh4, fx.prim_ids, fx.meshes, fx.curves, ray, tmax, motion=MotionTable.none())
         if s2 != s4:
             bad += 1
     print("bvh4 vs bvh2:", n_tris, "tris,", n_rays, "rays,", n_hit, "hits,", n_exact, "identical,", n_tie, "ties,", b4[1], "bvh4 nodes,", bad, "mismatches")
@@ -134,13 +135,13 @@ def test_bvh4_shadow_rays_skip_interface_material() raises:
         if len < Float32(1e-3):
             continue
         var ray = Ray(org, Vec3f(dx / len, dy / len, dz / len))
-        var plain2 = any_hit_bvh2_core(fx.bvh_nodes, fx.prim_ids, fx.meshes, fx.curves, ray, Float32(100.0))
-        var plain4 = any_hit_bvh4_core(bvh4, fx.prim_ids, fx.meshes, fx.curves, ray, Float32(100.0))
+        var plain2 = any_hit_bvh2_core(fx.bvh_nodes, fx.prim_ids, fx.meshes, fx.curves, ray, Float32(100.0), motion=MotionTable.none())
+        var plain4 = any_hit_bvh4_core(bvh4, fx.prim_ids, fx.meshes, fx.curves, ray, Float32(100.0), motion=MotionTable.none())
         assert_equal(plain2, plain4)
         if plain2:
             n_blocked += 1
-        var skip2 = any_hit_bvh2_core(fx.bvh_nodes, fx.prim_ids, fx.meshes, fx.curves, ray, Float32(100.0), materials=fx.materials)
-        var skip4 = any_hit_bvh4_core(bvh4, fx.prim_ids, fx.meshes, fx.curves, ray, Float32(100.0), materials=fx.materials)
+        var skip2 = any_hit_bvh2_core(fx.bvh_nodes, fx.prim_ids, fx.meshes, fx.curves, ray, Float32(100.0), materials=fx.materials, motion=MotionTable.none())
+        var skip4 = any_hit_bvh4_core(bvh4, fx.prim_ids, fx.meshes, fx.curves, ray, Float32(100.0), materials=fx.materials, motion=MotionTable.none())
         assert_true(not skip2)
         assert_true(not skip4)
     assert_true(n_blocked > 500)

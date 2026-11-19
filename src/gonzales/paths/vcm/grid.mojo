@@ -3,6 +3,7 @@ from max.algorithm import parallelize
 from std.atomic import Atomic
 from std.math import sqrt, floor, max, pow
 from std.memory.alloc import unsafe_alloc
+from gonzales.scene.shapes.motion import MotionTable
 from gonzales.core.geometry import Point3f, Vec3f
 from gonzales.scene.appearance.materials import LobeKind
 from gonzales.scene.shapes.primitives import Intersection, PrimId
@@ -243,7 +244,7 @@ def _camera_typical_distance(
             isects[unsafe_offset=0] = Intersection(PrimId(-1, -1, 0, -1, 0, 0, 0, 0), Float32(1e38), 0.0, 0.0, Int8(0), 0, 0, 0)
             if Int(sd.meshCount) > 0 or Int(sd.curveCount) > 0 or Int(sd.instanceCount) > 0:
                 traverse_dispatch(sd.bvh4, sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, Float32(1e38), isects.unsafe_offset(0),
-                                   sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances)
+                                   sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances, motion=MotionTable.none())
             if Int(sd.sphereCount) > 0:
                 test_spheres(sd.spheres, Int(sd.sphereCount), ray, isects.unsafe_offset(0))
             if isects[unsafe_offset=0].hit != Int8(0):

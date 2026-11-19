@@ -194,7 +194,7 @@ def test_wavefront_split_matches_original_light_path_exactly() raises:
         var ray = Ray(state.ro, state.rd)
         var scratch_new = unsafe_alloc[Intersection](1)
         scratch_new[unsafe_offset=0].hit = Int8(0)
-        traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, Float32(1e38), scratch_new)
+        traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, Float32(1e38), scratch_new, motion=MotionTable.none())
         var inter = scratch_new[unsafe_offset=0]
         scratch_new.unsafe_free()
 

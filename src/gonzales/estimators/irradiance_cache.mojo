@@ -2,6 +2,7 @@
 from std.math import floor, max, min, sqrt
 from std.memory.alloc import unsafe_alloc
 from std.builtin.device_passable import DevicePassable, DeviceTypeEncoder
+from gonzales.scene.shapes.motion import MotionTable
 from gonzales.core.geometry import Point3f, Ray, Vec3f, cross, dot, point3f, _is_real_ptr
 from gonzales.core.rng import PCG32
 from gonzales.core.spectrum import SpectralSample
@@ -279,14 +280,14 @@ def _outside_ior(ref sd: SceneView, x: Point3f, n: Vec3f, hit: Pointer[Intersect
     for _ in range(32):
         o = o + d * Float32(1e-4)
         traverse_dispatch(sd.bvh4, sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, Ray(point3f(o), n),
-                          Float32(1.0e38), hit, sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances, sd.spheres, Int(sd.sphereCount))
+                          Float32(1.0e38), hit, sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances, sd.spheres, Int(sd.sphereCount), motion=MotionTable.none())
         if hit[].hit == Int8(0):
             return Float32(1)
         o = o + d * hit[].tHit
         var m = sd.materials[unsafe_offset=Int(hit[].primId.materialIndex)]
         if m.type != MatKind.dielectric or m.sss_walk_interior():
             continue
-        if dot(_geom_normal(hit[], sd.meshes, sd.instances, sd.spheres, o), d) > Float32(0):
+        if dot(_geom_normal(hit[], sd.meshes, sd.instances, sd.spheres, o, motion=MotionTable.none()), d) > Float32(0):
             if depth == 0:
                 return m.albedo.r
             depth -= 1

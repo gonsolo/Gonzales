@@ -17,7 +17,7 @@ def _geom_normal(
     instances: Pointer[Instance, MutUntrackedOrigin] = Pointer[Instance, MutUntrackedOrigin].unsafe_dangling(),
     spheres: Pointer[Sphere, MutUntrackedOrigin] = Pointer[Sphere, MutUntrackedOrigin].unsafe_dangling(),
     hit: Vec3f = Vec3f(Float32(0), Float32(0), Float32(0)),
-    motion: MotionTable = MotionTable.none(),
+    *, motion: MotionTable,
 ) -> Vec3f:
     """Normalized geometric normal from triangle cross product. If this hit
     came from inside an instanced BLAS (primId.instanceIdx >= 0 — see
@@ -73,7 +73,7 @@ def _shading_normal_at(
     instances: Pointer[Instance, MutUntrackedOrigin] = Pointer[Instance, MutUntrackedOrigin].unsafe_dangling(),
     spheres: Pointer[Sphere, MutUntrackedOrigin] = Pointer[Sphere, MutUntrackedOrigin].unsafe_dangling(),
     hit: Point3f = Point3f(Float32(0)),
-    motion: MotionTable = MotionTable.none(),
+    *, motion: MotionTable,
 ) -> Vec3f:
     """Barycentrically-interpolated SMOOTH shading normal at a triangle hit,
     falling back to the flat geometric normal when the mesh has no per-vertex

@@ -1,6 +1,7 @@
 """ReSTIR DI and GI on the path tracer."""
 from std.collections import Array
 from std.math import sqrt, abs
+from gonzales.scene.shapes.motion import MotionTable
 from gonzales.core.geometry import RGB, Point3f, Point2i, restir_jitter_pixel, Vec3f, dot, _is_real_ptr
 from gonzales.transport.render_state import PathState
 from gonzales.core.geometry import Ray
@@ -211,6 +212,7 @@ def di_resolve(
 def _gi_generate_recon_candidate(
     ctx: ShadeContext, hit_point: Vec3f, normal: Vec3f, alb: RGB,
     mut pcg: PCG32,
+    *, motion: MotionTable,
 ) -> GIReservoir:
     """Generates x2's own contribution to Lo(x2): ONE area-light NEE sample
     (mirrors _di_sample_candidate's light pick, resolved as a plain single-
@@ -256,7 +258,7 @@ def _gi_generate_recon_candidate(
     if not any_hit_dispatch(ctx.bvh4, ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves, shadow_ray, dist * Float32(0.9999),
                               ctx.blasNodesArr, ctx.blasPrimIdsArr, ctx.instances,
                               ctx.lights.spheres, ctx.lights.sphere_count,
-                              materials=ctx.materials, motion=ctx.motion):
+                              materials=ctx.materials, motion=motion):
         lo = bxdf_eval_diffuse(alb) * le * (cos_s / gen_pdf)
     var res = gi_reservoir_init()
     res.recon_point = hit_point

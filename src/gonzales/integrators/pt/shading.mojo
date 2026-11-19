@@ -77,7 +77,7 @@ def shade_core(
         var p1 = mesh_pos(mesh, v1)
         var p2 = mesh_pos(mesh, v2)
 
-        var (normal, ray_dir, _) = _geom_normal_and_ray(path_ptr, p0, p1, p2)
+        var (normal, ray_dir, _) = _geom_normal_and_ray(path_ptr, p0, p1, p2, motion=MotionTable.none())
 
         # Cosine weighted hemisphere sampling
         var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
@@ -416,8 +416,8 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
             if seg_len > Float32(0.0001):
                 var seg_dir = seg * (Float32(1.0) / seg_len)
                 if dot(ns_n, seg_dir) > Float32(0.0) \
-                   and area_light_hit_cos(inter, ctx.meshes, ctx.instances, seg_dir) > Float32(0.0):
-                    if _mnee_first_probe(ctx, path_ptr[].last_ns_p, seg_dir, seg_len)[0]:
+                   and area_light_hit_cos(inter, ctx.meshes, ctx.instances, seg_dir, ctx.motion.at(path_ptr[].time)) > Float32(0.0):
+                    if _mnee_first_probe(ctx, path_ptr[].last_ns_p, seg_dir, seg_len, motion=ctx.motion.at(path_ptr[].time))[0]:
                         shared_with = 1
         elif path_ptr[].gl_pdf >= GLOSSY_SMS_MIN_PDF and path_ptr[].specularBounce == Int8(1) and path_ptr[].ns_spec >= Int8(1) \
              and al.kind == Int8(0) and glossy_sms_live(ctx):
@@ -428,7 +428,7 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
                 if _is_real_ptr(ctx.suppress_tasks):
                     var edir_d = Vec3f(path_ptr[].ray.direction.x, path_ptr[].ray.direction.y, path_ptr[].ray.direction.z)
                     var park = SpectralSample(Float32(0.0))
-                    if area_light_hit_cos(inter, ctx.meshes, ctx.instances, edir_d) > Float32(0.0):
+                    if area_light_hit_cos(inter, ctx.meshes, ctx.instances, edir_d, ctx.motion.at(path_ptr[].time)) > Float32(0.0):
                         park = path_ptr[].throughput * _to_spec_illum(ctx, emission, path_ptr[].wavelengths)
                     ctx.suppress_tasks[unsafe_offset=ctx.path_idx] = SuppressTask(park, Int32(shared_with), Int32(0), Int32(0), Int32(0))
                 if mat.type == MatKind.lamp:   # the ray goes on (Cycles' shade_light.h)
@@ -455,7 +455,7 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
         var e_front = True
         if inter.primId.type == PrimKind.emitter:
             var edir = Vec3f(path_ptr[].ray.direction.x, path_ptr[].ray.direction.y, path_ptr[].ray.direction.z)
-            e_front = area_light_hit_cos(inter, ctx.meshes, ctx.instances, edir) > Float32(0.0)
+            e_front = area_light_hit_cos(inter, ctx.meshes, ctx.instances, edir, ctx.motion.at(path_ptr[].time)) > Float32(0.0)
         if path_ptr[].bounce == 0 or path_ptr[].specularBounce == Int8(1):
             comptime if GSMS_DEBUG >= 2:
                 if e_front and shared_with == 2:
@@ -474,7 +474,7 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
                 # two must agree on which way the emitter faces.
                 var lnorm = _emitter_face_normal(lmesh, lv0, lv1, lv2, inter.u, inter.v,
                                                  lp0, lp1, lp2,
-                                                 inter.primId.instanceIdx, ctx.instances)
+                                                 inter.primId.instanceIdx, ctx.instances, motion=ctx.motion.at(path_ptr[].time))
                 var lnlen = dot(lnorm, lnorm)
                 if lnlen > Float32(0.0):
                     lnorm = lnorm * (Float32(1.0) / sqrt(lnlen))
@@ -646,7 +646,7 @@ def cpu_shade_context(
     filter_glossy: Float32 = Float32(0),
     clamp: SIMD[DType.float32, 2] = SIMD[DType.float32, 2](0),
     cycles: SIMD[DType.int32, 4] = SIMD[DType.int32, 4](0),
-    motion: MotionTable = MotionTable.none(),
+    *, motion: MotionTable,
 ) -> ShadeContext:
     """The per-render-invariant ShadeContext of the CPU wavefront; build once, set path_idx per path."""
     return ShadeContext(
@@ -716,7 +716,7 @@ def shade_core_cpu_nee(
     if path_ptr[].active == 0:
         return
     var inter = intersections[unsafe_offset=tid]
-    var ctx = cpu_shade_context(bvh2Nodes=bvh2Nodes, primIds=primIds, meshes=meshes, curves=curves, materials=materials, areaLights=areaLights, areaLightCount=areaLightCount, tex_filenames=tex_filenames, distantLights=distantLights, distantLightCount=distantLightCount, pointLights=pointLights, pointLightCount=pointLightCount, infiniteLights=infiniteLights, infiniteLightCount=infiniteLightCount, spheres=spheres, sphereCount=sphereCount, light_sampler=light_sampler, sobol_matrices=sobol_matrices, guide=guide, blasNodesArr=blasNodesArr, blasPrimIdsArr=blasPrimIdsArr, instances=instances, guide_write=guide_write, spectral=spectral, measured_brdfs=measured_brdfs, use_restir=use_restir, gi_pending=gi_pending, gi_io=gi_io, nmaps=nmaps, textures=textures, n_textures=n_textures, has_glass=has_glass, bvh4=bvh4)
+    var ctx = cpu_shade_context(bvh2Nodes=bvh2Nodes, primIds=primIds, meshes=meshes, curves=curves, materials=materials, areaLights=areaLights, areaLightCount=areaLightCount, tex_filenames=tex_filenames, distantLights=distantLights, distantLightCount=distantLightCount, pointLights=pointLights, pointLightCount=pointLightCount, infiniteLights=infiniteLights, infiniteLightCount=infiniteLightCount, spheres=spheres, sphereCount=sphereCount, light_sampler=light_sampler, sobol_matrices=sobol_matrices, guide=guide, blasNodesArr=blasNodesArr, blasPrimIdsArr=blasPrimIdsArr, instances=instances, guide_write=guide_write, spectral=spectral, measured_brdfs=measured_brdfs, use_restir=use_restir, gi_pending=gi_pending, gi_io=gi_io, nmaps=nmaps, textures=textures, n_textures=n_textures, has_glass=has_glass, bvh4=bvh4, motion=MotionTable.none())
     ctx.path_idx = tid
     shade_nee_core[False, False](path_ptr, inter, ctx, guide_write, restir_io, pixel_idx, sms_io)
 

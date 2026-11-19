@@ -40,7 +40,7 @@ def shadow_transmittance(
     mediums: Pointer[Medium, MutUntrackedOrigin], medium_ifaces: Pointer[MediumInterface, MutUntrackedOrigin],
     grids: Pointer[Grid, MutUntrackedOrigin], nvdb_grids: Pointer[NvdbGrid, MutUntrackedOrigin],
     spectral: SpectralHandle, wl: SampledWavelengths, mut pcg: PCG32,
-    motion: MotionTable = MotionTable.none(),
+    motion: MotionTable,
 ) -> SpectralSample:
     """Walk the segment through interface surfaces, tracking the current medium; black if an opaque surface blocks it."""
     var T = SpectralSample(Float32(1.0))
@@ -81,7 +81,7 @@ def shadow_transmittance(
         var p = o + dir * t_seg
         if mat.medium_interface_idx >= Int32(0):
             var iface = medium_ifaces[unsafe_offset=Int(mat.medium_interface_idx)]
-            cur = iface.toward(dir, _geom_normal(inter, meshes, instances, spheres, p, motion))
+            cur = iface.toward(dir, _geom_normal(inter, meshes, instances, spheres, p, motion=motion))
         o = p + dir * Float32(0.0002)
         remaining = remaining - t_seg - Float32(0.0002)
     return T

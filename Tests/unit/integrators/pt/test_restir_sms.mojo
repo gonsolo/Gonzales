@@ -1,6 +1,7 @@
 from std.collections import Array
 from std.math import abs, sqrt
 from std.testing import assert_true, TestSuite
+from gonzales.scene.shapes.motion import MotionTable
 from gonzales.core.geometry import RGB, dot, cross, Vec3f
 from gonzales.transport.sms import sms_walk, SMSVertex, MAX_SMS_VERTICES, sms_vertex_flat, sms_vertex_init
 from gonzales.integrators.pt.restir_sms import sms_reservoir_init, sms_target_pdf, sms_shift
@@ -98,7 +99,7 @@ def test_sms_shift_succeeds_and_lands_on_a_valid_solution_for_a_nearby_pixel() r
     var verts = _empty_verts()
     verts[0] = _flat_vert(Vec3f(Float32(0.1), Float32(0.1), Float32(1.0)), Float32(1.5))
     verts[1] = _flat_vert(Vec3f(Float32(0.15), Float32(0.05), Float32(2.0)), Float32(1.0)/Float32(1.5))
-    var _rw = sms_walk(src_x0, xL, verts, 2, du, dv)
+    var _rw = sms_walk(src_x0, xL, verts, 2, du, dv, motion=MotionTable.none())
     var src_ok = _rw[0]; var src_pos = _rw[1].copy()
     assert_true(src_ok)
     var src_verts = _empty_verts()
@@ -113,7 +114,7 @@ def test_sms_shift_succeeds_and_lands_on_a_valid_solution_for_a_nearby_pixel() r
     var _rs = sms_shift(
         dst_x0, xL, du, dv,
         src_x0, xL, du, dv,
-        src_verts, 2)
+        src_verts, 2, motion=MotionTable.none())
     var ok = _rs[0]; var shifted = _rs[1].copy(); var bsdf = _rs[2]; var jac = _rs[3]
     assert_true(ok)
     assert_true(bsdf > Float32(0.0))
@@ -135,7 +136,7 @@ def test_sms_shift_rejects_degenerate_source_chain() raises:
     src_verts[0] = _flat_vert(src_x0, Float32(1.5))
     src_verts[1] = _flat_vert(Vec3f(Float32(0.15), Float32(0.05), Float32(2.0)), Float32(1.0)/Float32(1.5))
     var _rs2 = sms_shift(
-        src_x0, xL, du, dv, src_x0, xL, du, dv, src_verts, 2)
+        src_x0, xL, du, dv, src_x0, xL, du, dv, src_verts, 2, motion=MotionTable.none())
     var ok = _rs2[0]
     assert_true(not ok)
 
@@ -151,7 +152,7 @@ def test_sms_shift_rejects_when_forward_walk_fails() raises:
     var verts = _empty_verts()
     verts[0] = _flat_vert(Vec3f(Float32(0.1), Float32(0.1), Float32(1.0)), Float32(1.5))
     verts[1] = _flat_vert(Vec3f(Float32(0.15), Float32(0.05), Float32(2.0)), Float32(1.0)/Float32(1.5))
-    var _rw2 = sms_walk(src_x0, xL, verts, 2, du, dv)
+    var _rw2 = sms_walk(src_x0, xL, verts, 2, du, dv, motion=MotionTable.none())
     var src_ok = _rw2[0]; var src_pos = _rw2[1].copy()
     assert_true(src_ok)
     var src_verts = _empty_verts()
@@ -162,7 +163,7 @@ def test_sms_shift_rejects_when_forward_walk_fails() raises:
     # to zero at vertex 0, forcing an immediate Newton-walk failure.
     var dst_x0 = src_pos[0]
     var _rs3 = sms_shift(
-        dst_x0, xL, du, dv, src_x0, xL, du, dv, src_verts, 2)
+        dst_x0, xL, du, dv, src_x0, xL, du, dv, src_verts, 2, motion=MotionTable.none())
     var ok = _rs3[0]
     assert_true(not ok)
 

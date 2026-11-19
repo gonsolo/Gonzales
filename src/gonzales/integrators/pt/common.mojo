@@ -47,6 +47,7 @@ def area_light_hit_cos(
     meshes: Pointer[TriangleMesh, MutUntrackedOrigin],
     instances: Pointer[Instance, MutUntrackedOrigin],
     ray_dir: Vec3f,
+    motion: MotionTable,
 ) -> Float32:
     """Cosine between an area-light TRIANGLE's emitting face and the ray that
     hit it (primId.type 3): > 0 on the emitting front, <= 0 on the back. The
@@ -60,7 +61,7 @@ def area_light_hit_cos(
     var p1 = mesh_pos(m, v1)
     var p2 = mesh_pos(m, v2)
     var en = _emitter_face_normal(m, v0, v1, v2, inter.u, inter.v, p0, p1, p2,
-                                  inter.primId.instanceIdx, instances)
+                                  inter.primId.instanceIdx, instances, motion=motion)
     var l2 = dot(en, en)
     if l2 <= Float32(0.0):
         return Float32(0)
@@ -112,7 +113,7 @@ def _shading_normal(
     geo_normal: Vec3f,
     instance_idx: Int32 = Int32(-1),
     instances: Pointer[Instance, MutUntrackedOrigin] = Pointer[Instance, MutUntrackedOrigin].unsafe_dangling(),
-    motion: MotionTable = MotionTable.none(),
+    *, motion: MotionTable,
 ) -> Vec3f:
     """Interpolate per-vertex shading normals with barycentric (bu, bv).
     Falls back to the geometric normal if the mesh has no shading normals.
@@ -123,7 +124,7 @@ def _shading_normal(
     the interpolated result is transformed the same way before comparison."""
     if _is_real_ptr(mesh.disp) or _is_real_ptr(mesh.patches):   # _hit_geom's geo_normal is the surface's already
         return geo_normal
-    var sn = _interp_vertex_normal(mesh, v0, v1, v2, bu, bv, instance_idx, instances, motion)
+    var sn = _interp_vertex_normal(mesh, v0, v1, v2, bu, bv, instance_idx, instances, motion=motion)
     if dot(sn, sn) == Float32(0.0):
         return geo_normal
     if dot(sn, geo_normal) < Float32(0.0):
@@ -167,7 +168,7 @@ def _geom_normal_and_ray(
     instance_idx: Int32 = Int32(-1),
     instances: Pointer[Instance, MutUntrackedOrigin] = Pointer[Instance, MutUntrackedOrigin].unsafe_dangling(),
     n_obj: Vec3f = Vec3f(0, 0, 0),   # nonzero: this object-space normal instead of the triangle's (a displaced hit)
-    motion: MotionTable = MotionTable.none(),
+    *, motion: MotionTable,
 ) -> Tuple[Vec3f, Vec3f, Vec3f]:
     """p0/p1/p2 come straight from `mesh.points` — object-space if this hit
     came from an instanced BLAS (instance_idx >= 0), so the resulting normal
@@ -215,7 +216,7 @@ def _sphere_geom_normal_and_ray(
 
 @always_inline
 def _hit_curve(inter: Intersection, curves: Pointer[Curve, MutUntrackedOrigin],
-               instances: Pointer[Instance, MutUntrackedOrigin], motion: MotionTable = MotionTable.none()) -> Curve:
+               instances: Pointer[Instance, MutUntrackedOrigin], motion: MotionTable) -> Curve:
     """The curve a hit is on, in world space. A curve of an object template is stored in the template's
     space; its control points go through the hit instance's transform (a cubic's control points transform
     like the curve) and its widths through that transform's mean scale."""
@@ -238,7 +239,7 @@ def _curve_geom_normal_and_ray(
     inter: Intersection,
     curves: Pointer[Curve, MutUntrackedOrigin],
     instances: Pointer[Instance, MutUntrackedOrigin] = Pointer[Instance, MutUntrackedOrigin].unsafe_dangling(),
-    motion: MotionTable = MotionTable.none(),
+    *, motion: MotionTable,
 ) -> Tuple[Vec3f, Vec3f, Vec3f]:
     var rd = Vec3f(path_ptr[].ray.direction.x, path_ptr[].ray.direction.y, path_ptr[].ray.direction.z)
     var ro = Vec3f(path_ptr[].ray.origin.x, path_ptr[].ray.origin.y, path_ptr[].ray.origin.z)
@@ -274,7 +275,7 @@ def _curve_geom_normal_and_ray(
 @always_inline
 def _curve_extra_offset(inter: Intersection, curves: Pointer[Curve, MutUntrackedOrigin],
                         instances: Pointer[Instance, MutUntrackedOrigin] = Pointer[Instance, MutUntrackedOrigin].unsafe_dangling(),
-                        motion: MotionTable = MotionTable.none()) -> Float32:
+                        *, motion: MotionTable) -> Float32:
     """Radius-scaled origin offset for a ray leaving a curve hit (same rule as shade_hair); 0 for other primitives."""
     if inter.primId.type != PrimKind.curve or not _is_real_ptr(curves):
         return Float32(0.0)
@@ -303,11 +304,11 @@ def _hit_geom(
     instance_idx: Int32 = Int32(-1),
     instances: Pointer[Instance, MutUntrackedOrigin] = Pointer[Instance, MutUntrackedOrigin].unsafe_dangling(),
     curves: Pointer[Curve, MutUntrackedOrigin] = Pointer[Curve, MutUntrackedOrigin].unsafe_dangling(),
-    motion: MotionTable = MotionTable.none(),
+    *, motion: MotionTable,
 ) -> Tuple[Bool, Bool, Vec3f, Vec3f, Vec3f, TriangleMesh, Int, Int, Int]:
     """Returns (ok, is_sphere, geo_normal, ray_dir, ray_org, mesh, v0, v1, v2). A curve hit (non-hair material) counts as is_sphere: no mesh, no UVs."""
     if inter.primId.type == PrimKind.curve and _is_real_ptr(curves):
-        var crv = _curve_geom_normal_and_ray(path_ptr, inter, curves, instances, motion)
+        var crv = _curve_geom_normal_and_ray(path_ptr, inter, curves, instances, motion=motion)
         return (True, True, crv[0], crv[1], crv[2], meshes[unsafe_offset=0], 0, 0, 0)
     if inter.primId.type == PrimKind.sphere:
         var sph_r = _sphere_geom_normal_and_ray(path_ptr, inter, spheres)
@@ -324,7 +325,7 @@ def _hit_geom(
         dn = displaced_hit_normal(mesh.disp, Int(inter.primId.id2), inter.u, inter.v)
     elif _is_real_ptr(mesh.patches):
         dn = patch_hit_normal(mesh.patches, Int(inter.primId.id2), inter.u, inter.v)
-    var gnr = _geom_normal_and_ray(path_ptr, p0, p1, p2, instance_idx, instances, dn, motion)
+    var gnr = _geom_normal_and_ray(path_ptr, p0, p1, p2, instance_idx, instances, dn, motion=motion)
     return (True, False, gnr[0], gnr[1], gnr[2], mesh, v0, v1, v2)
 
 
@@ -736,7 +737,7 @@ def _pt_hit_footprint(
     mesh: TriangleMesh, v0: Int, v1: Int, v2: Int,
     inter: Intersection, ray_org: Vec3f, ray_dir: Vec3f,
     textures: Pointer[GpuTexture, MutUntrackedOrigin], n_textures: Int,
-    motion: MotionTable = MotionTable.none(),
+    motion: MotionTable,
 ) -> Tuple[TriWorld, UVFootprint]:
     var tri = tri_world(mesh, v0, v1, v2, inter.primId.instanceIdx, instances, motion)
     # The footprint only ever feeds a texture or map lookup. A material with
@@ -768,7 +769,7 @@ def _build_geom_context_full[use_gpu: Bool](
     ctx: ShadeContext,
 ) -> Tuple[GeomContext, Bool]:
     var (ok, is_sphere, geo_normal, ray_dir, ray_org, mesh, v0, v1, v2) = _hit_geom(
-        path_ptr, inter, ctx.meshes, ctx.lights.spheres, inter.primId.instanceIdx, ctx.instances, ctx.curves, ctx.motion.at(path_ptr[].time))
+        path_ptr, inter, ctx.meshes, ctx.lights.spheres, inter.primId.instanceIdx, ctx.instances, ctx.curves, motion=ctx.motion.at(path_ptr[].time))
     if not ok:
         var z = Vec3f(Float32(0.0), Float32(0.0), Float32(0.0))
         return (GeomContext(z, z, z, z, z, z, RGB(Float32(0.0)), Float32(0.0)), False)
@@ -787,7 +788,7 @@ def _build_geom_context_full[use_gpu: Bool](
     var ng_ff = geo_normal
     var (tri, fp) = _pt_hit_footprint(path_ptr, mat, ctx.cam_fp, ctx.instances, mesh, v0, v1, v2, inter, ray_org, ray_dir, ctx.textures, ctx.n_textures, ctx.motion.at(path_ptr[].time))
 
-    var normal = _shading_normal(mesh, v0, v1, v2, inter.u, inter.v, geo_normal, inter.primId.instanceIdx, ctx.instances, ctx.motion.at(path_ptr[].time))
+    var normal = _shading_normal(mesh, v0, v1, v2, inter.u, inter.v, geo_normal, inter.primId.instanceIdx, ctx.instances, motion=ctx.motion.at(path_ptr[].time))
     normal = _apply_surface_maps[use_gpu](mat, v0, v1, v2, mesh, inter, normal, ng_ff,
         tri, fp, ctx.tex_filenames, ctx.textures, ctx.n_textures)
     var wo = Vec3f(-ray_dir[0], -ray_dir[1], -ray_dir[2])

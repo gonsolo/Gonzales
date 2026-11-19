@@ -1,4 +1,5 @@
 """A subsurface walk: the hop from a boundary's entry to its exit, shared by every integrator."""
+from gonzales.scene.shapes.motion import MotionTable
 from gonzales.scene.accel.bvh import traverse_bvh2_core_defer_curves, SceneView
 from gonzales.core.geometry import Frame, Point3f, Vec3f, _is_real_ptr, cross, dot, face_toward, offset_point
 from gonzales.scene.shapes.geom_normal import _geom_normal
@@ -108,7 +109,7 @@ def sss_walker_advance[steps: Int](ref sd: SceneView, walkers: Pointer[PathState
     var store = Array[Intersection, 1](fill=hits[unsafe_offset=i])
     var ps = state.unsafe_ptr()
     var h = store.unsafe_ptr()
-    _sss_walk_trace(sd, ps[].sss, ps[].ray, h.unsafe_origin_cast[MutUntrackedOrigin]())
+    _sss_walk_trace(sd, ps[].sss, ps[].ray, h.unsafe_origin_cast[MutUntrackedOrigin](), MotionTable.none())
     _sss_walk_step[steps](ps.unsafe_origin_cast[MutUntrackedOrigin](), h.unsafe_origin_cast[MutUntrackedOrigin](), 0, sd)
     walkers[unsafe_offset=i] = ps[]
     hits[unsafe_offset=i] = h[]
@@ -122,7 +123,7 @@ def sss_walker_exit(ref sd: SceneView, ps: PathState, e: Intersection) -> SssExi
     var x = Point3f(r.origin.x + r.direction.x * e.tHit, r.origin.y + r.direction.y * e.tHit, r.origin.z + r.direction.z * e.tHit)
     if ps.active == 0 or ps.sss.exiting == Int32(0):
         return SssExit(False, x, Vec3f(Float32(0)), SpectralSample(Float32(0)), e, ps.sss.eta)
-    var n = _geom_normal(e, sd.meshes, sd.instances, sd.spheres, x.to_simd())
+    var n = _geom_normal(e, sd.meshes, sd.instances, sd.spheres, x.to_simd(), motion=MotionTable.none())
     if dot(n, Vec3f(r.direction.x, r.direction.y, r.direction.z)) < Float32(0):
         n = -n
     return SssExit(True, x, n, ps.throughput, e, ps.sss.eta)
@@ -138,14 +139,14 @@ def sss_walk_to_exit(ref sd: SceneView, mat: Material, inter: Intersection, hit:
     var ps = state.unsafe_ptr()   # tracked: keep state and store alive while read
     var hits = store.unsafe_ptr()
     sss_walker_begin(ps.unsafe_origin_cast[MutUntrackedOrigin](), ray, walk, wl, pcg)
-    _sss_walk_trace(sd, walk, ray, hits.unsafe_origin_cast[MutUntrackedOrigin]())
+    _sss_walk_trace(sd, walk, ray, hits.unsafe_origin_cast[MutUntrackedOrigin](), MotionTable.none())
     _sss_walk_step(ps.unsafe_origin_cast[MutUntrackedOrigin](), hits.unsafe_origin_cast[MutUntrackedOrigin](), 0, sd)
     pcg.state = ps[].pcgState
     return sss_walker_exit(sd, ps[], hits[unsafe_offset=0])
 
 
 @always_inline
-def _sss_walk_trace(ref sd: SceneView, walk: SssWalk, ray: Ray, store: Pointer[Intersection, MutUntrackedOrigin]):
+def _sss_walk_trace(ref sd: SceneView, walk: SssWalk, ray: Ray, store: Pointer[Intersection, MutUntrackedOrigin], motion: MotionTable):
     """One segment of a walk: in the mesh's own BVH when it has one."""
     var local_bvh = -1
     if _is_real_ptr(sd.walkBvhOfMesh) and walk.instance < Int32(0):
@@ -154,18 +155,18 @@ def _sss_walk_trace(ref sd: SceneView, walk: SssWalk, ray: Ray, store: Pointer[I
         traverse_bvh2_core_defer_curves[False, False, False](
             sd.walkNodesArr[unsafe_offset=local_bvh], sd.walkPrimsArr[unsafe_offset=local_bvh], sd.meshes, sd.curves,
             ray, Float32(1.0e38), store,
-            Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(), Pointer[Int32, MutUntrackedOrigin].unsafe_dangling())
+            Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(), Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(), motion=motion)
     else:
         traverse_bvh2_core_defer_curves[False, True, False](
             sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, Float32(1.0e38),
             store,
             Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(), Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
-            sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances)
+            sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances, motion=motion)
 
 
 # Traces a walk's later segments: the software BVH (BvhWalkTracer) or the RT cores.
 trait WalkTracer(TrivialRegisterPassable):
-    def trace(self, ref sd: SceneView, walk: SssWalk, ray: Ray, store: Pointer[Intersection, MutUntrackedOrigin]):
+    def trace(self, ref sd: SceneView, walk: SssWalk, ray: Ray, store: Pointer[Intersection, MutUntrackedOrigin], motion: MotionTable):
         ...
 
 struct BvhWalkTracer(WalkTracer):
@@ -173,8 +174,8 @@ struct BvhWalkTracer(WalkTracer):
         pass
 
     @always_inline
-    def trace(self, ref sd: SceneView, walk: SssWalk, ray: Ray, store: Pointer[Intersection, MutUntrackedOrigin]):
-        _sss_walk_trace(sd, walk, ray, store)
+    def trace(self, ref sd: SceneView, walk: SssWalk, ray: Ray, store: Pointer[Intersection, MutUntrackedOrigin], motion: MotionTable):
+        _sss_walk_trace(sd, walk, ray, store, motion)
 
 
 @always_inline
@@ -223,7 +224,7 @@ def _sss_walk_step[steps: Int, T: WalkTracer](
     var ray = path_ptr[].ray
     for it in range(steps):
         if it > 0:
-            tracer.trace(sd, walk, ray, store.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]())
+            tracer.trace(sd, walk, ray, store.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin](), sd.motion.at(path_ptr[].time))
         var step = path_ptr[].sss.steps
         if step >= Int32(_SSS_MAX_STEPS):
             path_ptr[].active = 0   # Cycles' BSSRDF_MAX_BOUNCES: a walk this long is given up
@@ -377,7 +378,7 @@ def sss_entered(mat: Material, inter: Intersection, ray_dir: Vec3f, new_dir: Vec
     """Did this dielectric crossing refract into a subsurface interior?"""
     if not sss_walks_below(mat, inter, med_before):
         return False
-    var gn = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit)
+    var gn = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit, motion=MotionTable.none())
     return dot(gn, ray_dir) * dot(gn, new_dir) > Float32(0)
 
 

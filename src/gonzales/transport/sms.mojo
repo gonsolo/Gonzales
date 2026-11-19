@@ -34,6 +34,7 @@
 
 from std.collections import Array
 from std.math import sqrt, abs, max, min, cos, sin, acos
+from gonzales.scene.shapes.motion import MotionTable
 from gonzales.core.geometry import dot, cross, Frame, Vec3f, Point3f, _atan2f, PI, TWO_PI, _is_real_ptr
 from gonzales.scene.appearance.materials import fr_dielectric
 from gonzales.scene.appearance.materials import NormalSlopeMap, normal_slope_map_none
@@ -559,6 +560,7 @@ def _sms_reproject_onto_sphere_anchored(
     instances: Pointer[Instance, MutUntrackedOrigin] = Pointer[Instance, MutUntrackedOrigin].unsafe_dangling(),
     spheres: Pointer[Sphere, MutUntrackedOrigin] = Pointer[Sphere, MutUntrackedOrigin].unsafe_dangling(),
     n_spheres: Int = 0,
+    *, motion: MotionTable,
 ) -> Tuple[Vec3f, Vec3f, Vec3f, Vec3f, Bool]:
     """Reprojects a raw Newton-step proposal onto the sphere by RAY-CASTING
     from a fixed anchor through the proposal, instead of
@@ -618,7 +620,7 @@ def _sms_reproject_onto_sphere_anchored(
             var dummy_inter = Intersection(dummy_prim, occl_tmax, Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0))
             var store = Array[Intersection, 1](fill=dummy_inter)
             traverse_bvh2_core(bvh2Nodes, primIds, meshes, curves, occl_ray, occl_tmax, store.unsafe_ptr(),
-                                blasNodesArr, blasPrimIdsArr, instances, spheres, n_spheres)
+                                blasNodesArr, blasPrimIdsArr, instances, spheres, n_spheres, motion=motion)
             if store[0].hit != Int8(0) and store[0].tHit < (t - occl_eps) - radius * Float32(1e-4):
                 return (x_raw, Vec3f(Float32(0.0)), Vec3f(Float32(0.0)), Vec3f(Float32(0.0)), False)
     var pos = anchor + dir * t
@@ -719,6 +721,7 @@ def sms_mesh_hit_from(
     blasNodesArr: Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin],
     blasPrimIdsArr: Pointer[Pointer[PrimId, MutUntrackedOrigin], MutUntrackedOrigin],
     instances: Pointer[Instance, MutUntrackedOrigin],
+    *, motion: MotionTable,
 ) -> MeshFrame:
     """The frame where a ray from `anchor` first meets the scene, if that is mesh `mesh_idx` (anything else in the
     way makes it unreachable). A vertex already on the mesh skips its own surface, which gives the far side of a
@@ -729,7 +732,7 @@ def sms_mesh_hit_from(
     var dummy_prim = PrimId(Int64(-1), Int64(-1), Int64(0), Int32(-1), PrimKind.triangle, Int8(0), Int8(0), Int8(0))
     var store = Array[Intersection, 1](fill=Intersection(dummy_prim, Float32(1e30), Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0)))
     traverse_bvh2_core(bvh2Nodes, primIds, meshes, curves, ray, Float32(1e30), store.unsafe_ptr(),
-                       blasNodesArr, blasPrimIdsArr, instances)
+                       blasNodesArr, blasPrimIdsArr, instances, motion=motion)
     var h = store[0]
     if h.hit == Int8(0) or h.primId.type != PrimKind.triangle or h.primId.instanceIdx >= Int32(0) or Int32(h.primId.id1) != mesh_idx:
         return (z, z, z, z, z, z, False, Int32(-1))
@@ -1078,6 +1081,7 @@ def sms_walk(
     instances: Pointer[Instance, MutUntrackedOrigin] = Pointer[Instance, MutUntrackedOrigin].unsafe_dangling(),
     spheres: Pointer[Sphere, MutUntrackedOrigin] = Pointer[Sphere, MutUntrackedOrigin].unsafe_dangling(),
     n_spheres: Int = 0,
+    *, motion: MotionTable,
 ) -> Tuple[Bool, Array[Vec3f, MAX_SMS_VERTICES], Float32, Float32]:
     """N-vertex generalization of _mnee_walk/_mnee_walk2 (kept in
     shading.mojo as fast paths for n=1/2 -- Phase 5.4). Newton iteration on
@@ -1238,7 +1242,7 @@ def sms_walk(
                         var m_len = sqrt(dot(m_dir, m_dir))
                         var mf = sms_mesh_hit_from(m_anchor, m_dir * (Float32(1.0) / max(m_len, Float32(1e-12))), trial[i].mesh_idx,
                             i > 0 and trial[i-1].mesh_idx == trial[i].mesh_idx,
-                            bvh2Nodes, primIds, meshes, curves, blasNodesArr, blasPrimIdsArr, instances)
+                            bvh2Nodes, primIds, meshes, curves, blasNodesArr, blasPrimIdsArr, instances, motion=motion)
                         if mf[6] and m_len > Float32(1e-12):
                             _sms_apply_mesh_frame(trial[i], mf)
                         else:
@@ -1261,7 +1265,7 @@ def sms_walk(
                         elif i > 0:
                             anchor = trial[i-1].pos
                         var ra = _sms_reproject_onto_sphere_anchored(anchor, trial[i].pos, trial[i].sphere_center, trial[i].sphere_radius, anchor_on_surface,
-                            bvh2Nodes, primIds, meshes, curves, blasNodesArr, blasPrimIdsArr, instances, spheres, n_spheres)
+                            bvh2Nodes, primIds, meshes, curves, blasNodesArr, blasPrimIdsArr, instances, spheres, n_spheres, motion=motion)
                         if ra[4]:
                             _sms_apply_sphere_frame(trial[i], (ra[0], ra[1], ra[2], ra[3]))
                         else:
@@ -1384,6 +1388,7 @@ def sms_refresh_mesh_frames(
     blasNodesArr: Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin],
     blasPrimIdsArr: Pointer[Pointer[PrimId, MutUntrackedOrigin], MutUntrackedOrigin],
     instances: Pointer[Instance, MutUntrackedOrigin],
+    *, motion: MotionTable,
 ) -> Bool:
     """sms_refresh_solved_frames for mesh vertices: the frame at each solved point, found again by its anchor ray."""
     for i in range(n):
@@ -1395,7 +1400,7 @@ def sms_refresh_mesh_frames(
         if dl <= Float32(1e-12):
             return False
         var mf = sms_mesh_hit_from(anchor, d * (Float32(1.0) / dl), verts[i].mesh_idx, i > 0 and verts[i-1].mesh_idx == verts[i].mesh_idx,
-            bvh2Nodes, primIds, meshes, curves, blasNodesArr, blasPrimIdsArr, instances)
+            bvh2Nodes, primIds, meshes, curves, blasNodesArr, blasPrimIdsArr, instances, motion=motion)
         if not mf[6]:
             return False
         _sms_apply_mesh_frame(verts[i], mf)
@@ -1491,6 +1496,7 @@ def sms_solve_bernoulli(
     instances: Pointer[Instance, MutUntrackedOrigin] = Pointer[Instance, MutUntrackedOrigin].unsafe_dangling(),
     spheres: Pointer[Sphere, MutUntrackedOrigin] = Pointer[Sphere, MutUntrackedOrigin].unsafe_dangling(),
     n_spheres: Int = 0,
+    *, motion: MotionTable,
 ) -> Tuple[Bool, Array[Vec3f, MAX_SMS_VERTICES], Float32, Float32, Float32]:
     """5.3: Zeltner et al. 2020's Bernoulli-trial reciprocal estimator.
     Solves once from a randomly-jittered seed to fix the primary candidate
@@ -1514,7 +1520,7 @@ def sms_solve_bernoulli(
     var seed0 = verts_seed.copy()
     sms_seed_randomize(x0, seed0, n, pcg, jitter_scale)
     var _walk0 = sms_walk(x0, xL, seed0, n, ldp_du, ldp_dv,
-        bvh2Nodes, primIds, meshes, curves, blasNodesArr, blasPrimIdsArr, instances, spheres, n_spheres)
+        bvh2Nodes, primIds, meshes, curves, blasNodesArr, blasPrimIdsArr, instances, spheres, n_spheres, motion=motion)
     var ok0 = _walk0[0]
     var pos0 = _walk0[1].copy()
     var bsdf0 = _walk0[2]
@@ -1529,7 +1535,7 @@ def sms_solve_bernoulli(
         var seed_k = verts_seed.copy()
         sms_seed_randomize(x0, seed_k, n, pcg, jitter_scale)
         var _walkk = sms_walk(x0, xL, seed_k, n, ldp_du, ldp_dv,
-            bvh2Nodes, primIds, meshes, curves, blasNodesArr, blasPrimIdsArr, instances, spheres, n_spheres)
+            bvh2Nodes, primIds, meshes, curves, blasNodesArr, blasPrimIdsArr, instances, spheres, n_spheres, motion=motion)
         var okk = _walkk[0]
         var posk = _walkk[1].copy()
         if okk and sms_same_solution(x0, posk, pos0, n):
@@ -1541,7 +1547,7 @@ def sms_solve_bernoulli(
             var seed_m = verts_seed.copy()
             sms_seed_randomize(x0, seed_m, n, pcg, jitter_scale)
             var _walkm = sms_walk(x0, xL, seed_m, n, ldp_du, ldp_dv,
-                bvh2Nodes, primIds, meshes, curves, blasNodesArr, blasPrimIdsArr, instances, spheres, n_spheres)
+                bvh2Nodes, primIds, meshes, curves, blasNodesArr, blasPrimIdsArr, instances, spheres, n_spheres, motion=motion)
             if _walkm[0] and sms_same_solution(x0, _walkm[1], pos0, n):
                 hits += 1
         print("QSMS", hits, SMS_QHAT_PROBE_M, Int(trials), n)

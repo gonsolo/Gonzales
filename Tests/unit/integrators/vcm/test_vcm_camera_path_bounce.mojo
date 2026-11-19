@@ -218,7 +218,7 @@ def test_wavefront_split_matches_original_camera_path_closely() raises:
         var ray_o = state.ro; var ray_d = state.rd
         scratch_new[unsafe_offset=0].hit = Int8(0)
         var ray = Ray(ray_o, ray_d)
-        traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, Float32(1e38), scratch_new)
+        traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, Float32(1e38), scratch_new, motion=MotionTable.none())
         test_spheres(sd.spheres, Int(sd.sphereCount), ray, scratch_new)
         var inter = scratch_new[unsafe_offset=0]
 

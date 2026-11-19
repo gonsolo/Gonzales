@@ -5,6 +5,7 @@
 from std.math import abs, sqrt, cos, sin
 from std.memory.alloc import unsafe_alloc
 from std.testing import assert_true, TestSuite
+from gonzales.scene.shapes.motion import MotionTable
 from gonzales.core.geometry import Vec3f, dot
 from gonzales.scene.shapes.primitives import TriangleMesh, Instance
 from gonzales.scene.appearance.footprint import CameraFootprint, uv_footprint, dp_dxy_approx_camera, dp_dxy_cone, camera_footprint, tri_world, hit_uv_footprint, TriWorld
@@ -137,11 +138,11 @@ def test_tri_world_applies_the_instance_transform() raises:
     w2o[1] = -1.0; w2o[4] = 1.0; w2o[10] = 1.0; w2o[15] = 1.0
     w2o[12] = -2.0; w2o[13] = 1.0; w2o[14] = -3.0
     inst[unsafe_offset=0] = Instance(w2o, Int32(0))
-    var tw = tri_world(mesh, 0, 1, 2, Int32(0), inst)
+    var tw = tri_world(mesh, 0, 1, 2, Int32(0), inst, motion=MotionTable.none())
     assert_true(_close(tw.p0[0], 1.0) and _close(tw.p0[1], 2.0) and _close(tw.p0[2], 3.0))
     assert_true(_close(tw.p1[0], 1.0) and _close(tw.p1[1], 3.0))   # (1,0,0) -> (0,1,0) + t
     assert_true(_close(tw.p2[0], 0.0) and _close(tw.p2[1], 2.0))   # (0,1,0) -> (-1,0,0) + t
-    var tn = tri_world(mesh, 0, 1, 2, Int32(-1), inst)
+    var tn = tri_world(mesh, 0, 1, 2, Int32(-1), inst, motion=MotionTable.none())
     assert_true(_close(tn.p1[0], 1.0) and abs(tn.p1[1]) < 1e-9)
     inst.unsafe_free(); pts.unsafe_free()
 

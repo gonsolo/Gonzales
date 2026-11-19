@@ -3,6 +3,7 @@ from std.math import sqrt, cos, sin, abs, min, max
 from std.atomic import Atomic
 from std.collections import Array
 from std.memory import bitcast
+from gonzales.scene.shapes.motion import MotionTable
 from gonzales.core.geometry import Point3f, Vec3f, Ray, dot, PI
 from gonzales.scene.shapes.primitives import Intersection, PrimId
 from gonzales.scene.shapes.geom_normal import _geom_normal
@@ -202,7 +203,7 @@ def gather_ball_reach[probes: Int = GATHER_BALL_PROBES](ref sd: SceneView, p: Po
         var ray = Ray(p, Vec3f(t1.x * c + t2.x * sn + n.x * z, t1.y * c + t2.y * sn + n.y * z, t1.z * c + t2.z * sn + n.z * z))
         mem[unsafe_offset=0].hit = Int8(0)
         traverse_dispatch(sd.bvh4, sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, reach, mem,
-                           sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances)
+                           sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances, motion=MotionTable.none())
         if mem[unsafe_offset=0].hit != Int8(0) and mem[unsafe_offset=0].primId.type != PrimKind.curve:
             reach = min(reach, mem[unsafe_offset=0].tHit)
     return reach
@@ -280,9 +281,9 @@ def gather_disk_coverage[probes: Int = GATHER_COVERAGE_PROBES](
         var ray = Ray(org, Vec3f(-n.x, -n.y, -n.z))
         mem[unsafe_offset=0].hit = Int8(0)
         traverse_dispatch(sd.bvh4, sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, Float32(2) * lift, mem,
-                           sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances)
+                           sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances, motion=MotionTable.none())
         if mem[unsafe_offset=0].hit != Int8(0) and mem[unsafe_offset=0].primId.type != PrimKind.sphere:
-            var ng = _geom_normal(mem[unsafe_offset=0], sd.meshes, sd.instances)
+            var ng = _geom_normal(mem[unsafe_offset=0], sd.meshes, sd.instances, motion=MotionTable.none())
             if abs(dot(ng, n)) > Float32(0.7):
                 hits += 1
     return Float32(hits) / Float32(probes)

@@ -1,4 +1,5 @@
 from std.memory.alloc import unsafe_alloc
+from gonzales.scene.shapes.motion import MotionTable
 from gonzales.core.geometry import Point3f, RGB
 from gonzales.scene.appearance.materials import Material, MatKind
 from gonzales.scene.shapes.primitives import Intersection, PrimId, TriangleMesh
@@ -36,7 +37,7 @@ struct TriangleSceneFixture(Movable):
 
     def intersect(self, ray: Ray, tMax: Float32) -> Intersection:
         var result = unsafe_alloc[Intersection](1)
-        traverse_bvh2_core(self.bvh_nodes, self.prim_ids, self.meshes, self.curves, ray, tMax, result)
+        traverse_bvh2_core(self.bvh_nodes, self.prim_ids, self.meshes, self.curves, ray, tMax, result, motion=MotionTable.none())
         var r = result[unsafe_offset=0]
         result.unsafe_free()
         return r

@@ -2,6 +2,7 @@
 # Part of the BDPT/VCM machinery that used to be one file (bdpt_*.mojo).
 
 from std.math import sqrt, cos, sin, log, exp, max
+from gonzales.scene.shapes.motion import MotionTable
 from gonzales.transport.medium import MediumView
 from gonzales.transport.sss_walk import sss_entered, sss_walks_below, sss_relative_eta
 from gonzales.transport.medium_interface import medium_after
@@ -280,7 +281,7 @@ def _vcm_skin_arrival(
 ) -> Float32:
     """A photon arriving at skin, stored before the boundary chooses for camera walk exits to merge
     (Scenes/vcm_sss_exit_merge_derivation.py); returns the walk's entry merge share, 0 when no slot is left."""
-    var gn = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
+    var gn = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd(), motion=MotionTable.none())
     var cos_a = abs(dot(ray_dir, gn))
     if st.mnee.side > Float32(0) and st.mnee.n_glass > Int32(0):
         # Reached through glass only: the camera exit's MNEE samples this entry too.
@@ -511,7 +512,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool, defer_walk: Bool = False](
 
         elif mat.passes_rays():
             if has_med:
-                st.cur_med_idx = medium_after(ray_dir, st.cur_med_idx, inter, mat, sd, hit.to_simd())
+                st.cur_med_idx = medium_after(ray_dir, st.cur_med_idx, inter, mat, sd, hit.to_simd(), MotionTable.none())
             st.ro = hit + st.rd*Float32(0.0002)
             if d_seg > Float32(0):
                 st.dvcm /= max(d_seg * d_seg, Float32(1e-20))
@@ -580,7 +581,7 @@ def _bdpt_trace_light_path[use_gpu: Bool](
         var ray = Ray(st.ro, st.rd)
         scratch[unsafe_offset=0].hit = Int8(0)
         traverse_dispatch(sd.bvh4, sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, Float32(1e38), scratch,
-                           sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances)
+                           sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances, motion=MotionTable.none())
         test_spheres(sd.spheres, Int(sd.sphereCount), ray, scratch)
         # A miss is handled inside the step (returns False).
         if not _bdpt_light_path_bounce[use_gpu](

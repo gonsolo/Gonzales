@@ -10,6 +10,7 @@ from std.math import sqrt, cos, sin, floor, max, min, abs
 from std.memory.alloc import unsafe_alloc
 from std.atomic import Atomic
 from std.memory import bitcast
+from gonzales.scene.shapes.motion import MotionTable
 from gonzales.transport.medium import MediumView
 from gonzales.core.geometry import face_toward
 from gonzales.transport.sss_walk import SssExit, sss_entered, sss_hop, sss_leave, sss_walks_below, sss_relative_eta
@@ -559,7 +560,7 @@ def _sppm_gsms(
     var ctx = _shade_context(sd, Pointer[UInt32, MutUntrackedOrigin].unsafe_dangling())
     var tab = LobeTables(sd.materials, sd.curves, sd.measuredBrdfs, sd.spectral, sd.mediums)
     var verts = SMSChain(fill=sms_vertex_init())
-    var r = glossy_sms_solve(ctx, x0, bsdf, tab, wl, y, ldu, ldv, pcg, verts)
+    var r = glossy_sms_solve(ctx, x0, bsdf, tab, wl, y, ldu, ldv, pcg, verts, motion=MotionTable.none())
     if not r[0]:
         return z
     var n = r[1]
@@ -587,7 +588,7 @@ def _sppm_gsms_bsdf_weight(
     the rest of _sppm_gsms' weight when re-tracing it by the chain rule lands there, everything otherwise."""
     var ctx = _shade_context(sd, Pointer[UInt32, MutUntrackedOrigin].unsafe_dangling())
     var verts = SMSChain(fill=sms_vertex_init())
-    var rp = glossy_sms_reproduce(ctx, x0, dir0, n, light_hit, light, verts)
+    var rp = glossy_sms_reproduce(ctx, x0, dir0, n, light_hit, light, verts, motion=MotionTable.none())
     if not rp[0]:
         return Float32(1)
     var al_idx = Int(light.primId.id1)
@@ -601,7 +602,7 @@ def _photon_walk[tex_gpu: Bool](ref sd: SceneView, mat: Material, inter: Interse
                                 wl: SampledWavelengths, mut pcg: PCG32, mut flux: SpectralSample,
                                 outside_ior: Float32) -> Tuple[Vec3f, Point3f, Bool]:
     """A photon through the walk and out of its exit: the next ray, and whether it lives."""
-    var g_w = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
+    var g_w = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd(), motion=MotionTable.none())
     var ex = sss_hop[tex_gpu, adjoint=True](sd, mat, inter, hit.to_simd(), g_w, refracted, wl, pcg, outside_ior)
     if not ex.ok:
         return (vec3f(refracted), hit, False)
@@ -793,7 +794,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
         # caustic, was missing from the render until 2026-09-09.
         traverse_dispatch(sd.bvh4, sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, Float32(1.0e38), scratch,
                            sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances,
-                           sd.spheres, Int(sd.sphereCount))
+                           sd.spheres, Int(sd.sphereCount), motion=MotionTable.none())
         if scratch[unsafe_offset=0].hit == Int8(0):
             for inf_i in range(Int(sd.infiniteLightCount)):
                 var ilight = sd.infiniteLights[unsafe_offset=inf_i]
@@ -884,7 +885,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
                 if glossy_pdf < Float32(0):
                     vp.env += vp.beta * _film_rgb(mat.emission, vp.wavelengths, sd)
             else:
-                var cos_l = area_light_hit_cos(inter, sd.meshes, sd.instances, ray_dir)
+                var cos_l = area_light_hit_cos(inter, sd.meshes, sd.instances, ray_dir, MotionTable.none())
                 if cos_l > Float32(0):
                     var al_h = sd.areaLights[unsafe_offset=Int(inter.primId.id1)]
                     # as _sppm_nee_at's: uniform over the lights, then over the light's area
@@ -970,7 +971,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
                         _vp_at_dipole(vp, hit, vec3f(face_toward(gn_geo, (-rd).to_simd())), mat, mat_idx, current_dielectric_ior)
                         break
                     if rough_skin and s_v.transmit:   # a walk leaves into the medium it came from, so no compression
-                        var ex_r = sss_hop[use_gpu](sd, mat, inter, hit.to_simd(), _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd()),
+                        var ex_r = sss_hop[use_gpu](sd, mat, inter, hit.to_simd(), _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd(), motion=MotionTable.none()),
                                                     s_v.wi, vp.wavelengths, pcg, current_dielectric_ior)
                         if ex_r.ok:
                             vp.beta = vp.beta * _spectral_gain_rgb(sd, s_v.weight * SpectralSample(mat.albedo.r * mat.albedo.r), vp.wavelengths)
@@ -1076,7 +1077,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
             if mat.sss_boundary != Int8(0):
                 bounce -= 1
             var ior = mat.albedo.r
-            var gn = _shading_normal_at(inter, sd.meshes, sd.instances, sd.spheres, hit)
+            var gn = _shading_normal_at(inter, sd.meshes, sd.instances, sd.spheres, hit, motion=MotionTable.none())
             # Bump/normal maps. barcelona's water is a `dielectric` with a
             # "texture displacement", so this is the branch the corpus cares
             # about most. `orient_to` is the RAW interpolated normal, NOT a
@@ -1092,7 +1093,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
                 ray_dir, hit.to_simd(), gn, ior, False, pcg, current_dielectric_ior, previous_dielectric_ior, mat.type == MatKind.thin_dielectric,
                 not sss_walks_below(mat, inter, cur_med_idx), True)
             if sss_entered(mat, inter, ray_dir, new_dir, cur_med_idx, sd, hit.to_simd()):
-                var g_w = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
+                var g_w = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd(), motion=MotionTable.none())
                 if dipole:
                     vp.beta = vp.beta * radiance_scale
                     _vp_at_dipole(vp, hit, vec3f(face_toward(g_w, -ray_dir)), mat, mat_idx, current_dielectric_ior)
@@ -1110,12 +1111,12 @@ def _sppm_trace_visible_point[use_gpu: Bool](
             rd = vec3f(new_dir)
             ro = point3f(new_org)
             if has_media:
-                cur_med_idx = medium_after(new_dir, cur_med_idx, inter, mat, sd, hit.to_simd())
+                cur_med_idx = medium_after(new_dir, cur_med_idx, inter, mat, sd, hit.to_simd(), MotionTable.none())
 
         elif mat.type == MatKind.interface:
             # Transparent boundary — update medium, continue ray
             if has_media:
-                cur_med_idx = medium_after(ray_dir, cur_med_idx, inter, mat, sd, hit.to_simd())
+                cur_med_idx = medium_after(ray_dir, cur_med_idx, inter, mat, sd, hit.to_simd(), MotionTable.none())
             ro = hit + rd * Float32(0.0002)
 
         else:
@@ -1365,7 +1366,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
         # caustic, was missing from the render until 2026-09-09.
         traverse_dispatch(sd.bvh4, sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, Float32(1.0e38), scratch,
                            sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances,
-                           sd.spheres, Int(sd.sphereCount))
+                           sd.spheres, Int(sd.sphereCount), motion=MotionTable.none())
         if scratch[unsafe_offset=0].hit == Int8(0):
             break  # miss
 
@@ -1475,7 +1476,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
             if mat.sss_boundary != Int8(0):
                 bounce -= 1
             var ior = mat.albedo.r
-            var gn = _shading_normal_at(inter, sd.meshes, sd.instances, sd.spheres, hit)
+            var gn = _shading_normal_at(inter, sd.meshes, sd.instances, sd.spheres, hit, motion=MotionTable.none())
             # Bump/normal maps. barcelona's water is a `dielectric` with a
             # "texture displacement", so this is the branch the corpus cares
             # about most. `orient_to` is the RAW interpolated normal, NOT a
@@ -1511,12 +1512,12 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
             rd = vec3f(new_dir)
             ro = point3f(new_org)
             if has_media:
-                cur_med_idx = medium_after(new_dir, cur_med_idx, inter, mat, sd, hit.to_simd())
+                cur_med_idx = medium_after(new_dir, cur_med_idx, inter, mat, sd, hit.to_simd(), MotionTable.none())
 
         elif mat.type == MatKind.interface:
             n_null += 1   # a null boundary is not an interaction for the surface "first segment" store gates
             if has_media:
-                cur_med_idx = medium_after(ray_dir, cur_med_idx, inter, mat, sd, hit.to_simd())
+                cur_med_idx = medium_after(ray_dir, cur_med_idx, inter, mat, sd, hit.to_simd(), MotionTable.none())
             ro = hit + rd * Float32(0.0002)
 
         else:
@@ -1831,10 +1832,10 @@ def _sppm_shadow(
         return shadow_transmittance(org.to_simd(), wi, tmax, vp.med_idx, sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves,
                                     sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances, sd.spheres, Int(sd.sphereCount),
                                     sd.materials, sd.mediums, sd.mediumInterfaces, sd.grids, sd.nvdbGrids,
-                                    sd.spectral, vp.wavelengths, pcg)
+                                    sd.spectral, vp.wavelengths, pcg, motion=MotionTable.none())
     if any_hit_dispatch(sd.bvh4, sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, Ray(org, vec3f(wi)), tmax,
                          sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances, sd.spheres, Int(sd.sphereCount),
-                         materials=sd.materials):
+                         materials=sd.materials, motion=MotionTable.none()):
         return SpectralSample(Float32(0.0))
     return SpectralSample(Float32(1.0))
 

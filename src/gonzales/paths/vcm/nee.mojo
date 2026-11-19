@@ -3,6 +3,7 @@
 
 from std.collections import Array
 from std.math import abs
+from gonzales.scene.shapes.motion import MotionTable
 from gonzales.transport.medium_interface import medium_after
 from gonzales.core.geometry import Point3f, Vec3f, vec3f, dot
 from gonzales.scene.appearance.materials import MatKind, fr_dielectric
@@ -57,7 +58,7 @@ def _visible_transmittance(
         var ray = Ray(org, Vec3f(dir[0], dir[1], dir[2]))
         inter_mem[unsafe_offset=0].hit = Int8(0)
         traverse_dispatch(sd.bvh4, sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, remaining * Float32(0.9995), inter_mem,
-                           sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances)
+                           sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances, motion=MotionTable.none())
         # test_spheres (analytic spheres, e.g. the caustic sphere) aren't part of
         # the BVH — traverse_bvh2_core only tests triangles/curves — so they need
         var had_bvh_hit = inter_mem[unsafe_offset=0].hit != Int8(0)
@@ -87,7 +88,7 @@ def _visible_transmittance(
             Tr *= segment_transmittance(sd.mediums[unsafe_offset=Int(cur_med)], org.to_simd(), dir, t_hit, sd.grids, sd.nvdbGrids, sd.spectral, wl, pcg)
 
         if mat.type == MatKind.thin_dielectric:
-            var gn = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
+            var gn = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd(), motion=MotionTable.none())
             var facing = dot(dir, gn) < Float32(0)
             var n_for_cos = gn if facing else gn*Float32(-1)
             var cos_i = -dot(dir, n_for_cos)
@@ -99,13 +100,13 @@ def _visible_transmittance(
             if Tr.is_black():
                 return SpectralSample(Float32(0))
             # Update medium after crossing glass surface
-            cur_med = medium_after(dir, cur_med, inter, mat, sd, hit.to_simd())
+            cur_med = medium_after(dir, cur_med, inter, mat, sd, hit.to_simd(), MotionTable.none())
             org = hit + Vec3f(dir[0], dir[1], dir[2]) * Float32(0.0002)
             remaining = remaining - t_hit - Float32(0.0002)
 
         elif mat.type == MatKind.interface:
             # Pure medium boundary: update medium, continue
-            cur_med = medium_after(dir, cur_med, inter, mat, sd, hit.to_simd())
+            cur_med = medium_after(dir, cur_med, inter, mat, sd, hit.to_simd(), MotionTable.none())
             org = hit + Vec3f(dir[0], dir[1], dir[2]) * Float32(0.0002)
             remaining = remaining - t_hit - Float32(0.0002)
 

@@ -1,6 +1,7 @@
 from std.collections import Array
 from std.math import abs, sqrt
 from std.testing import assert_true, TestSuite
+from gonzales.scene.shapes.motion import MotionTable
 from gonzales.core.geometry import dot, cross, Vec3f
 from gonzales.transport.manifold import _mnee_walk2
 from gonzales.transport.sms import (
@@ -72,7 +73,7 @@ def test_sms_walk_n2_matches_mnee_walk2() raises:
     var verts = _empty_verts()
     verts[0] = _flat_vert(x1_init, eta1)
     verts[1] = _flat_vert(x2_init, eta2)
-    var _r74 = sms_walk(x0, x3, verts, 2, du, dv)
+    var _r74 = sms_walk(x0, x3, verts, 2, du, dv, motion=MotionTable.none())
     var okn = _r74[0]; var posn = _r74[1].copy(); var bsdfn = _r74[2]; var jacn = _r74[3]
 
     assert_true(ok2 == okn)
@@ -97,7 +98,7 @@ def test_sms_walk_n1_converges() raises:
     var dv = Vec3f(Float32(0.0), Float32(1.0), Float32(0.0))
     var verts = _empty_verts()
     verts[0] = _flat_vert(Vec3f(Float32(0.1), Float32(0.1), Float32(1.0)), Float32(1.5))
-    var _r98 = sms_walk(x0, xL, verts, 1, du, dv)
+    var _r98 = sms_walk(x0, xL, verts, 1, du, dv, motion=MotionTable.none())
     var ok = _r98[0]; var pos = _r98[1].copy(); var bsdf = _r98[2]; var jac = _r98[3]
     assert_true(ok)
     verts[0].pos = pos[0]
@@ -120,7 +121,7 @@ def test_sms_walk_n3_converges() raises:
     verts[0] = _flat_vert(Vec3f(Float32(0.08), Float32(0.05), Float32(1.0)), Float32(1.5))
     verts[1] = _flat_vert(Vec3f(Float32(0.14), Float32(0.02), Float32(2.0)), Float32(1.0)/Float32(1.5))
     verts[2] = _flat_vert(Vec3f(Float32(0.20), Float32(-0.05), Float32(3.0)), Float32(1.33))
-    var _r120 = sms_walk(x0, xL, verts, 3, du, dv)
+    var _r120 = sms_walk(x0, xL, verts, 3, du, dv, motion=MotionTable.none())
     var ok = _r120[0]; var pos = _r120[1].copy(); var bsdf = _r120[2]; var jac = _r120[3]
     assert_true(ok)
     for i in range(3):
@@ -141,7 +142,7 @@ def test_sms_walk_n4_converges() raises:
     verts[1] = _flat_vert(Vec3f(Float32(0.10), Float32(0.01), Float32(1.6)), Float32(1.0)/Float32(1.5))
     verts[2] = _flat_vert(Vec3f(Float32(0.16), Float32(-0.02), Float32(2.4)), Float32(1.33))
     verts[3] = _flat_vert(Vec3f(Float32(0.22), Float32(-0.06), Float32(3.2)), Float32(1.0)/Float32(1.33))
-    var _r140 = sms_walk(x0, xL, verts, 4, du, dv)
+    var _r140 = sms_walk(x0, xL, verts, 4, du, dv, motion=MotionTable.none())
     var ok = _r140[0]; var pos = _r140[1].copy(); var bsdf = _r140[2]; var jac = _r140[3]
     assert_true(ok)
     for i in range(4):
@@ -196,7 +197,7 @@ def test_sms_walk_sphere_n1_converges_and_stays_on_sphere() raises:
     var seed_pos = center - Vec3f(Float32(0.0), Float32(0.0), radius)
     var verts = _empty_verts()
     verts[0] = sms_vertex_sphere(seed_pos, center, radius, Float32(1.5))
-    var _r194 = sms_walk(x0, xL, verts, 1, du, dv)
+    var _r194 = sms_walk(x0, xL, verts, 1, du, dv, motion=MotionTable.none())
     var ok = _r194[0]; var pos = _r194[1].copy(); var bsdf = _r194[2]; var jac = _r194[3]
     assert_true(ok)
     var to_center = pos[0] - center
@@ -303,7 +304,7 @@ def test_sms_walk_sphere_n2_solid_sphere_symmetric_case() raises:
     var verts = _empty_verts()
     verts[0] = sms_vertex_sphere(seed1, center, radius, ior)
     verts[1] = sms_vertex_sphere(seed2, center, radius, Float32(1.0) / ior)
-    var _r300 = sms_walk(x0, xL, verts, 2, du, dv)
+    var _r300 = sms_walk(x0, xL, verts, 2, du, dv, motion=MotionTable.none())
     var ok = _r300[0]; var pos = _r300[1].copy(); var bsdf = _r300[2]; var jac = _r300[3]
     assert_true(ok)
     var d0 = pos[0] - center; var dist0 = sqrt(dot(d0, d0))
@@ -326,7 +327,7 @@ def test_sms_walk_fails_on_coincident_points() raises:
     var verts = _empty_verts()
     # Vertex coincides with x0 -- wi length is zero, must fail cleanly, not NaN.
     verts[0] = _flat_vert(Vec3f(Float32(0.0), Float32(0.0), Float32(0.0)), Float32(1.5))
-    var _r322 = sms_walk(x0, xL, verts, 1, du, dv)
+    var _r322 = sms_walk(x0, xL, verts, 1, du, dv, motion=MotionTable.none())
     var ok = _r322[0]
     assert_true(not ok)
 
@@ -359,7 +360,7 @@ def test_sms_solve_bernoulli_converges_on_unique_solution() raises:
     verts[1] = _flat_vert(Vec3f(Float32(0.14), Float32(0.02), Float32(2.0)), Float32(1.0)/Float32(1.5))
     verts[2] = _flat_vert(Vec3f(Float32(0.20), Float32(-0.05), Float32(3.0)), Float32(1.33))
     var pcg = PCG32(UInt64(777), UInt64(1))
-    var _r354 = sms_solve_bernoulli(x0, xL, verts, 3, du, dv, Float32(0.01), pcg)
+    var _r354 = sms_solve_bernoulli(x0, xL, verts, 3, du, dv, Float32(0.01), pcg, motion=MotionTable.none())
     var ok = _r354[0]; var pos = _r354[1].copy(); var bsdf = _r354[2]; var jac = _r354[3]; var trials = _r354[4]
     assert_true(ok)
     assert_true(bsdf > Float32(0.0))

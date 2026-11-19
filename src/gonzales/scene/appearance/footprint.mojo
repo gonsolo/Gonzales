@@ -67,7 +67,7 @@ struct TriWorld(TrivialRegisterPassable):
 def tri_world(
     mesh: TriangleMesh, v0: Int, v1: Int, v2: Int,
     instance_idx: Int32, instances: Pointer[Instance, MutUntrackedOrigin],
-    motion: MotionTable = MotionTable.none(),
+    motion: MotionTable,
 ) -> TriWorld:
     var p0 = mesh_pos(mesh, v0)
     var p1 = mesh_pos(mesh, v1)

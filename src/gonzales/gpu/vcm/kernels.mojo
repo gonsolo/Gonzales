@@ -4,6 +4,7 @@
 from std.collections import Array
 from max.gpu import block_idx, thread_idx, block_dim, MAX_THREADS_PER_BLOCK_METADATA
 from std.utils import StaticTuple
+from gonzales.scene.shapes.motion import MotionTable
 from gonzales.core.gpu_tuning import (
     MINCTA_VCM_EMIT, MINCTA_VCM_SPLAT, MINCTA_VCM_CONNECT, MINCTA_VCM_LBOUNCE, MINCTA_VCM_CBOUNCE,
     MINCTA_VCM_RESOLVE,
@@ -276,7 +277,7 @@ def _bdpt_light_path_intersect_gpu(
     var ray = Ray(states[unsafe_offset=tid].ro, states[unsafe_offset=tid].rd)
     results[unsafe_offset=tid].hit = Int8(0)
     traverse_dispatch(sd.bvh4, sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, Float32(1e38), results.unsafe_offset(tid),
-                        sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances)
+                        sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances, motion=MotionTable.none())
     test_spheres(sd.spheres, Int(sd.sphereCount), ray, results.unsafe_offset(tid))
 
 @__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
@@ -390,7 +391,7 @@ def _bdpt_camera_path_intersect_gpu(
     var ray = Ray(states[unsafe_offset=tid].ro, states[unsafe_offset=tid].rd)
     results[unsafe_offset=tid].hit = Int8(0)
     traverse_dispatch(sd.bvh4, sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, Float32(1e38), results.unsafe_offset(tid),
-                        sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances)
+                        sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances, motion=MotionTable.none())
     test_spheres(sd.spheres, Int(sd.sphereCount), ray, results.unsafe_offset(tid))
 
 @__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
