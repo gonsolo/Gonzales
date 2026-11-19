@@ -3,6 +3,7 @@
 
 from std.collections import Array
 from std.math import abs
+from gonzales.scene.appearance.lights import point_light_at, distant_light_at
 from gonzales.scene.shapes.motion import MotionTable
 from gonzales.transport.medium_interface import medium_after
 from gonzales.core.geometry import Point3f, Vec3f, vec3f, dot
@@ -134,10 +135,10 @@ def _bdpt_sample_simple_light(
     var nd = Int(sd.distantLightCount)
     var np_ = Int(sd.pointLightCount)
     if i < nd:
-        var ls_d = _sample_distant_light_nee(sd.distantLights[unsafe_offset=i])
+        var ls_d = _sample_distant_light_nee(distant_light_at(motion, sd.distantLights, i))
         return ls_d^
     if i < nd + np_:
-        var ls_p = _sample_point_light_nee(sd.pointLights[unsafe_offset=i - nd], hit_point)
+        var ls_p = _sample_point_light_nee(point_light_at(motion, sd.pointLights, i - nd), hit_point)
         return ls_p^
     var si = i - nd - np_
     var ls_s = _sample_sphere_light_nee(motion.sphere(sd.spheres, si), Int(sd.sphereCount), hit_point, pcg)

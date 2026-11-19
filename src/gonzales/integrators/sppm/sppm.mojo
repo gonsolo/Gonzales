@@ -10,6 +10,7 @@ from std.math import sqrt, cos, sin, floor, max, min, abs
 from std.memory.alloc import unsafe_alloc
 from std.atomic import Atomic
 from std.memory import bitcast
+from gonzales.scene.appearance.lights import point_light_at, distant_light_at
 from gonzales.scene.shapes.motion import MotionTable
 from gonzales.transport.medium import MediumView
 from gonzales.core.geometry import face_toward
@@ -1305,7 +1306,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
         ro = point3f(sp_e + sn_e * (sph_e.radius * Float32(0.0001)))
         rd = vec3f(sd_e)
     elif light_pick < n_area + n_sphere + n_distant:
-        var dl = sd.distantLights[unsafe_offset=light_pick - n_area - n_sphere]
+        var dl = distant_light_at(motion, sd.distantLights, light_pick - n_area - n_sphere)
         var (center, radius) = _scene_bounding_sphere(sd)
         var dir = Vec3f(dl.direction.x, dl.direction.y, dl.direction.z)
         var disk_pt = _sample_disk_perpendicular(dir, center, radius, Point2f(pcg.next_float(), pcg.next_float()))
@@ -1333,7 +1334,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
         # bounding-sphere disk trick needed — emit directly from it, uniform
         # over the sphere (isotropic point light). pdf_dir = 1/(4π), so
         # flux = intensity × 4π × n_lights / n_emit (pdf_dir cancels).
-        var pll = sd.pointLights[unsafe_offset=light_pick - n_area - n_sphere - n_distant - n_infinite]
+        var pll = point_light_at(motion, sd.pointLights, light_pick - n_area - n_sphere - n_distant - n_infinite)
         var u1p = pcg.next_float(); var u2p = pcg.next_float()
         var cos_p = Float32(1) - Float32(2) * u1p
         var sin_p = sqrt(max(Float32(0), Float32(1) - cos_p * cos_p))
@@ -1827,11 +1828,11 @@ def _sppm_sample_simple_light(
     var nd = Int(sd.distantLightCount)
     var np_ = Int(sd.pointLightCount)
     if i < nd:
-        var ls_d = _sample_distant_light_nee(sd.distantLights[unsafe_offset=i])
+        var ls_d = _sample_distant_light_nee(distant_light_at(motion, sd.distantLights, i))
         var d = ls_d.dist
         return (ls_d^, d)
     if i < nd + np_:
-        var ls_p = _sample_point_light_nee(sd.pointLights[unsafe_offset=i - nd], hit_point)
+        var ls_p = _sample_point_light_nee(point_light_at(motion, sd.pointLights, i - nd), hit_point)
         var d = ls_p.dist * Float32(0.9999)
         return (ls_p^, d)
     var si = i - nd - np_

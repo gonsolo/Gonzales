@@ -7,6 +7,7 @@ into the media section, not their own) -- each depends only on the core
 comments and docstrings stripped before moving it."""
 from std.memory.alloc import unsafe_alloc
 from std.math import max, min, sqrt
+from gonzales.scene.shapes.motion import MotionTable
 from gonzales.core.geometry import Point3f, Vec3f, RGB, _is_real_ptr
 from gonzales.scene.appearance.portal_light import portal_passes
 
@@ -323,3 +324,27 @@ def area_light_side_pdf(al: AreaLight) -> Float32:
     """Probability of the emission side a TWO-SIDED mesh light (pbrt
     "twosided") picks: 1/2, since both faces emit; 1 for one-sided."""
     return Float32(0.5) if (al.kind == Int8(0) and al._pad0 != Int8(0)) else Float32(1.0)
+
+
+@always_inline
+def point_light_at(motion: MotionTable, lights: Pointer[PointLight, MutUntrackedOrigin], k: Int) -> PointLight:
+    """Point light k placed at the motion table's time."""
+    var l = lights[unsafe_offset=k]
+    var (moving, m) = motion.placement(motion.point_index, k)
+    if moving:
+        var p = l.position
+        l.position = Point3f(m[0] * p.x + m[4] * p.y + m[8] * p.z + m[12], m[1] * p.x + m[5] * p.y + m[9] * p.z + m[13],
+                             m[2] * p.x + m[6] * p.y + m[10] * p.z + m[14])
+    return l
+
+
+@always_inline
+def distant_light_at(motion: MotionTable, lights: Pointer[DistantLight, MutUntrackedOrigin], k: Int) -> DistantLight:
+    """Distant light k turned to the motion table's time."""
+    var l = lights[unsafe_offset=k]
+    var (moving, m) = motion.placement(motion.distant_index, k)
+    if moving:
+        var d = l.direction
+        var md = Vec3f(m[0] * d.x + m[4] * d.y + m[8] * d.z, m[1] * d.x + m[5] * d.y + m[9] * d.z, m[2] * d.x + m[6] * d.y + m[10] * d.z)
+        l.direction = md * (Float32(1) / sqrt(md.x * md.x + md.y * md.y + md.z * md.z))
+    return l

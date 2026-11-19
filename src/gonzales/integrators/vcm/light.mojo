@@ -2,6 +2,7 @@
 # Part of the BDPT/VCM machinery that used to be one file (bdpt_*.mojo).
 
 from std.math import sqrt, cos, sin, log, exp, max
+from gonzales.scene.appearance.lights import point_light_at, distant_light_at
 from gonzales.scene.shapes.motion import MotionTable
 from gonzales.transport.medium import MediumView
 from gonzales.transport.sss_walk import sss_entered, sss_walks_below, sss_relative_eta
@@ -207,7 +208,7 @@ def _bdpt_light_path_init[use_gpu: Bool](
         dvc_carry = PI * area_weight_s
         dvm_carry = dvc_carry * mis_vc_weight_factor
     elif light_pick < n_area + n_sphere + n_distant:
-        var dl = sd.distantLights[unsafe_offset=light_pick - n_area - n_sphere]
+        var dl = distant_light_at(motion, sd.distantLights, light_pick - n_area - n_sphere)
         var (center, radius) = _scene_bounding_sphere(sd)
         var dir = Vec3f(dl.direction.x, dl.direction.y, dl.direction.z)
         var disk_pt = _sample_disk_perpendicular(dir, center, radius, Point2f(pcg.next_float(), pcg.next_float()))
@@ -249,7 +250,7 @@ def _bdpt_light_path_init[use_gpu: Bool](
     else:
         # Point light: a real finite position (unlike distant/infinite), but
         # still no NEE-equivalent cache vertex — see this function's own
-        var pll = sd.pointLights[unsafe_offset=light_pick - n_area - n_sphere - n_distant - n_infinite]
+        var pll = point_light_at(motion, sd.pointLights, light_pick - n_area - n_sphere - n_distant - n_infinite)
         var u1p = pcg.next_float(); var u2p = pcg.next_float()
         var cos_p = Float32(1) - Float32(2) * u1p
         var sin_p = sqrt(max(Float32(0), Float32(1) - cos_p * cos_p))

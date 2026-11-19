@@ -165,6 +165,8 @@ struct MotionTable(TrivialRegisterPassable, DevicePassable):
     comptime device_type: AnyType = Self
     var index: Pointer[Int32, MutUntrackedOrigin]
     var sphere_index: Pointer[Int32, MutUntrackedOrigin]   # sphere -> record, -1 static
+    var point_index: Pointer[Int32, MutUntrackedOrigin]    # point light -> record, -1 static
+    var distant_index: Pointer[Int32, MutUntrackedOrigin]  # distant light -> record, -1 static
     var records: Pointer[InstanceMotion, MutUntrackedOrigin]
     var count: Int32
     var camera: Int32
@@ -182,6 +184,8 @@ struct MotionTable(TrivialRegisterPassable, DevicePassable):
     @staticmethod
     def none() -> MotionTable:
         return MotionTable(Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
+                           Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
+                           Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
                            Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
                            Pointer[InstanceMotion, MutUntrackedOrigin].unsafe_dangling(),
                            Int32(0), Int32(-1), Float32(0), Float32(1), Float32(0))
@@ -213,6 +217,16 @@ struct MotionTable(TrivialRegisterPassable, DevicePassable):
                              m[2] * c.x + m[6] * c.y + m[10] * c.z + m[14])
         sph.radius *= sqrt(m[0] * m[0] + m[1] * m[1] + m[2] * m[2])
         return sph
+
+    @always_inline
+    def placement(self, index: Pointer[Int32, MutUntrackedOrigin], k: Int) -> Tuple[Bool, M32]:
+        """Whether item k of `index` (-1 static) moves, and its motion relative to the start at this table's time."""
+        if self.count == Int32(0):
+            return (False, M32(0))
+        var mi = index[unsafe_offset=k]
+        if mi < Int32(0):
+            return (False, M32(0))
+        return (True, self.records[unsafe_offset=Int(mi)].obj_to_world(self.dt()))
 
     @always_inline
     def camera_point(self, p: Vec3f, back: Bool = False) -> Vec3f:

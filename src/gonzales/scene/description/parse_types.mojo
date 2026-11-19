@@ -288,6 +288,8 @@ struct SceneParseState(Movable):
     var spheres_rgb: List[RGB]
     var spheres_inside_med:  List[Int32]
     var spheres_motion:      List[Int32]   # index into motion_mats, -1 static
+    var point_motion_pairs:  List[Int32]   # (point light, motion record) of the moving ones
+    var distant_motion_pairs: List[Int32]  # (distant light, motion record) of the moving ones
     var spheres_outside_med: List[Int32]
 
     # Homogeneous / heterogeneous media
@@ -525,6 +527,8 @@ struct SceneParseState(Movable):
         self.spheres_rgb = List[RGB]()
         self.spheres_inside_med  = List[Int32]()
         self.spheres_motion      = List[Int32]()
+        self.point_motion_pairs  = List[Int32]()
+        self.distant_motion_pairs = List[Int32]()
         self.spheres_outside_med = List[Int32]()
 
         self.med_names    = List[String]()

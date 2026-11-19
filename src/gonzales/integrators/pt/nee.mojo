@@ -2,6 +2,7 @@
 from std.atomic import Atomic
 from std.collections import Array
 from std.math import sqrt
+from gonzales.scene.appearance.lights import point_light_at, distant_light_at
 from gonzales.scene.shapes.motion import MotionTable
 from gonzales.core.geometry import offset_point, RGB, Point3f, Point2f, Vec3f, dot, cross, fast_sincos, TWO_PI, _is_real_ptr
 from gonzales.core.geometry import point3f
@@ -59,11 +60,11 @@ def _nee_sample_simple_light(
     var nd = ctx.lights.distant_count
     var np_ = ctx.lights.point_count
     if i < nd:
-        var ls_d = _sample_distant_light_nee(ctx.lights.distant_lights[unsafe_offset=i])
+        var ls_d = _sample_distant_light_nee(distant_light_at(motion, ctx.lights.distant_lights, i))
         var d = ls_d.dist
         return (ls_d^, d)
     if i < nd + np_:
-        var ls_p = _sample_point_light_nee(ctx.lights.point_lights[unsafe_offset=i - nd], hit_point)
+        var ls_p = _sample_point_light_nee(point_light_at(motion, ctx.lights.point_lights, i - nd), hit_point)
         var d = ls_p.dist * Float32(0.9999)
         return (ls_p^, d)
     var si = i - nd - np_

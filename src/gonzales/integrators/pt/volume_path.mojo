@@ -1,4 +1,5 @@
 """The path tracer's volume vertices: free flight, volume NEE and reservoirs."""
+from gonzales.scene.appearance.lights import point_light_at, distant_light_at
 from gonzales.transport.medium import MediumView
 from gonzales.scene.accel.bvh import LightSample, _sample_distant_light_nee, _sample_infinite_light_nee, _sample_point_light_nee, _sample_sphere_light_nee, any_hit_bvh2_core, test_spheres, traverse_bvh2_core, SceneView
 from gonzales.core.geometry import Point2f, Point3f, RGB, Vec3f, _is_real_ptr, cross, dot, point3f, vec3f
@@ -759,10 +760,10 @@ def _sample_medium_core(
         var scatter_w = scatter_pt.to_simd()
         var wo_v = -ray_dir
         for dl_i in range(Int(sd.distantLightCount)):
-            _volume_nee_light(path_ptr, _sample_distant_light_nee(sd.distantLights[unsafe_offset=dl_i]),
+            _volume_nee_light(path_ptr, _sample_distant_light_nee(distant_light_at(sd.motion.at(path_ptr[].time), sd.distantLights, dl_i)),
                 scatter_w, wo_v, medv, pcg, sd)
         for pl_i in range(Int(sd.pointLightCount)):
-            _volume_nee_light(path_ptr, _sample_point_light_nee(sd.pointLights[unsafe_offset=pl_i], scatter_w),
+            _volume_nee_light(path_ptr, _sample_point_light_nee(point_light_at(sd.motion.at(path_ptr[].time), sd.pointLights, pl_i), scatter_w),
                 scatter_w, wo_v, medv, pcg, sd)
         for sph_i in range(n_spheres):
             if sd.spheres[unsafe_offset=sph_i].isAreaLight == Int8(1):

@@ -134,6 +134,8 @@ struct ParsedScene_Mojo:
     var spheres:          Pointer[Sphere, MutUntrackedOrigin]
     var sphere_count:     Int32
     var sphere_motion:    Pointer[Int32, MutUntrackedOrigin]   # per sphere: index into motions, -1 static
+    var point_motion:     Pointer[Int32, MutUntrackedOrigin]   # per point light: index into motions, -1 static
+    var distant_motion:   Pointer[Int32, MutUntrackedOrigin]   # per distant light: index into motions, -1 static
     var curves:           Pointer[Curve, MutUntrackedOrigin]
     var curve_count:      Int32
     var mediums:          Pointer[Medium, MutUntrackedOrigin]
@@ -188,7 +190,7 @@ struct ParsedScene_Mojo:
     def motion_table(self) -> MotionTable:
         if self.motion_count == Int32(0):
             return MotionTable.none()
-        return MotionTable(self.instance_motion, self.sphere_motion, self.motions, self.motion_count, self.camera_motion,
+        return MotionTable(self.instance_motion, self.sphere_motion, self.point_motion, self.distant_motion, self.motions, self.motion_count, self.camera_motion,
                            self.transform_times[0], self.transform_times[1], Float32(0))
 
     def sample_clamp(self) -> Float32:
@@ -2071,6 +2073,33 @@ def _psc_push_motion(s: Pointer[SceneParseState, MutUntrackedOrigin], base: Poin
     for ci in range(16): s[unsafe_offset=0].motion_mats.append(Float64(base[unsafe_offset=ci]))
     return k
 
+def _psc_light_motion(s: Pointer[SceneParseState, MutUntrackedOrigin], np0: Int, nd0: Int):
+    """The point and distant lights just added, at their start, move by the motion relative to the start."""
+    var np1 = len(s[unsafe_offset=0].point_pos) // 3
+    var nd1 = len(s[unsafe_offset=0].distant_dirs) // 3
+    if np1 == np0 and nd1 == nd0:
+        print("Warning: only point and distant lights can move; a light stays at its start transform.")
+        return
+    var inv = unsafe_alloc[Float32](16)
+    _ = matrix_invert(s[unsafe_offset=0].ctm.unsafe_ptr(), inv)
+    var k = _psc_push_motion(s, inv)
+    inv.unsafe_free()
+    for i in range(np0, np1):
+        s[unsafe_offset=0].point_motion_pairs.append(Int32(i)); s[unsafe_offset=0].point_motion_pairs.append(k)
+    for i in range(nd0, nd1):
+        s[unsafe_offset=0].distant_motion_pairs.append(Int32(i)); s[unsafe_offset=0].distant_motion_pairs.append(k)
+
+
+def _motion_index(pairs: List[Int32], n: Int) -> Pointer[Int32, MutUntrackedOrigin]:
+    """Per light: its motion record, -1 static."""
+    var idx = unsafe_alloc[Int32](max(n, 1))
+    for i in range(max(n, 1)):
+        idx[unsafe_offset=i] = Int32(-1)
+    for j in range(len(pairs) // 2):
+        idx[unsafe_offset=Int(pairs[2 * j])] = pairs[2 * j + 1]
+    return idx
+
+
 def _psc_push_camera_motion(s: Pointer[SceneParseState, MutUntrackedOrigin]):
     """The camera's world-from-camera at start and end, acting after the start camera-from-world: a camera ray of the
     start camera, moved to its time."""
@@ -2222,9 +2251,11 @@ def parse_scene_file(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
                 _psc_skip_params(handle)
         elif _psc_streq(kw_buf, "LightSource"):
             if s[unsafe_offset=0].object_depth == 0:
-                if ctm_moving(s[unsafe_offset=0]):
-                    print("Warning: moving lights are not supported; a light stays at its start transform.")
+                var np0 = len(s[unsafe_offset=0].point_pos) // 3
+                var nd0 = len(s[unsafe_offset=0].distant_dirs) // 3
                 handle_light_source(handle, s)
+                if ctm_moving(s[unsafe_offset=0]):
+                    _psc_light_motion(s, np0, nd0)
             else:
                 _psc_skip_params(handle)
         elif _psc_streq(kw_buf, "Texture"):
@@ -4121,6 +4152,8 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
     else:
         psc[unsafe_offset=0].point_lights = Pointer[PointLight, MutUntrackedOrigin].unsafe_dangling()
     psc[unsafe_offset=0].point_count = Int32(np2)
+    psc[unsafe_offset=0].point_motion = _motion_index(s[unsafe_offset=0].point_motion_pairs, np2)
+    psc[unsafe_offset=0].distant_motion = _motion_index(s[unsafe_offset=0].distant_motion_pairs, nd)
 
     var ni = len(s[unsafe_offset=0].inf_tex_idx)
     if ni > 0:
@@ -4732,6 +4765,8 @@ def mojo_parsed_free(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin]):
     psc[unsafe_offset=0].instances.unsafe_free()
     psc[unsafe_offset=0].instance_motion.unsafe_free()
     psc[unsafe_offset=0].sphere_motion.unsafe_free()
+    psc[unsafe_offset=0].point_motion.unsafe_free()
+    psc[unsafe_offset=0].distant_motion.unsafe_free()
     psc[unsafe_offset=0].motions.unsafe_free()
     psc[unsafe_offset=0].template_mesh_start.unsafe_free()
     psc[unsafe_offset=0].template_mesh_end.unsafe_free()
