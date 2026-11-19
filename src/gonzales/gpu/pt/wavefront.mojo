@@ -2152,6 +2152,7 @@ def gen_aux_buffers_gpu(
     instances: Pointer[Instance, MutUntrackedOrigin],
     spheres: Pointer[Sphere, MutUntrackedOrigin],
     n_spheres_dp: Int64,
+    motion: MotionTable,   # placed at the middle of the shutter
     isects_tmp: Pointer[Intersection, MutUntrackedOrigin],
     normals_out: Pointer[Float32, MutUntrackedOrigin],
     depth_out: Pointer[Float32, MutUntrackedOrigin],
@@ -2196,7 +2197,7 @@ def gen_aux_buffers_gpu(
     if hits_traced == Int32(0):
         var dummy_id = PrimId(Int64(-1), Int64(-1), Int64(0), Int32(-1), PrimKind.triangle, Int8(0), Int8(0), Int8(0))
         isects_tmp[unsafe_offset=tid] = Intersection(dummy_id, Float32(1e38), Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0))
-        traverse_bvh2_core(bvh2Nodes, primIds, meshes, curves, ray, Float32(1e38), isects_tmp.unsafe_offset(tid), blasNodesArr, blasPrimIdsArr, instances)
+        traverse_bvh2_core(bvh2Nodes, primIds, meshes, curves, ray, Float32(1e38), isects_tmp.unsafe_offset(tid), blasNodesArr, blasPrimIdsArr, instances, motion=motion)
     test_spheres(spheres, n_spheres, ray, isects_tmp.unsafe_offset(tid))
 
     var normal = Vec3f(Float32(0), Float32(0), Float32(1))
@@ -2235,7 +2236,7 @@ def gen_aux_buffers_gpu(
             normal = Vec3f(e1.y*e2.z - e1.z*e2.y, e1.z*e2.x - e1.x*e2.z, e1.x*e2.y - e1.y*e2.x)
             var inst_idx = isects_tmp[unsafe_offset=tid].primId.instanceIdx
             if inst_idx >= Int32(0):
-                var n_world = transform_normal(Mat4(instances[unsafe_offset=Int(inst_idx)].world_to_obj()), normal.to_simd())
+                var n_world = transform_normal(Mat4(motion.instance(instances, Int(inst_idx)).world_to_obj()), normal.to_simd())
                 normal = vec3f(n_world)
             var nl = normal.length()
             if nl > Float32(0): normal = normal / nl
@@ -2302,6 +2303,7 @@ def gpu_gen_aux_buffers[Oc: Origin[mut=True]](
                 handle[].scene_descriptor().instances,
                 handle[].spheres_buf.unsafe_ptr().unsafe_bitcast[Sphere](),
                 Int64(handle[].n_spheres),
+                handle[].motion.at(handle[].lens.mid_time()),
                 handle[].inter_buf.unsafe_ptr().unsafe_bitcast[Intersection]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
                 handle[].atrous_normals_buf.unsafe_ptr().unsafe_bitcast[Float32](),
                 handle[].atrous_depth_buf.unsafe_ptr().unsafe_bitcast[Float32](),

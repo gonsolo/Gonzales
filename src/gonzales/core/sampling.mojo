@@ -571,6 +571,10 @@ struct ThinLens(TrivialRegisterPassable):
         self.shutter = shutter
         self.timed = timed
 
+    def mid_time(self) -> Float32:
+        """The middle of the shutter: one time for the single-ray passes."""
+        return (self.shutter[0] + self.shutter[1]) * Float32(0.5) if self.timed else Float32(0)
+
     @staticmethod
     def pinhole() -> ThinLens:
         return ThinLens(Float32(0), Float32(1e6))

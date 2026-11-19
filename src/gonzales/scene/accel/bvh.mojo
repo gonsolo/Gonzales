@@ -3437,7 +3437,7 @@ def render_aux_buffers[Osc: Origin[mut=True], Onm: Origin[mut=True], Oc2w: Origi
         # an edge case this function has never had to handle.
         if Int(sd.meshCount) > 0 or Int(sd.curveCount) > 0 or Int(sd.instanceCount) > 0:
             traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, Float32(1e38), isects.unsafe_offset(i),
-                               sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances)
+                               sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances, motion=sd.motion.at(sd.lens.mid_time()))
         else:
             isects[unsafe_offset=i] = Intersection(PrimId(-1, -1, 0, -1, 0, 0, 0, 0), Float32(1e38), 0.0, 0.0, Int8(0), 0, 0, 0)
         if Int(sd.sphereCount) > 0:

@@ -1,5 +1,6 @@
 # pbrt-v4's AnimatedTransform for moving instances: matrices are 16 floats, column-major (flat[col*4 + row]).
 from std.math import sqrt, sin, cos, asin, abs, min, max
+from std.builtin.device_passable import DevicePassable, DeviceTypeEncoder
 from gonzales.core.geometry import _is_real_ptr
 from gonzales.scene.shapes.primitives import Instance, affine_inverse
 
@@ -158,15 +159,23 @@ struct InstanceMotion(TrivialRegisterPassable):
 
 
 @fieldwise_init
-struct MotionTable(TrivialRegisterPassable):
+struct MotionTable(TrivialRegisterPassable, DevicePassable):
     """The scene's moving instances (`index`: instance -> record, -1 static), pbrt's TransformTimes [t0, t1] and the
     time a path places them at. count == 0: nothing moves."""
+    comptime device_type: AnyType = Self
     var index: Pointer[Int32, MutUntrackedOrigin]
     var records: Pointer[InstanceMotion, MutUntrackedOrigin]
     var count: Int32
     var t0: Float32
     var t1: Float32
     var time: Float32
+
+    def _to_device_type(self, mut encoder: Some[DeviceTypeEncoder], target: MutOpaquePointer[_]):
+        encoder.encode(self, target)
+
+    @staticmethod
+    def get_type_name() -> String:
+        return "MotionTable"
 
     @staticmethod
     def none() -> MotionTable:
