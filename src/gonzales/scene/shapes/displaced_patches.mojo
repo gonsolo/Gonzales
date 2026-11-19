@@ -51,13 +51,13 @@ def _class_of(v: SIMD[DType.int32, 8], x: Int) -> Int:
 @always_inline
 def prim_patch(d: DispSurface, prim: Int) -> Tuple[Int, Int, Int]:
     """Primitive prim: its patch, sub-square k (row * n + column) and level."""
-    var l = _class_of(d.lv.prim, prim); var loc = prim - Int(d.lv.prim[l])
-    return (Int(d.lv.patch[l]) + (loc >> (2 * l)), loc & ((1 << (2 * l)) - 1), l)
+    var l = _class_of(d.lv[].prim, prim); var loc = prim - Int(d.lv[].prim[l])
+    return (Int(d.lv[].patch[l]) + (loc >> (2 * l)), loc & ((1 << (2 * l)) - 1), l)
 
 
 @always_inline
 def patch_level(d: DispSurface, pi: Int) -> Int:
-    return _class_of(d.lv.patch, pi)
+    return _class_of(d.lv[].patch, pi)
 
 
 @always_inline
@@ -68,7 +68,7 @@ def corner_off(lv: Levels, pi: Int) -> Int:
 
 @always_inline
 def prim_total(d: DispSurface) -> Int:
-    return Int(d.lv.prim[LEVELS])
+    return Int(d.lv[].prim[LEVELS])
 
 
 @fieldwise_init
@@ -95,7 +95,7 @@ struct DispSurface(TrivialRegisterPassable, DevicePassable):
     var chain: _U8
     var fm: _F32         # per patch: the Fm interior points (1,1), (2,1), (2,2), (1,2), 12 floats; patches hold Fp there
     var greg: _U8        # per patch: 1 for a Gregory patch, 2 for an end cap fitted as Bezier
-    var lv: Levels         # the BVH's primitives: each patch's 2^l x 2^l sub-squares
+    var lv: Pointer[Levels, MutUntrackedOrigin]   # the BVH's primitives: each patch's 2^l x 2^l sub-squares (behind a pointer: fewer live registers in the walk)
     var leaf_mode: Int32   # 0: box leaves no larger than the footprint; 1: exact bilinear leaves at a texel or a pixel; 2: at a texel only;
                            # 3: as 1, cells walked in the sub-square's affine (s, t, h) frame; 4: as 1, every box cropped from the patch
                            # 5 (6: at a texel only): the sub-square's base bilinear through its limit corners
@@ -920,7 +920,7 @@ def _bl_frame(d: DispSurface, pi: Int, k: Int, org: Vec3f) -> BLFrame:
     var ku = k & (n - 1); var kv = k >> l
     var f = BLFrame(SIMD[DType.float32, 4](0), SIMD[DType.float32, 4](0), SIMD[DType.float32, 4](0), SIMD[DType.float32, 4](0),
                     SIMD[DType.float32, 4](0), SIMD[DType.float32, 4](0))
-    var g = d.corners.unsafe_offset(corner_off(d.lv, pi))
+    var g = d.corners.unsafe_offset(corner_off(d.lv[], pi))
     var st = g[unsafe_offset=3]
     var b = Vec3f(g[unsafe_offset=0], g[unsafe_offset=1], g[unsafe_offset=2])
     var ew = g.unsafe_offset(4).bitcast[UInt32]()[unsafe_offset=0]

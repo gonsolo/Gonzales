@@ -1244,7 +1244,7 @@ def _xert_attach(ctx: DeviceContext, psc: Pointer[ParsedScene_Mojo, MutUntracked
                 var sm = psc[unsafe_offset=0].meshes[unsafe_offset=ms[g]]
                 if _is_real_ptr(sm.subdiv):
                     sd_blocks.append(Int32(n_procs + n_sub)); sd_blocks.append(Int32(ms[g])); sd_blocks.append(Int32(g))
-                    n_sub += Int(sm.subdiv[unsafe_offset=0].d.lv.prim[LEVELS])
+                    n_sub += Int(sm.subdiv[unsafe_offset=0].d.lv[].prim[LEVELS])
         sd_total += n_sub
         var proc_bounds = unsafe_alloc[Float32](6 * max(n_procs + n_sub, 1))
         for j in range(n_procs):
@@ -1268,7 +1268,7 @@ def _xert_attach(ctx: DeviceContext, psc: Pointer[ParsedScene_Mojo, MutUntracked
         for g in range(len(ms)):
             if b < n_base and _is_real_ptr(psc[unsafe_offset=0].meshes[unsafe_offset=ms[g]].subdiv):
                 var hd = psc[unsafe_offset=0].meshes[unsafe_offset=ms[g]].subdiv[unsafe_offset=0].d
-                var cnt = Int(hd.lv.prim[LEVELS]); var at = sd_at
+                var cnt = Int(hd.lv[].prim[LEVELS]); var at = sd_at
                 def sub_boxes(c: Int) {imm}:
                     for j in range(c * 4096, min(cnt, c * 4096 + 4096)):
                         var sb = sub_box(hd, j)

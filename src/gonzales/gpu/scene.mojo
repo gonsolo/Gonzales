@@ -24,7 +24,8 @@ from gonzales.scene.description.pbrt_parser import ParsedScene_Mojo
 from gonzales.scene.appearance.host_textures import decode_host_textures, set_tex_maps
 from gonzales.scene.shapes.displacement import DisplacedMesh, DisplacedTri, Rmip
 from gonzales.scene.shapes.patches import BezierPatch
-from gonzales.scene.shapes.displaced_patches import DispSurface, SubdivSurface, LEVELS
+from gonzales.scene.shapes.displaced_patches import SubdivSurface
+from gonzales.scene.shapes.disp_build import upload_subdiv
 from gonzales.scene.appearance.ptex_cache import PtexCache, PTEX_QUEUE_CAP
 from gonzales.transport.restir_di import DIReservoir
 from gonzales.integrators.pt.restir_vol import VolReservoir
@@ -426,17 +427,8 @@ struct MeshBuffers(Movable):
                 if found < 0:
                     found = len(subdiv_keys)
                     subdiv_keys.append(key)
-                    var d = hs.d; var np = Int(d.lv.patch[LEVELS]); var nf = Int(hs.nf)
-                    var dd = DispSurface(_gpu_upload_owned[BezierPatch](ctx, alpha_bufs, d.patches, np),
-                        _gpu_upload_owned[Float32](ctx, alpha_bufs, d.sq, 3 * np), _gpu_upload_owned[Int32](ctx, alpha_bufs, d.face, np),
-                        _gpu_upload_owned[Int32](ctx, alpha_bufs, d.hdr, 3 * nf), _gpu_upload_owned[UInt8](ctx, alpha_bufs, d.pyr, max(Int(hs.npyr), 1)),
-                        d.scale, d.cam, d.pixel, _gpu_upload_owned[Int32](ctx, alpha_bufs, d.chain_off, nf),
-                        _gpu_upload_owned[UInt8](ctx, alpha_bufs, d.chain, max(Int(hs.nchain), 1)), _gpu_upload_owned[Float32](ctx, alpha_bufs, d.fm, 12 * np),
-                        _gpu_upload_owned[UInt8](ctx, alpha_bufs, d.greg, np), d.lv, d.leaf_mode,
-                        _gpu_upload_owned[Float32](ctx, alpha_bufs, d.corners, max(Int(d.lv.corner[LEVELS]), 1)))
                     var tmp = unsafe_alloc[SubdivSurface](1)
-                    tmp[unsafe_offset=0] = SubdivSurface(dd, _gpu_upload_owned[Int32](ctx, alpha_bufs, hs.face_off, nf + 1),
-                        _gpu_upload_owned[Int32](ctx, alpha_bufs, hs.face_patch, max(np, 1)), hs.nf, hs.npyr, hs.nchain)
+                    tmp[unsafe_offset=0] = upload_subdiv(ctx, alpha_bufs, hs)
                     disp_temps_sub.append(tmp)
                     subdiv_dev.append(_gpu_upload_owned[SubdivSurface](ctx, alpha_bufs, tmp, 1))
                 mesh_structs_host[unsafe_offset=i].subdiv = subdiv_dev[found]

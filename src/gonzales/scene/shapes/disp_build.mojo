@@ -2,6 +2,9 @@
 # nodes from src/oiio/disp.cc, sub-square levels per patch, the welded corner grid (displaced_patches.mojo).
 
 from std.ffi import external_call
+from std.sys.info import size_of
+from max.gpu.host import DeviceBuffer, DeviceContext
+from gonzales.scene.accel.dev_buf import dev_buf
 from std.math import max, min, sqrt
 from std.memory.alloc import unsafe_alloc
 from max.algorithm import parallelize
@@ -52,12 +55,13 @@ struct DispMesh(Copyable, Movable):
     var face_off: Pointer[Int32, MutUntrackedOrigin]     # per Ptex face its patches in face_patch (nf + 1)
     var face_patch: Pointer[Int32, MutUntrackedOrigin]
     var lv: Levels
+    var lvp: Pointer[Levels, MutUntrackedOrigin]   # a copy for its surfaces
     var lo: Vec3f
     var hi: Vec3f
 
     def surface(self, scale: Float32, cam: Vec3f, pixel: Float32, leaf_mode: Int32) -> DispSurface:
         return DispSurface(self.patches, self.sq, self.face, self.hdr, self.pyr, scale, cam, pixel, self.chain_off, self.chain,
-                           self.fm, self.greg, self.lv, leaf_mode, self.corners)
+                           self.fm, self.greg, self.lvp, leaf_mode, self.corners)
 
     def subdiv(self, scale: Float32, cam: Vec3f, pixel: Float32) -> SubdivSurface:
         return SubdivSurface(self.surface(scale, cam, pixel, Int32(5)), self.face_off, self.face_patch, Int64(self.nf),
@@ -76,7 +80,35 @@ def empty_disp_mesh() -> DispMesh:
                     Pointer[UInt8, MutUntrackedOrigin].unsafe_dangling(), Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
                     Pointer[UInt8, MutUntrackedOrigin].unsafe_dangling(), Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
                     Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(), Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(), lv,
-                    Vec3f(0, 0, 0), Vec3f(0, 0, 0))
+                    Pointer[Levels, MutUntrackedOrigin].unsafe_dangling(), Vec3f(0, 0, 0), Vec3f(0, 0, 0))
+
+
+def _put[T: AnyType](ctx: DeviceContext, mut bufs: List[DeviceBuffer[DType.uint8]], src: Pointer[T, MutUntrackedOrigin],
+                     n: Int) raises -> Pointer[T, MutUntrackedOrigin]:
+    """n elements to the device (dev_buf: in GONZALES_GPU_LOG's table), kept alive in bufs."""
+    var buf = dev_buf(ctx, max(n, 1) * size_of[T]())
+    if n > 0:
+        ctx.enqueue_copy(buf, src.unsafe_bitcast[UInt8]())
+    var p = buf.unsafe_ptr().unsafe_bitcast[T]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
+    bufs.append(buf^)
+    return p
+
+
+def upload_surface(ctx: DeviceContext, mut bufs: List[DeviceBuffer[DType.uint8]], d: DispSurface, nf: Int, npyr: Int,
+                   nchain: Int) raises -> DispSurface:
+    """Host surface d with its arrays on the device; scale, camera and leaf mode as they are."""
+    var np = Int(d.lv[].patch[LEVELS]); var ncg = Int(d.lv[].corner[LEVELS])
+    return DispSurface(_put(ctx, bufs, d.patches, np), _put(ctx, bufs, d.sq, 3 * np), _put(ctx, bufs, d.face, np),
+                       _put(ctx, bufs, d.hdr, 3 * nf), _put(ctx, bufs, d.pyr, npyr), d.scale, d.cam, d.pixel,
+                       _put(ctx, bufs, d.chain_off, nf), _put(ctx, bufs, d.chain, nchain), _put(ctx, bufs, d.fm, 12 * np),
+                       _put(ctx, bufs, d.greg, np), _put(ctx, bufs, d.lv, 1), d.leaf_mode, _put(ctx, bufs, d.corners, ncg))
+
+
+def upload_subdiv(ctx: DeviceContext, mut bufs: List[DeviceBuffer[DType.uint8]], s: SubdivSurface) raises -> SubdivSurface:
+    """A host SubdivSurface on the device."""
+    var nf = Int(s.nf); var np = Int(s.d.lv[].patch[LEVELS])
+    return SubdivSurface(upload_surface(ctx, bufs, s.d, nf, Int(s.npyr), Int(s.nchain)), _put(ctx, bufs, s.face_off, nf + 1),
+                         _put(ctx, bufs, s.face_patch, np), s.nf, s.npyr, s.nchain)
 
 
 def _cstr(s: String) -> Pointer[UInt8, MutUntrackedOrigin]:
@@ -206,7 +238,9 @@ def load_disp_mesh(ptx: String, o: DispOptions, corners: Int = 0) raises -> Disp
     for p in range(np):
         var f = Int(face2[unsafe_offset=p])
         fpat[unsafe_offset=Int(foff[unsafe_offset=f]) + Int(fill_at[f])] = Int32(p); fill_at[f] += 1
-    var m = DispMesh(np, nf, npyr, nchain, ncg, texels, p2, sq2, face2, hdr, pyr, chain_off, chain, fm2, greg2, cg, foff, fpat, lv,
+    var lvp = unsafe_alloc[Levels](1)
+    lvp[unsafe_offset=0] = lv
+    var m = DispMesh(np, nf, npyr, nchain, ncg, texels, p2, sq2, face2, hdr, pyr, chain_off, chain, fm2, greg2, cg, foff, fpat, lv, lvp,
                      Vec3f(cbox[unsafe_offset=0], cbox[unsafe_offset=1], cbox[unsafe_offset=2]), Vec3f(cbox[unsafe_offset=3], cbox[unsafe_offset=4], cbox[unsafe_offset=5]))
     cbox.unsafe_free()
     var d = m.surface(Float32(0), Vec3f(0, 0, 0), Float32(0), Int32(5))
