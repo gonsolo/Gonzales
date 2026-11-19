@@ -785,6 +785,7 @@ def _rtcore_attach_own_native(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin]
         psc[unsafe_offset=0].instances.unsafe_free()
         psc[unsafe_offset=0].instances = reordered
         psc[unsafe_offset=0].instance_count = Int32(n_inst)
+        psc[unsafe_offset=0].motion_count = Int32(0)   # the motion table indexes the old order
     var gid = unsafe_alloc[Int32](max(id_base, 1))
     var go = 0
     for b in range(n_blas):
@@ -1976,7 +1977,7 @@ struct CpuGuidedRenderer(GuidedRenderer):
             filterWeight=self.psc[unsafe_offset=0].filter_weight,
             filterType=self.psc[unsafe_offset=0].filter_type,
             sampleIndexOffset=Int32(begin),
-            lens=ThinLens(self.psc[unsafe_offset=0].camera_lens_radius, self.psc[unsafe_offset=0].camera_focal_distance),
+            lens=self.psc[unsafe_offset=0].camera_lens(),
         )
         var sp_ptr = OwnedPointer[TileSamplerParams](sp)
         var zero = TileResult(
@@ -3042,7 +3043,7 @@ def parse_and_render(
                 filterWeight=psc[unsafe_offset=0].filter_weight,
                 filterType=psc[unsafe_offset=0].filter_type,
                 sampleIndexOffset=Int32(0),
-                lens=ThinLens(psc[unsafe_offset=0].camera_lens_radius, psc[unsafe_offset=0].camera_focal_distance),
+                lens=psc[unsafe_offset=0].camera_lens(),
             )
             var sp_ptr = OwnedPointer[TileSamplerParams](sp)
             render_all_tiles(
@@ -3326,7 +3327,7 @@ def render_interactive(
         filterWeight=psc[unsafe_offset=0].filter_weight,
         filterType=psc[unsafe_offset=0].filter_type,
         sampleIndexOffset=Int32(0),
-        lens=ThinLens(psc[unsafe_offset=0].camera_lens_radius, psc[unsafe_offset=0].camera_focal_distance),
+        lens=psc[unsafe_offset=0].camera_lens(),
     ))
 
     if use_gpu:
@@ -3562,7 +3563,7 @@ def render_interactive(
                 filterWeight=psc[unsafe_offset=0].filter_weight,
                 filterType=psc[unsafe_offset=0].filter_type,
                 sampleIndexOffset=Int32(0),
-                lens=ThinLens(psc[unsafe_offset=0].camera_lens_radius, psc[unsafe_offset=0].camera_focal_distance),
+                lens=psc[unsafe_offset=0].camera_lens(),
             )
             for i in range(n_pixels):
                 results[i] = zero
@@ -3889,7 +3890,7 @@ def session_set_lens(s: SessionPtr, radius: Float32, focal_distance: Float32):
         return
     psc[unsafe_offset=0].camera_lens_radius = radius
     psc[unsafe_offset=0].camera_focal_distance = focal_distance
-    s[].renderer.handle[].lens = ThinLens(radius, focal_distance)
+    s[].renderer.handle[].lens = psc[unsafe_offset=0].camera_lens()
     session_clear(s)
 
 def session_set_clamp(s: SessionPtr, clamp: Float32):

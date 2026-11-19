@@ -18,6 +18,7 @@ from gonzales.scene.shapes.primitives import (
 )
 from gonzales.core.geometry import Ray
 from gonzales.scene.shapes.primitives import mesh_pos, mesh_point, surface_prim
+from gonzales.scene.shapes.motion import MotionTable
 from gonzales.scene.shapes.displacement import displaced_hit
 from gonzales.scene.appearance.media import Medium, MediumInterface, Grid, NvdbGrid
 from gonzales.scene.appearance.lights import AreaLight, DistantLight, PointLight, InfiniteLight, LightSampler, il_rgb
@@ -325,6 +326,7 @@ struct SceneView(TrivialRegisterPassable, DevicePassable):
     # CPU-only 4-wide collapse of bvh2Nodes (build_bvh4); BVH4.none() = use the BVH2.
     var bvh4: BVH4
     var sharedCtx: Pointer[UInt8, MutUntrackedOrigin]   # the driver's ShadeContext, for its Intel scene; dangling on the CPU
+    var motion: MotionTable   # the moving instances; none() = nothing moves
 
 # ── Infinite/distant-light emission + NEE sampling (shared by bdpt_*.mojo and
 #    sppm.mojo — lives here, not shading.mojo, to avoid an import cycle:

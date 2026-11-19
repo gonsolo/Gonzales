@@ -14,8 +14,9 @@ from gonzales.scene.appearance.footprint import camera_footprint
 from gonzales.core.sensors import named_sensor_is_supported, named_sensor_srgb_matrix
 from gonzales.core.diagnostics import warn_unsupported, warn_unsupported_in
 from gonzales.scene.description.lexer import PbrtScanner, scanner_open, scanner_free, scanner_is_at_end, scanner_scan_token, scanner_parse_quoted_string, scanner_scan_char, scanner_scan_float, _psc_streq, _psc_collect_params, ParameterDictionary, _psc_skip_params, _psc_skip_line
+from gonzales.scene.shapes.motion import InstanceMotion, MotionTable
 from gonzales.scene.description.parse_types import (SceneParseState, MeshAccum, NamedMaterial, scene_path,
-                           ctm_push, ctm_pop, PSC_NAME_MAX, PSC_FILE_MAX)
+                           ctm_push, ctm_pop, ctm_moving, PSC_NAME_MAX, PSC_FILE_MAX)
 from gonzales.core.geometry import RGB, Point3f, Vec3f, dot, cross, PI, _is_real_ptr
 from gonzales.scene.appearance.materials import Material, MatKind, MeasuredBRDF
 from gonzales.scene.appearance.materials import GpuTexture, NormalSlopeMap, normal_slope_map_none
@@ -158,6 +159,11 @@ struct ParsedScene_Mojo:
     var instances:        Pointer[Instance, MutUntrackedOrigin]
     var instance_count:   Int32
     var instance_prefix:  Int32   # pruned: the instances of templates with curves come first; the software structures reach only these
+    var instance_motion:  Pointer[Int32, MutUntrackedOrigin]            # per instance: index into motions, -1 static
+    var motions:          Pointer[InstanceMotion, MutUntrackedOrigin]
+    var motion_count:     Int32
+    var transform_times:  SIMD[DType.float32, 2]   # pbrt's TransformTimes
+    var shutter:          SIMD[DType.float32, 2]   # the camera's shutteropen, shutterclose
     # Mesh-index range [start, end) each template's BLAS spans, into the SAME
     # `meshes` array above (a template can bundle several Shape calls, e.g.
     # barcelona-pavilion's tree templates each have 5-9 plymesh shapes).
@@ -173,6 +179,15 @@ struct ParsedScene_Mojo:
     # the dedup+load loop near the materials array build below.
     var measured_brdfs:  Pointer[MeasuredBRDF, MutUntrackedOrigin]
     var measured_count:  Int32
+
+    def camera_lens(self) -> ThinLens:
+        return ThinLens(self.camera_lens_radius, self.camera_focal_distance, self.shutter, self.motion_count > Int32(0))
+
+    def motion_table(self) -> MotionTable:
+        if self.motion_count == Int32(0):
+            return MotionTable.none()
+        return MotionTable(self.instance_motion, self.motions, self.motion_count,
+                           self.transform_times[0], self.transform_times[1], Float32(0))
 
     def sample_clamp(self) -> Float32:
         """pbrt's per-sample `maxcomponentvalue` in pre-iso radiance (the kernels apply iso later); 0 = off."""
@@ -193,11 +208,17 @@ def _psc_identity(m: Pointer[Float32, MutUntrackedOrigin]):
 
 def _psc_ctm_concat(s: Pointer[SceneParseState, MutUntrackedOrigin],
                    t: Pointer[Float32, MutUntrackedOrigin]):
-    """Compute s.ctm = s.ctm × t and store back."""
+    """Compute s.ctm = s.ctm × t and store back (and the same for ctm_end, as ActiveTransform says)."""
     var result = unsafe_alloc[Float32](16)
-    matrix_multiply(s[unsafe_offset=0].ctm.unsafe_ptr(), t, result)
-    for i in range(16):
-        s[unsafe_offset=0].ctm[i] = result[unsafe_offset=i]
+    var active = s[unsafe_offset=0].cur_attr.active_xf
+    if (active & Int32(1)) != Int32(0):
+        matrix_multiply(s[unsafe_offset=0].ctm.unsafe_ptr(), t, result)
+        for i in range(16):
+            s[unsafe_offset=0].ctm[i] = result[unsafe_offset=i]
+    if (active & Int32(2)) != Int32(0):
+        matrix_multiply(s[unsafe_offset=0].ctm_end.unsafe_ptr(), t, result)
+        for i in range(16):
+            s[unsafe_offset=0].ctm_end[i] = result[unsafe_offset=i]
     result.unsafe_free()
 
 # ── Transform keyword handlers ────────────────────────────────────────────────
@@ -389,7 +410,11 @@ def _psc_handle_camera(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
     sbuf.unsafe_free()
     # Copy current CTM into cam2w_raw
     for i in range(16): s[unsafe_offset=0].cam2w_raw[i] = s[unsafe_offset=0].ctm[i]
+    if ctm_moving(s[unsafe_offset=0]):
+        print("Warning: a moving camera is not supported; it stays at its start transform.")
     var params = _psc_collect_params(handle)
+    s[unsafe_offset=0].shutter = SIMD[DType.float32, 2](params.get_float("shutteropen", Float32(0)),
+                                                        params.get_float("shutterclose", Float32(1)))
     s[unsafe_offset=0].camera_fov = params.get_float("fov", s[unsafe_offset=0].camera_fov)
     s[unsafe_offset=0].lens_radius = params.get_float("lensradius", Float32(0))
     s[unsafe_offset=0].focal_distance = params.get_float("focaldistance", Float32(1e6))
@@ -403,9 +428,13 @@ def _psc_handle_transform(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
                          s: Pointer[SceneParseState, MutUntrackedOrigin]):
     _ = scanner_scan_char(handle, UInt8(91))  # '['
     var tmp = unsafe_alloc[Float32](1)
+    var active = s[unsafe_offset=0].cur_attr.active_xf
     for i in range(16):
         _ = scanner_scan_float(handle, tmp)
-        s[unsafe_offset=0].ctm[i] = tmp[unsafe_offset=0]
+        if (active & Int32(1)) != Int32(0):
+            s[unsafe_offset=0].ctm[i] = tmp[unsafe_offset=0]
+        if (active & Int32(2)) != Int32(0):
+            s[unsafe_offset=0].ctm_end[i] = tmp[unsafe_offset=0]
     tmp.unsafe_free()
     _ = scanner_scan_char(handle, UInt8(93))  # ']'
 
@@ -414,6 +443,9 @@ def _psc_handle_world_begin(s: Pointer[SceneParseState, MutUntrackedOrigin]):
     s[unsafe_offset=0].ctm[0] = Float32(1); s[unsafe_offset=0].ctm[5] = Float32(1)
     s[unsafe_offset=0].ctm[10] = Float32(1); s[unsafe_offset=0].ctm[15] = Float32(1)
     s[unsafe_offset=0].ctm_stack.clear()
+    s[unsafe_offset=0].ctm_end = s[unsafe_offset=0].ctm.copy()
+    s[unsafe_offset=0].ctm_end_stack.clear()
+    s[unsafe_offset=0].cur_attr.active_xf = Int32(3)
 
 def _psc_handle_attribute_begin(s: Pointer[SceneParseState, MutUntrackedOrigin]):
     ctm_push(s[unsafe_offset=0])
@@ -1862,6 +1894,7 @@ def _wrap_world_meshes(s: Pointer[SceneParseState, MutUntrackedOrigin]):
         s[unsafe_offset=0].object_mesh_start.append(Int32(i)); s[unsafe_offset=0].object_mesh_end.append(Int32(j))
         s[unsafe_offset=0].object_curve_start.append(Int32(0)); s[unsafe_offset=0].object_curve_end.append(Int32(0))
         s[unsafe_offset=0].instance_template_idx.append(Int32(tmpl))
+        s[unsafe_offset=0].instance_motion.append(Int32(-1))
         for ci in range(16):
             var e = Float32(1) if ci % 5 == 0 else Float32(0)
             s[unsafe_offset=0].object_ctm.append(e)
@@ -2020,11 +2053,45 @@ def _psc_emit_object_instance(s: Pointer[SceneParseState, MutUntrackedOrigin], n
     _ = matrix_invert(obj_to_world, world_to_obj)
 
     s[unsafe_offset=0].instance_template_idx.append(Int32(tmpl_idx))
+    s[unsafe_offset=0].instance_motion.append(_psc_push_motion(s, mdef_inv) if ctm_moving(s[unsafe_offset=0]) else Int32(-1))
     for ci in range(16):
         s[unsafe_offset=0].instance_obj_to_world.append(obj_to_world[unsafe_offset=ci])
         s[unsafe_offset=0].instance_world_to_obj.append(world_to_obj[unsafe_offset=ci])
 
     mdef.unsafe_free(); mdef_inv.unsafe_free(); obj_to_world.unsafe_free(); world_to_obj.unsafe_free()
+
+def _psc_push_motion(s: Pointer[SceneParseState, MutUntrackedOrigin], base: Pointer[Float32, MutUntrackedOrigin]) -> Int32:
+    """Record the current start and end CTMs as a motion acting on template space mapped by `base`."""
+    var k = Int32(len(s[unsafe_offset=0].motion_mats) // 48)
+    for ci in range(16): s[unsafe_offset=0].motion_mats.append(Float64(s[unsafe_offset=0].ctm[ci]))
+    for ci in range(16): s[unsafe_offset=0].motion_mats.append(Float64(s[unsafe_offset=0].ctm_end[ci]))
+    for ci in range(16): s[unsafe_offset=0].motion_mats.append(Float64(base[unsafe_offset=ci]))
+    return k
+
+def _psc_make_moving(s: Pointer[SceneParseState, MutUntrackedOrigin], mesh_start: Int, curve_start: Int):
+    """A shape under an animated CTM: its meshes and curves, baked with the start CTM, become a template with one
+    moving instance."""
+    var mesh_end = len(s[unsafe_offset=0].meshes)
+    var curve_end = len(s[unsafe_offset=0].curves_mat)
+    if s[unsafe_offset=0].cur_attr.is_alight or (mesh_end == mesh_start and curve_end == curve_start):
+        print("Warning: only meshes and curves that are not lights can move; a shape stays at its start transform.")
+        return
+    for i in range(mesh_start, mesh_end):
+        s[unsafe_offset=0].meshes[i].is_object_template = True
+    var tmpl = len(s[unsafe_offset=0].object_names)
+    s[unsafe_offset=0].object_names.append(String("__moving_") + String(tmpl))
+    s[unsafe_offset=0].object_mesh_start.append(Int32(mesh_start)); s[unsafe_offset=0].object_mesh_end.append(Int32(mesh_end))
+    s[unsafe_offset=0].object_curve_start.append(Int32(curve_start)); s[unsafe_offset=0].object_curve_end.append(Int32(curve_end))
+    var inv = unsafe_alloc[Float32](16)
+    _ = matrix_invert(s[unsafe_offset=0].ctm.unsafe_ptr(), inv)
+    s[unsafe_offset=0].instance_template_idx.append(Int32(tmpl))
+    s[unsafe_offset=0].instance_motion.append(_psc_push_motion(s, inv))
+    for ci in range(16):
+        var e = Float32(1) if ci % 5 == 0 else Float32(0)
+        s[unsafe_offset=0].object_ctm.append(s[unsafe_offset=0].ctm[ci])
+        s[unsafe_offset=0].instance_obj_to_world.append(e)
+        s[unsafe_offset=0].instance_world_to_obj.append(e)
+    inv.unsafe_free()
 
 # ── Main parse loop ───────────────────────────────────────────────────────────
 
@@ -2099,7 +2166,12 @@ def parse_scene_file(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
             # Shapes inside an ObjectBegin/ObjectEnd block ARE parsed (into a
             # template mesh range, see _psc_finish_object_def) — unlike
             # AreaLightSource/LightSource below, which stay scoped out.
+            var moving = s[unsafe_offset=0].object_depth == 0 and ctm_moving(s[unsafe_offset=0])
+            var mesh_start = len(s[unsafe_offset=0].meshes)
+            var curve_start = len(s[unsafe_offset=0].curves_mat)
             handle_shape(handle, s)
+            if moving:
+                _psc_make_moving(s, mesh_start, curve_start)
         elif _psc_streq(kw_buf, "AttributeBegin"):
             _psc_handle_attribute_begin(s)
         elif _psc_streq(kw_buf, "AttributeEnd"):
@@ -2117,6 +2189,8 @@ def parse_scene_file(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
                 _psc_skip_params(handle)
         elif _psc_streq(kw_buf, "LightSource"):
             if s[unsafe_offset=0].object_depth == 0:
+                if ctm_moving(s[unsafe_offset=0]):
+                    print("Warning: moving lights are not supported; a light stays at its start transform.")
                 handle_light_source(handle, s)
             else:
                 _psc_skip_params(handle)
@@ -2212,11 +2286,25 @@ def parse_scene_file(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
             for i in range(16):
                 _ = scanner_scan_float(handle, tmp.unsafe_offset(i))
             _ = scanner_scan_char(handle, UInt8(93))  # ']'
-            var result = unsafe_alloc[Float32](16)
-            matrix_multiply(s[unsafe_offset=0].ctm.unsafe_ptr(), tmp, result)
-            for i in range(16):
-                s[unsafe_offset=0].ctm[i] = result[unsafe_offset=i]
-            tmp.unsafe_free(); result.unsafe_free()
+            _psc_ctm_concat(s, tmp)
+            tmp.unsafe_free()
+        elif _psc_streq(kw_buf, "ActiveTransform"):
+            _ = scanner_scan_token(handle, ws_delims, 4, kw_buf, 256)
+            if _psc_streq(kw_buf, "StartTime"):
+                s[unsafe_offset=0].cur_attr.active_xf = Int32(1)
+            elif _psc_streq(kw_buf, "EndTime"):
+                s[unsafe_offset=0].cur_attr.active_xf = Int32(2)
+            elif _psc_streq(kw_buf, "All"):
+                s[unsafe_offset=0].cur_attr.active_xf = Int32(3)
+            else:
+                print("Warning: unknown ActiveTransform", String(unsafe_from_utf8_ptr=kw_buf.as_imm()))
+        elif _psc_streq(kw_buf, "TransformTimes"):
+            var tt = unsafe_alloc[Float32](2)
+            tt[unsafe_offset=0] = Float32(0); tt[unsafe_offset=1] = Float32(1)
+            _ = scanner_scan_float(handle, tt)
+            _ = scanner_scan_float(handle, tt.unsafe_offset(1))
+            s[unsafe_offset=0].transform_times = SIMD[DType.float32, 2](tt[unsafe_offset=0], tt[unsafe_offset=1])
+            tt.unsafe_free()
         else:
             _ = scanner_parse_quoted_string(handle, kw_buf, 256)
             _psc_skip_params(handle)
@@ -3474,6 +3562,13 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
         for q in range(Int(total_instances)):
             inst_src[unsafe_offset=q] = keep[unsafe_offset=q]
     keep.unsafe_free()
+    var n_motion = len(s[unsafe_offset=0].motion_mats) // 48
+    var motions = unsafe_alloc[InstanceMotion](max(n_motion, 1))
+    for mi in range(n_motion):
+        var mm = SIMD[DType.float64, 64](0)
+        for ci in range(48): mm[ci] = s[unsafe_offset=0].motion_mats[mi * 48 + ci]
+        motions[unsafe_offset=mi] = InstanceMotion(mm.slice[16](), mm.slice[16, offset=16](), mm.slice[16, offset=32]())
+    var inst_motion = unsafe_alloc[Int32](max(Int(total_instances), 1))
     for kk in range(Int(total_instances)):
         var k = Int(inst_src[unsafe_offset=kk])
         var tmpl_idx = Int(s[unsafe_offset=0].instance_template_idx[k])
@@ -3483,6 +3578,8 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
             o2w[ci] = s[unsafe_offset=0].instance_obj_to_world[k*16+ci]
             w2o[ci] = s[unsafe_offset=0].instance_world_to_obj[k*16+ci]
         instances_c[unsafe_offset=kk] = Instance(w2o, Int32(tmpl_idx))
+        var motion_idx = s[unsafe_offset=0].instance_motion[k]
+        inst_motion[unsafe_offset=kk] = motion_idx
         if kk >= n_ci:
             continue
 
@@ -3493,15 +3590,34 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
             Int32(0), Int32(0))
         var wxmin = Float32(1e38); var wymin = Float32(1e38); var wzmin = Float32(1e38)
         var wxmax = Float32(-1e38); var wymax = Float32(-1e38); var wzmax = Float32(-1e38)
-        for corner in range(8):
-            var cx = root.max.x if (corner & 1) != 0 else root.min.x
-            var cy = root.max.y if (corner & 2) != 0 else root.min.y
-            var cz = root.max.z if (corner & 4) != 0 else root.min.z
-            var wx = o2w[0]*cx + o2w[4]*cy + o2w[8]*cz  + o2w[12]
-            var wy = o2w[1]*cx + o2w[5]*cy + o2w[9]*cz  + o2w[13]
-            var wz = o2w[2]*cx + o2w[6]*cy + o2w[10]*cz + o2w[14]
-            wxmin = min(wxmin, wx); wymin = min(wymin, wy); wzmin = min(wzmin, wz)
-            wxmax = max(wxmax, wx); wymax = max(wymax, wy); wzmax = max(wzmax, wz)
+        # A moving instance: the union over the motion, padded by the arc a corner can bulge out between samples.
+        comptime MOTION_SAMPLES = 64
+        var n_samples = 1 if motion_idx < Int32(0) else MOTION_SAMPLES
+        var pad = Float32(0)
+        for si in range(n_samples):
+            var pad_scale = Float32(0)
+            var pivot = SIMD[DType.float32, 4](0)
+            if motion_idx >= Int32(0):
+                ref mo = motions[unsafe_offset=Int(motion_idx)]
+                var dt = Float32(si) / Float32(MOTION_SAMPLES - 1)
+                o2w = mo.obj_to_world(dt)
+                pivot = mo.t0 * (1 - dt) + mo.t1 * dt
+                var step = mo.rotation_angle() / Float32(MOTION_SAMPLES - 1)
+                pad_scale = step * step / Float32(4) + Float32(1e-4)
+            for corner in range(8):
+                var cx = root.max.x if (corner & 1) != 0 else root.min.x
+                var cy = root.max.y if (corner & 2) != 0 else root.min.y
+                var cz = root.max.z if (corner & 4) != 0 else root.min.z
+                var wx = o2w[0]*cx + o2w[4]*cy + o2w[8]*cz  + o2w[12]
+                var wy = o2w[1]*cx + o2w[5]*cy + o2w[9]*cz  + o2w[13]
+                var wz = o2w[2]*cx + o2w[6]*cy + o2w[10]*cz + o2w[14]
+                wxmin = min(wxmin, wx); wymin = min(wymin, wy); wzmin = min(wzmin, wz)
+                wxmax = max(wxmax, wx); wymax = max(wymax, wy); wzmax = max(wzmax, wz)
+                if pad_scale > Float32(0):
+                    var ox = wx - pivot[0]; var oy = wy - pivot[1]; var oz = wz - pivot[2]
+                    pad = max(pad, sqrt(ox * ox + oy * oy + oz * oz) * pad_scale)
+        if pad > Float32(0):
+            wxmin -= pad; wymin -= pad; wzmin -= pad; wxmax += pad; wymax += pad; wzmax += pad
         var ib = (Int(total_tris) + Int(total_curve_groups) + kk) * 6
         prim_bounds[unsafe_offset=ib+0] = wxmin; prim_bounds[unsafe_offset=ib+1] = wymin; prim_bounds[unsafe_offset=ib+2] = wzmin
         prim_bounds[unsafe_offset=ib+3] = wxmax; prim_bounds[unsafe_offset=ib+4] = wymax; prim_bounds[unsafe_offset=ib+5] = wzmax
@@ -3531,6 +3647,11 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
         var inst_tmp = unsafe_alloc[Instance](n_ci)
         for k in range(n_ci): inst_tmp[unsafe_offset=k] = instances_c[unsafe_offset=Int(inst_order[unsafe_offset=k])]
         for k in range(n_ci): instances_c[unsafe_offset=k] = inst_tmp[unsafe_offset=k]
+        if n_motion > 0:
+            var motion_tmp = unsafe_alloc[Int32](n_ci)
+            for k in range(n_ci): motion_tmp[unsafe_offset=k] = inst_motion[unsafe_offset=Int(inst_order[unsafe_offset=k])]
+            for k in range(n_ci): inst_motion[unsafe_offset=k] = motion_tmp[unsafe_offset=k]
+            motion_tmp.unsafe_free()
         inst_tmp.unsafe_free(); inst_order.unsafe_free()
         var iroot = inst_nodes[unsafe_offset=0]
         prim_bounds[unsafe_offset=inst_slot + 0] = iroot.min.x; prim_bounds[unsafe_offset=inst_slot + 1] = iroot.min.y
@@ -3806,6 +3927,11 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
     psc[unsafe_offset=0].instances        = instances_c
     psc[unsafe_offset=0].instance_count   = total_instances
     psc[unsafe_offset=0].instance_prefix  = Int32(n_ci) if prune_inst else Int32(0)
+    psc[unsafe_offset=0].instance_motion  = inst_motion
+    psc[unsafe_offset=0].motions          = motions
+    psc[unsafe_offset=0].motion_count     = Int32(n_motion)
+    psc[unsafe_offset=0].transform_times  = s[unsafe_offset=0].transform_times
+    psc[unsafe_offset=0].shutter          = s[unsafe_offset=0].shutter
     psc[unsafe_offset=0].template_mesh_start = template_mesh_start
     psc[unsafe_offset=0].template_mesh_end   = template_mesh_end
     psc[unsafe_offset=0].film_w           = s[unsafe_offset=0].film_w
@@ -4566,6 +4692,8 @@ def mojo_parsed_free(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin]):
     psc[unsafe_offset=0].blas_node_counts.unsafe_free()
     psc[unsafe_offset=0].blas_primid_counts.unsafe_free()
     psc[unsafe_offset=0].instances.unsafe_free()
+    psc[unsafe_offset=0].instance_motion.unsafe_free()
+    psc[unsafe_offset=0].motions.unsafe_free()
     psc[unsafe_offset=0].template_mesh_start.unsafe_free()
     psc[unsafe_offset=0].template_mesh_end.unsafe_free()
     psc.unsafe_free()
@@ -4712,7 +4840,7 @@ def mojo_parsed_scene_descriptor(
         if psc[unsafe_offset=0].materials[unsafe_offset=mi].is_specular_glass():
             any_glass = True
     sd[unsafe_offset=0].hasGlass        = Int32(3) if any_glass else Int32(0)   # bit 0: MNEE, bit 1: glossy SMS
-    sd[unsafe_offset=0].lens            = ThinLens(psc[unsafe_offset=0].camera_lens_radius, psc[unsafe_offset=0].camera_focal_distance)
+    sd[unsafe_offset=0].lens            = psc[unsafe_offset=0].camera_lens()
     sd[unsafe_offset=0].filterGlossy    = Float32(0)
     sd[unsafe_offset=0].clamp           = SIMD[DType.float32, 2](0)
     sd[unsafe_offset=0].cycles          = SIMD[DType.int32, 4](0)
@@ -4724,6 +4852,7 @@ def mojo_parsed_scene_descriptor(
     sd[unsafe_offset=0].blasCount       = Int64(psc[unsafe_offset=0].blas_count)
     sd[unsafe_offset=0].instances       = psc[unsafe_offset=0].instances
     sd[unsafe_offset=0].instanceCount   = Int64(psc[unsafe_offset=0].instance_count)
+    sd[unsafe_offset=0].motion          = psc[unsafe_offset=0].motion_table()
     sd[unsafe_offset=0].measuredBrdfs      = psc[unsafe_offset=0].measured_brdfs
     sd[unsafe_offset=0].measuredBrdfCount  = Int64(psc[unsafe_offset=0].measured_count)
     sd[unsafe_offset=0].spectral        = spectral

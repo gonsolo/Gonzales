@@ -38,6 +38,7 @@ from std.memory.alloc import unsafe_alloc
 from std.sys import has_accelerator, get_defined_int
 from std.sys.info import size_of
 from gonzales.scene.shapes.primitives import PrimKind
+from gonzales.scene.shapes.motion import MotionTable, InstanceMotion
 
 
 # Concurrent samples a pixel; build with -D WAVEFRONT_BATCH=2 where the per-pixel buffers must shrink (the whole island).
@@ -904,6 +905,9 @@ struct GpuSceneHandle(Movable):
     var instances_buf: DeviceBuffer[DType.uint8]
     var n_instances: Int
     var instances_ext: Int          # device address of instance records kept elsewhere (the RT-core TLAS); 0: instances_buf
+    var motion_index_buf: DeviceBuffer[DType.uint8]   # MotionTable.index and .records
+    var motion_buf: DeviceBuffer[DType.uint8]
+    var motion: MotionTable         # its count and TransformTimes; the pointers are the two buffers above
     var meshes: MeshBuffers
     var materials_buf: DeviceBuffer[DType.uint8]
     var material_count: Int
@@ -1074,6 +1078,8 @@ struct GpuSceneHandle(Movable):
             walkBvhOfMesh=typed_ptr[Int32](self.walk_bvh.of_mesh_buf) if self.walk_bvh.n > 0 else Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
             bvh4=BVH4.none(),
             sharedCtx=self.shade_ctx_buf.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
+            motion=MotionTable(typed_ptr[Int32](self.motion_index_buf), typed_ptr[InstanceMotion](self.motion_buf),
+                               self.motion.count, self.motion.t0, self.motion.t1, Float32(0)) if self.motion.count > 0 else MotionTable.none(),
         )
 
 def gpu_available() -> Bool:
@@ -1539,6 +1545,12 @@ def gpu_upload_scene(
             var n_inst = Int(s.instance_count)
             var inst_host = not instances_external and xert_alignment() > 0 and n_inst * size_of[Instance]() > 1 << 30
             var instances_gpu_buf = _gpu_upload_array[Instance](ctx, s.instances, 1 if instances_external or inst_host else n_inst)
+            var motion = s.motion_table()
+            if motion.count > 0 and (instances_external or inst_host):
+                print("Warning: motion blur needs the instance records on the GPU; moving instances stay at their start.")
+                motion = MotionTable.none()
+            var motion_index_buf = _gpu_upload_array[Int32](ctx, s.instance_motion, n_inst if motion.count > 0 else 0)
+            var motion_buf = _gpu_upload_array[InstanceMotion](ctx, s.motions, Int(motion.count))
             var host_plan = _host_plan(ctx, s, n_pixels)
             var meshes = MeshBuffers.upload(ctx, s, host_plan[0])
             var instances_ext = 0
@@ -1634,6 +1646,9 @@ def gpu_upload_scene(
                 instances_buf=instances_gpu_buf^,
                 n_instances=Int(s.instance_count),
                 instances_ext=instances_ext,
+                motion_index_buf=motion_index_buf^,
+                motion_buf=motion_buf^,
+                motion=motion,
                 meshes=meshes^,
                 materials_buf=mat_buf^,
                 material_count=Int(s.material_count),
@@ -1700,7 +1715,7 @@ def gpu_upload_scene(
                 c2w_buf=c2w_gpu_buf^,
                 filter=FilterParams(s.filter_sigma, s.filter_support_x, s.filter_support_y,
                                     s.filter_norm_x, s.filter_norm_y, s.filter_type),
-                lens=ThinLens(s.camera_lens_radius, s.camera_focal_distance),
+                lens=s.camera_lens(),
                 filter_glossy=Float32(0),
                 clamp=SIMD[DType.float32, 2](0, clamp_indirect),
                 cycles=SIMD[DType.int32, 4](0),

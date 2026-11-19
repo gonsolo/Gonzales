@@ -557,19 +557,28 @@ def triangle_sample_1d(u: Float32, radius: Float32) -> Float32:
 #
 # Returns the world-space Ray and the PCG seed pair for the path.
 # px/py are integer pixel coords; si is the sample index (Int32).
-@fieldwise_init
 struct ThinLens(TrivialRegisterPassable):
-    """pbrt's PerspectiveCamera lens: radius 0 is a pinhole."""
+    """pbrt's PerspectiveCamera lens and shutter: radius 0 is a pinhole; timed: a camera sample also draws a time."""
     var radius: Float32
     var focal_distance: Float32
+    var shutter: SIMD[DType.float32, 2]   # shutteropen, shutterclose
+    var timed: Bool
+
+    def __init__(out self, radius: Float32, focal_distance: Float32,
+                 shutter: SIMD[DType.float32, 2] = SIMD[DType.float32, 2](0, 1), timed: Bool = False):
+        self.radius = radius
+        self.focal_distance = focal_distance
+        self.shutter = shutter
+        self.timed = timed
 
     @staticmethod
     def pinhole() -> ThinLens:
         return ThinLens(Float32(0), Float32(1e6))
 
     def first_dim(self) -> Int32:
-        """The Sobol dimension the first bounce starts at: the lens takes dims 3 and 4."""
-        return Int32(5) if self.radius > Float32(0) else Int32(3)
+        """The Sobol dimension the first bounce starts at: the lens takes dims 3 and 4, then the time one more."""
+        var d = Int32(5) if self.radius > Float32(0) else Int32(3)
+        return d + Int32(1) if self.timed else d
 
 
 @always_inline

@@ -58,6 +58,7 @@ struct AttributeState(Copyable, ImplicitlyCopyable, Movable):
     var al_two_sided:   Bool   # AreaLightSource "bool twosided"
     var al_transparent: Bool   # Cycles' lamp: rays pass it after taking its light, shadows ignore it
     var al_hidden:      Bool   # a lamp camera rays do not see (USD lights)
+    var active_xf:      Int32  # pbrt's ActiveTransform: bit 0 start, bit 1 end
 
 struct NamedMaterial(Copyable, ImplicitlyCopyable, Movable):
     var name:           String
@@ -230,6 +231,11 @@ struct SceneParseState(Movable):
     # Current transform matrix and stack
     var ctm:       Array[Float32, 16]
     var ctm_stack: List[Array[Float32, 16]]
+    # The CTM at TransformTimes' end time (pbrt's ctm[1]); equal to ctm unless ActiveTransform split them.
+    var ctm_end:       Array[Float32, 16]
+    var ctm_end_stack: List[Array[Float32, 16]]
+    var transform_times: SIMD[DType.float32, 2]
+    var shutter:         SIMD[DType.float32, 2]   # the camera's shutteropen, shutterclose
 
     # Attribute stack (material, area-light, medium per nesting level)
     var attr_stack: List[AttributeState]
@@ -466,6 +472,10 @@ struct SceneParseState(Movable):
     var instance_template_idx: List[Int32]
     var instance_obj_to_world: List[Float32]
     var instance_world_to_obj: List[Float32]
+    # Per placement the index of its motion (-1 static); a motion is 48 floats: start and end CTM and the inverse of
+    # the CTM its template was baked with.
+    var instance_motion: List[Int32]
+    var motion_mats:     List[Float64]
 
     def __init__(out self):
         # Identity CTM
@@ -473,10 +483,14 @@ struct SceneParseState(Movable):
         self.ctm[0] = Float32(1); self.ctm[5] = Float32(1)
         self.ctm[10] = Float32(1); self.ctm[15] = Float32(1)
         self.ctm_stack = List[Array[Float32, 16]]()
+        self.ctm_end = self.ctm.copy()
+        self.ctm_end_stack = List[Array[Float32, 16]]()
+        self.transform_times = SIMD[DType.float32, 2](0, 1)
+        self.shutter = SIMD[DType.float32, 2](0, 1)
 
         self.cur_attr  = AttributeState(Int32(-1), False,
                              RGB(Float32(0),Float32(0),Float32(0)),
-                             Int32(-1), Int32(-1), False, False, False, False)
+                             Int32(-1), Int32(-1), False, False, False, False, Int32(3))
         self.attr_stack = List[AttributeState]()
 
         self.named_materials = List[NamedMaterial]()
@@ -619,16 +633,26 @@ struct SceneParseState(Movable):
         self.instance_template_idx = List[Int32]()
         self.instance_obj_to_world = List[Float32]()
         self.instance_world_to_obj = List[Float32]()
+        self.instance_motion = List[Int32]()
+        self.motion_mats = List[Float64]()
 
 
 # ── CTM stack helpers (operate on SceneParseState only) ──────────────────────
 
 def ctm_push(mut s: SceneParseState):
     s.ctm_stack.append(s.ctm.copy())
+    s.ctm_end_stack.append(s.ctm_end.copy())
 
 def ctm_pop(mut s: SceneParseState):
     if len(s.ctm_stack) > 0:
         s.ctm = s.ctm_stack.pop()
+        s.ctm_end = s.ctm_end_stack.pop()
+
+def ctm_moving(s: SceneParseState) -> Bool:
+    for i in range(16):
+        if s.ctm[i] != s.ctm_end[i]:
+            return True
+    return False
 
 def scene_parse_state_new() -> SceneParseState:
     return SceneParseState()
