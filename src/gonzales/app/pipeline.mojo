@@ -16,6 +16,7 @@ from std.time import perf_counter_ns
 from gonzales.core.geometry import RGB, Point3f, Vec3f, Bounds3f, _is_real_ptr
 from gonzales.transport.render_state import TileResult, FilmDims
 from gonzales.scene.shapes.primitives import PrimId, TriangleMesh, Instance, mesh_vi, mesh_pos
+from gonzales.scene.shapes.motion import MotionTable
 from gonzales.core.geometry import Ray
 from gonzales.scene.shapes.curves import CurveBvh, curve_at, curve_piece_bounds
 from gonzales.scene.shapes.patches import patch_bounds
@@ -418,6 +419,19 @@ def _rtcore_cubin_path() -> String:
             path += "rt_trace.cubin"
     buf.unsafe_free()
     return path
+
+
+def _motion_unsupported(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin]):
+    """Motion blur is the software-BVH path tracer's only: elsewhere the moving instances stay at their start."""
+    if psc[unsafe_offset=0].motion_count > Int32(0):
+        print("Warning: motion blur needs the path tracer on the software BVH; moving instances stay at their start.")
+        psc[unsafe_offset=0].motion_count = Int32(0)
+
+
+def _motion_unsupported(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin], handle: Pointer[GpuSceneHandle, MutUntrackedOrigin]):
+    _motion_unsupported(psc)
+    handle[].motion = MotionTable.none()
+    handle[].lens = psc[unsafe_offset=0].camera_lens()
 
 
 # Instanced scenes are traced through the Vulkan-built top-level structure as it is: the hardware reports the
@@ -2358,6 +2372,8 @@ def parse_and_render(
             eff_h = Int32(Int(eff_w) * Int(psc[unsafe_offset=0].film_h) / max(Int(psc[unsafe_offset=0].film_w), 1))
         resize_film(psc, eff_w, eff_h)
     mojo_apply_overrides(psc, spp_override, Int32(0), Int32(0), seed_override)
+    if use_sppm or use_vcm or use_jb or use_vulkan_rt_shade or env_on["GONZALES_RTCORE"]():
+        _motion_unsupported(psc)
     try:
         checkpoint_adopt_seed(ckpt, psc)
     except e:
@@ -3190,6 +3206,7 @@ def render_interactive(
             return
     var rtb = _RtBufs()
     if use_gpu and env_on["GONZALES_RTCORE"]() and not use_restir:
+        _motion_unsupported(psc, handle)
         try:
             rtb = _rt_wavefront_setup(handle, psc, n_pixels * WAVEFRONT_BATCH)
         except:
@@ -3800,6 +3817,7 @@ def session_new(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin], sobol: Point
     t0 = perf_counter_ns()
     var rtb = _RtBufs()
     if env_on["GONZALES_RTCORE"]() or xert_alignment() > 0:   # Intel Xe2 always, as parse_and_render
+        _motion_unsupported(psc, handle)
         try:
             rtb = _rt_wavefront_setup(handle, psc, n_pixels * _session_batch(n_pixels))
         except e:
