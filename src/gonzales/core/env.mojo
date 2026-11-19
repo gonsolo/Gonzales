@@ -63,7 +63,7 @@ comptime ENV_SWITCHES: List[EnvSwitch] = [
     EnvSwitch("GONZALES_XERT_VRAM_MB", "Intel Xe2: MiB of RT structures and mesh arrays in VRAM (default automatic)"),
     EnvSwitch("GONZALES_XERT_RESERVE_MB", "Intel Xe2 automatic VRAM budget: MiB left free (default 2800)"),
     EnvSwitch("GONZALES_XERT_STATS", "Intel Xe2: print per-ray procedural and sub-square candidate counts"),
-    EnvSwitch("GONZALES_XERT_SD_CAP", "Intel Xe2 debug: sub-square candidates a ray tests (default all)"),
+    EnvSwitch("GONZALES_XERT_SD_CAP", "Intel Xe2 debug: sub-square candidates a ray tests (default all; -1: none, traversal only)"),
     EnvSwitch("GONZALES_XERT_SD_CAP_BREAK", "Intel Xe2 debug: past GONZALES_XERT_SD_CAP, end the ray's query"),
     # Logs, timing, dumps
     EnvSwitch("GONZALES_TIMING", "set: stage times of Hydra sessions and the curve setup"),

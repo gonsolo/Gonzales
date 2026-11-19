@@ -213,7 +213,7 @@ def xert_trace(accel: MutPointer[UInt8, MutAnyOrigin], ray: XeRayDesc, cv: XePro
                 if s1 > s0 + 1 and pid >= Int(cv.subdiv[unsafe_offset=s0]):
                     n_sd += 1
                     var cap = Int64(cv.subdiv[unsafe_offset=-2])
-                    if cap > 0 and n_sd > cap:
+                    if cap != 0 and n_sd > cap:   # -1: every walk skipped
                         if (cv.subdiv[unsafe_offset=-1] & 2) != 0:
                             break
                         external_call["intel_ray_query_start_traversal", NoneType](q)
