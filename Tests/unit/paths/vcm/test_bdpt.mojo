@@ -23,6 +23,7 @@ from gonzales.scene.appearance.materials import GpuTexture, NormalSlopeMap
 from gonzales.scene.shapes.primitives import Intersection, Sphere, PrimId, Instance
 from gonzales.scene.appearance.media import Medium, MediumInterface, Grid, NvdbGrid
 from gonzales.scene.appearance.lights import LightSampler, AreaLight, DistantLight, PointLight, InfiniteLight
+from gonzales.scene.shapes.motion import MotionTable
 from gonzales.scene.accel.bvh import BVH4, SceneView, BVH2Node
 from gonzales.transport.bxdf import ggx_D, ggx_G2, ggx_albedo_avg, ggx_ms_shape, ggx_ms_tint
 from gonzales.paths.vcm.vertex import BDPTVertex
@@ -147,6 +148,7 @@ def _dummy_sd() -> SceneView:
         Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
         BVH4.none(),
         Pointer[UInt8, MutUntrackedOrigin].unsafe_dangling(),
+        MotionTable.none(),
     )
 
 # ── _pdf_solid_to_area ────────────────────────────────────────────────────────
@@ -368,6 +370,7 @@ def test_bdpt_connect_to_cache_sums_one_paired_light_path() raises:
         Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
         BVH4.none(),
         Pointer[UInt8, MutUntrackedOrigin].unsafe_dangling(),
+        MotionTable.none(),
     )
 
     var cv = BDPTVertex(

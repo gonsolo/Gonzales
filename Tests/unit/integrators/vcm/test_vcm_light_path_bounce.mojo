@@ -30,6 +30,7 @@ from gonzales.core.geometry import Ray
 from gonzales.scene.appearance.media import Medium, MediumInterface, Grid, NvdbGrid
 from gonzales.scene.appearance.lights import LightSampler, AreaLight, DistantLight, PointLight, InfiniteLight
 from gonzales.scene.shapes.curves import Curve
+from gonzales.scene.shapes.motion import MotionTable
 from gonzales.scene.accel.bvh import BVH4, SceneView, BVH2Node, build_bvh2, traverse_bvh2_core
 from gonzales.core.rng import PCG32
 from gonzales.core.spectrum import null_spectral_handle, sample_wavelengths
@@ -157,6 +158,7 @@ def _build_scene() -> SceneView:
         Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
         BVH4.none(),
         Pointer[UInt8, MutUntrackedOrigin].unsafe_dangling(),
+        MotionTable.none(),
     )
 
 # Both subpath halves of a VCM pass share one hero-wavelength set (see
