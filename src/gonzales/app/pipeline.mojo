@@ -13,6 +13,8 @@ from gonzales.integrators.film import normalize_film, apply_film_sensor
 from gonzales.core.progress import Progress, fmt_time
 from gonzales.integrators.outputs import write_partial_image, write_render_outputs
 from std.time import perf_counter_ns
+from std.sys import has_accelerator
+from gonzales.app.kernel_list import compile_kernels
 from gonzales.core.geometry import RGB, Point3f, Vec3f, Bounds3f, _is_real_ptr
 from gonzales.transport.render_state import TileResult, FilmDims
 from gonzales.scene.shapes.primitives import PrimId, TriangleMesh, Instance, mesh_vi, mesh_pos
@@ -565,6 +567,20 @@ def _rtcore_attach_native(interop_scene: VulkanInteropRtSceneHandle, psc: Pointe
 # those of _rtcore_attach_native; the hit's primitive id is mapped to the triangle number in its BLAS by the gid table.
 # A fully pruned scene shades from the RT-core TLAS records instead of its own instance array (the software structures only
 # reach the first instance_prefix instances, whose places do not change): the instances are reordered into record order.
+# The context (made if need be) with every kernel compiled, before the scene takes the card's memory.
+def _kernels_ready(ctx: Optional[DeviceContext], verbose: Bool = False, part: Int = 0, parts: Int = 1) -> Optional[DeviceContext]:
+    comptime if has_accelerator():
+        try:
+            var c = ctx.value().copy() if ctx else DeviceContext()
+            var t0 = perf_counter_ns()
+            var failed = compile_kernels(c, verbose, part, parts)
+            print("GPU: kernels compiled in", Float64(perf_counter_ns() - t0) / 1.0e9, "s" + ("" if failed == 0 else ", " + String(failed) + " failed"))
+            return Optional[DeviceContext](c^)
+        except e:
+            print("GPU: kernel compile skipped:", e)
+    return ctx.copy()
+
+
 def _instances_in_tlas(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin]) -> Bool:
     return env_str["GONZALES_RT_PRUNE"]() == "1" and not env_on["GONZALES_RTCORE_VULKAN"]() and _rtcore_native_wanted(psc) \
         and xert_alignment() == 0   # Intel's structures hold no records shading can read
@@ -2444,7 +2460,7 @@ def parse_and_render(
     # this chain the compiler rejects every enqueue_function in sppm_gpu.mojo (cause unknown).
     if use_gpu and use_vcm and not use_sppm:
         var sd = mojo_parsed_scene_descriptor(psc, spectral)
-        var handle = gpu_upload_scene(psc, sobol_matrices, n_pixels, spectral.coeffs, spectral.res, spectral.cie_x, spectral.cie_y, spectral.cie_z, spectral.d65, gpu_ctx)
+        var handle = gpu_upload_scene(psc, sobol_matrices, n_pixels, spectral.coeffs, spectral.res, spectral.cie_x, spectral.cie_y, spectral.cie_z, spectral.d65, _kernels_ready(gpu_ctx))
         if not _is_real_ptr(handle):
             sd.unsafe_free()
             mojo_parsed_free(psc)
@@ -2621,7 +2637,7 @@ def parse_and_render(
         return ret
     elif use_gpu and use_sppm:
         var sd = mojo_parsed_scene_descriptor(psc, spectral)
-        var handle = gpu_upload_scene(psc, sobol_matrices, n_pixels, spectral.coeffs, spectral.res, spectral.cie_x, spectral.cie_y, spectral.cie_z, spectral.d65, gpu_ctx)
+        var handle = gpu_upload_scene(psc, sobol_matrices, n_pixels, spectral.coeffs, spectral.res, spectral.cie_x, spectral.cie_y, spectral.cie_z, spectral.d65, _kernels_ready(gpu_ctx))
         if not _is_real_ptr(handle):
             sd.unsafe_free()
             mojo_parsed_free(psc)
@@ -2643,7 +2659,7 @@ def parse_and_render(
             return Int32(-1)
         var spp = Int(psc[unsafe_offset=0].samples_per_pixel)
         var ret = Int32(0)
-        var handle = gpu_upload_scene(psc, sobol_matrices, n_pixels, spectral.coeffs, spectral.res, spectral.cie_x, spectral.cie_y, spectral.cie_z, spectral.d65, gpu_ctx, restir_di=use_restir, restir_vol=use_vol_restir_reuse, instances_external=_instances_in_tlas(psc))
+        var handle = gpu_upload_scene(psc, sobol_matrices, n_pixels, spectral.coeffs, spectral.res, spectral.cie_x, spectral.cie_y, spectral.cie_z, spectral.d65, _kernels_ready(gpu_ctx), restir_di=use_restir, restir_vol=use_vol_restir_reuse, instances_external=_instances_in_tlas(psc))
         if not _is_real_ptr(handle):
             mojo_parsed_free(psc)
             return Int32(-1)
@@ -3233,7 +3249,7 @@ def render_interactive(
         return
     var handle = Pointer[GpuSceneHandle, MutUntrackedOrigin].unsafe_dangling()
     if use_gpu:
-        handle = gpu_upload_scene(psc, sobol, n_pixels, spectral.coeffs, spectral.res, spectral.cie_x, spectral.cie_y, spectral.cie_z, spectral.d65, restir_di=False, restir_vol=False, instances_external=_instances_in_tlas(psc))
+        handle = gpu_upload_scene(psc, sobol, n_pixels, spectral.coeffs, spectral.res, spectral.cie_x, spectral.cie_y, spectral.cie_z, spectral.d65, _kernels_ready(None), restir_di=False, restir_vol=False, instances_external=_instances_in_tlas(psc))
         if not _is_real_ptr(handle):
             viewer_destroy(v)
             mojo_parsed_free(psc)
@@ -3841,7 +3857,7 @@ def session_new(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin], sobol: Point
     var timing = env_on["GONZALES_TIMING"]()
     var t0 = perf_counter_ns()
     var handle = gpu_upload_scene(psc, sobol, n_pixels, spectral.coeffs, spectral.res, spectral.cie_x, spectral.cie_y,
-                                  spectral.cie_z, spectral.d65, gpu_ctx, restir_di=False, restir_vol=False, verbose=False,
+                                  spectral.cie_z, spectral.d65, _kernels_ready(gpu_ctx), restir_di=False, restir_vol=False, verbose=False,
                                   batch=_session_batch(n_pixels))
     if not _is_real_ptr(handle):
         mojo_parsed_free(psc)

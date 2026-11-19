@@ -313,6 +313,7 @@ MOJO_LINK_FLAGS = -Xlinker -L$(BUILD_DIR) -Xlinker -loiiobridge -Xlinker -lvulka
 
 $(GONZALES): $(MOJO_SRCS) pyproject.toml $(OIIO_BRIDGE_LIB) $(VIEWER_LIB) $(VULKANRT_LIB) $(VULKANINTEROP_LIB) $(RTCORE_LIB) $(XERT_LIB) $(OPTIXCURVES_LIB) $(NVDB_BRIDGE_LIB)
 	@mkdir -p $(BUILD_DIR)
+	python3 Tools/gen_kernel_list.py
 	$(RELEASE_PREP)
 	$(RELEASE_ENV) uv run mojo build $(RELEASE_SRC)/gonzales/__init__.mojo -I $(RELEASE_SRC) -o $(GONZALES) $(MOJO_BUILD_FLAGS) $(MOJO_LINK_FLAGS)
 

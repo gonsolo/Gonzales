@@ -5,7 +5,7 @@ from std.time import perf_counter_ns
 from std.os import setenv
 from gonzales.core.env import env_str, env_on, env_set, env_warn_unknown, env_list
 from std.memory.alloc import unsafe_alloc
-from gonzales.app.pipeline import _generate_sobol_matrices, parse_and_render, render_interactive, debug_trace_pixel, debug_render_vulkanrt, bake_scene
+from gonzales.app.pipeline import _kernels_ready, _generate_sobol_matrices, parse_and_render, render_interactive, debug_trace_pixel, debug_render_vulkanrt, bake_scene
 from gonzales.core.spectrum import load_spectral_context, spectral_handle, SpectralContext
 from gonzales.scene.description.pbrt_parser import ParsedScene_Mojo
 from gonzales.scene.shapes.ply_prefetch import PlyPrefetch, scan_plys
@@ -66,7 +66,7 @@ def _parse_res(s: String, start: Int) -> Tuple[Int32, Int32]:
 def _create_context_thread(arg: ThreadArg) -> ThreadArg:
     var slot = arg.unsafe_bitcast[Optional[DeviceContext]]()
     try:
-        slot[unsafe_offset=0] = Optional[DeviceContext](DeviceContext())
+        slot[unsafe_offset=0] = _kernels_ready(Optional[DeviceContext](DeviceContext()))   # compiled while the scene parses
     except:
         pass
     return arg
@@ -206,6 +206,16 @@ def main() raises:
             return
         elif arg == "--list-env":
             env_list()
+            return
+        elif arg.startswith("--compile-kernels"):   # fills the driver's kernel cache; =i/N compiles every Nth from i
+            var spec = arg.removeprefix("--compile-kernels").removeprefix("=")
+            var part = 0
+            var parts = 1
+            if spec:
+                var ip = spec.split("/")
+                part = Int(ip[0])
+                parts = Int(ip[1])
+            _ = _kernels_ready(None, True, part, parts)
             return
         elif arg == "--interactive":
             interactive = True
