@@ -139,8 +139,9 @@ def disp_levels(np: Int, patches: Pointer[BezierPatch, MutUntrackedOrigin], sq: 
     return lev^
 
 
-def load_disp_mesh(ptx: String, o: DispOptions) raises -> DispMesh:
-    """The displaced mesh of `ptx` for options `o`."""
+def load_disp_mesh(ptx: String, o: DispOptions, corners: Int = 0) raises -> DispMesh:
+    """The displaced mesh of `ptx` for options `o`; corners (an address, 0: the Ptex's own cage): the mesh's positions, 12
+    floats a Ptex face in its (u, v) corner order, for a pose of the cage (src/oiio/disp.cc disp_open)."""
     var c = _cstr(ptx)
     var counts = unsafe_alloc[Int64](4)
     var view = unsafe_alloc[Float32](10)
@@ -148,7 +149,7 @@ def load_disp_mesh(ptx: String, o: DispOptions) raises -> DispMesh:
     view[unsafe_offset=3] = o.pixel; view[unsafe_offset=4] = o.lod if o.pixel > Float32(0) else Float32(0)
     view[unsafe_offset=5] = o.fwd.x; view[unsafe_offset=6] = o.fwd.y; view[unsafe_offset=7] = o.fwd.z
     view[unsafe_offset=8] = o.cos_cone; view[unsafe_offset=9] = o.far
-    var hd = external_call["disp_open", Int](c, Int32(2), counts, view)
+    var hd = external_call["disp_open", Int](c, Int32(2), counts, view, corners)
     c.unsafe_free(); view.unsafe_free()
     if hd == 0:
         raise Error("cannot read " + ptx)

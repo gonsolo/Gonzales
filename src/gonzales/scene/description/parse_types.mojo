@@ -360,11 +360,13 @@ struct SceneParseState(Movable):
     var disp_meshes: List[DisplacedMesh]
     var disp_map_keys: List[String]
     var disp_maps: List[Rmip]
-    # Displaced Catmull-Clark meshes from Ptex displacement (scene/shapes/disp_build.mojo), one per file, with the height scale
+    # Displaced Catmull-Clark meshes from Ptex displacement (scene/shapes/disp_build.mojo), one per file and pose, with the height scale
     var subdiv_meshes: List[DispMesh]
     var subdiv_files:  List[String]
     var subdiv_scale:  List[Float32]
     var subdiv_eye:    List[Vec3f]    # the eye each was loaded for, in its object space
+    var subdiv_corners: List[List[Float32]]   # each one's mesh positions, 12 a Ptex face (a pose of the Ptex's cage)
+    var subdiv_hash:   List[UInt64]
     var alpha_mask_files: List[String]
     var alpha_mask_data:  List[Pointer[UInt8, MutUntrackedOrigin]]
     var alpha_mask_w:     List[Int32]
@@ -564,6 +566,8 @@ struct SceneParseState(Movable):
         self.subdiv_files  = List[String]()
         self.subdiv_scale  = List[Float32]()
         self.subdiv_eye    = List[Vec3f]()
+        self.subdiv_corners = List[List[Float32]]()
+        self.subdiv_hash   = List[UInt64]()
         self.disp_maps = List[Rmip]()
         self.alpha_mask_files = List[String]()
         self.alpha_mask_data  = List[Pointer[UInt8, MutUntrackedOrigin]]()

@@ -2,6 +2,7 @@
 over the texture's height map instead of pbrt's pre-tessellation to "edgelength" (see scene/shapes/displacement.mojo)."""
 from std.math import sqrt, abs, tan, min, max
 from std.os import getenv
+from std.memory import bitcast
 from std.time import perf_counter_ns
 from std.memory.alloc import unsafe_alloc
 from gonzales.core.diagnostics import warn_unsupported_in
@@ -176,14 +177,26 @@ def apply_subdiv_displacement(s: Pointer[SceneParseState, MutUntrackedOrigin]):
         if abs(s[unsafe_offset=0].ctm[i] - (Float32(1) if i % 5 == 0 else Float32(0))) > Float32(1e-6):
             print("subdiv displacement:", file, ": the shape is transformed - it keeps its bump map")
             return
-    var k = -1
+    var nf = len(ma.vert_idxs) // 6
+    var corners = List[Float32](capacity=12 * nf)   # face f: triangles (A, B, C), (A, C, D)
+    var h = UInt64(14695981039346656037)
+    for f in range(nf):
+        var vs: List[Int] = [Int(ma.vert_idxs[6 * f]), Int(ma.vert_idxs[6 * f + 1]), Int(ma.vert_idxs[6 * f + 2]), Int(ma.vert_idxs[6 * f + 5])]
+        for v in vs:
+            for i in range(3):
+                var x = ma.points[4 * v + i]   # x, y, z, 1 a vertex (store_mesh)
+                corners.append(x)
+                h = (h ^ UInt64(bitcast[DType.uint32](x))) * UInt64(1099511628211)
+    var k = -1   # one surface per file and pose
     for i in range(len(s[unsafe_offset=0].subdiv_files)):
-        if s[unsafe_offset=0].subdiv_files[i] == file:
+        if s[unsafe_offset=0].subdiv_hash[i] == h and s[unsafe_offset=0].subdiv_files[i] == file and s[unsafe_offset=0].subdiv_corners[i] == corners:
             k = i
             break
     if k < 0:
         s[unsafe_offset=0].subdiv_files.append(file)
         s[unsafe_offset=0].subdiv_scale.append(s[unsafe_offset=0].named_materials[mi].disp_ptex_scale)
+        s[unsafe_offset=0].subdiv_corners.append(corners^)
+        s[unsafe_offset=0].subdiv_hash.append(h)
         k = len(s[unsafe_offset=0].subdiv_files) - 1
     ma.subdiv_idx = Int32(k)
 
@@ -214,12 +227,14 @@ def load_subdiv_meshes(s: Pointer[SceneParseState, MutUntrackedOrigin]):
     if n == 0 or len(s[unsafe_offset=0].subdiv_meshes) == n:
         return
     var cam = subdiv_camera(s)
-    var boxes = List[Tuple[Vec3f, Vec3f]]()
+    var boxes = List[Tuple[Vec3f, Vec3f]]()   # of each one's corners
     for k in range(n):
-        try:
-            boxes.append(disp_bounds(s[unsafe_offset=0].subdiv_files[k]))
-        except:
-            boxes.append((Vec3f(0, 0, 0), Vec3f(0, 0, 0)))
+        ref c = s[unsafe_offset=0].subdiv_corners[k]
+        var lo = Vec3f(3e38, 3e38, 3e38); var hi = Vec3f(-3e38, -3e38, -3e38)
+        for j in range(len(c) // 3):
+            lo = Vec3f(min(lo.x, c[3 * j]), min(lo.y, c[3 * j + 1]), min(lo.z, c[3 * j + 2]))
+            hi = Vec3f(max(hi.x, c[3 * j]), max(hi.y, c[3 * j + 1]), max(hi.z, c[3 * j + 2]))
+        boxes.append((lo, hi))
     var best_d = List[Float32](length=n, fill=Float32(3e38)); var best_e = List[Vec3f](length=n, fill=cam[0])
     var best_f = List[Vec3f](length=n, fill=cam[2])
     comptime FAR = Float32(16)   # outside the view a cage counts this much farther: secondary rays only
@@ -256,21 +271,27 @@ def load_subdiv_meshes(s: Pointer[SceneParseState, MutUntrackedOrigin]):
             var d = _view_dist(e, f, cam[3], boxes[k], FAR)
             if d < best_d[k]:
                 best_d[k] = d; best_e[k] = e; best_f[k] = f
-    var lod = Float32(0.25)
-    var le = getenv("GONZALES_SUBDIV_LOD")
-    if le.byte_length() > 0:
-        try:
-            lod = Float32(atof(le))
-        except:
-            pass
+    var lod = Float32(0.25); var pps = Float32(0.5)
+    try:
+        if getenv("GONZALES_SUBDIV_LOD").byte_length() > 0:
+            lod = Float32(atof(getenv("GONZALES_SUBDIV_LOD")))
+        if getenv("GONZALES_SUBDIV_PPS").byte_length() > 0:
+            pps = Float32(atof(getenv("GONZALES_SUBDIV_PPS")))
+    except:
+        pass
+    var uses = List[Int](length=n, fill=0)
+    for i in range(len(s[unsafe_offset=0].meshes)):
+        if s[unsafe_offset=0].meshes[i].subdiv_idx >= Int32(0):
+            uses[Int(s[unsafe_offset=0].meshes[i].subdiv_idx)] += 1
     for k in range(n):
         var file = s[unsafe_offset=0].subdiv_files[k]
         s[unsafe_offset=0].subdiv_eye.append(best_e[k])
         var t0 = perf_counter_ns()
         try:
-            var m = load_disp_mesh(file, DispOptions(best_e[k], best_f[k], cam[3], FAR, cam[1], lod, Float32(0.5), Float32(5), 2, -1, True))
+            var m = load_disp_mesh(file, DispOptions(best_e[k], best_f[k], cam[3], FAR, cam[1], lod, pps, Float32(5), 2, -1, True),
+                                   Int(s[unsafe_offset=0].subdiv_corners[k].unsafe_ptr()))
             var mb = Float64(m.nchain + m.npyr + 4 * m.ncg + m.np * (64 * 3 + 12 + 4 + 48 + 1)) / Float64(1 << 20)
-            print("subdiv displacement:", file, ":", m.np, "patches,", m.prims(), "sub-squares,", m.texels, "texels kept,",
+            print("subdiv displacement:", file, ":", uses[k], "meshes,", m.np, "patches,", m.prims(), "sub-squares,", m.texels, "texels kept,",
                   Int(mb), "MiB host data,", Float64(Int(perf_counter_ns()) - Int(t0)) * 1e-9, "s")
             s[unsafe_offset=0].subdiv_meshes.append(m^)
         except err:

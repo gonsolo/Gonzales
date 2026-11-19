@@ -56,7 +56,9 @@ int disp_bounds(const char *ptx, float *box) {
 // view (eye x, y, z, pixel angle, keep; keep <= 0: off; then the view cone's axis x, y, z, cosine (< -1: none) and the
 // factor faces outside it count as farther) or null: a face keeps its finer levels only while its texels at its nearest point
 // to the eye are at least `keep` pixels; the coarser level then stands in for the face's resolution everywhere.
-void *disp_open(const char *ptx, int isolation, long long *counts, const float *view) {
+// corners or null: the mesh's own positions, 4 a Ptex face in the face's (u, v) order (0,0) (1,0) (1,1) (0,1), for meshes
+// posed differently from the cage stored in the Ptex (one Ptex shared by a rig's poses).
+void *disp_open(const char *ptx, int isolation, long long *counts, const float *view, const float *corners) {
         Ptex::String err;
         PtexPtr<PtexTexture> tex(PtexTexture::open(ptx, err));
         if (!tex)
@@ -70,6 +72,18 @@ void *disp_open(const char *ptx, int isolation, long long *counts, const float *
         meta->getValue("PtexFaceVertIndices", vidx, nidx);
         if (!pos || !vcount || !vidx || nfc != tex->numFaces())
                 return nullptr;
+        std::vector<float> posed;
+        if (corners) {
+                posed.assign(pos, pos + npos);
+                for (int f = 0, at = 0; f < nfc; at += vcount[f], ++f) {
+                        if (vcount[f] != 4)
+                                return nullptr;
+                        for (int c = 0; c < 4; ++c)
+                                for (int i = 0; i < 3; ++i)
+                                        posed[3 * vidx[at + c] + i] = corners[12 * f + 3 * c + i];
+                }
+                pos = posed.data();
+        }
         auto d = std::make_unique<Disp>();
         d->cage.assign(pos, pos + npos);
         for (int i = 0; i < npos; ++i) {
