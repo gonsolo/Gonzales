@@ -3,6 +3,7 @@ from std.ffi import external_call
 from gonzales.core.env import env_str, env_on
 from std.math import ceildiv, sqrt
 from std.memory import OpaquePointer, bitcast
+from std.sys import get_defined_int
 from std.sys.info import is_amd_gpu, is_apple_gpu, is_gpu, is_nvidia_gpu
 from max.gpu import global_idx
 from max.gpu.host import DeviceBuffer, DeviceContext
@@ -90,6 +91,19 @@ def xert_heat_save(ctx: DeviceContext) raises:
         f.write_bytes(Span(counts))
     print("RT hardware (Intel): hit counts written to", xert_heat_path())
 
+comptime XERT_STATS = get_defined_int["XERT_STATS", 0]() != 0
+
+# XERT_STATS: rays, other procedural candidates, sub-square candidates, sub-square hits (Int64 each, before the subdiv table).
+def xert_stats_print(ctx: DeviceContext) raises:
+    comptime if XERT_STATS:
+        var addr = Int(xert_proc_table(9))
+        if addr == 0:
+            return
+        var c = List[Int64](length=4, fill=0)
+        ctx.enqueue_copy(c.unsafe_ptr().unsafe_bitcast[UInt8](), DeviceBuffer[DType.uint8](ctx, MutPointer[UInt8, MutAnyOrigin](unsafe_from_address=addr - 32), 32, owning=False))
+        ctx.synchronize()
+        print("xert stats: rays", c[0], "other candidates", c[1], "sub-square candidates", c[2], "sub-square hits", c[3])
+
 def xert_active() -> Bool:
     return external_call["xert_scene_accel", UInt64]() != 0
 
@@ -175,6 +189,7 @@ def xert_trace(accel: MutPointer[UInt8, MutAnyOrigin], ray: XeRayDesc, cv: XePro
         var ch_v = Float32(0)
         var sd_tri = Int32(-1)
         var sd_geom = Int32(-1)
+        var n_oth = Int64(0); var n_sd = Int64(0); var n_sdh = Int64(0)
         while not external_call["intel_is_traversal_done", Bool](q):
             var level = external_call["intel_get_hit_bvh_level", UInt32](q, UInt32(1))
             var org = SIMD[DType.float32, 4](0)
@@ -188,6 +203,7 @@ def xert_trace(accel: MutPointer[UInt8, MutAnyOrigin], ray: XeRayDesc, cv: XePro
             if Int(cv.subdiv) != 0:   # a sub-square of a displaced subdivision mesh: past the structure's leaves
                 var s0 = Int(cv.subdiv[unsafe_offset=ib]); var s1 = Int(cv.subdiv[unsafe_offset=ib + 1])
                 if s1 > s0 + 1 and pid >= Int(cv.subdiv[unsafe_offset=s0]):
+                    n_sd += 1
                     var rec = s0 + 1
                     for j in range(s0 + 1, s1, 3):
                         if pid >= Int(cv.subdiv[unsafe_offset=j]):
@@ -205,13 +221,14 @@ def xert_trace(accel: MutPointer[UInt8, MutAnyOrigin], ray: XeRayDesc, cv: XePro
                         var upper = fu < fv
                         var bary = SIMD[DType.float32, 2](fu if upper else fu - fv, fv - fu if upper else fv)
                         external_call["intel_ray_query_commit_potential_hit_override", NoneType](q, st, Pointer(to=bary))
-                        curve = Int32(-2); ch_u = bary[0]; ch_v = bary[1]
+                        curve = Int32(-2); ch_u = bary[0]; ch_v = bary[1]; n_sdh += 1
                         sd_tri = Int32(2 * Int(sub.d.face[unsafe_offset=pi]) + (1 if upper else 0)); sd_geom = cv.subdiv[unsafe_offset=rec + 2]
                         if any_hit:
                             break
                     external_call["intel_ray_query_start_traversal", NoneType](q)
                     external_call["intel_ray_query_sync", NoneType](q)
                     continue
+            n_oth += 1
             var leaf = Int(cv.leaf_base[unsafe_offset=ib]) + pid
             var p = cv.leaves[unsafe_offset=leaf]
             var is_curve = p.type == PrimKind.curve
@@ -240,6 +257,15 @@ def xert_trace(accel: MutPointer[UInt8, MutAnyOrigin], ray: XeRayDesc, cv: XePro
                     break
             external_call["intel_ray_query_start_traversal", NoneType](q)
             external_call["intel_ray_query_sync", NoneType](q)
+        comptime if XERT_STATS:
+            if Int(cv.subdiv) != 0:
+                var st = cv.subdiv.unsafe_offset(-8).unsafe_bitcast[Int64]()
+                _ = Atomic.fetch_add(st, Int64(1))
+                if n_oth > 0:
+                    _ = Atomic.fetch_add(st.unsafe_offset(1), n_oth)
+                if n_sd > 0:
+                    _ = Atomic.fetch_add(st.unsafe_offset(2), n_sd)
+                    _ = Atomic.fetch_add(st.unsafe_offset(3), n_sdh)
         var hit = XeHit(-1, 0, 0, -1, -1, -1, -1, -1)
         if external_call["intel_has_committed_hit", Bool](q):
             hit.t = external_call["intel_get_hit_distance", Float32](q, UInt32(0))
