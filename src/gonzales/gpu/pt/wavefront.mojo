@@ -2303,7 +2303,7 @@ def gpu_gen_aux_buffers[Oc: Origin[mut=True]](
                 handle[].scene_descriptor().instances,
                 handle[].spheres_buf.unsafe_ptr().unsafe_bitcast[Sphere](),
                 Int64(handle[].n_spheres),
-                handle[].motion.at(handle[].lens.mid_time()),
+                handle[].scene_descriptor().motion.at(handle[].lens.mid_time()),
                 handle[].inter_buf.unsafe_ptr().unsafe_bitcast[Intersection]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
                 handle[].atrous_normals_buf.unsafe_ptr().unsafe_bitcast[Float32](),
                 handle[].atrous_depth_buf.unsafe_ptr().unsafe_bitcast[Float32](),
