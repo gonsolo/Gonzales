@@ -471,7 +471,7 @@ def shade_thin_dielectric_gpu(
     path_ptr[].pending_mat = Int8(0)
     var inter = intersections[unsafe_offset=tid]
     var mat = sd.materials[unsafe_offset=Int(inter.primId.materialIndex)]
-    shade_thin_dielectric(path_ptr, inter, sd.meshes, mat, sd.spheres, sd.cycles)
+    shade_thin_dielectric(path_ptr, inter, sd.meshes, mat, sd.spheres, sd.cycles, sd.instances, sd.curves, sd.motion)
 
 
 @__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))

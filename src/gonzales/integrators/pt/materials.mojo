@@ -1,5 +1,8 @@
 """The path tracer's material shaders."""
 from std.math import sqrt, atan, exp, pow
+from gonzales.scene.shapes.motion import MotionTable
+from gonzales.scene.shapes.primitives import Instance
+from gonzales.scene.shapes.curves import Curve
 from gonzales.core.geometry import offset_point, offset_eps, RGB, Point3f, Point2f, Vec3f, dot, face_toward, cross, Frame, PI, INV_PI, _is_real_ptr
 from gonzales.core.geometry import point3f
 from gonzales.scene.appearance.materials import Material, MatKind, LobeKind, sss_boundary_lobe
@@ -688,8 +691,12 @@ def shade_thin_dielectric(
     mat: Material,
     spheres: Pointer[Sphere, MutUntrackedOrigin],
     cycles: SIMD[DType.int32, 4],
+    instances: Pointer[Instance, MutUntrackedOrigin],
+    curves: Pointer[Curve, MutUntrackedOrigin],
+    motion: MotionTable,
 ):
-    var (ok, _, geom_normal, ray_dir, ray_org, _, _, _, _) = _hit_geom(path_ptr, inter, meshes, spheres)
+    var (ok, _, geom_normal, ray_dir, ray_org, _, _, _, _) = _hit_geom(
+        path_ptr, inter, meshes, spheres, inter.primId.instanceIdx, instances, curves, motion=motion.at(path_ptr[].time))
     if not ok:
         path_ptr[].active = 0
         return
@@ -740,7 +747,8 @@ def shade_conductor[use_gpu: Bool, enqueue_shadow: Bool](
                 var r = sqrt(max(mat_eff.rough_bias + mat_eff.rough_scale * rtex.luma(), Float32(0.0)))
                 mat_eff.roughU = r
                 mat_eff.roughV = r
-        normal = _shading_normal(mesh, v0, v1, v2, inter.u, inter.v, geo_normal)
+        normal = _shading_normal(mesh, v0, v1, v2, inter.u, inter.v, geo_normal, inter.primId.instanceIdx, ctx.instances,
+                                 motion=ctx.motion.at(path_ptr[].time))
         var (tri_co, fp_co) = _pt_hit_footprint(path_ptr, mat, ctx.cam_fp, ctx.instances, mesh, v0, v1, v2, inter, ray_org, ray_dir, ctx.textures, ctx.n_textures, ctx.motion.at(path_ptr[].time))
         if mat_eff.tex_idx != Int32(-1):   # pbrt "reflectance" texture
             mat_eff.albedo = _tex_lookup[use_gpu](mat_eff, inter, v0, v1, v2, mesh, ctx.tex_filenames, ctx.textures, ctx.n_textures, fp_co.width)
@@ -843,7 +851,8 @@ def shade_measured[use_gpu: Bool, enqueue_shadow: Bool](
         # Analytic sphere: exact normal, never tilted past wo.
         normal = geo_normal
     else:
-        normal = _shading_normal(mesh, v0, v1, v2, inter.u, inter.v, geo_normal)
+        normal = _shading_normal(mesh, v0, v1, v2, inter.u, inter.v, geo_normal, inter.primId.instanceIdx, ctx.instances,
+                                 motion=ctx.motion.at(path_ptr[].time))
         var (tri_me, fp_me) = _pt_hit_footprint(path_ptr, mat, ctx.cam_fp, ctx.instances, mesh, v0, v1, v2, inter, ray_org, ray_dir, ctx.textures, ctx.n_textures, ctx.motion.at(path_ptr[].time))
         normal = _apply_surface_maps[use_gpu](mat, v0, v1, v2, mesh, inter, normal, geo_normal,
             tri_me, fp_me, ctx.tex_filenames, ctx.textures, ctx.n_textures)

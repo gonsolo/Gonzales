@@ -165,7 +165,7 @@ def _shade_dispatch[use_gpu: Bool, enqueue_shadow: Bool](
     elif mat.type == MatKind.mix:
         shade_mix[use_gpu, enqueue_shadow](path_ptr, inter, ctx, mat)
     elif mat.type == MatKind.thin_dielectric:
-        shade_thin_dielectric(path_ptr, inter, ctx.meshes, mat, ctx.lights.spheres, ctx.cycles)
+        shade_thin_dielectric(path_ptr, inter, ctx.meshes, mat, ctx.lights.spheres, ctx.cycles, ctx.instances, ctx.curves, ctx.motion)
     elif mat.type == MatKind.interface:
         shade_interface(path_ptr, inter)
     elif mat.type == MatKind.hair:
