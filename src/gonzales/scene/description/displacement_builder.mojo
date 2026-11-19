@@ -271,8 +271,10 @@ def load_subdiv_meshes(s: Pointer[SceneParseState, MutUntrackedOrigin]):
             var d = _view_dist(e, f, cam[3], boxes[k], FAR)
             if d < best_d[k]:
                 best_d[k] = d; best_e[k] = e; best_f[k] = f
-    var lod = Float32(0.25); var pps = Float32(0.5)
+    var lod = Float32(0.25); var pps = Float32(0.5); var minpx = Float32(1)
     try:
+        if getenv("GONZALES_SUBDIV_MINPX").byte_length() > 0:
+            minpx = Float32(atof(getenv("GONZALES_SUBDIV_MINPX")))
         if getenv("GONZALES_SUBDIV_LOD").byte_length() > 0:
             lod = Float32(atof(getenv("GONZALES_SUBDIV_LOD")))
         if getenv("GONZALES_SUBDIV_PPS").byte_length() > 0:
@@ -283,9 +285,15 @@ def load_subdiv_meshes(s: Pointer[SceneParseState, MutUntrackedOrigin]):
     for i in range(len(s[unsafe_offset=0].meshes)):
         if s[unsafe_offset=0].meshes[i].subdiv_idx >= Int32(0):
             uses[Int(s[unsafe_offset=0].meshes[i].subdiv_idx)] += 1
+    var skipped = 0
     for k in range(n):
         var file = s[unsafe_offset=0].subdiv_files[k]
         s[unsafe_offset=0].subdiv_eye.append(best_e[k])
+        # Heights reach the scale at most (Ptex bytes / 255): under minpx pixels where it is nearest (out of view: FAR times
+        # farther) the displacement does not show, and the mesh keeps its bump map.
+        if s[unsafe_offset=0].subdiv_scale[k] < minpx * cam[1] * best_d[k]:
+            s[unsafe_offset=0].subdiv_meshes.append(empty_disp_mesh()); skipped += 1
+            continue
         var t0 = perf_counter_ns()
         try:
             var m = load_disp_mesh(file, DispOptions(best_e[k], best_f[k], cam[3], FAR, cam[1], lod, pps, Float32(5), 2, -1, True),
@@ -297,3 +305,5 @@ def load_subdiv_meshes(s: Pointer[SceneParseState, MutUntrackedOrigin]):
         except err:
             print("subdiv displacement:", file, ":", err)
             s[unsafe_offset=0].subdiv_meshes.append(empty_disp_mesh())
+    print("subdiv displacement:", n - skipped, "of", n, "surfaces displaced; the others keep their bump maps (under",
+          minpx, "pixel of relief)")

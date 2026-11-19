@@ -52,6 +52,7 @@ comptime ENV_SWITCHES: List[EnvSwitch] = [
     EnvSwitch("GONZALES_MESH_VRAM_MB", "MiB of the host-placed mesh arrays kept on the card, hottest first"),
     EnvSwitch("GONZALES_PTEX_BUDGET_MB", "MiB for Ptex texels (default 2048)"),
     EnvSwitch("GONZALES_SUBDIV_DISP", "1: meshes with a Ptex displacement become that Ptex's displaced Catmull-Clark surface"),
+    EnvSwitch("GONZALES_SUBDIV_MINPX", "pixels of relief below which a mesh keeps its bump map (default 1)"),
     EnvSwitch("GONZALES_SUBDIV_PPS", "pixels a displaced surface's sub-square spans at least (default 0.5)"),
     EnvSwitch("GONZALES_SUBDIV_LOD", "pixels below which a displaced surface's finer height levels are dropped (default 0.25)"),
     EnvSwitch("GONZALES_PTEX_LOG2RES", "(C++) log2 of a uniform per-face Ptex resolution cap; no paging"),
