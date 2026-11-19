@@ -148,13 +148,23 @@ def _cage_layout(ma: MeshAccum) -> Bool:
     return True
 
 
+def _exag() -> Float32:
+    """GONZALES_SUBDIV_SCALE: the heights times this (pictures only; default 1)."""
+    try:
+        if getenv("GONZALES_SUBDIV_SCALE").byte_length() > 0:
+            return Float32(atof(getenv("GONZALES_SUBDIV_SCALE")))
+    except:
+        pass
+    return Float32(1)
+
+
 def subdiv_host_surface(s: Pointer[SceneParseState, MutUntrackedOrigin], k: Int) -> Pointer[SubdivSurface, MutUntrackedOrigin]:
     """Subdiv mesh k's surface for a TriangleMesh (host data; gpu/scene.mojo uploads it). Ptex bytes are heights / 255."""
     if k >= len(s[unsafe_offset=0].subdiv_meshes) or s[unsafe_offset=0].subdiv_meshes[k].np == 0:   # not loaded: the cage stays
         return Pointer[SubdivSurface, MutUntrackedOrigin].unsafe_dangling()
     var cam = subdiv_camera(s)
     var p = unsafe_alloc[SubdivSurface](1)
-    p[unsafe_offset=0] = s[unsafe_offset=0].subdiv_meshes[k].subdiv(s[unsafe_offset=0].subdiv_scale[k] / Float32(255), s[unsafe_offset=0].subdiv_eye[k], cam[1])
+    p[unsafe_offset=0] = s[unsafe_offset=0].subdiv_meshes[k].subdiv(s[unsafe_offset=0].subdiv_scale[k] * _exag() / Float32(255), s[unsafe_offset=0].subdiv_eye[k], cam[1])
     return p
 
 
@@ -291,7 +301,7 @@ def load_subdiv_meshes(s: Pointer[SceneParseState, MutUntrackedOrigin]):
         s[unsafe_offset=0].subdiv_eye.append(best_e[k])
         # Heights reach the scale at most (Ptex bytes / 255): under minpx pixels where it is nearest (out of view: FAR times
         # farther) the displacement does not show, and the mesh keeps its bump map.
-        if s[unsafe_offset=0].subdiv_scale[k] < minpx * cam[1] * best_d[k]:
+        if s[unsafe_offset=0].subdiv_scale[k] * _exag() < minpx * cam[1] * best_d[k]:
             s[unsafe_offset=0].subdiv_meshes.append(empty_disp_mesh()); skipped += 1
             continue
         var t0 = perf_counter_ns()
