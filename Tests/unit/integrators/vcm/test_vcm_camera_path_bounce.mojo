@@ -192,12 +192,12 @@ def test_wavefront_split_matches_original_camera_path_closely() raises:
         Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
         Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
         Float32(0), Float32(0), Float32(0),
-        px_scale, Float32(0), Float32(0), n_light_paths_f, _TEST_PASS_WL, _TEST_FILTER,
+        px_scale, Float32(0), Float32(0), n_light_paths_f, _TEST_PASS_WL, _TEST_FILTER, Float32(0),
     )
 
     var pcg_new = PCG32(UInt64(999), UInt64(3))
     var scratch_new = unsafe_alloc[Intersection](1)
-    var state = _bdpt_camera_path_init[False](r2c, c2w, 0, 0, pcg_new, px_scale, n_light_paths_f, _TEST_PASS_WL, _TEST_FILTER)
+    var state = _bdpt_camera_path_init[False](r2c, c2w, 0, 0, pcg_new, px_scale, n_light_paths_f, _TEST_PASS_WL, _TEST_FILTER, Float32(0), MotionTable.none())
 
     var pcg_bounce = PCG32(UInt64(0), UInt64(0))
     pcg_bounce.state = state.pcg_state

@@ -68,7 +68,8 @@ def sss_entry_tint[use_gpu: Bool](ref sd: SceneView, mat: Material, inter: Inter
 
 @always_inline
 def surface_hit[use_gpu: Bool](ref sd: SceneView, inter: Intersection, mut mat: Material, hit: Point3f, ray_dir: Vec3f,
-                               cone_w: Float32) -> SurfaceHit:
+                               cone_w: Float32,
+                               *, motion: MotionTable,) -> SurfaceHit:
     """The hit at a lobe material, whose textured roughness it resolves into `mat`. `cone_w` is the camera ray's
     footprint width for texture filtering, -1 for none."""
     # Geometry, not material: a curve hit has its own normal and spawn offset, and no texture or bump map.
@@ -80,9 +81,9 @@ def surface_hit[use_gpu: Bool](ref sd: SceneView, inter: Intersection, mut mat: 
         gn = cf[3]
         spawn_eps = curve_offset_eps(cf[4])
     elif mat.type == MatKind.dielectric:
-        gn = _shading_normal_at(inter, sd.meshes, sd.instances, sd.spheres, hit, motion=MotionTable.none())
+        gn = _shading_normal_at(inter, sd.meshes, sd.instances, sd.spheres, hit, motion=motion)
     else:
-        gn = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd(), motion=MotionTable.none())
+        gn = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd(), motion=motion)
     # A rough dielectric needs the outward normal: inside vs outside is which side of it wo lies on.
     var outward = mat.type == MatKind.dielectric
     if dot(gn, ray_dir) > Float32(0) and not outward: gn = gn * Float32(-1)
@@ -91,14 +92,14 @@ def surface_hit[use_gpu: Bool](ref sd: SceneView, inter: Intersection, mut mat: 
     var alb = mat.albedo
     var (tex_mesh, tv0, tv1, tv2, tex_ok) = _get_tri_verts(inter, sd.meshes)
     if tex_ok and not on_curve:
-        var fp_w = uv_footprint_at_hit(inter, sd.meshes, sd.instances, hit.to_simd(), ray_dir, cone_w, sd.camFp).width
+        var fp_w = uv_footprint_at_hit(inter, sd.meshes, sd.instances, hit.to_simd(), ray_dir, cone_w, sd.camFp, motion=motion).width
         alb = _tex_lookup[use_gpu](mat, inter, tv0, tv1, tv2, tex_mesh, sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount), fp_w)
         resolve_rough_texture[use_gpu](mat, inter, tv0, tv1, tv2, tex_mesh, sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount), fp_w)
     var gn_geo = gn
     if not on_curve:
         gn = apply_surface_maps_at_hit[use_gpu](mat, inter, sd.meshes, sd.instances,
             gn, gn, hit.to_simd(), ray_dir, cone_w, sd.camFp,
-            sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
+            sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount), motion=motion)
     if not outward:
         gn = face_toward(gn, -ray_dir)   # pbrt two-sided reflection
     var curve_idx = Int32(inter.primId.id1) if on_curve else Int32(-1)

@@ -135,6 +135,7 @@ def _bdpt_connect_to_camera(
     if lv.is_light == Int32(1) or not _bdpt_vertex_mis_scoped(lv):
         return (False, Float32(-1), Float32(-1), SpectralSample(Float32(0)))
 
+    var motion = sd.motion.at(lv.time)
     var lp = lv.pos.to_simd()
     var lx = Float32(0); var ly = Float32(0)
     if sd.lens.radius > Float32(0):
@@ -146,6 +147,7 @@ def _bdpt_connect_to_camera(
     var cam_pos = Vec3f(c2w[unsafe_offset=0]*lx + c2w[unsafe_offset=4]*ly + c2w[unsafe_offset=12],
                         c2w[unsafe_offset=1]*lx + c2w[unsafe_offset=5]*ly + c2w[unsafe_offset=13],
                         c2w[unsafe_offset=2]*lx + c2w[unsafe_offset=6]*ly + c2w[unsafe_offset=14])
+    cam_pos = motion.camera_point(cam_pos)
     var d3 = cam_pos - lp
     var dist2 = dot(d3, d3)
     if dist2 < Float32(1e-8):
@@ -153,7 +155,7 @@ def _bdpt_connect_to_camera(
     var dist = sqrt(dist2)
     var dir_to_cam = d3 * (Float32(1) / dist)
 
-    var pr = _bdpt_world_to_raster(lp, w2c, c2r, fw, fh, lx, ly, sd.lens.focal_distance if sd.lens.radius > Float32(0) else Float32(0))
+    var pr = _bdpt_world_to_raster(motion.camera_point(lp, back=True), w2c, c2r, fw, fh, lx, ly, sd.lens.focal_distance if sd.lens.radius > Float32(0) else Float32(0))
     if not pr[0]:
         return (False, Float32(-1), Float32(-1), SpectralSample(Float32(0)))
     var cos_at_camera = pr[3]
@@ -169,7 +171,7 @@ def _bdpt_connect_to_camera(
         return (False, Float32(-1), Float32(-1), SpectralSample(Float32(0)))
 
     var Tr = _visible_transmittance(
-        lv.pos, Point3f(cam_pos[0], cam_pos[1], cam_pos[2]), lv.med_idx, sd, scratch, wl)
+        lv.pos, Point3f(cam_pos[0], cam_pos[1], cam_pos[2]), lv.med_idx, sd, scratch, wl, motion=motion)
     if Tr.is_black():
         return (False, Float32(-1), Float32(-1), SpectralSample(Float32(0)))
 
@@ -298,20 +300,21 @@ def _connect(
 ) -> SpectralSample:
     """Evaluate the contribution of connecting cv to lv via a shadow ray.
     Each connection is already a complete, self-normalized estimator of its"""
+    var motion = sd.motion.at(cv.time)
     # THE connection estimator lives in _connect_unweighted; this is that
     # times visibility. They used to be two byte-for-byte copies (one for the
     # Medium for the shadow segment: the camera vertex's (both endpoints agree
     # in a well-defined scene). The weight needs the edge's transmittance too.
     var Tr = SpectralSample(Float32(1))
     if has_med:
-        Tr = _visible_transmittance(cv.pos, lv.pos, cv.med_idx, sd, scratch, cv.wavelengths)
+        Tr = _visible_transmittance(cv.pos, lv.pos, cv.med_idx, sd, scratch, cv.wavelengths, motion=motion)
         if Tr.is_black():
             return SpectralSample(Float32(0))
     var (contrib, valid) = _connect_unweighted(cv, lv, sd, mis_vm_weight_factor, Tr, long_path)
     if not valid or contrib.is_black():
         return SpectralSample(Float32(0))
     if not has_med:
-        Tr = _visible_transmittance(cv.pos, lv.pos, cv.med_idx, sd, scratch, cv.wavelengths)
+        Tr = _visible_transmittance(cv.pos, lv.pos, cv.med_idx, sd, scratch, cv.wavelengths, motion=motion)
         if Tr.is_black():
             return SpectralSample(Float32(0))
     return contrib * Tr

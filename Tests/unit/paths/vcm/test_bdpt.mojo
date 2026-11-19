@@ -93,6 +93,7 @@ def _make_vertex(pos: Point3f, normal: Vec3f, is_surface: Int32) -> BDPTVertex:
         med_idx=Int32(-1), mat_kind=LobeKind.lambertian, n_delta=Int32(0), wo=Vec3f(Float32(0)),
         mat_idx=Int32(-1), hair_curve_idx=Int32(-1), hair_h=Float32(0), hair_v=Float32(0),
         wavelengths=SampledWavelengths(Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0)),
+        time=Float32(0),
     )
 
 def _dummy_sd() -> SceneView:
@@ -185,6 +186,7 @@ def test_eval_vertex_delta_vertex_is_always_zero() raises:
         med_idx=Int32(-1), mat_kind=LobeKind.lambertian, n_delta=Int32(0), wo=Vec3f(Float32(0)),
         mat_idx=Int32(-1), hair_curve_idx=Int32(-1), hair_h=Float32(0), hair_v=Float32(0),
         wavelengths=SampledWavelengths(Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0)),
+        time=Float32(0),
     )
     var result = _eval_v(v, Vec3f(0.0, 0.0, 1.0), _dummy_sd())
     assert_true(_spec_close(result, Vec3f(0.0, 0.0, 0.0)))
@@ -201,6 +203,7 @@ def test_eval_vertex_volume_scatter_matches_isotropic_phase_function() raises:
         med_idx=Int32(-1), mat_kind=LobeKind.lambertian, n_delta=Int32(0), wo=Vec3f(Float32(0)),
         mat_idx=Int32(-1), hair_curve_idx=Int32(-1), hair_h=Float32(0), hair_v=Float32(0),
         wavelengths=SampledWavelengths(Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0)),
+        time=Float32(0),
     )
     var dir = Vec3f(0.267261, 0.534522, 0.801784)  # arbitrary; ignored by volume path
     # BAND_WL, not NULL_WL: a volume vertex's alb is the single-scattering
@@ -223,6 +226,7 @@ def test_eval_vertex_lambertian_matches_closed_form() raises:
         med_idx=Int32(-1), mat_kind=LobeKind.lambertian, n_delta=Int32(0), wo=Vec3f(Float32(0)),
         mat_idx=Int32(-1), hair_curve_idx=Int32(-1), hair_h=Float32(0), hair_v=Float32(0),
         wavelengths=SampledWavelengths(Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0)),
+        time=Float32(0),
     )
     var dir = Vec3f(0.7071068, 0.0, 0.7071068)  # 45 degrees off the normal
     var result = _eval_v(v, dir, _dummy_sd())
@@ -250,6 +254,7 @@ def test_eval_vertex_conductor_dispatches_to_eval_conductor_ggx_with_own_fields(
         med_idx=Int32(-1), mat_kind=LobeKind.ggx, n_delta=Int32(0), wo=Vec3f(0.0, 0.0, 1.0),
         mat_idx=Int32(-1), hair_curve_idx=Int32(-1), hair_h=Float32(0), hair_v=Float32(0),
         wavelengths=SampledWavelengths(Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0)),
+        time=Float32(0),
     )
     var expected = _eval_cond(n, wo, wi, alpha, f0)
     var result = _eval_v(v, wi, _dummy_sd())
@@ -382,6 +387,7 @@ def test_bdpt_connect_to_cache_sums_one_paired_light_path() raises:
         med_idx=Int32(-1), mat_kind=LobeKind.lambertian, n_delta=Int32(0), wo=Vec3f(Float32(0)),
         mat_idx=Int32(-1), hair_curve_idx=Int32(-1), hair_h=Float32(0), hair_v=Float32(0),
         wavelengths=SampledWavelengths(Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0)),
+        time=Float32(0),
     )
     var lv = BDPTVertex(
         pos=Point3f(5.0, 5.0, 20.0), normal=Vec3f(0.0, 0.0, -1.0), shading_normal=Vec3f(0.0, 0.0, -1.0),
@@ -392,6 +398,7 @@ def test_bdpt_connect_to_cache_sums_one_paired_light_path() raises:
         med_idx=Int32(-1), mat_kind=LobeKind.lambertian, n_delta=Int32(0), wo=Vec3f(Float32(0)),
         mat_idx=Int32(-1), hair_curve_idx=Int32(-1), hair_h=Float32(0), hair_v=Float32(0),
         wavelengths=SampledWavelengths(Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0)),
+        time=Float32(0),
     )
     var lvc = unsafe_alloc[BDPTVertex](1)
     lvc[unsafe_offset=0] = lv

@@ -3,6 +3,8 @@
 
 from std.sys import get_defined_int
 from gonzales.core.geometry import RGB, Point3f, Vec3f
+from gonzales.core.rng import PCG32
+from gonzales.core.sampling import ThinLens
 from gonzales.transport.render_state import PDF_VOL_PHASE_HIT
 from gonzales.scene.appearance.materials import LobeKind
 from gonzales.core.spectrum import SampledWavelengths, SpectralSample
@@ -66,9 +68,10 @@ struct BDPTVertex(TrivialRegisterPassable):
     # Hero-wavelength sample this vertex's subpath was traced at (staged
     # spectral rollout, see project_spectral_rendering memory /
     var wavelengths: SampledWavelengths
+    var time: Float32  # its subpath's shutter time: connections and merges see moving instances there
 
 @always_inline
-def _null_vertex() -> BDPTVertex:
+def _null_vertex(time: Float32) -> BDPTVertex:
     return BDPTVertex(
         pos=Point3f(Float32(0)),
         normal=Vec3f(Float32(0), Float32(1), Float32(0)),
@@ -82,6 +85,7 @@ def _null_vertex() -> BDPTVertex:
         wo=Vec3f(Float32(0)),
         mat_idx=Int32(-1), hair_curve_idx=Int32(-1), hair_h=Float32(0), hair_v=Float32(0),
         wavelengths=SampledWavelengths(Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0)),
+        time=time,
     )
 
 
@@ -97,3 +101,11 @@ def vcm_light_dvcm(lv: BDPTVertex, rev_pdf_w: Float32) -> Float32:
     if lv.hair_curve_idx == VCM_GSMS_ARRIVAL and rev_pdf_w < GLOSSY_SMS_MIN_PDF:
         return Float32(0)
     return lv.dVCM
+
+
+def vcm_path_time(lens: ThinLens, pass_idx: Int, k: Int) -> Float32:
+    """The shutter time of a pass's camera path k and of light path k, which it connects to: a hash of both."""
+    if not lens.timed:
+        return Float32(0)
+    var pcg = PCG32(UInt64(pass_idx) * UInt64(0x9E3779B97F4A7C15) ^ UInt64(k), UInt64(0xDA3E39CB94B95BDB))
+    return lens.shutter[0] + (lens.shutter[1] - lens.shutter[0]) * pcg.next_float()

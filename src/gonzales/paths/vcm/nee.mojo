@@ -29,6 +29,7 @@ def _visible_transmittance(
     ref sd:      SceneView,
     scratch: Pointer[Intersection, MutUntrackedOrigin],
     wl:      SampledWavelengths,
+    *, motion: MotionTable,
 ) -> SpectralSample:
     """Returns transmittance along segment AB, spectrally, or black if
     occluded. Glass (dielectric) surfaces are passed through with Fresnel"""
@@ -58,7 +59,7 @@ def _visible_transmittance(
         var ray = Ray(org, Vec3f(dir[0], dir[1], dir[2]))
         inter_mem[unsafe_offset=0].hit = Int8(0)
         traverse_dispatch(sd.bvh4, sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, remaining * Float32(0.9995), inter_mem,
-                           sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances, motion=MotionTable.none())
+                           sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances, motion=motion)
         # test_spheres (analytic spheres, e.g. the caustic sphere) aren't part of
         # the BVH — traverse_bvh2_core only tests triangles/curves — so they need
         var had_bvh_hit = inter_mem[unsafe_offset=0].hit != Int8(0)
@@ -68,7 +69,7 @@ def _visible_transmittance(
             # Clear the primId along with the sentinel. `scratch` is a
             # caller-owned slot reused across bounces, samples and (on GPU)
             inter_mem[unsafe_offset=0].primId.type = PrimKind.triangle
-        test_spheres(sd.spheres, Int(sd.sphereCount), ray, inter_mem, motion=MotionTable.none())
+        test_spheres(sd.spheres, Int(sd.sphereCount), ray, inter_mem, motion=motion)
         if not had_bvh_hit and inter_mem[unsafe_offset=0].primId.type != PrimKind.sphere:
             inter_mem[unsafe_offset=0].hit = Int8(0)
         if inter_mem[unsafe_offset=0].hit == Int8(0):
@@ -88,7 +89,7 @@ def _visible_transmittance(
             Tr *= segment_transmittance(sd.mediums[unsafe_offset=Int(cur_med)], org.to_simd(), dir, t_hit, sd.grids, sd.nvdbGrids, sd.spectral, wl, pcg)
 
         if mat.type == MatKind.thin_dielectric:
-            var gn = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd(), motion=MotionTable.none())
+            var gn = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd(), motion=motion)
             var facing = dot(dir, gn) < Float32(0)
             var n_for_cos = gn if facing else gn*Float32(-1)
             var cos_i = -dot(dir, n_for_cos)
@@ -100,13 +101,13 @@ def _visible_transmittance(
             if Tr.is_black():
                 return SpectralSample(Float32(0))
             # Update medium after crossing glass surface
-            cur_med = medium_after(dir, cur_med, inter, mat, sd, hit.to_simd(), MotionTable.none())
+            cur_med = medium_after(dir, cur_med, inter, mat, sd, hit.to_simd(), motion)
             org = hit + Vec3f(dir[0], dir[1], dir[2]) * Float32(0.0002)
             remaining = remaining - t_hit - Float32(0.0002)
 
         elif mat.type == MatKind.interface:
             # Pure medium boundary: update medium, continue
-            cur_med = medium_after(dir, cur_med, inter, mat, sd, hit.to_simd(), MotionTable.none())
+            cur_med = medium_after(dir, cur_med, inter, mat, sd, hit.to_simd(), motion)
             org = hit + Vec3f(dir[0], dir[1], dir[2]) * Float32(0.0002)
             remaining = remaining - t_hit - Float32(0.0002)
 
@@ -126,6 +127,7 @@ def _bdpt_simple_light_count(ref sd: SceneView) -> Int:
 @always_inline
 def _bdpt_sample_simple_light(
     ref sd: SceneView, i: Int, hit_point: Vec3f, mut pcg: PCG32,
+    *, motion: MotionTable,
 ) -> LightSample:
     """The i-th distant/point/sphere light. Unlike shading.mojo's twin
     (_nee_sample_simple_light), this returns ONLY the LightSample -- BDPT's"""
@@ -138,7 +140,7 @@ def _bdpt_sample_simple_light(
         var ls_p = _sample_point_light_nee(sd.pointLights[unsafe_offset=i - nd], hit_point)
         return ls_p^
     var si = i - nd - np_
-    var ls_s = _sample_sphere_light_nee(sd.spheres[unsafe_offset=si], Int(sd.sphereCount), hit_point, pcg)
+    var ls_s = _sample_sphere_light_nee(motion.sphere(sd.spheres, si), Int(sd.sphereCount), hit_point, pcg)
     return ls_s^
 
 
@@ -155,12 +157,13 @@ def _bdpt_nee_contribute(
     wl: SampledWavelengths,
     eps: Float32 = Float32(0.0001),
     two_sided: Bool = False,
+    *, motion: MotionTable,
 ) -> SpectralSample:
     """BDPT-side NEE glue shared by every per-material light loop below:
     given a LightSample + material weight (from the shared Light interface"""
     if w.is_black():
         return SpectralSample(Float32(0))
-    return beta * w * _bdpt_nee_transmittance(ls, hit, gn, cur_med_idx, sd, scratch, wl, eps, two_sided)
+    return beta * w * _bdpt_nee_transmittance(ls, hit, gn, cur_med_idx, sd, scratch, wl, eps, two_sided, motion=motion)
 
 
 @always_inline
@@ -174,6 +177,7 @@ def _bdpt_nee_transmittance(
     wl: SampledWavelengths,
     eps: Float32 = Float32(0.0001),
     two_sided: Bool = False,
+    *, motion: MotionTable,
 ) -> SpectralSample:
     # `gn` is the GEOMETRIC normal (pbrt's OffsetRayOrigin), never the shading
     # one: that is turned toward wo (face_toward) and can point into the
@@ -184,4 +188,4 @@ def _bdpt_nee_transmittance(
     # Stop 3 offsets short: shadow_org sits `eps` off the surface, so a light closer than
     # eps / 0.0005 (0.2 units at eps=1e-4) would otherwise end past its own surface and occlude itself.
     var shadow_end = shadow_org + Vec3f(ls.wi[0], ls.wi[1], ls.wi[2]) * (ls.dist - Float32(3) * abs(side_eps))
-    return _visible_transmittance(shadow_org, shadow_end, cur_med_idx, sd, scratch, wl)
+    return _visible_transmittance(shadow_org, shadow_end, cur_med_idx, sd, scratch, wl, motion=motion)

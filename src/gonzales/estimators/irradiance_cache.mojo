@@ -131,7 +131,7 @@ struct IrradianceCache(TrivialRegisterPassable, DevicePassable):
             var i = order[j]
             pos[unsafe_offset=j] = pts[i]; nrm[unsafe_offset=j] = nrms[i]; mat[unsafe_offset=j] = mats[i]
             area[unsafe_offset=j] = Float32(step[Int(mats[i])])
-            eta[unsafe_offset=j] = sss_relative_eta(sd.materials[unsafe_offset=Int(mats[i])], _outside_ior(sd, pts[i], nrms[i], hit))
+            eta[unsafe_offset=j] = sss_relative_eta(sd.materials[unsafe_offset=Int(mats[i])], _outside_ior(sd, pts[i], nrms[i], hit, motion=MotionTable.none()))
         hit.unsafe_free()
         var nn = len(t.skip)
         var center = unsafe_alloc[Point3f](max(nn, 1)).unsafe_origin_cast[MutUntrackedOrigin]()
@@ -272,7 +272,7 @@ def _dist2(a: Point3f, b: Point3f) -> Float32:
     return dx * dx + dy * dy + dz * dz
 
 
-def _outside_ior(ref sd: SceneView, x: Point3f, n: Vec3f, hit: Pointer[Intersection, MutUntrackedOrigin]) -> Float32:
+def _outside_ior(ref sd: SceneView, x: Point3f, n: Vec3f, hit: Pointer[Intersection, MutUntrackedOrigin], *, motion: MotionTable) -> Float32:
     """The index of the dielectric around a translucent point: along its normal, the first one left before entered."""
     var o = x.to_simd()
     var d = n
@@ -280,14 +280,14 @@ def _outside_ior(ref sd: SceneView, x: Point3f, n: Vec3f, hit: Pointer[Intersect
     for _ in range(32):
         o = o + d * Float32(1e-4)
         traverse_dispatch(sd.bvh4, sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, Ray(point3f(o), n),
-                          Float32(1.0e38), hit, sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances, sd.spheres, Int(sd.sphereCount), motion=MotionTable.none())
+                          Float32(1.0e38), hit, sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances, sd.spheres, Int(sd.sphereCount), motion=motion)
         if hit[].hit == Int8(0):
             return Float32(1)
         o = o + d * hit[].tHit
         var m = sd.materials[unsafe_offset=Int(hit[].primId.materialIndex)]
         if m.type != MatKind.dielectric or m.sss_walk_interior():
             continue
-        if dot(_geom_normal(hit[], sd.meshes, sd.instances, sd.spheres, o, motion=MotionTable.none()), d) > Float32(0):
+        if dot(_geom_normal(hit[], sd.meshes, sd.instances, sd.spheres, o, motion=motion), d) > Float32(0):
             if depth == 0:
                 return m.albedo.r
             depth -= 1

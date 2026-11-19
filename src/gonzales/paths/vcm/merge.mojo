@@ -4,6 +4,7 @@
 from std.collections import Array
 from std.math import sqrt, floor, max, abs
 from std.atomic import Atomic
+from gonzales.scene.shapes.motion import MotionTable
 from gonzales.core.geometry import dot, PI, Vec3f
 from gonzales.scene.appearance.materials import LobeKind
 from gonzales.scene.accel.bvh import SceneView, _is_real_ptr, curve_radius
@@ -42,7 +43,7 @@ struct MergeKernel(TrivialRegisterPassable):
                 norm = norm * (r_pass_vol * r_pass_vol * r_pass_vol) / max(rq * rq * rq, Float32(1e-20))
             # The ball stays inside the medium: past its boundary there are no photons (gather_ball_reach).
             var r_vol = sqrt(r2)
-            var reach = max(gather_ball_reach(sd, cv.pos, r_vol), Float32(0.05) * r_vol)
+            var reach = max(gather_ball_reach(sd, cv.pos, r_vol, motion=sd.motion.at(cv.time)), Float32(0.05) * r_vol)
             if reach < r_vol:
                 var q = r_vol / reach
                 norm = norm * (q * q * q)
@@ -89,6 +90,7 @@ def _bdpt_merge_from_cache(
 ) -> SpectralSample:
     """Vertex MERGING (photon-mapping-style density estimation) against the
     shared Light Vertex Cache -- the "M" in VCM, run UNCONDITIONALLY"""
+    var motion = sd.motion.at(cv.time)
     if cv.is_delta != Int32(0) or VcmStrategies.beyond_cache(cam_nd):   # past the cache every merge is too long
         return SpectralSample(Float32(0))
     # The merge GRID is what this needs, so test the grid -- not, as the call
@@ -190,7 +192,7 @@ def _bdpt_merge_from_cache(
     # to correct, and a disk the probes find empty keeps the plain estimate.
     comptime if _MERGE_COVERAGE:
         if cv.is_surface == Int32(1) and cv.mat_kind != LobeKind.hair and total.v0 + total.v1 + total.v2 + total.v3 > Float32(0):
-            var cov = gather_disk_coverage(sd, cv.pos, cv.normal, sqrt(r2))
+            var cov = gather_disk_coverage(sd, cv.pos, cv.normal, sqrt(r2), motion=motion)
             if cov > Float32(0):
                 result = result * (Float32(1) / cov)
 

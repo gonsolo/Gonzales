@@ -14,7 +14,7 @@ from gonzales.scene.description.pbrt_parser import ParsedScene_Mojo
 from gonzales.core.progress import Progress
 from gonzales.integrators.outputs import finish_render
 from gonzales.core.spectrum import SpectralSample, pass_wavelengths, spectral_sample_to_rgb
-from gonzales.paths.vcm.vertex import _BDPT_MAX_VERTS, BDPTVertex
+from gonzales.paths.vcm.vertex import _BDPT_MAX_VERTS, BDPTVertex, vcm_path_time
 from gonzales.paths.vcm.grid import _VCM_MN_SIZE, _VCM_HEADS_SIZE, _vcm_grid_inv_cell, _bdpt_build_merge_grid, vcm_merge_radius
 from gonzales.paths.vcm.connect import _bdpt_splat_filtered, _bdpt_connect_to_camera
 from gonzales.integrators.vcm.camera import _bdpt_trace_camera_and_connect
@@ -132,7 +132,7 @@ def _bdpt_render_core(
                               UInt64(si * 2654435761 + 1) ^ UInt64(0x5851F42D4C957F2D))
             _bdpt_trace_light_path[False](sd, lpcg, has_med, default_emit_med,
                                          scratch_light.unsafe_offset(lp_idx), lvc, lp_idx, lvc_path_len,
-                                         mis_vc_weight_factor, mis_vm_weight_factor, pass_wl)
+                                         mis_vc_weight_factor, mis_vm_weight_factor, pass_wl, vcm_path_time(sd.lens, si, lp_idx))
 
         parallelize(emit_light_path, n_light_paths_merge)
 
@@ -180,7 +180,8 @@ def _bdpt_render_core(
                 merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm,
                 px_scale, mis_vc_weight_factor, mis_vm_weight_factor, Float32(n_light_paths_merge), pass_wl,
                 film_filter_of(psc[unsafe_offset=0].filter_type, psc[unsafe_offset=0].filter_sigma,
-                               psc[unsafe_offset=0].filter_support_x, psc[unsafe_offset=0].filter_support_y))
+                               psc[unsafe_offset=0].filter_support_x, psc[unsafe_offset=0].filter_support_y),
+                vcm_path_time(sd.lens, si, pix))
             # ── Output boundary: spectral transport -> RGB film ──────────
             var (cr, cg, cb) = spectral_sample_to_rgb(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, contrib, pass_wl)
             buf[unsafe_offset=pix] += RGB(cr, cg, cb)

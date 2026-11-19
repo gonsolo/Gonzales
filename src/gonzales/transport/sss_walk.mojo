@@ -83,7 +83,7 @@ struct SssExit(TrivialRegisterPassable):
 
 
 @always_inline
-def sss_walker_begin(ps: Pointer[PathState, MutUntrackedOrigin], ray: Ray, walk: SssWalk, wl: SampledWavelengths, pcg: PCG32):
+def sss_walker_begin(ps: Pointer[PathState, MutUntrackedOrigin], ray: Ray, walk: SssWalk, wl: SampledWavelengths, pcg: PCG32, time: Float32):
     """A walker's state at its entry, for _sss_walk_step."""
     ps[].ray = ray
     ps[].sss = walk
@@ -93,6 +93,7 @@ def sss_walker_begin(ps: Pointer[PathState, MutUntrackedOrigin], ray: Ray, walk:
     ps[].volume_scattered = Int8(0)
     ps[].pcgState = pcg.state
     ps[].pcgInc = pcg.inc
+    ps[].time = time
 
 
 @always_inline
@@ -109,7 +110,7 @@ def sss_walker_advance[steps: Int](ref sd: SceneView, walkers: Pointer[PathState
     var store = Array[Intersection, 1](fill=hits[unsafe_offset=i])
     var ps = state.unsafe_ptr()
     var h = store.unsafe_ptr()
-    _sss_walk_trace(sd, ps[].sss, ps[].ray, h.unsafe_origin_cast[MutUntrackedOrigin](), MotionTable.none())
+    _sss_walk_trace(sd, ps[].sss, ps[].ray, h.unsafe_origin_cast[MutUntrackedOrigin](), sd.motion.at(ps[].time))
     _sss_walk_step[steps](ps.unsafe_origin_cast[MutUntrackedOrigin](), h.unsafe_origin_cast[MutUntrackedOrigin](), 0, sd)
     walkers[unsafe_offset=i] = ps[]
     hits[unsafe_offset=i] = h[]
@@ -123,7 +124,7 @@ def sss_walker_exit(ref sd: SceneView, ps: PathState, e: Intersection) -> SssExi
     var x = Point3f(r.origin.x + r.direction.x * e.tHit, r.origin.y + r.direction.y * e.tHit, r.origin.z + r.direction.z * e.tHit)
     if ps.active == 0 or ps.sss.exiting == Int32(0):
         return SssExit(False, x, Vec3f(Float32(0)), SpectralSample(Float32(0)), e, ps.sss.eta)
-    var n = _geom_normal(e, sd.meshes, sd.instances, sd.spheres, x.to_simd(), motion=MotionTable.none())
+    var n = _geom_normal(e, sd.meshes, sd.instances, sd.spheres, x.to_simd(), motion=sd.motion.at(ps.time))
     if dot(n, Vec3f(r.direction.x, r.direction.y, r.direction.z)) < Float32(0):
         n = -n
     return SssExit(True, x, n, ps.throughput, e, ps.sss.eta)
@@ -131,15 +132,16 @@ def sss_walker_exit(ref sd: SceneView, ps: PathState, e: Intersection) -> SssExi
 
 @always_inline
 def sss_walk_to_exit(ref sd: SceneView, mat: Material, inter: Intersection, hit: Vec3f, geo_normal: Vec3f, wi: Vec3f,
-                     wl: SampledWavelengths, mut pcg: PCG32, outside_ior: Float32) -> SssExit:
+                     wl: SampledWavelengths, mut pcg: PCG32, outside_ior: Float32,
+                     *, motion: MotionTable,) -> SssExit:
     """The path tracer's walk, run to its end in one go for the integrators without a walking wavefront."""
     var (ray, walk) = sss_walk_start(mat, inter, hit, geo_normal, wi, wl, sd.spectral, outside_ior)
     var state = Array[PathState, 1](uninitialized=True)
     var store = Array[Intersection, 1](fill=inter)
     var ps = state.unsafe_ptr()   # tracked: keep state and store alive while read
     var hits = store.unsafe_ptr()
-    sss_walker_begin(ps.unsafe_origin_cast[MutUntrackedOrigin](), ray, walk, wl, pcg)
-    _sss_walk_trace(sd, walk, ray, hits.unsafe_origin_cast[MutUntrackedOrigin](), MotionTable.none())
+    sss_walker_begin(ps.unsafe_origin_cast[MutUntrackedOrigin](), ray, walk, wl, pcg, motion.time)
+    _sss_walk_trace(sd, walk, ray, hits.unsafe_origin_cast[MutUntrackedOrigin](), motion)
     _sss_walk_step(ps.unsafe_origin_cast[MutUntrackedOrigin](), hits.unsafe_origin_cast[MutUntrackedOrigin](), 0, sd)
     pcg.state = ps[].pcgState
     return sss_walker_exit(sd, ps[], hits[unsafe_offset=0])
@@ -374,23 +376,24 @@ def sss_walks_below(mat: Material, inter: Intersection, med_before: Int32) -> Bo
 
 
 @always_inline
-def sss_entered(mat: Material, inter: Intersection, ray_dir: Vec3f, new_dir: Vec3f, med_before: Int32, ref sd: SceneView, hit: Vec3f) -> Bool:
+def sss_entered(mat: Material, inter: Intersection, ray_dir: Vec3f, new_dir: Vec3f, med_before: Int32, ref sd: SceneView, hit: Vec3f, *, motion: MotionTable) -> Bool:
     """Did this dielectric crossing refract into a subsurface interior?"""
     if not sss_walks_below(mat, inter, med_before):
         return False
-    var gn = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit, motion=MotionTable.none())
+    var gn = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit, motion=motion)
     return dot(gn, ray_dir) * dot(gn, new_dir) > Float32(0)
 
 
 @always_inline
 def sss_hop[use_gpu: Bool, adjoint: Bool = False](ref sd: SceneView, mat: Material, inter: Intersection, hit: Vec3f, gn: Vec3f,
                                                   refracted: Vec3f, wl: SampledWavelengths, mut pcg: PCG32,
-                                                  outside_ior: Float32) -> SssExit:
+                                                  outside_ior: Float32,
+                                                  *, motion: MotionTable,) -> SssExit:
     """The whole hop for an integrator that does not walk across wavefront rounds: entry lobe, walk, surface tint.
     The tint is the camera walk's, at its entry; a light walk (`adjoint`) looks it up at its exit, the camera's entry, so
     both directions estimate the same transport (Scenes/vcm_sss_exit_merge_reciprocity.py)."""
     var ex = sss_walk_to_exit(sd, mat, inter, hit, gn, sss_entry_lobe(face_toward(gn, refracted), sss_relative_eta(mat, outside_ior), pcg),
-                              wl, pcg, outside_ior)
+                              wl, pcg, outside_ior, motion=motion)
     sss_hop_tint[use_gpu, adjoint](sd, mat, inter, ex, wl)
     return ex
 

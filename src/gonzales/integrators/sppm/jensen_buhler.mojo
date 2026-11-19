@@ -1,6 +1,7 @@
 """Jensen and Buhler 2002 inside SPPM: irradiance samples on translucent surfaces from SPPM's photons and NEE, and a
 dipole integral of them at every camera hit on those surfaces. A biased reference for the random walk, not a rival."""
 from std.math import floor, sqrt
+from gonzales.scene.shapes.motion import MotionTable
 from gonzales.core.geometry import Point3f, Vec3f, RGB, INV_PI, dot
 from gonzales.core.rng import PCG32
 from gonzales.core.spectrum import SampledWavelengths, SpectralSample, spectral_sample_to_rgb
@@ -47,7 +48,7 @@ def jb_point_photons(cache: IrradianceCache, i: Int, photons: Pointer[SPPMPhoton
                     and gather_disk_contains(e.to_simd(), e.length_sq(), r2, n.to_simd()):
                 phi += ph.flux * (bw * sss_boundary_lobe(c, eta) * INV_PI)
             k = Int(ph.nxt)
-    var cov = gather_disk_coverage(sd, p, n, sqrt(r2), salt=13 + pass_idx * 1000003)
+    var cov = gather_disk_coverage(sd, p, n, sqrt(r2), salt=13 + pass_idx * 1000003, motion=MotionTable.none())
     if cov > Float32(0):
         return phi * (Float32(1) / (cov * disk_measure(r2)))
     return SpectralSample(Float32(0))
@@ -59,7 +60,7 @@ def _point_vp(p: Point3f, n: Vec3f, mi: Int32, eta: Float32, wl: SampledWaveleng
                      N_acc=Float32(0), r2=Float32(0), valid=Int32(1), pidx=Int32(-1), is_volume=PhotonKind.surface,
                      ld=SpectralSample(Float32(0)), med_idx=Int32(-1), env=RGB(Float32(0)), gsum=RGB(Float32(0)),
                      coat_keep=Float32(1), mat_kind=LobeKind.sss_exit, wo=n, alpha=eta, mat_idx=mi,
-                     hair_curve_idx=Int32(-1), hair_h=Float32(0), hair_v=Float32(0), wavelengths=wl)
+                     hair_curve_idx=Int32(-1), hair_h=Float32(0), hair_v=Float32(0), wavelengths=wl, time=Float32(0))
 
 
 def jb_dipole_vp(vps: Pointer[SPPMPixel, MutUntrackedOrigin], i: Int, cache: IrradianceCache, ref sd: SceneView,

@@ -669,13 +669,14 @@ def apply_surface_maps_at_hit[use_gpu: Bool](
     tex_filenames: Pointer[Pointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin],
     textures: Pointer[GpuTexture, MutUntrackedOrigin],
     n_textures: Int,
+    *, motion: MotionTable,
 ) -> Vec3f:
     if mat.normal_tex_idx < Int32(0) and mat.bump_tex_idx < Int32(0):
         return shading_normal
     var (mesh, v0, v1, v2, ok) = _get_tri_verts(inter, meshes)
     if not ok:
         return shading_normal
-    var tri = tri_world(mesh, v0, v1, v2, inter.primId.instanceIdx, instances, motion=MotionTable.none())
+    var tri = tri_world(mesh, v0, v1, v2, inter.primId.instanceIdx, instances, motion=motion)
     var fp = hit_uv_footprint(cam, tri, mesh, v0, v1, v2, hit, ray_dir, cone_w)
     return _apply_surface_maps[use_gpu](mat, v0, v1, v2, mesh, inter,
         shading_normal, orient_to, tri, fp,
@@ -693,11 +694,12 @@ def uv_footprint_at_hit(
     ray_dir: Vec3f,
     cone_w: Float32,
     cam: CameraFootprint,
+    *, motion: MotionTable,
 ) -> UVFootprint:
     var (mesh, v0, v1, v2, ok) = _get_tri_verts(inter, meshes)
     if not ok:
         return UVFootprint.none()
-    return hit_uv_footprint(cam, tri_world(mesh, v0, v1, v2, inter.primId.instanceIdx, instances, motion=MotionTable.none()),
+    return hit_uv_footprint(cam, tri_world(mesh, v0, v1, v2, inter.primId.instanceIdx, instances, motion=motion),
         mesh, v0, v1, v2, hit, ray_dir, cone_w)
 
 

@@ -175,6 +175,7 @@ struct SPPMPixel(TrivialRegisterPassable):
     # medium must attenuate the shadow ray by that medium's transmittance,
     # not just from a volume scatter vertex.
     var med_idx: Int32
+    var time: Float32   # the shutter time it was traced at: its NEE and gather see moving instances there
     # Infinite-light radiance for a VP sample whose traced ray escaped the
     # scene entirely (valid stays 0 — there's no surface to gather photons
     # at or run NEE from) instead of hitting a diffuse/volume scatterer.
@@ -418,6 +419,7 @@ def area_light_nee_normal(s: AreaLightSample, toward: Vec3f) -> Vec3f:
 
 def sample_sphere_light_emission(
     ref sd: SceneView, k: Int, mut pcg: PCG32,
+    *, motion: MotionTable,
 ) -> Tuple[Int, Vec3f, Vec3f, Vec3f]:
     """Start of a light subpath on the k-th EMITTING analytic sphere:
     (its index in sd.spheres, a uniform point on its surface -- area density
@@ -438,7 +440,7 @@ def sample_sphere_light_emission(
                 si = i
                 break
             seen += 1
-    var sph = sd.spheres[unsafe_offset=si]
+    var sph = motion.sphere(sd.spheres, si)
     var us1 = pcg.next_float(); var us2 = pcg.next_float()
     var cz = Float32(1) - Float32(2) * us1
     var sz = sqrt(max(Float32(0), Float32(1) - cz * cz))
@@ -545,6 +547,7 @@ def _sppm_gsms_on(ref sd: SceneView, bsdf: BSDF) -> Bool:
 @no_inline   # one copy of the solver in the visible-point trace
 def _sppm_gsms(
     ref sd: SceneView, bsdf: BSDF, x0: Vec3f, med: Int32, wl: SampledWavelengths, mut pcg: PCG32,
+    *, motion: MotionTable,
 ) -> SpectralSample:
     """Glossy SMS from a glossy camera vertex, power-weighted against its lobe sampling the same chain (as the path
     tracer's _glossy_sms_nee). Photons never reach these paths: no visible point sits on the glossy vertex."""
@@ -552,7 +555,7 @@ def _sppm_gsms(
     var (slot, p_pick) = light_path_pick(sd, pcg.next_float())
     if p_pick <= Float32(0) or slot < 0 or slot >= Int(sd.areaLightCount):   # mesh lights only
         return z
-    var (ok, y, l_du, l_dv, ln, area, side, emission) = _vcm_mnee_light_point(sd, slot, pcg)
+    var (ok, y, l_du, l_dv, ln, area, side, emission) = _vcm_mnee_light_point(sd, slot, pcg, motion=motion)
     if not ok:
         return z
     var p_a = p_pick / area
@@ -560,7 +563,7 @@ def _sppm_gsms(
     var ctx = _shade_context(sd, Pointer[UInt32, MutUntrackedOrigin].unsafe_dangling())
     var tab = LobeTables(sd.materials, sd.curves, sd.measuredBrdfs, sd.spectral, sd.mediums)
     var verts = SMSChain(fill=sms_vertex_init())
-    var r = glossy_sms_solve(ctx, x0, bsdf, tab, wl, y, ldu, ldv, pcg, verts, motion=MotionTable.none())
+    var r = glossy_sms_solve(ctx, x0, bsdf, tab, wl, y, ldu, ldv, pcg, verts, motion=motion)
     if not r[0]:
         return z
     var n = r[1]
@@ -583,12 +586,13 @@ def _sppm_gsms(
 def _sppm_gsms_bsdf_weight(
     ref sd: SceneView, x0: Vec3f, pdf0: Float32, dir0: Vec3f, n: Int, light_hit: Vec3f, light: Intersection, med: Int32,
     wl: SampledWavelengths,
+    *, motion: MotionTable,
 ) -> Float32:
     """The share of a camera path that left glossy vertex x0 along dir0 and reached light_hit through n chain vertices:
     the rest of _sppm_gsms' weight when re-tracing it by the chain rule lands there, everything otherwise."""
     var ctx = _shade_context(sd, Pointer[UInt32, MutUntrackedOrigin].unsafe_dangling())
     var verts = SMSChain(fill=sms_vertex_init())
-    var rp = glossy_sms_reproduce(ctx, x0, dir0, n, light_hit, light, verts, motion=MotionTable.none())
+    var rp = glossy_sms_reproduce(ctx, x0, dir0, n, light_hit, light, verts, motion=motion)
     if not rp[0]:
         return Float32(1)
     var al_idx = Int(light.primId.id1)
@@ -600,10 +604,11 @@ def _sppm_gsms_bsdf_weight(
 @always_inline
 def _photon_walk[tex_gpu: Bool](ref sd: SceneView, mat: Material, inter: Intersection, hit: Point3f, refracted: Vec3f,
                                 wl: SampledWavelengths, mut pcg: PCG32, mut flux: SpectralSample,
-                                outside_ior: Float32) -> Tuple[Vec3f, Point3f, Bool]:
+                                outside_ior: Float32,
+                                *, motion: MotionTable,) -> Tuple[Vec3f, Point3f, Bool]:
     """A photon through the walk and out of its exit: the next ray, and whether it lives."""
-    var g_w = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd(), motion=MotionTable.none())
-    var ex = sss_hop[tex_gpu, adjoint=True](sd, mat, inter, hit.to_simd(), g_w, refracted, wl, pcg, outside_ior)
+    var g_w = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd(), motion=motion)
+    var ex = sss_hop[tex_gpu, adjoint=True](sd, mat, inter, hit.to_simd(), g_w, refracted, wl, pcg, outside_ior, motion=motion)
     if not ex.ok:
         return (vec3f(refracted), hit, False)
     var out = sss_leave(ex.n_o, ex.eta, pcg.next_float(), pcg.next_float())
@@ -718,6 +723,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
         mat_idx=Int32(-1), hair_curve_idx=Int32(-1), hair_h=Float32(0), hair_v=Float32(0),
         wavelengths=vp_wavelengths,
         med_idx=Int32(-1),
+        time=Float32(0),
     )
 
     # Sub-pixel position, drawn through the scene's PixelFilter -- the SAME
@@ -734,7 +740,13 @@ def _sppm_trace_visible_point[use_gpu: Bool](
     var ul0 = Float32(0.5); var ul1 = Float32(0.5)
     if sd.lens.radius > Float32(0):
         ul0 = pcg.next_float(); ul1 = pcg.next_float()
-    var (rd, ro, _) = camera_ray_from_film_xy(fX, fY, r2c, c2w, sd.lens, ul0, ul1)
+    var (rd0, ro0, _) = camera_ray_from_film_xy(fX, fY, r2c, c2w, sd.lens, ul0, ul1)
+    if sd.lens.timed:
+        vp.time = sd.lens.shutter[0] + (sd.lens.shutter[1] - sd.lens.shutter[0]) * pcg.next_float()
+    var motion = sd.motion.at(vp.time)
+    var cam_ray = motion.camera_ray(Ray(ro0, rd0))
+    var rd = cam_ray.direction
+    var ro = cam_ray.origin
 
     # Total path length along the SPECULAR chain only -- a cone tracks the
     # camera's footprint, which survives refraction (the pool floor seen
@@ -794,7 +806,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
         # caustic, was missing from the render until 2026-09-09.
         traverse_dispatch(sd.bvh4, sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, Float32(1.0e38), scratch,
                            sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances,
-                           sd.spheres, Int(sd.sphereCount), motion=MotionTable.none())
+                           sd.spheres, Int(sd.sphereCount), motion=motion)
         if scratch[unsafe_offset=0].hit == Int8(0):
             for inf_i in range(Int(sd.infiniteLightCount)):
                 var ilight = sd.infiniteLights[unsafe_offset=inf_i]
@@ -855,7 +867,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
         # sample, same reasoning as the infinite-light miss-escape case
         # below, so there's no competing strategy to double-count against.
         if inter.primId.type == PrimKind.sphere:
-            var sph_hit = sd.spheres[unsafe_offset=Int(inter.primId.id1)]
+            var sph_hit = motion.sphere(sd.spheres, Int(inter.primId.id1))
             if sph_hit.isAreaLight != Int8(0):
                 if glossy_pdf < Float32(0):
                     vp.env += vp.beta * _film_rgb(sph_hit.emission, vp.wavelengths, sd)
@@ -885,7 +897,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
                 if glossy_pdf < Float32(0):
                     vp.env += vp.beta * _film_rgb(mat.emission, vp.wavelengths, sd)
             else:
-                var cos_l = area_light_hit_cos(inter, sd.meshes, sd.instances, ray_dir, MotionTable.none())
+                var cos_l = area_light_hit_cos(inter, sd.meshes, sd.instances, ray_dir, motion)
                 if cos_l > Float32(0):
                     var al_h = sd.areaLights[unsafe_offset=Int(inter.primId.id1)]
                     # as _sppm_nee_at's: uniform over the lights, then over the light's area
@@ -893,7 +905,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
                     var w_gs = Float32(1)   # share against glossy SMS from the last glossy vertex
                     var gs_shared = gs_pdf >= GLOSSY_SMS_MIN_PDF and gs_n >= 1 and al_h.kind == Int8(0)
                     if gs_shared:
-                        w_gs = _sppm_gsms_bsdf_weight(sd, gs_x0, gs_pdf, gs_dir, gs_n, hit.to_simd(), inter, gs_med, vp.wavelengths)
+                        w_gs = _sppm_gsms_bsdf_weight(sd, gs_x0, gs_pdf, gs_dir, gs_n, hit.to_simd(), inter, gs_med, vp.wavelengths, motion=motion)
                     var le_h = vp.beta * _film_rgb(al_h.emission, vp.wavelengths, sd)
                     comptime if GSMS_DEBUG >= 2:
                         if gs_shared:
@@ -919,7 +931,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
         if mat.uses_lobe():
             if not mat.has_lobe():
                 break   # e.g. a measured table that failed to load
-            var sh = surface_hit[use_gpu](sd, inter, mat, hit, ray_dir, sd.camFp.cone_spread * cone_len)
+            var sh = surface_hit[use_gpu](sd, inter, mat, hit, ray_dir, sd.camFp.cone_spread * cone_len, motion=motion)
             var gn = sh.gn
             var gn_geo = sh.gn_geo   # before any bump/normal map -- see SPPMPixel.geo_normal
             var eff_alb = sh.alb
@@ -953,7 +965,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
                     if gsms:
                         var (gr, gg, gb) = spectral_sample_to_rgb(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x,
                             sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65,
-                            _sppm_gsms(sd, bsdf_g, hit.to_simd(), cur_med_idx, vp.wavelengths, pcg), vp.wavelengths)
+                            _sppm_gsms(sd, bsdf_g, hit.to_simd(), cur_med_idx, vp.wavelengths, pcg, motion=motion), vp.wavelengths)
                         vp.env += vp.beta * RGB(gr, gg, gb)
                         comptime if GSMS_DEBUG == 1:
                             dbg += vp.beta * RGB(gr, gg, gb)
@@ -971,8 +983,8 @@ def _sppm_trace_visible_point[use_gpu: Bool](
                         _vp_at_dipole(vp, hit, vec3f(face_toward(gn_geo, (-rd).to_simd())), mat, mat_idx, current_dielectric_ior)
                         break
                     if rough_skin and s_v.transmit:   # a walk leaves into the medium it came from, so no compression
-                        var ex_r = sss_hop[use_gpu](sd, mat, inter, hit.to_simd(), _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd(), motion=MotionTable.none()),
-                                                    s_v.wi, vp.wavelengths, pcg, current_dielectric_ior)
+                        var ex_r = sss_hop[use_gpu](sd, mat, inter, hit.to_simd(), _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd(), motion=motion),
+                                                    s_v.wi, vp.wavelengths, pcg, current_dielectric_ior, motion=motion)
                         if ex_r.ok:
                             vp.beta = vp.beta * _spectral_gain_rgb(sd, s_v.weight * SpectralSample(mat.albedo.r * mat.albedo.r), vp.wavelengths)
                             _vp_at_walk_exit(vp, ex_r, mat, mat_idx, sd)
@@ -1077,7 +1089,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
             if mat.sss_boundary != Int8(0):
                 bounce -= 1
             var ior = mat.albedo.r
-            var gn = _shading_normal_at(inter, sd.meshes, sd.instances, sd.spheres, hit, motion=MotionTable.none())
+            var gn = _shading_normal_at(inter, sd.meshes, sd.instances, sd.spheres, hit, motion=motion)
             # Bump/normal maps. barcelona's water is a `dielectric` with a
             # "texture displacement", so this is the branch the corpus cares
             # about most. `orient_to` is the RAW interpolated normal, NOT a
@@ -1088,17 +1100,17 @@ def _sppm_trace_visible_point[use_gpu: Bool](
             # shading.mojo's dielectric site).
             gn = apply_surface_maps_at_hit[use_gpu](mat, inter, sd.meshes, sd.instances,
                 gn, gn, hit.to_simd(), ray_dir, sd.camFp.cone_spread * cone_len, sd.camFp,
-                sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
+                sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount), motion=motion)
             var (new_dir, new_org, radiance_scale, new_cur_ior, new_prev_ior) = _dielectric_bounce(
                 ray_dir, hit.to_simd(), gn, ior, False, pcg, current_dielectric_ior, previous_dielectric_ior, mat.type == MatKind.thin_dielectric,
                 not sss_walks_below(mat, inter, cur_med_idx), True)
-            if sss_entered(mat, inter, ray_dir, new_dir, cur_med_idx, sd, hit.to_simd()):
-                var g_w = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd(), motion=MotionTable.none())
+            if sss_entered(mat, inter, ray_dir, new_dir, cur_med_idx, sd, hit.to_simd(), motion=motion):
+                var g_w = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd(), motion=motion)
                 if dipole:
                     vp.beta = vp.beta * radiance_scale
                     _vp_at_dipole(vp, hit, vec3f(face_toward(g_w, -ray_dir)), mat, mat_idx, current_dielectric_ior)
                     break
-                var ex = sss_hop[use_gpu](sd, mat, inter, hit.to_simd(), g_w, new_dir, vp.wavelengths, pcg, current_dielectric_ior)
+                var ex = sss_hop[use_gpu](sd, mat, inter, hit.to_simd(), g_w, new_dir, vp.wavelengths, pcg, current_dielectric_ior, motion=motion)
                 if ex.ok:
                     vp.beta = vp.beta * radiance_scale
                     _vp_at_walk_exit(vp, ex, mat, mat_idx, sd)
@@ -1111,12 +1123,12 @@ def _sppm_trace_visible_point[use_gpu: Bool](
             rd = vec3f(new_dir)
             ro = point3f(new_org)
             if has_media:
-                cur_med_idx = medium_after(new_dir, cur_med_idx, inter, mat, sd, hit.to_simd(), MotionTable.none())
+                cur_med_idx = medium_after(new_dir, cur_med_idx, inter, mat, sd, hit.to_simd(), motion)
 
         elif mat.type == MatKind.interface:
             # Transparent boundary — update medium, continue ray
             if has_media:
-                cur_med_idx = medium_after(ray_dir, cur_med_idx, inter, mat, sd, hit.to_simd(), MotionTable.none())
+                cur_med_idx = medium_after(ray_dir, cur_med_idx, inter, mat, sd, hit.to_simd(), motion)
             ro = hit + rd * Float32(0.0002)
 
         else:
@@ -1216,6 +1228,10 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
     bvh.mojo's _scene_bounding_sphere/_sample_disk_perpendicular) just seeds
     where this photon's path starts. Direct illumination from these lights
     is provided separately by _sppm_nee_one's own distant/infinite sampling."""
+    var time = Float32(0)
+    if sd.lens.timed:
+        time = sd.lens.shutter[0] + (sd.lens.shutter[1] - sd.lens.shutter[0]) * pcg.next_float()
+    var motion = sd.motion.at(time)
     var has_media = Int(sd.mediumCount) > 0
     var n_area = Int(sd.areaLightCount)
     # Analytic sphere lights are NOT in a pre-filtered lights array (sd.spheres
@@ -1280,8 +1296,8 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
         # area. Its NEE counterpart is _sample_sphere_light_nee (cone
         # sampling), a different strategy for the same light; SPPM does not
         # MIS the two (photons and NEE cover disjoint path lengths here).
-        var (si_e, sp_e, sn_e, sd_e) = sample_sphere_light_emission(sd, light_pick - n_area, pcg)
-        var sph_e = sd.spheres[unsafe_offset=si_e]
+        var (si_e, sp_e, sn_e, sd_e) = sample_sphere_light_emission(sd, light_pick - n_area, pcg, motion=motion)
+        var sph_e = motion.sphere(sd.spheres, si_e)
         var area_e = Float32(4) * PI * sph_e.radius * sph_e.radius
         var scale_e = PI * area_e * inv_pick / Float32(n_emit)
         flux = spec_illum(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
@@ -1366,7 +1382,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
         # caustic, was missing from the render until 2026-09-09.
         traverse_dispatch(sd.bvh4, sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, Float32(1.0e38), scratch,
                            sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances,
-                           sd.spheres, Int(sd.sphereCount), motion=MotionTable.none())
+                           sd.spheres, Int(sd.sphereCount), motion=motion)
         if scratch[unsafe_offset=0].hit == Int8(0):
             break  # miss
 
@@ -1447,7 +1463,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
                     SPPMPhoton(pos=hit, flux=flux, nxt=Int32(-1), is_volume=PhotonKind.surface, dir_in=rd, wavelengths=ph_wavelengths,
                                curve=Int32(inter.primId.id1) if inter.primId.type == PrimKind.curve else Int32(-1)),
                     photons, max_photons, counter)
-            var sh = surface_hit[tex_gpu](sd, inter, mat, hit, ray_dir, Float32(-1.0))
+            var sh = surface_hit[tex_gpu](sd, inter, mat, hit, ray_dir, Float32(-1.0), motion=motion)
             var s_l = sh.bsdf(mat, mat_idx, adjoint=True).sample(pcg.next_float(), pcg.next_float(), pcg.next_float(),
                 pcg.next_float(), LobeTables(sd.materials, sd.curves, sd.measuredBrdfs, sd.spectral, sd.mediums), ph_wavelengths)
             if not s_l.valid:
@@ -1459,7 +1475,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
             if s_l.transmit and sss_walks_below(mat, inter, cur_med_idx):
                 bounce -= 1
                 var (wr, or_w, ok_w) = _photon_walk[tex_gpu](sd, mat, inter, hit, s_l.wi, ph_wavelengths, pcg, flux,
-                                                     current_dielectric_ior)
+                                                     current_dielectric_ior, motion=motion)
                 if not ok_w:
                     break
                 rd = wr; ro = or_w
@@ -1476,7 +1492,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
             if mat.sss_boundary != Int8(0):
                 bounce -= 1
             var ior = mat.albedo.r
-            var gn = _shading_normal_at(inter, sd.meshes, sd.instances, sd.spheres, hit, motion=MotionTable.none())
+            var gn = _shading_normal_at(inter, sd.meshes, sd.instances, sd.spheres, hit, motion=motion)
             # Bump/normal maps. barcelona's water is a `dielectric` with a
             # "texture displacement", so this is the branch the corpus cares
             # about most. `orient_to` is the RAW interpolated normal, NOT a
@@ -1487,7 +1503,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
             # shading.mojo's dielectric site).
             gn = apply_surface_maps_at_hit[tex_gpu](mat, inter, sd.meshes, sd.instances,
                 gn, gn, hit.to_simd(), ray_dir, Float32(-1.0), sd.camFp,
-                sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
+                sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount), motion=motion)
             # A visible point at a camera walk's exit gathers what lands here. Its lobe holds the Fresnel, so store before the choice.
             if sss_walks_below(mat, inter, cur_med_idx) and n_events - n_null > 1:
                 _sppm_store_photon[use_gpu](
@@ -1496,9 +1512,9 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
                     photons, max_photons, counter)
             var (new_dir, new_org, _, new_cur_ior, new_prev_ior) = _dielectric_bounce(
                 ray_dir, hit.to_simd(), gn, ior, False, pcg, current_dielectric_ior, previous_dielectric_ior, mat.type == MatKind.thin_dielectric, radiance_mode=False)
-            if sss_entered(mat, inter, ray_dir, new_dir, cur_med_idx, sd, hit.to_simd()):
+            if sss_entered(mat, inter, ray_dir, new_dir, cur_med_idx, sd, hit.to_simd(), motion=motion):
                 var (wr, or_w, ok_w) = _photon_walk[tex_gpu](sd, mat, inter, hit, new_dir, ph_wavelengths, pcg, flux,
-                                                     current_dielectric_ior)
+                                                     current_dielectric_ior, motion=motion)
                 if not ok_w:
                     break
                 rd = wr; ro = or_w
@@ -1512,12 +1528,12 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
             rd = vec3f(new_dir)
             ro = point3f(new_org)
             if has_media:
-                cur_med_idx = medium_after(new_dir, cur_med_idx, inter, mat, sd, hit.to_simd(), MotionTable.none())
+                cur_med_idx = medium_after(new_dir, cur_med_idx, inter, mat, sd, hit.to_simd(), motion)
 
         elif mat.type == MatKind.interface:
             n_null += 1   # a null boundary is not an interaction for the surface "first segment" store gates
             if has_media:
-                cur_med_idx = medium_after(ray_dir, cur_med_idx, inter, mat, sd, hit.to_simd(), MotionTable.none())
+                cur_med_idx = medium_after(ray_dir, cur_med_idx, inter, mat, sd, hit.to_simd(), motion)
             ro = hit + rd * Float32(0.0002)
 
         else:
@@ -1619,7 +1635,7 @@ def _sppm_gather_one(
     var r2 = vp.r2
     if vp.is_volume == PhotonKind.volume and Int(vp.med_idx) >= 0:
         var cap = MediumView.at(sd, vp.med_idx).kernel_radius(vp.pos.to_simd())
-        cap = max(gather_ball_reach(sd, vp.pos, cap), Float32(0.05) * cap)   # the ball stays inside the medium
+        cap = max(gather_ball_reach(sd, vp.pos, cap, motion=sd.motion.at(vp.time)), Float32(0.05) * cap)   # the ball stays inside the medium
         if r2 > cap * cap:   # same history rescale as the update below
             var q = cap * cap / r2
             vp.tau = vp.tau * (q * sqrt(q))
@@ -1696,7 +1712,7 @@ def _sppm_gather_one(
             # 0.998, mid-bin +5%, brightest -8%) is not probe-count noise.
             # Left at 8, matching VCM's merge (the open SPPM-specific residual is
             # described in gather_disk_coverage's docstring).
-            var cov = gather_disk_coverage(sd, vp.pos, vp.geo_normal, sqrt(r2), salt=7 + pass_idx * 1000003)
+            var cov = gather_disk_coverage(sd, vp.pos, vp.geo_normal, sqrt(r2), salt=7 + pass_idx * 1000003, motion=sd.motion.at(vp.time))
             if cov > Float32(0):
                 phi_rgb = phi_rgb * (Float32(1) / cov)
         if vp.mat_kind == LobeKind.hair:
@@ -1799,6 +1815,7 @@ def _sppm_simple_light_count(ref sd: SceneView) -> Int:
 @always_inline
 def _sppm_sample_simple_light(
     ref sd: SceneView, i: Int, hit_point: Vec3f, mut pcg: PCG32,
+    *, motion: MotionTable,
 ) -> Tuple[LightSample, Float32]:
     """The i-th distant/point/sphere light, plus the any_hit_bvh2_core tmax
     to use for it -- same pairing shading.mojo's _nee_sample_simple_light
@@ -1818,7 +1835,7 @@ def _sppm_sample_simple_light(
         var d = ls_p.dist * Float32(0.9999)
         return (ls_p^, d)
     var si = i - nd - np_
-    var ls_s = _sample_sphere_light_nee(sd.spheres[unsafe_offset=si], Int(sd.sphereCount), hit_point, pcg)
+    var ls_s = _sample_sphere_light_nee(motion.sphere(sd.spheres, si), Int(sd.sphereCount), hit_point, pcg)
     var d = ls_s.dist * Float32(0.9999)
     return (ls_s^, d)
 
@@ -1826,16 +1843,17 @@ def _sppm_sample_simple_light(
 @always_inline
 def _sppm_shadow(
     vp: SPPMPixel, ref sd: SceneView, org: Point3f, wi: Vec3f, tmax: Float32, mut pcg: PCG32,
+    *, motion: MotionTable,
 ) -> SpectralSample:
     """Visibility times transmittance of a VP shadow ray: black if blocked, 1 in a medium-free scene."""
     if Int(sd.mediumCount) > 0:
         return shadow_transmittance(org.to_simd(), wi, tmax, vp.med_idx, sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves,
                                     sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances, sd.spheres, Int(sd.sphereCount),
                                     sd.materials, sd.mediums, sd.mediumInterfaces, sd.grids, sd.nvdbGrids,
-                                    sd.spectral, vp.wavelengths, pcg, motion=MotionTable.none())
+                                    sd.spectral, vp.wavelengths, pcg, motion=motion)
     if any_hit_dispatch(sd.bvh4, sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, Ray(org, vec3f(wi)), tmax,
                          sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances, sd.spheres, Int(sd.sphereCount),
-                         materials=sd.materials, motion=MotionTable.none()):
+                         materials=sd.materials, motion=motion):
         return SpectralSample(Float32(0.0))
     return SpectralSample(Float32(1.0))
 
@@ -1920,7 +1938,7 @@ def _sppm_nee_at(
             if (cos_surface > Float32(0.0) or two_sided_vp) and cos_light > Float32(0.0):
                 # Shadow ray, offset from both ends to avoid self-intersection.
                 var org_a = shadow_org_back if (two_sided_vp and cos_surface < Float32(0)) else shadow_org
-                var tr_a = _sppm_shadow(vp, sd, org_a, wi, dist * Float32(0.999), pcg)
+                var tr_a = _sppm_shadow(vp, sd, org_a, wi, dist * Float32(0.999), pcg, motion=sd.motion.at(vp.time))
                 if not tr_a.is_black():
                     # pdf_area = 1/(n_area * total_area) — uniform-over-all-lights
                     # assumption, same as the emission-sampling flux scale factor.
@@ -1950,7 +1968,7 @@ def _sppm_nee_at(
     # lights-only one like every other light type.
     var n_delta = Int(sd.distantLightCount) + Int(sd.pointLightCount)
     for li in range(_sppm_simple_light_count(sd)):
-        var res = _sppm_sample_simple_light(sd, li, spos, pcg)
+        var res = _sppm_sample_simple_light(sd, li, spos, pcg, motion=sd.motion.at(vp.time))
         var ls = res[0].copy()
         var tmax = res[1]
         var w = _sppm_nee_weight(vp, sd, vn, wo, ls, _vp_base_alpha(vp.alpha))
@@ -1959,7 +1977,7 @@ def _sppm_nee_at(
             w = w + (_sppm_nee_weight(vp, sd, vn, wo, ls, -vp.alpha) - w) * vp.coat_keep
         if not w.is_black():
             var s_org = shadow_org_back if (two_sided_vp and dot(vp.geo_normal.to_simd(), ls.wi) < Float32(0)) else shadow_org
-            var tr_s = _sppm_shadow(vp, sd, s_org, ls.wi, tmax, pcg)
+            var tr_s = _sppm_shadow(vp, sd, s_org, ls.wi, tmax, pcg, motion=sd.motion.at(vp.time))
             if not tr_s.is_black():
                 ld += w * tr_s
 
@@ -1968,7 +1986,7 @@ def _sppm_nee_at(
         var w_e = _sppm_nee_weight(vp, sd, vn, wo, ls_e, _vp_base_alpha(vp.alpha), shares)
         if not w_e.is_black():
             var s_org_e = shadow_org_back if (two_sided_vp and dot(vp.geo_normal.to_simd(), ls_e.wi) < Float32(0)) else shadow_org
-            var tr_e = _sppm_shadow(vp, sd, s_org_e, ls_e.wi, ls_e.dist, pcg)
+            var tr_e = _sppm_shadow(vp, sd, s_org_e, ls_e.wi, ls_e.dist, pcg, motion=sd.motion.at(vp.time))
             if not tr_e.is_black():
                 ld += w_e * tr_e
     return ld

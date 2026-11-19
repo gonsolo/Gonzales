@@ -66,11 +66,12 @@ def _vcm_nee_one(
     wavelengths: SampledWavelengths, spawn_eps: Float32, two_sided: Bool, long_path: Bool,
 ) -> SpectralSample:
     """One light sample's contribution. In a medium the weight needs the edge's transmittance, so it is traced first."""
+    var motion = sd.motion.at(v.time)
     if long_path:
         pol.emission_pdf_w = Float32(0)   # no light strategy reaches this far (VcmStrategies.past_cache)
     if Int(sd.mediumCount) == 0:
-        return _bdpt_nee_contribute(beta, ctx.nee_weight_mis(ls, tab, wavelengths, pol), ls, pos, gn_geo, cur_med_idx, sd, scratch, wavelengths, spawn_eps, two_sided)
-    var tr = _bdpt_nee_transmittance(ls, pos, gn_geo, cur_med_idx, sd, scratch, wavelengths, spawn_eps, two_sided)
+        return _bdpt_nee_contribute(beta, ctx.nee_weight_mis(ls, tab, wavelengths, pol), ls, pos, gn_geo, cur_med_idx, sd, scratch, wavelengths, spawn_eps, two_sided, motion=motion)
+    var tr = _bdpt_nee_transmittance(ls, pos, gn_geo, cur_med_idx, sd, scratch, wavelengths, spawn_eps, two_sided, motion=motion)
     if tr.is_black():
         return SpectralSample(Float32(0))
     pol.tr = tr.average()
@@ -109,10 +110,11 @@ def _vcm_nee_surface(
 ) -> SpectralSample:
     """NEE from one camera vertex to every distant/point/sphere and infinite
     light, weighted by VCM's balance policy. `ctx` is the lobe, `gn_geo` the geometric"""
+    var motion = sd.motion.at(v.time)
     var total = SpectralSample(Float32(0))
     var tab = LobeTables(sd.materials, sd.curves, sd.measuredBrdfs, sd.spectral, sd.mediums)
     for li in range(_bdpt_simple_light_count(sd)):
-        var ls = _bdpt_sample_simple_light(sd, li, pos.to_simd(), pcg)
+        var ls = _bdpt_sample_simple_light(sd, li, pos.to_simd(), pcg, motion=motion)
         if not ls.valid:
             continue   # a non-emitting sphere
         var pol = _vcm_simple_light_policy(sd, li, ls, v, eta_x, dvcm, dvc, _vcm_cos_at(sd, v, ls.wi), wavelengths)
@@ -233,6 +235,7 @@ def _vcm_sphere_of_slot(ref sd: SceneView, slot: Int) -> Int:
 @always_inline
 def _vcm_mnee_light_point(
     ref sd: SceneView, slot: Int, mut pcg: PCG32,
+    *, motion: MotionTable,
 ) -> Tuple[Bool, Vec3f, Vec3f, Vec3f, Vec3f, Float32, Float32, RGB]:
     """A uniform point on the mesh or sphere light in light-path slot `slot`:
     (ok, point, two tangents, unit emitting normal, area, emission-face probability, emission)."""
@@ -248,7 +251,7 @@ def _vcm_mnee_light_point(
         var lp0 = mesh_pos(lmesh, lv0); var lp1 = mesh_pos(lmesh, lv1); var lp2 = mesh_pos(lmesh, lv2)
         var sr1 = sqrt(pcg.next_float()); var ru2 = pcg.next_float()
         var bu = sr1 * (Float32(1) - ru2); var bv = sr1 * ru2
-        var ln = _emitter_face_normal(lmesh, lv0, lv1, lv2, bu, bv, lp0, lp1, lp2, motion=MotionTable.none())
+        var ln = _emitter_face_normal(lmesh, lv0, lv1, lv2, bu, bv, lp0, lp1, lp2, motion=motion)
         var lnl = sqrt(dot(ln, ln))
         if lnl <= Float32(0):
             return none
@@ -257,7 +260,7 @@ def _vcm_mnee_light_point(
     var si = _vcm_sphere_of_slot(sd, slot)
     if si < 0:
         return none
-    var sph = sd.spheres[unsafe_offset=si]
+    var sph = motion.sphere(sd.spheres, si)
     if sph.radius <= Float32(0):
         return none
     var cos_t = Float32(1) - Float32(2) * pcg.next_float()
@@ -277,13 +280,14 @@ def _vcm_mnee(
 ) -> SpectralSample:
     """MNEE from camera vertex `v` to a light behind glass, balance-weighted against BSDF sampling through the chain
     and against every light-subpath strategy that reaches v through it. dvcm/dvc are v's arrival carries."""
+    var motion = sd.motion.at(v.time)
     var z = SpectralSample(Float32(0))
     if (sd.hasGlass & Int32(1)) == Int32(0):
         return z
     var (slot, p_pick) = light_path_pick(sd, pcg.next_float())
     if p_pick <= Float32(0) or slot < 0 or slot >= Int(sd.areaLightCount) + Int(sd.sphereLightCount):   # -1: no lights
         return z
-    var (ok, light_point, l_du, l_dv, ln, area, side, emission) = _vcm_mnee_light_point(sd, slot, pcg)
+    var (ok, light_point, l_du, l_dv, ln, area, side, emission) = _vcm_mnee_light_point(sd, slot, pcg, motion=motion)
     if not ok:
         return z
     var p_a = p_pick / area
@@ -293,10 +297,10 @@ def _vcm_mnee(
         return z
     var shadow_dir = to_light * (Float32(1) / dist)
     var ctx = _shade_context(sd, Pointer[UInt32, MutUntrackedOrigin].unsafe_dangling())
-    var (glass, probe) = _mnee_first_probe(ctx, hit_v, shadow_dir, dist, motion=MotionTable.none())
+    var (glass, probe) = _mnee_first_probe(ctx, hit_v, shadow_dir, dist, motion=motion)
     if not glass:
         return z
-    var c = _mnee_chain(ctx, gn, hit_v, shadow_dir, dist, light_point, l_du, l_dv, pcg, probe, motion=MotionTable.none())
+    var c = _mnee_chain(ctx, gn, hit_v, shadow_dir, dist, light_point, l_du, l_dv, pcg, probe, motion=motion)
     if not c[1]:
         return z
     var n = c[2]
@@ -326,13 +330,14 @@ def _vcm_mnee(
 def _vcm_mnee_hit_term(
     ref sd: SceneView, x0: Vec3f, pdf_x0: Float32, n_glass: Int, last_glass: Vec3f, light_hit: Vec3f,
     l_du: Vec3f, l_dv: Vec3f, p_a: Float32, cur_med: Int32, wl: SampledWavelengths, mut pcg: PCG32,
+    *, motion: MotionTable,
 ) -> Float32:
     """MNEE's share in the weight of a camera path that reached light_hit from vertex x0 through n_glass glass
     vertices: p_A / (p_bsdf (1 - F) g) when MNEE's solve reproduces the path, else 0."""
     if (sd.hasGlass & Int32(1)) == Int32(0) or n_glass <= 0 or pdf_x0 <= Float32(0):
         return Float32(0)
     var ctx = _shade_context(sd, Pointer[UInt32, MutUntrackedOrigin].unsafe_dangling())
-    var rp = _mnee_reproduce(ctx, x0, n_glass, last_glass, light_hit, l_du, l_dv, pcg, motion=MotionTable.none())
+    var rp = _mnee_reproduce(ctx, x0, n_glass, last_glass, light_hit, l_du, l_dv, pcg, motion=motion)
     if not rp[0] or rp[3] <= Float32(0):
         return Float32(0)
     var t_pass = _mnee_pass(_mnee_chain_transmittance(ctx, x0, rp[2], rp[1], light_hit, cur_med, wl))
@@ -343,6 +348,7 @@ def _vcm_mnee_hit_term(
 def _vcm_mnee_light_dvcm(
     ref sd: SceneView, x0: Vec3f, n_geo: Vec3f, y: Vec3f, ny: Vec3f, side: Float32, n_glass: Int, first_glass: Vec3f,
     cur_med: Int32, wl: SampledWavelengths, mut pcg: PCG32,
+    *, motion: MotionTable,
 ) -> Float32:
     """dVCM on arriving at x0 for a light path that left light point y through n_glass glass vertices, the first at
     first_glass: 1 / (p_emit (1 - F) J_light) when MNEE's solve from x0 reproduces that chain, else 0 (no share).
@@ -352,7 +358,7 @@ def _vcm_mnee_light_dvcm(
     var ctx = _shade_context(sd, Pointer[UInt32, MutUntrackedOrigin].unsafe_dangling())
     var a = Vec3f(Float32(1), Float32(0), Float32(0)) if abs(ny[0]) < Float32(0.9) else Vec3f(Float32(0), Float32(1), Float32(0))
     var tu = cross(ny, a)
-    var rp = _mnee_reproduce(ctx, x0, n_glass, first_glass, y, tu, cross(ny, tu), pcg, motion=MotionTable.none())
+    var rp = _mnee_reproduce(ctx, x0, n_glass, first_glass, y, tu, cross(ny, tu), pcg, motion=motion)
     if not rp[0] or rp[3] <= Float32(0):
         return Float32(0)
     var (t_ch, eta_ch) = _mnee_chain_t_eta(x0, rp[2], rp[1])
@@ -382,11 +388,12 @@ def _vcm_gsms(
 ) -> SpectralSample:
     """Glossy SMS from camera vertex `v` (transport/glossy_sms.mojo), balance-weighted like _vcm_mnee: its density in
     every weight is the deterministic solve's, p_A / g (Scenes/vcm_glossy_sms_mis_derivation.py)."""
+    var motion = sd.motion.at(v.time)
     var z = SpectralSample(Float32(0))
     var (slot, p_pick) = light_path_pick(sd, pcg.next_float())
     if p_pick <= Float32(0) or slot < 0 or slot >= Int(sd.areaLightCount):   # mesh lights only
         return z
-    var (ok, y, l_du, l_dv, ln, area, side, emission) = _vcm_mnee_light_point(sd, slot, pcg)
+    var (ok, y, l_du, l_dv, ln, area, side, emission) = _vcm_mnee_light_point(sd, slot, pcg, motion=motion)
     if not ok:
         return z
     var p_a = p_pick / area
@@ -395,7 +402,7 @@ def _vcm_gsms(
     var bsdf = _vertex_ctx(v)
     var tab = LobeTables(sd.materials, sd.curves, sd.measuredBrdfs, sd.spectral, sd.mediums)
     var verts = Array[SMSVertex, MAX_SMS_VERTICES](fill=sms_vertex_init())
-    var r = glossy_sms_solve(ctx, hit_v, bsdf, tab, wl, y, ldu, ldv, pcg, verts, motion=MotionTable.none())
+    var r = glossy_sms_solve(ctx, hit_v, bsdf, tab, wl, y, ldu, ldv, pcg, verts, motion=motion)
     if not r[0]:
         return z
     var n = r[1]
@@ -427,6 +434,7 @@ def _vcm_gsms(
 def _vcm_gsms_hit_term(
     ref sd: SceneView, x0: Vec3f, pdf_x0: Float32, dir0: Vec3f, n_glass: Int, light_hit: Vec3f, light: Intersection,
     p_a: Float32, cur_med: Int32, wl: SampledWavelengths,
+    *, motion: MotionTable,
 ) -> Float32:
     """Glossy SMS's share in the weight of a camera path that left glossy vertex x0 along dir0 and reached light_hit
     through n_glass chain vertices: p_A / (p_lobe T g) when re-tracing it by the chain rule lands there, else 0."""
@@ -434,7 +442,7 @@ def _vcm_gsms_hit_term(
         return Float32(0)
     var ctx = _shade_context(sd, Pointer[UInt32, MutUntrackedOrigin].unsafe_dangling())
     var verts = Array[SMSVertex, MAX_SMS_VERTICES](fill=sms_vertex_init())
-    var rp = glossy_sms_reproduce(ctx, x0, dir0, n_glass, light_hit, light, verts, motion=MotionTable.none())
+    var rp = glossy_sms_reproduce(ctx, x0, dir0, n_glass, light_hit, light, verts, motion=motion)
     if not rp[0] or rp[1] <= Float32(0):
         return Float32(0)
     var t_pass = _mnee_pass(_mnee_chain_transmittance(ctx, x0, verts, n_glass, light_hit, cur_med, wl))
@@ -445,6 +453,7 @@ def _vcm_gsms_hit_term(
 def _vcm_gsms_light_dvcm(
     ref sd: SceneView, x0: Vec3f, n_geo: Vec3f, y: Vec3f, ny: Vec3f, side: Float32, n_glass: Int, dir_in: Vec3f,
     cur_med: Int32, wl: SampledWavelengths,
+    *, motion: MotionTable,
 ) -> Float32:
     """_vcm_mnee_light_dvcm for a light path reaching glossy vertex x0 from direction dir_in through n_glass chain
     vertices: glossy SMS from x0 samples it when re-tracing dir_in by the chain rule lands on y."""
@@ -452,7 +461,7 @@ def _vcm_gsms_light_dvcm(
         return Float32(0)
     var ctx = _shade_context(sd, Pointer[UInt32, MutUntrackedOrigin].unsafe_dangling())
     var verts = Array[SMSVertex, MAX_SMS_VERTICES](fill=sms_vertex_init())
-    if not sms_chain_lands(ctx, x0, dir_in, n_glass, y, verts, motion=MotionTable.none())[0]:
+    if not sms_chain_lands(ctx, x0, dir_in, n_glass, y, verts, motion=motion)[0]:
         return Float32(0)
     var a = Vec3f(Float32(1), Float32(0), Float32(0)) if abs(ny[0]) < Float32(0.9) else Vec3f(Float32(0), Float32(1), Float32(0))
     var tu = cross(ny, a)

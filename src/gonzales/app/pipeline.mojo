@@ -1,4 +1,5 @@
 from gonzales.core.os_thread import OsThread, ThreadArg
+from std.os import setenv
 from std.memory.alloc import unsafe_alloc
 from std.memory import OwnedPointer, unsafe_memcpy
 from std.collections import List, Array
@@ -422,16 +423,18 @@ def _rtcore_cubin_path() -> String:
 
 
 def _motion_unsupported(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin]):
-    """Motion blur is the software-BVH path tracer's only: elsewhere the moving instances stay at their start."""
+    """Motion blur needs the software BVH and is not in Jensen-Buhler: elsewhere everything stays at its start."""
     if psc[unsafe_offset=0].motion_count > Int32(0):
-        print("Warning: motion blur needs the path tracer on the software BVH; moving instances stay at their start.")
+        print("Warning: motion blur needs the software BVH and is not in --jb; everything stays at its start.")
         psc[unsafe_offset=0].motion_count = Int32(0)
 
 
-def _motion_unsupported(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin], handle: Pointer[GpuSceneHandle, MutUntrackedOrigin]):
-    _motion_unsupported(psc)
-    handle[].motion = MotionTable.none()
-    handle[].lens = psc[unsafe_offset=0].camera_lens()
+def _motion_off_rt(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin], rt_wanted: Bool) -> Bool:
+    """Whether a scene with motion turns the RT hardware off: its structures hold everything at the start."""
+    if rt_wanted and psc[unsafe_offset=0].motion_count > Int32(0):
+        print("Warning: motion blur traces on the software BVH; the RT hardware is off for this scene.")
+        return True
+    return False
 
 
 # Instanced scenes are traced through the Vulkan-built top-level structure as it is: the hardware reports the
@@ -2307,7 +2310,7 @@ def parse_and_render(
     # spheres/object instancing (see vulkanrt_traverse_paths_gpu's
     # docstring in gpu.mojo) -- falls back to CUDA traversal with a
     # warning otherwise.
-    use_vulkan_rt_shade: Bool = False,
+    var use_vulkan_rt_shade: Bool = False,
     # --vcm-wavefront: staged intersect and bounce kernels, one launch per depth, so RT cores can do the intersect.
     use_vcm_wavefront: Bool = False,
     # docs/A2_restir_migration_plan.md Phase 2/3: ReSTIR DI, wired into both
@@ -2372,7 +2375,10 @@ def parse_and_render(
             eff_h = Int32(Int(eff_w) * Int(psc[unsafe_offset=0].film_h) / max(Int(psc[unsafe_offset=0].film_w), 1))
         resize_film(psc, eff_w, eff_h)
     mojo_apply_overrides(psc, spp_override, Int32(0), Int32(0), seed_override)
-    if use_sppm or use_vcm or use_jb or use_vulkan_rt_shade or env_on["GONZALES_RTCORE"]():
+    if _motion_off_rt(psc, use_vulkan_rt_shade or env_on["GONZALES_RTCORE"]()):
+        use_vulkan_rt_shade = False
+        _ = setenv("GONZALES_RTCORE", "", True)
+    if use_jb:
         _motion_unsupported(psc)
     try:
         checkpoint_adopt_seed(ckpt, psc)
@@ -3205,8 +3211,7 @@ def render_interactive(
             mojo_parsed_free(psc)
             return
     var rtb = _RtBufs()
-    if use_gpu and env_on["GONZALES_RTCORE"]() and not use_restir:
-        _motion_unsupported(psc, handle)
+    if use_gpu and env_on["GONZALES_RTCORE"]() and not use_restir and not _motion_off_rt(psc, True):
         try:
             rtb = _rt_wavefront_setup(handle, psc, n_pixels * WAVEFRONT_BATCH)
         except:
@@ -3816,8 +3821,7 @@ def session_new(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin], sobol: Point
         print("Gonzales:   gpu upload", Float64(perf_counter_ns() - t0) / 1.0e9, "s")
     t0 = perf_counter_ns()
     var rtb = _RtBufs()
-    if env_on["GONZALES_RTCORE"]() or xert_alignment() > 0:   # Intel Xe2 always, as parse_and_render
-        _motion_unsupported(psc, handle)
+    if (env_on["GONZALES_RTCORE"]() or xert_alignment() > 0) and not _motion_off_rt(psc, True):   # Intel Xe2 always, as parse_and_render
         try:
             rtb = _rt_wavefront_setup(handle, psc, n_pixels * _session_batch(n_pixels))
         except e:

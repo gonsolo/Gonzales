@@ -172,7 +172,7 @@ def gather_disk_contains(e: Vec3f, dist2: Float32, r2: Float32, n: Vec3f) -> Boo
 comptime GATHER_BALL_PROBES = 16
 
 
-def gather_ball_reach[probes: Int = GATHER_BALL_PROBES](ref sd: SceneView, p: Point3f, r: Float32, salt: Int = 11) -> Float32:
+def gather_ball_reach[probes: Int = GATHER_BALL_PROBES](ref sd: SceneView, p: Point3f, r: Float32, salt: Int = 11, *, motion: MotionTable) -> Float32:
     """How far the gather BALL around a volume point p may reach, at most r: the distance to the nearest surface. A
     dense medium keeps its visible points within a mean free path of the boundary; a ball reaching past it finds no
     photons there and reads dark (a skin ball at sigma_t 40 lost 9%), and dividing by the covered fraction instead
@@ -203,7 +203,7 @@ def gather_ball_reach[probes: Int = GATHER_BALL_PROBES](ref sd: SceneView, p: Po
         var ray = Ray(p, Vec3f(t1.x * c + t2.x * sn + n.x * z, t1.y * c + t2.y * sn + n.y * z, t1.z * c + t2.z * sn + n.z * z))
         mem[unsafe_offset=0].hit = Int8(0)
         traverse_dispatch(sd.bvh4, sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, reach, mem,
-                           sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances, motion=MotionTable.none())
+                           sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances, motion=motion)
         if mem[unsafe_offset=0].hit != Int8(0) and mem[unsafe_offset=0].primId.type != PrimKind.curve:
             reach = min(reach, mem[unsafe_offset=0].tHit)
     return reach
@@ -214,6 +214,7 @@ comptime GATHER_COVERAGE_PROBES = 8
 
 def gather_disk_coverage[probes: Int = GATHER_COVERAGE_PROBES](
     ref sd: SceneView, p: Point3f, n: Vec3f, r: Float32, salt: Int = 7,
+    *, motion: MotionTable,
 ) -> Float32:
     """The fraction of the gather disk -- radius r on the tangent plane of the
     geometric normal n at p -- over which a surface lies that
@@ -281,9 +282,9 @@ def gather_disk_coverage[probes: Int = GATHER_COVERAGE_PROBES](
         var ray = Ray(org, Vec3f(-n.x, -n.y, -n.z))
         mem[unsafe_offset=0].hit = Int8(0)
         traverse_dispatch(sd.bvh4, sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, Float32(2) * lift, mem,
-                           sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances, motion=MotionTable.none())
+                           sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances, motion=motion)
         if mem[unsafe_offset=0].hit != Int8(0) and mem[unsafe_offset=0].primId.type != PrimKind.sphere:
-            var ng = _geom_normal(mem[unsafe_offset=0], sd.meshes, sd.instances, motion=MotionTable.none())
+            var ng = _geom_normal(mem[unsafe_offset=0], sd.meshes, sd.instances, motion=motion)
             if abs(dot(ng, n)) > Float32(0.7):
                 hits += 1
     return Float32(hits) / Float32(probes)

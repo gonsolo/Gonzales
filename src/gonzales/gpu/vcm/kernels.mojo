@@ -22,7 +22,7 @@ from gonzales.core.sampling import FilmFilter, ThinLens
 from gonzales.core.rng import PCG32
 from gonzales.estimators.photon_grid import _HSIZE, _PHOTON_BUCKET_CAP
 from gonzales.core.spectrum import SpectralSample, pass_wavelengths, spectral_sample_to_rgb
-from gonzales.paths.vcm.vertex import _BDPT_MAX_VERTS, BDPTVertex
+from gonzales.paths.vcm.vertex import _BDPT_MAX_VERTS, BDPTVertex, vcm_path_time
 from gonzales.paths.vcm.nee import _visible_transmittance
 from gonzales.paths.vcm.grid import _bdpt_count_merge_vertex, _bdpt_insert_merge_vertex, _vcm_reset_cell, _vcm_sort_bucket, _VCM_FINE_LEVELS
 from gonzales.paths.vcm.connect import _bdpt_splat_filtered, _bdpt_connect_to_camera
@@ -101,7 +101,7 @@ def _bdpt_emit_light_paths_gpu(
     var scratch = inter_scratch.unsafe_offset(k)
     var pass_wl = pass_wavelengths(pass_idx)
     _bdpt_trace_light_path[True](sd, pcg, has_med, default_emit_med, scratch, lvc, k, lvc_path_len,
-                                 mis_vc_weight_factor, mis_vm_weight_factor, pass_wl)
+                                 mis_vc_weight_factor, mis_vm_weight_factor, pass_wl, vcm_path_time(sd.lens, pass_idx, k))
 
 @__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
 @__llvm_metadata(`nvvm.minctasm`=SIMDLength(MINCTA_VCM_SPLAT))
@@ -211,7 +211,7 @@ def _bdpt_camera_connect_gpu(
     var (contrib, contrib_merge, alb, visit_naive, visit_footprint, visit_thin) = _bdpt_trace_camera_and_connect[True](
         r2c, c2w, px, py, sd, pcg, has_med, scratch, lvc, pix, Int(lvc_path_len[unsafe_offset=pix]),
         merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm,
-        px_scale, mis_vc_weight_factor, mis_vm_weight_factor, n_light_paths_f, pass_wl, film_filter)
+        px_scale, mis_vc_weight_factor, mis_vm_weight_factor, n_light_paths_f, pass_wl, film_filter, vcm_path_time(sd.lens, pass_idx, pix))
     # Benchmark instrumentation only -- see
     # _bdpt_merge_from_cache's docstring paragraph.
     visit_accum[unsafe_offset=pix*3]   += Float32(visit_naive)
@@ -256,7 +256,8 @@ def _bdpt_light_path_init_gpu(
         return
     var pcg = PCG32(seed ^ UInt64(pass_idx * 1000003 + k), UInt64(7))
     var pass_wl = pass_wavelengths(pass_idx)
-    states[unsafe_offset=k] = _bdpt_light_path_init[True](sd, pcg, default_emit_med, k, lvc, lvc_path_len, mis_vc_weight_factor, pass_wl)
+    states[unsafe_offset=k] = _bdpt_light_path_init[True](sd, pcg, default_emit_med, k, lvc, lvc_path_len, mis_vc_weight_factor, pass_wl,
+                                                          vcm_path_time(sd.lens, pass_idx, k))
 
 @__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
 @__llvm_metadata(`nvvm.minctasm`=SIMDLength(1))    # NVIDIA keeps its old register budget; AMD ignores this
@@ -275,10 +276,11 @@ def _bdpt_light_path_intersect_gpu(
     if states[unsafe_offset=tid].active != Int8(1):
         return   # done or walking
     var ray = Ray(states[unsafe_offset=tid].ro, states[unsafe_offset=tid].rd)
+    var motion = sd.motion.at(states[unsafe_offset=tid].time)
     results[unsafe_offset=tid].hit = Int8(0)
     traverse_dispatch(sd.bvh4, sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, Float32(1e38), results.unsafe_offset(tid),
-                        sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances, motion=MotionTable.none())
-    test_spheres(sd.spheres, Int(sd.sphereCount), ray, results.unsafe_offset(tid), motion=MotionTable.none())
+                        sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances, motion=motion)
+    test_spheres(sd.spheres, Int(sd.sphereCount), ray, results.unsafe_offset(tid), motion=motion)
 
 @__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
 @__llvm_metadata(`nvvm.minctasm`=SIMDLength(MINCTA_VCM_LBOUNCE))
@@ -332,7 +334,7 @@ def _bdpt_light_path_bounce_gpu(
         if sss_walker_advance[VCM_WALK_STEPS](sd, walkers, walker_inter, k):
             var (ex, _r) = _vcm_sss_walk_resume[True, adjoint=True](sd, walkers, walker_inter, walk_resume, k, st.wl,
                                                                     mis_vc_weight_factor, pcg, st.flux, st.dvcm, st.dvc, st.dvm)
-            cont = _vcm_light_walk_exit(sd, ex, pcg, lvc, k, mis_vc_weight_factor, st)
+            cont = _vcm_light_walk_exit(sd, ex, pcg, lvc, k, mis_vc_weight_factor, st, motion=sd.motion.at(st.time))
             walking = False
     lvc_path_len[unsafe_offset=k] = Int32(st.n_verts)
     st.active = _vcm_wf_active(cont, walking, st.bounces, sd, live)
@@ -354,6 +356,8 @@ def _bdpt_camera_path_init_gpu(
     seed: UInt64,
     pass_idx_dp: Int64,
     lens_radius: Float32, focal_distance: Float32,
+    shutter_open: Float32, shutter_close: Float32, timed: Int32,
+    motion: MotionTable,
 ):
     """One thread per pixel: seed this thread's own PCG32 (same seed formula
     _bdpt_camera_connect_gpu uses), call _bdpt_camera_path_init, store the
@@ -370,7 +374,9 @@ def _bdpt_camera_path_init_gpu(
     var pcg = PCG32(seed ^ UInt64(pix * 6364136223846793005 + 1442695040888963407),
                      UInt64(pass_idx * 2654435761 + 1))
     var pass_wl = pass_wavelengths(pass_idx)
-    states[unsafe_offset=pix] = _bdpt_camera_path_init[True](r2c, c2w, px, py, pcg, px_scale, n_light_paths_f, pass_wl, film_filter, lens=ThinLens(lens_radius, focal_distance))
+    var lens = ThinLens(lens_radius, focal_distance, SIMD[DType.float32, 2](shutter_open, shutter_close), timed != Int32(0))
+    states[unsafe_offset=pix] = _bdpt_camera_path_init[True](r2c, c2w, px, py, pcg, px_scale, n_light_paths_f, pass_wl, film_filter,
+                                                             vcm_path_time(lens, pass_idx, pix), motion, lens=lens)
 
 @__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
 @__llvm_metadata(`nvvm.minctasm`=SIMDLength(1))    # NVIDIA keeps its old register budget; AMD ignores this
@@ -389,10 +395,11 @@ def _bdpt_camera_path_intersect_gpu(
     if states[unsafe_offset=tid].active != Int8(1):
         return   # done or walking
     var ray = Ray(states[unsafe_offset=tid].ro, states[unsafe_offset=tid].rd)
+    var motion = sd.motion.at(states[unsafe_offset=tid].time)
     results[unsafe_offset=tid].hit = Int8(0)
     traverse_dispatch(sd.bvh4, sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, Float32(1e38), results.unsafe_offset(tid),
-                        sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances, motion=MotionTable.none())
-    test_spheres(sd.spheres, Int(sd.sphereCount), ray, results.unsafe_offset(tid), motion=MotionTable.none())
+                        sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances, motion=motion)
+    test_spheres(sd.spheres, Int(sd.sphereCount), ray, results.unsafe_offset(tid), motion=motion)
 
 @__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
 @__llvm_metadata(`nvvm.minctasm`=SIMDLength(MINCTA_VCM_CBOUNCE))
@@ -467,7 +474,7 @@ def _bdpt_camera_path_bounce_gpu(
             cont = _vcm_camera_walk_exit[True](
                 sd, ex, sd.materials[unsafe_offset=Int(r.mat_idx)], r.inter, pcg, has_med, results.unsafe_offset(pix),
                 lvc, pix, Int(lvc_path_len[unsafe_offset=pix]), merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm,
-                mis_vc_weight_factor, mis_vm_weight_factor, st, visit_naive, visit_footprint, visit_thin)
+                mis_vc_weight_factor, mis_vm_weight_factor, st, visit_naive, visit_footprint, visit_thin, motion=sd.motion.at(st.time))
             walking = False
     st.active = _vcm_wf_active(cont, walking, st.bounces, sd, live)
     st.pcg_state = pcg.state
@@ -675,7 +682,7 @@ def resolve_shadow_connect_gpu(
         var dst = org + dir * dist
         var cst = cam_states[unsafe_offset=idx // _BDPT_MAX_VERTS]
         var wl_sp = cst.wl
-        var Tr = _visible_transmittance(org, dst, seg_med, sd, scratch.unsafe_offset(tid), wl_sp)
+        var Tr = _visible_transmittance(org, dst, seg_med, sd, scratch.unsafe_offset(tid), wl_sp, motion=sd.motion.at(cst.time))
         var p = shadow_pending[unsafe_offset=idx]
         shadow_pending[unsafe_offset=idx] = p * Tr
 

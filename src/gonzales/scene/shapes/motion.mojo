@@ -215,6 +215,17 @@ struct MotionTable(TrivialRegisterPassable, DevicePassable):
         return sph
 
     @always_inline
+    def camera_point(self, p: Vec3f, back: Bool = False) -> Vec3f:
+        """A point carried with the camera from its start to this table's time (back: the other way)."""
+        if self.camera < Int32(0):
+            return p
+        var m = self.records[unsafe_offset=Int(self.camera)].obj_to_world(self.dt())
+        if back:
+            m = affine_inverse(m)
+        return Vec3f(m[0] * p.x + m[4] * p.y + m[8] * p.z + m[12], m[1] * p.x + m[5] * p.y + m[9] * p.z + m[13],
+                     m[2] * p.x + m[6] * p.y + m[10] * p.z + m[14])
+
+    @always_inline
     def camera_ray(self, ray: Ray) -> Ray:
         """A ray of the start camera, carried along with the camera to this table's time."""
         if self.camera < Int32(0):

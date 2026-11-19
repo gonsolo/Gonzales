@@ -434,6 +434,7 @@ struct VcmGpu(Movable):
             cam_states, _f32(self.r2c), _f32(self.c2w), Int64(self.n_pix), Int64(self.fw), self.px_scale,
             Float32(self.n_light_paths), p.filt, p.base_seed, Int64(si),
             psc[unsafe_offset=0].camera_lens_radius, psc[unsafe_offset=0].camera_focal_distance,
+            p.gsd.lens.shutter[0], p.gsd.lens.shutter[1], Int32(1) if p.gsd.lens.timed else Int32(0), p.gsd.motion,
             grid_dim=grid_pix, block_dim=block_size)
         var shadow_rays = self.shadow_rays.unsafe_ptr().unsafe_bitcast[Float32]()
         var shadow_pending = self.shadow_pending.unsafe_ptr().unsafe_bitcast[SpectralSample]()

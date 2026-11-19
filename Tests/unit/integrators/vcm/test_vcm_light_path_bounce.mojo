@@ -174,12 +174,12 @@ def test_wavefront_split_matches_original_light_path_exactly() raises:
     var scratch_old = unsafe_alloc[Intersection](1)
     var lvc_old = unsafe_alloc[BDPTVertex](_BDPT_MAX_VERTS)
     var lvc_path_len_old = unsafe_alloc[Int32](1)
-    _bdpt_trace_light_path[False](sd, pcg_old, False, Int32(-1), scratch_old, lvc_old, 0, lvc_path_len_old, Float32(0), Float32(0), _TEST_PASS_WL)
+    _bdpt_trace_light_path[False](sd, pcg_old, False, Int32(-1), scratch_old, lvc_old, 0, lvc_path_len_old, Float32(0), Float32(0), _TEST_PASS_WL, Float32(0))
 
     var pcg_new = PCG32(UInt64(12345), UInt64(7))
     var lvc_new = unsafe_alloc[BDPTVertex](_BDPT_MAX_VERTS)
     var lvc_path_len_new = unsafe_alloc[Int32](1)
-    var state = _bdpt_light_path_init[False](sd, pcg_new, Int32(-1), 0, lvc_new, lvc_path_len_new, Float32(0), _TEST_PASS_WL)
+    var state = _bdpt_light_path_init[False](sd, pcg_new, Int32(-1), 0, lvc_new, lvc_path_len_new, Float32(0), _TEST_PASS_WL, Float32(0))
     lvc_path_len_new[unsafe_offset=0] = Int32(state.n_verts)
 
     var pcg_bounce = PCG32(UInt64(0), UInt64(0))

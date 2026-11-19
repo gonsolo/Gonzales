@@ -79,6 +79,7 @@ struct VCMLightPathState(TrivialRegisterPassable):
     var mis_null_dist: Float32
     var prev_sig_t: Float32   # sigma_t at the previous vertex, 0 on a surface: dVC's free-flight ratio (MediumView.ff_ratio)
     var mnee: VCMMneeLightTrack
+    var time: Float32   # its shutter time, shared with the camera path it connects to
 
 def _null_light_path_state() -> VCMLightPathState:
     var z = Float32(0)
@@ -86,7 +87,7 @@ def _null_light_path_state() -> VCMLightPathState:
         ro=Point3f(z, z, z), rd=Vec3f(z, z, z), flux=SpectralSample(z), dvcm=z, dvc=z, dvm=z, is_finite_origin=False,
         origin_sphere=Int32(-1), cur_med_idx=Int32(-1), n_verts=0, active=Int8(0), bounces=Int32(0), pcg_state=UInt64(0), pcg_inc=UInt64(0),
         wl=SampledWavelengths(z, z, z, z), current_dielectric_ior=Float32(1.0), previous_dielectric_ior=Float32(1.0),
-        n_delta=0, mis_null_dist=z, prev_sig_t=Float32(0), mnee=vcm_mnee_light_track_none(),
+        n_delta=0, mis_null_dist=z, prev_sig_t=Float32(0), mnee=vcm_mnee_light_track_none(), time=z,
     )
 
 def _bdpt_light_path_init[use_gpu: Bool](
@@ -98,8 +99,10 @@ def _bdpt_light_path_init[use_gpu: Bool](
     lvc_path_len: Pointer[Int32, MutUntrackedOrigin],
     mis_vc_weight_factor: Float32,
     pass_wl: SampledWavelengths,
+    time: Float32,
 ) -> VCMLightPathState:
     """A light subpath's emission: its origin vertex, first ray and MIS carries."""
+    var motion = sd.motion.at(time)
     var n_area = Int(sd.areaLightCount)
     var n_sphere = Int(sd.sphereLightCount)
     var n_distant = Int(sd.distantLightCount)
@@ -152,7 +155,7 @@ def _bdpt_light_path_init[use_gpu: Bool](
         # Light vertex (the emission point, s=1 strategy connects here directly).
         # beta = 1/p_A = area × n_lights (area sampling PDF correction only).
         var area_weight = al.total_area * inv_pick
-        var lv0_vert = _null_vertex()
+        var lv0_vert = _null_vertex(time)
         lv0_vert.pos = point3f(lp)
         lv0_vert.normal = vec3f(ln)
         lv0_vert.shading_normal = vec3f(ln)
@@ -190,8 +193,8 @@ def _bdpt_light_path_init[use_gpu: Bool](
     elif light_pick < n_area + n_sphere:
         # Sphere light: the shared emission sampler (a uniform point on the
         # emitter, a cosine direction -- the mesh-light model with area
-        var (si_l, sp_l, sn_l, sdir_l) = sample_sphere_light_emission(sd, light_pick - n_area, pcg)
-        var sph_l = sd.spheres[unsafe_offset=si_l]
+        var (si_l, sp_l, sn_l, sdir_l) = sample_sphere_light_emission(sd, light_pick - n_area, pcg, motion=motion)
+        var sph_l = motion.sphere(sd.spheres, si_l)
         var area_weight_s = Float32(4) * PI * sph_l.radius * sph_l.radius * inv_pick
         flux = spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, sph_l.emission.r, sph_l.emission.g, sph_l.emission.b, wavelengths) * (area_weight_s * PI)
         ro = point3f(sp_l + sn_l * (sph_l.radius * Float32(0.0001)))
@@ -270,7 +273,7 @@ def _bdpt_light_path_init[use_gpu: Bool](
         origin_sphere=origin_sphere, cur_med_idx=cur_med_idx, n_verts=n_verts, active=Int8(1), bounces=Int32(0),
         pcg_state=pcg.state, pcg_inc=pcg.inc, wl=wavelengths,
         current_dielectric_ior=Float32(1.0), previous_dielectric_ior=Float32(1.0),   # vacuum
-        n_delta=0, mis_null_dist=Float32(0), prev_sig_t=Float32(0), mnee=mnee_l,
+        n_delta=0, mis_null_dist=Float32(0), prev_sig_t=Float32(0), mnee=mnee_l, time=time,
     )
 
 
@@ -281,12 +284,13 @@ def _vcm_skin_arrival(
 ) -> Float32:
     """A photon arriving at skin, stored before the boundary chooses for camera walk exits to merge
     (Scenes/vcm_sss_exit_merge_derivation.py); returns the walk's entry merge share, 0 when no slot is left."""
-    var gn = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd(), motion=MotionTable.none())
+    var motion = sd.motion.at(st.time)
+    var gn = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd(), motion=motion)
     var cos_a = abs(dot(ray_dir, gn))
     if st.mnee.side > Float32(0) and st.mnee.n_glass > Int32(0):
         # Reached through glass only: the camera exit's MNEE samples this entry too.
         var d_m = _vcm_mnee_light_dvcm(sd, hit.to_simd(), gn, st.mnee.y, st.mnee.ny, st.mnee.side,
-                                       Int(st.mnee.n_glass), st.mnee.first_glass, st.cur_med_idx, st.wl, pcg)
+                                       Int(st.mnee.n_glass), st.mnee.first_glass, st.cur_med_idx, st.wl, pcg, motion=motion)
         if d_m > Float32(0):
             dvcm_in = d_m * cos_a   # the walk applies the arrival cosine
     if sd.vcmExitMerge == Int32(0):
@@ -296,7 +300,7 @@ def _vcm_skin_arrival(
     if st.n_verts >= _BDPT_MAX_VERTS:
         return Float32(0)
     var (a_vcm, a_vc, a_vm) = vcm_arrival_carries(dvcm_in, dvc_in, dvm_in, cos_a)
-    var a = _null_vertex()
+    var a = _null_vertex(motion.time)
     a.pos = hit
     a.normal = vec3f(face_toward(gn, -ray_dir))
     a.shading_normal = a.normal
@@ -331,6 +335,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool, defer_walk: Bool = False](
 ) -> Bool:
     """One bounce of a light subpath, shared by the per-path loop and the wavefront kernels; False ends the path.
     `defer_walk`: as _bdpt_camera_path_bounce's, _vcm_light_walk_exit ends the bounce."""
+        var motion = sd.motion.at(st.time)
         if st.n_verts >= _BDPT_MAX_VERTS:
             return False   # mirrors the original loop's top-of-iteration guard
         # The next vertex stored would be interior vertex n_verts (after an area
@@ -353,7 +358,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool, defer_walk: Bool = False](
         if st.origin_sphere >= Int32(0):
             # First hit of a sphere light's path: the origin's direct density
             # is the camera NEE's cone pdf seen from HERE, and its area
-            cone_hit = sphere_light_cone_pdf(sd.spheres[unsafe_offset=Int(st.origin_sphere)],
+            cone_hit = sphere_light_cone_pdf(motion.sphere(sd.spheres, Int(st.origin_sphere)),
                                                 st.ro.to_simd() + ray_dir * t_hit)
             sphere_at = st.origin_sphere
             st.dvcm *= cone_hit
@@ -377,7 +382,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool, defer_walk: Bool = False](
                 if d_seg > Float32(0):
                     st.dvcm *= ((ff.t_free + st.mis_null_dist) * (ff.t_free + st.mis_null_dist)) / (d_seg * d_seg)
                 elif sphere_at >= Int32(0):
-                    st.dvcm *= sphere_light_cone_pdf(sd.spheres[unsafe_offset=Int(sphere_at)], sp.to_simd()) / max(cone_hit, Float32(1e-30))
+                    st.dvcm *= sphere_light_cone_pdf(motion.sphere(sd.spheres, Int(sphere_at)), sp.to_simd()) / max(cone_hit, Float32(1e-30))
                 # Free-flight at this VOLUME arrival: ff_b = the collision
                 # density actually sampled = ff.pdf. No cos_fix -- a volume
                 # vertex has no surface normal to divide by.
@@ -385,7 +390,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool, defer_walk: Bool = False](
                 # dVC's ff_a/ff_b ratio is 1/sigma_t only when the PREVIOUS
                 # vertex was a surface (kind-changing edge); a volume->volume
                 st.dvc *= med.ff_ratio(st.prev_sig_t > Float32(0), st.prev_sig_t, ff.t_free, ff, st.wl)
-                var v = _null_vertex()
+                var v = _null_vertex(motion.time)
                 v.pos = sp
                 # `flux`, NOT flux*albedo -- see the matching camera-side
                 # comment in _bdpt_camera_path_bounce: a stored vertex's
@@ -454,20 +459,20 @@ def _bdpt_light_path_bounce[use_gpu: Bool, defer_walk: Bool = False](
             if not mat.has_lobe():
                 return False   # e.g. a measured table that failed to load
             var lh = _vcm_lobe_vertex[use_gpu](sd, inter, mat, mat_idx, hit, ray_dir, Float32(-1.0), st.flux, st.cur_med_idx,
-                                               st.wl, st.dvcm, st.dvc, st.dvm)
+                                               st.wl, st.dvcm, st.dvc, st.dvm, motion=motion)
             var v = lh.v
             var gn_geo = lh.gn_geo; var spawn_eps = lh.spawn_eps; var on_curve = lh.on_curve
             if st.mnee.side > Float32(0) and st.mnee.n_glass > Int32(0) and v.is_delta == Int32(0) \
                and LobeKind.is_diffuse(v.mat_kind):
                 # Reached through glass only: MNEE from here samples this path too (_vcm_mnee_light_dvcm).
                 var d_m = _vcm_mnee_light_dvcm(sd, hit.to_simd(), gn_geo, st.mnee.y, st.mnee.ny, st.mnee.side,
-                                               Int(st.mnee.n_glass), st.mnee.first_glass, st.cur_med_idx, st.wl, pcg)
+                                               Int(st.mnee.n_glass), st.mnee.first_glass, st.cur_med_idx, st.wl, pcg, motion=motion)
                 if d_m > Float32(0):
                     st.dvcm = d_m
             elif st.mnee.side > Float32(0) and st.mnee.n_glass > Int32(0) and v.is_delta == Int32(0) and _vcm_gsms_on(sd, v):
                 # Reached through a chain only: glossy SMS from here samples it too.
                 var d_g = _vcm_gsms_light_dvcm(sd, hit.to_simd(), gn_geo, st.mnee.y, st.mnee.ny, st.mnee.side,
-                                               Int(st.mnee.n_glass), -ray_dir, st.cur_med_idx, st.wl)
+                                               Int(st.mnee.n_glass), -ray_dir, st.cur_med_idx, st.wl, motion=motion)
                 if d_g > Float32(0):
                     st.dvcm = d_g
                     v.hair_curve_idx = VCM_GSMS_ARRIVAL
@@ -499,8 +504,8 @@ def _bdpt_light_path_bounce[use_gpu: Bool, defer_walk: Bool = False](
         elif mat.type == MatKind.dielectric or mat.type == MatKind.thin_dielectric:
             var ior_cur = st.current_dielectric_ior; var ior_prev = st.previous_dielectric_ior
             _ = _vcm_dielectric_cross[use_gpu, False](sd, inter, mat, hit, ray_dir, Float32(-1.0), has_med, pcg,
-                    st.ro, st.rd, st.current_dielectric_ior, st.previous_dielectric_ior, st.cur_med_idx, st.dvcm, st.dvc, st.dvm)
-            if sss_entered(mat, inter, ray_dir, st.rd, med_in, sd, hit.to_simd()):
+                    st.ro, st.rd, st.current_dielectric_ior, st.previous_dielectric_ior, st.cur_med_idx, st.dvcm, st.dvc, st.dvm, motion=motion)
+            if sss_entered(mat, inter, ray_dir, st.rd, med_in, sd, hit.to_simd(), motion=motion):
                 st.cur_med_idx = med_in
                 st.current_dielectric_ior = ior_cur; st.previous_dielectric_ior = ior_prev
                 walks = True
@@ -512,7 +517,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool, defer_walk: Bool = False](
 
         elif mat.passes_rays():
             if has_med:
-                st.cur_med_idx = medium_after(ray_dir, st.cur_med_idx, inter, mat, sd, hit.to_simd(), MotionTable.none())
+                st.cur_med_idx = medium_after(ray_dir, st.cur_med_idx, inter, mat, sd, hit.to_simd(), motion)
             st.ro = hit + st.rd*Float32(0.0002)
             if d_seg > Float32(0):
                 st.dvcm /= max(d_seg * d_seg, Float32(1e-20))
@@ -528,21 +533,22 @@ def _bdpt_light_path_bounce[use_gpu: Bool, defer_walk: Bool = False](
                 return False
             comptime if defer_walk:
                 _vcm_sss_walk_suspend(sd, inter, mat, mat_idx, hit, ray_dir, st.rd, st.wl, pcg, st.current_dielectric_ior,
-                                      dvcm_in, dvc_in, dvm_in, entry_eta, walkers, walk_resume, lp_idx)
+                                      dvcm_in, dvc_in, dvm_in, entry_eta, walkers, walk_resume, lp_idx, motion=motion)
                 return True
             var ex = _vcm_sss_walk[use_gpu, adjoint=True](sd, inter, mat, hit, ray_dir, st.rd, st.wl, mis_vc_weight_factor, pcg, st.flux,
-                                            st.dvcm, st.dvc, st.dvm, dvcm_in, dvc_in, dvm_in, st.current_dielectric_ior, entry_eta)
-            return _vcm_light_walk_exit(sd, ex, pcg, lvc, lp_idx, mis_vc_weight_factor, st)
+                                            st.dvcm, st.dvc, st.dvm, dvcm_in, dvc_in, dvm_in, st.current_dielectric_ior, entry_eta, motion=motion)
+            return _vcm_light_walk_exit(sd, ex, pcg, lvc, lp_idx, mis_vc_weight_factor, st, motion=motion)
 
         return True   # bounce processed normally, path continues
 
 
 def _vcm_light_walk_exit(ref sd: SceneView, ex: SssExit, mut pcg: PCG32, lvc: Pointer[BDPTVertex, MutUntrackedOrigin],
-                         lp_idx: Int, mis_vc_weight_factor: Float32, mut st: VCMLightPathState) -> Bool:
+                         lp_idx: Int, mis_vc_weight_factor: Float32, mut st: VCMLightPathState,
+                         *, motion: MotionTable,) -> Bool:
     """The light bounce after a walk: its exit vertex stored and the scatter out; False ends the path."""
     if not ex.ok or st.n_verts >= _BDPT_MAX_VERTS:   # rough skin's entry may have taken the last slot
         return False
-    var v = _vcm_sss_exit_vertex(ex, ex.eta, st.flux, st.cur_med_idx, st.wl, st.dvcm, st.dvc, st.dvm)
+    var v = _vcm_sss_exit_vertex(ex, ex.eta, st.flux, st.cur_med_idx, st.wl, st.dvcm, st.dvc, st.dvm, motion=motion)
     st.n_verts += 1
     v.n_delta = Int32(st.n_delta)
     _bdpt_store_lvc_vertex(v, lvc, lp_idx, st.n_verts - 1)
@@ -563,14 +569,16 @@ def _bdpt_trace_light_path[use_gpu: Bool](
     mis_vc_weight_factor: Float32,
     mis_vm_weight_factor: Float32,
     pass_wl: SampledWavelengths,
+    time: Float32,
 ):
     """Emit a photon from a random light and trace a light subpath, storing
     every non-delta vertex (including the light-source point itself, the"""
+    var motion = sd.motion.at(time)
 
     # SHARED WITH THE WAVEFRONT GPU DRIVER. This body used to be a
     # byte-for-byte copy of _bdpt_light_path_init + _bdpt_light_path_bounce
     var st = _bdpt_light_path_init[use_gpu](
-        sd, pcg, default_emit_med, lp_idx, lvc, lvc_path_len, mis_vc_weight_factor, pass_wl)
+        sd, pcg, default_emit_med, lp_idx, lvc, lvc_path_len, mis_vc_weight_factor, pass_wl, time)
     if st.active == Int8(0):
         return
 
@@ -581,8 +589,8 @@ def _bdpt_trace_light_path[use_gpu: Bool](
         var ray = Ray(st.ro, st.rd)
         scratch[unsafe_offset=0].hit = Int8(0)
         traverse_dispatch(sd.bvh4, sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, Float32(1e38), scratch,
-                           sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances, motion=MotionTable.none())
-        test_spheres(sd.spheres, Int(sd.sphereCount), ray, scratch, motion=MotionTable.none())
+                           sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances, motion=motion)
+        test_spheres(sd.spheres, Int(sd.sphereCount), ray, scratch, motion=motion)
         # A miss is handled inside the step (returns False).
         if not _bdpt_light_path_bounce[use_gpu](
             sd, pcg, has_med, scratch[unsafe_offset=0], lvc, lp_idx,
