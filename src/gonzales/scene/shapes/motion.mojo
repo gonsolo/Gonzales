@@ -196,6 +196,10 @@ struct MotionTable(TrivialRegisterPassable, DevicePassable):
         m.time = time
         return m
 
+    def moves_geometry(self) -> Bool:
+        """Anything besides the camera moves: photons and light paths then depend on the time."""
+        return Int(self.count) > (1 if self.camera >= Int32(0) else 0)
+
     @always_inline
     def dt(self) -> Float32:
         if self.t1 > self.t0:

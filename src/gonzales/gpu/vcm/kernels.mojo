@@ -22,7 +22,7 @@ from gonzales.core.sampling import FilmFilter, ThinLens
 from gonzales.core.rng import PCG32
 from gonzales.estimators.photon_grid import _HSIZE, _PHOTON_BUCKET_CAP
 from gonzales.core.spectrum import SpectralSample, pass_wavelengths, spectral_sample_to_rgb
-from gonzales.paths.vcm.vertex import _BDPT_MAX_VERTS, BDPTVertex, vcm_path_time
+from gonzales.paths.vcm.vertex import _BDPT_MAX_VERTS, BDPTVertex
 from gonzales.paths.vcm.nee import _visible_transmittance
 from gonzales.paths.vcm.grid import _bdpt_count_merge_vertex, _bdpt_insert_merge_vertex, _vcm_reset_cell, _vcm_sort_bucket, _VCM_FINE_LEVELS
 from gonzales.paths.vcm.connect import _bdpt_splat_filtered, _bdpt_connect_to_camera
@@ -101,7 +101,7 @@ def _bdpt_emit_light_paths_gpu(
     var scratch = inter_scratch.unsafe_offset(k)
     var pass_wl = pass_wavelengths(pass_idx)
     _bdpt_trace_light_path[True](sd, pcg, has_med, default_emit_med, scratch, lvc, k, lvc_path_len,
-                                 mis_vc_weight_factor, mis_vm_weight_factor, pass_wl, vcm_path_time(sd.lens, pass_idx, k))
+                                 mis_vc_weight_factor, mis_vm_weight_factor, pass_wl, sd.lens.pass_time(pass_idx))
 
 @__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
 @__llvm_metadata(`nvvm.minctasm`=SIMDLength(MINCTA_VCM_SPLAT))
@@ -211,7 +211,7 @@ def _bdpt_camera_connect_gpu(
     var (contrib, contrib_merge, alb, visit_naive, visit_footprint, visit_thin) = _bdpt_trace_camera_and_connect[True](
         r2c, c2w, px, py, sd, pcg, has_med, scratch, lvc, pix, Int(lvc_path_len[unsafe_offset=pix]),
         merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm,
-        px_scale, mis_vc_weight_factor, mis_vm_weight_factor, n_light_paths_f, pass_wl, film_filter, vcm_path_time(sd.lens, pass_idx, pix))
+        px_scale, mis_vc_weight_factor, mis_vm_weight_factor, n_light_paths_f, pass_wl, film_filter, sd.lens.pass_time(pass_idx))
     # Benchmark instrumentation only -- see
     # _bdpt_merge_from_cache's docstring paragraph.
     visit_accum[unsafe_offset=pix*3]   += Float32(visit_naive)
@@ -257,7 +257,7 @@ def _bdpt_light_path_init_gpu(
     var pcg = PCG32(seed ^ UInt64(pass_idx * 1000003 + k), UInt64(7))
     var pass_wl = pass_wavelengths(pass_idx)
     states[unsafe_offset=k] = _bdpt_light_path_init[True](sd, pcg, default_emit_med, k, lvc, lvc_path_len, mis_vc_weight_factor, pass_wl,
-                                                          vcm_path_time(sd.lens, pass_idx, k))
+                                                          sd.lens.pass_time(pass_idx))
 
 @__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
 @__llvm_metadata(`nvvm.minctasm`=SIMDLength(1))    # NVIDIA keeps its old register budget; AMD ignores this
@@ -376,7 +376,7 @@ def _bdpt_camera_path_init_gpu(
     var pass_wl = pass_wavelengths(pass_idx)
     var lens = ThinLens(lens_radius, focal_distance, SIMD[DType.float32, 2](shutter_open, shutter_close), timed != Int32(0))
     states[unsafe_offset=pix] = _bdpt_camera_path_init[True](r2c, c2w, px, py, pcg, px_scale, n_light_paths_f, pass_wl, film_filter,
-                                                             vcm_path_time(lens, pass_idx, pix), motion, lens=lens)
+                                                             lens.pass_time(pass_idx), motion, lens=lens)
 
 @__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
 @__llvm_metadata(`nvvm.minctasm`=SIMDLength(1))    # NVIDIA keeps its old register budget; AMD ignores this

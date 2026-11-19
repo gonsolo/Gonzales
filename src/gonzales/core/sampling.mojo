@@ -1,5 +1,5 @@
 from std.math import sqrt, log, exp, cos, sin
-from std.bit import count_trailing_zeros
+from std.bit import count_trailing_zeros, bit_reverse
 from gonzales.core.rng import mix_bits_u64
 from gonzales.core.geometry import Vec3f, Point3f, dot, cross, Frame, PI, TWO_PI, _is_real_ptr, fast_sincos, Ray
 from gonzales.core.spectrum import SampledWavelengths, sample_wavelengths
@@ -574,6 +574,13 @@ struct ThinLens(TrivialRegisterPassable):
     def mid_time(self) -> Float32:
         """The middle of the shutter: one time for the single-ray passes."""
         return (self.shutter[0] + self.shutter[1]) * Float32(0.5) if self.timed else Float32(0)
+
+    def sample_time(self, u: Float32) -> Float32:
+        return self.shutter[0] + (self.shutter[1] - self.shutter[0]) * u if self.timed else Float32(0)
+
+    def pass_time(self, pass_idx: Int) -> Float32:
+        """pbrt's SPPM: one time per pass for all its camera and light paths, the base-2 radical inverse."""
+        return self.sample_time(Float32(bit_reverse(UInt32(pass_idx))) * Float32(2.3283064365386963e-10))
 
     @staticmethod
     def pinhole() -> ThinLens:

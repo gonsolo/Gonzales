@@ -669,6 +669,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
     maxdepth: Int,
     film_filter: FilmFilter,
     vp_sample: Int,
+    time: Float32,   # the shutter time: the pass's in retrace mode, where its photons share it
     wl_pass: Int = -1,   # >=0: this pass's shared hero wavelengths (per-pass retrace)
     dipole: Bool = False,   # Jensen-Buhler: skin gets a dipole visible point at the entry instead of a walk
 ) -> SPPMPixel:
@@ -742,8 +743,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
     if sd.lens.radius > Float32(0):
         ul0 = pcg.next_float(); ul1 = pcg.next_float()
     var (rd0, ro0, _) = camera_ray_from_film_xy(fX, fY, r2c, c2w, sd.lens, ul0, ul1)
-    if sd.lens.timed:
-        vp.time = sd.lens.shutter[0] + (sd.lens.shutter[1] - sd.lens.shutter[0]) * pcg.next_float()
+    vp.time = time
     var motion = sd.motion.at(vp.time)
     var cam_ray = motion.camera_ray(Ray(ro0, rd0))
     var rd = cam_ray.direction
@@ -1198,6 +1198,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
     spectral_cie_z: Pointer[Float32, MutUntrackedOrigin],
     spectral_d65: Pointer[Float32, MutUntrackedOrigin],
     pass_wl:          SampledWavelengths,
+    time:             Float32,   # the pass's shutter time, shared with its visible points
 ):
     """Emit one photon path from a random light (area, distant, or
     infinite), trace through glass/media, storing at diffuse/volume hits via
@@ -1229,9 +1230,6 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
     bvh.mojo's _scene_bounding_sphere/_sample_disk_perpendicular) just seeds
     where this photon's path starts. Direct illumination from these lights
     is provided separately by _sppm_nee_one's own distant/infinite sampling."""
-    var time = Float32(0)
-    if sd.lens.timed:
-        time = sd.lens.shutter[0] + (sd.lens.shutter[1] - sd.lens.shutter[0]) * pcg.next_float()
     var motion = sd.motion.at(time)
     var has_media = Int(sd.mediumCount) > 0
     var n_area = Int(sd.areaLightCount)

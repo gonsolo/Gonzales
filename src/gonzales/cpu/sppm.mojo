@@ -54,7 +54,8 @@ def _sppm_camera_pass(
         var px = pix % Int(fw)
         var py = pix // Int(fw)
         var pcg = PCG32(seed ^ UInt64(combined * 6364136223846793005 + 1), UInt64(1))
-        vps[unsafe_offset=combined] = _sppm_trace_visible_point[False](sd, pcg, r2c, c2w, px, py, Int32(pix), init_r2, scratch.unsafe_offset(combined), maxdepth, film_filter, combined % vp_samples, dipole=jb)
+        var vp_time = sd.lens.sample_time(pcg.next_float()) if sd.lens.timed else Float32(0)   # only the camera can move here
+        vps[unsafe_offset=combined] = _sppm_trace_visible_point[False](sd, pcg, r2c, c2w, px, py, Int32(pix), init_r2, scratch.unsafe_offset(combined), maxdepth, film_filter, combined % vp_samples, vp_time, dipole=jb)
 
     parallelize(trace_one, n_pix * vp_samples)
 
@@ -65,6 +66,35 @@ def _sppm_camera_pass(
 
 
 @always_inline
+def _sppm_retrace_pass(
+    vps: Pointer[SPPMPixel, MutUntrackedOrigin], n_pix: Int, fw: Int32,
+    r2c: Pointer[Float32, MutUntrackedOrigin], c2w: Pointer[Float32, MutUntrackedOrigin],
+    ref sd: SceneView, init_r2: Float32, seed: UInt64, maxdepth: Int, film_filter: FilmFilter, pass_idx: Int,
+):
+    """pbrt's SPPM, as sppm_retrace_vp_gpu: a fresh visible point per pixel; the pixel keeps r2, N_acc, tau, gsum."""
+    var scratch = unsafe_alloc[Intersection](max(n_pix, 1))
+
+    def trace_one(pix: Int) {imm}:
+        var pcg = PCG32(seed ^ UInt64(pix * 6364136223846793005 + 1), UInt64(1))
+        var vp_time = Float32(0)
+        if sd.motion.moves_geometry():
+            vp_time = sd.lens.pass_time(pass_idx)
+        elif sd.lens.timed:
+            vp_time = sd.lens.sample_time(pcg.next_float())
+        var nv = _sppm_trace_visible_point[False](sd, pcg, r2c, c2w, pix % Int(fw), pix // Int(fw), Int32(pix), init_r2,
+                                                  scratch.unsafe_offset(pix), maxdepth, film_filter, pass_idx,
+                                                  vp_time, pass_idx)
+        if pass_idx > 0:
+            var old = vps[unsafe_offset=pix]
+            nv.r2 = old.r2
+            nv.N_acc = old.N_acc
+            nv.tau = old.tau
+            nv.gsum = old.gsum
+        vps[unsafe_offset=pix] = nv
+    parallelize(trace_one, n_pix)
+    scratch.unsafe_free()
+
+
 def _sppm_photon_pass(
     photons:      Pointer[SPPMPhoton, MutUntrackedOrigin],
     n_emit:       Int,
@@ -103,7 +133,8 @@ def _sppm_photon_pass(
         var pcg = PCG32(seed ^ UInt64(pass_idx * 1000003 + k), UInt64(7))
         _sppm_trace_photon[True, False](sd, pcg, scratch.unsafe_offset(k), n_emit, photons, max_photons, counter, default_emit_med, maxdepth,
             sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y,
-            sd.spectral.cie_z, sd.spectral.d65, pass_wavelengths(pass_idx if shared_wl else pass_idx * n_emit + k))
+            sd.spectral.cie_z, sd.spectral.d65, pass_wavelengths(pass_idx if shared_wl else pass_idx * n_emit + k),
+            sd.lens.pass_time(pass_idx))
 
     parallelize(emit_one, n_emit)
 
@@ -273,7 +304,9 @@ def _sppm_render_core(
     # tradeoff. If a future regression looks like "over-brightening",
     # re-derive against an equilibrium or analytic scene before
     # reintroducing a cap -- don't just trust the old claim.
-    var n_vps    = n_pix * _VP_SAMPLES
+    var retrace = sd.motion.moves_geometry()   # one visible point per pixel per pass, at the time its photons share
+    var vp_samples = 1 if retrace else _VP_SAMPLES
+    var n_vps    = n_pix * vp_samples
     var vps     = unsafe_alloc[SPPMPixel](n_vps)
     var max_bounces_per_photon = min(Int(psc[unsafe_offset=0].max_depth), _photon_depth_cap(sd))
     # A subsurface interior blows this budget wide open: its random-walk steps
@@ -303,21 +336,21 @@ def _sppm_render_core(
     # _sppm_camera_pass's docstring for why a per-pass re-trace (the old
     # design) breaks SPPM's convergence guarantee.
     var cam_seed = psc[unsafe_offset=0].rng_seed ^ UInt64(0x9E3779B97F4A7C15 + 7)
-    _sppm_camera_pass(
-        vps, n_pix, _VP_SAMPLES, psc[unsafe_offset=0].film_w,
-        psc[unsafe_offset=0].raster_to_camera, psc[unsafe_offset=0].camera_to_world,
-        sd, init_r2, cam_seed, Int(psc[unsafe_offset=0].max_depth),
-        film_filter_of(psc[unsafe_offset=0].filter_type, psc[unsafe_offset=0].filter_sigma,
-                       psc[unsafe_offset=0].filter_support_x, psc[unsafe_offset=0].filter_support_y),
-        jb,
-    )
+    var film_filter = film_filter_of(psc[unsafe_offset=0].filter_type, psc[unsafe_offset=0].filter_sigma,
+                                     psc[unsafe_offset=0].filter_support_x, psc[unsafe_offset=0].filter_support_y)
+    if not retrace:
+        _sppm_camera_pass(
+            vps, n_pix, _VP_SAMPLES, psc[unsafe_offset=0].film_w,
+            psc[unsafe_offset=0].raster_to_camera, psc[unsafe_offset=0].camera_to_world,
+            sd, init_r2, cam_seed, Int(psc[unsafe_offset=0].max_depth), film_filter, jb,
+        )
     # Jensen-Buhler: irradiance points on the translucent surfaces; photons then share each pass's wavelengths.
     var cache = IrradianceCache.build(sd, psc[unsafe_offset=0].prim_ids_cpu, Int(psc[unsafe_offset=0].prim_count_cpu) if jb else 0,
                                       jb_spacing, jb_near, psc[unsafe_offset=0].rng_seed ^ UInt64(0x51ED))
     if jb:
         print("Jensen-Buhler: " + String(cache.n) + " irradiance points, spacing " + String(cache.spacing)
               + ", " + String(cache.n_nodes) + " nodes")
-    if verbose:
+    if verbose and not retrace:
         var n_valid = 0
         for i in range(n_vps):
             if vps[unsafe_offset=i].valid != Int32(0): n_valid += 1
@@ -327,6 +360,11 @@ def _sppm_render_core(
     var prog = Progress(n_passes, "passes", quiet=verbose)
     for pass_idx in range(n_passes):
         var pass_seed = psc[unsafe_offset=0].rng_seed ^ UInt64(pass_idx * 2654435761 + 1)
+        if retrace:
+            _sppm_retrace_pass(vps, n_pix, psc[unsafe_offset=0].film_w, psc[unsafe_offset=0].raster_to_camera,
+                               psc[unsafe_offset=0].camera_to_world, sd, init_r2,
+                               cam_seed ^ UInt64(pass_idx * 0x94D049BB133111EB + 5),
+                               Int(psc[unsafe_offset=0].max_depth), film_filter, pass_idx)
         var n_stored = _sppm_photon_pass(photons, n_photons_per_pass, max_photons, sd, pass_seed, pass_idx, Int(psc[unsafe_offset=0].max_depth), jb)
         if n_stored > 0 or jb:
             _build_grid(photons, n_stored, heads, inv_cell, pass_idx)
@@ -360,7 +398,7 @@ def _sppm_render_core(
     var albedo_pixels = unsafe_alloc[Float32](n_pix * 3)
 
     def finalize_one(i: Int) {imm}:
-        var (acc_g, acc_c) = _sppm_finalize_one_pixel(vps, i, _VP_SAMPLES, Int32(n_passes), iso_scale,
+        var (acc_g, acc_c) = _sppm_finalize_one_pixel(vps, i, vp_samples, Int32(n_passes), iso_scale,
                                          sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x,
                                          sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65)
         out_global[unsafe_offset=i * 3 + 0] = acc_g.r
@@ -369,7 +407,7 @@ def _sppm_render_core(
         out_caustic[unsafe_offset=i * 3 + 0] = acc_c.r
         out_caustic[unsafe_offset=i * 3 + 1] = acc_c.g
         out_caustic[unsafe_offset=i * 3 + 2] = acc_c.b
-        var alb = _sppm_finalize_albedo_one_pixel(vps, i, _VP_SAMPLES)
+        var alb = _sppm_finalize_albedo_one_pixel(vps, i, vp_samples)
         albedo_pixels[unsafe_offset=i * 3 + 0] = alb.r
         albedo_pixels[unsafe_offset=i * 3 + 1] = alb.g
         albedo_pixels[unsafe_offset=i * 3 + 2] = alb.b

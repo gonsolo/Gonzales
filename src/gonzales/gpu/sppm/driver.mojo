@@ -119,8 +119,8 @@ def sppm_render_gpu(
                     has_real_medium = True
             # Scenes without participating media or curves retrace one visible point per pixel every pass (pbrt's
             # SPPM): camera samples = passes, and the gather touches 1 VP per pixel instead of 32. A skin's walk
-            # medium ends its camera path at a surface VP, so it does not count.
-            var retrace = not has_real_medium and Int(sd.curveCount) == 0
+            # medium ends its camera path at a surface VP, so it does not count. Moving geometry retraces: photons need the VP's time.
+            var retrace = (not has_real_medium and Int(sd.curveCount) == 0) or sd.motion.moves_geometry()
             var vp_samples = 1 if retrace else _vp_samples_for(n_pix, True)
             var n_vps = n_pix * vp_samples
             print("SPPM (GPU): " + ("one retraced visible point per pixel per pass" if retrace else String(vp_samples) + " visible points per pixel"))

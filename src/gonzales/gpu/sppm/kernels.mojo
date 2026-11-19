@@ -51,7 +51,8 @@ def sppm_gen_vp_gpu(
     var px = pix % Int(fw)
     var py = pix // Int(fw)
     var pcg = PCG32(seed ^ UInt64(combined * 6364136223846793005 + 1), UInt64(1))
-    vps[unsafe_offset=combined] = _sppm_trace_visible_point[True](sd, pcg, r2c, c2w, px, py, Int32(pix), init_r2, inter_scratch.unsafe_offset(combined), Int(max_depth_dp), film_filter, combined % vp_samples, dipole=dipole_dp != Int32(0))
+    var vp_time = sd.lens.sample_time(pcg.next_float()) if sd.lens.timed else Float32(0)   # only the camera can move here
+    vps[unsafe_offset=combined] = _sppm_trace_visible_point[True](sd, pcg, r2c, c2w, px, py, Int32(pix), init_r2, inter_scratch.unsafe_offset(combined), Int(max_depth_dp), film_filter, combined % vp_samples, vp_time, dipole=dipole_dp != Int32(0))
 
 
 @__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
@@ -96,7 +97,8 @@ def sppm_emit_photons_gpu(
     var pcg = PCG32(seed ^ UInt64(pass_idx * 1000003 + k), UInt64(7))
     _sppm_trace_photon[True, True](sd, pcg, inter_scratch.unsafe_offset(k), n_emit, photons, max_photons, stored_counter, default_emit_med, Int(max_depth_dp),
         spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y,
-        spectral_cie_z, spectral_d65, pass_wavelengths(pass_idx if shared_wl_dp != Int32(0) else pass_idx * Int(n_emit) + k))
+        spectral_cie_z, spectral_d65, pass_wavelengths(pass_idx if shared_wl_dp != Int32(0) else pass_idx * Int(n_emit) + k),
+        sd.lens.pass_time(pass_idx))
 
 
 @__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
@@ -225,7 +227,12 @@ def sppm_retrace_vp_gpu(
     var px = pix % Int(fw)
     var py = pix // Int(fw)
     var pcg = PCG32(seed ^ UInt64(pix * 6364136223846793005 + 1), UInt64(1))
-    var nv = _sppm_trace_visible_point[True](sd, pcg, r2c, c2w, px, py, Int32(pix), init_r2, inter_scratch.unsafe_offset(pix), Int(max_depth_dp), film_filter, pass_idx, pass_idx, dipole=dipole_dp != Int32(0))
+    var vp_time = Float32(0)
+    if sd.motion.moves_geometry():
+        vp_time = sd.lens.pass_time(pass_idx)
+    elif sd.lens.timed:
+        vp_time = sd.lens.sample_time(pcg.next_float())
+    var nv = _sppm_trace_visible_point[True](sd, pcg, r2c, c2w, px, py, Int32(pix), init_r2, inter_scratch.unsafe_offset(pix), Int(max_depth_dp), film_filter, pass_idx, vp_time, pass_idx, dipole=dipole_dp != Int32(0))
     if pass_idx > 0:
         var old = vps[unsafe_offset=pix]
         nv.r2 = old.r2
