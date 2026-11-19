@@ -32,7 +32,7 @@ def handle_light_source(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
     var rgb = params.get_rgb_or_blackbody("L", RGB(Float32(1)))
     rgb = params.get_rgb_or_blackbody("I", rgb)
     var scale = params.get_float("scale", Float32(1.0))
-    var xyz = params.get_rgb("from", RGB(Float32(0), Float32(0), Float32(1000)))  # default: from above
+    var xyz = params.get_rgb("from", RGB(Float32(0), Float32(0), Float32(0)))  # pbrt: a point light sits at its origin
     var filename = params.get_string("filename", "")
 
     if _psc_streq(ltype, "distant"):
