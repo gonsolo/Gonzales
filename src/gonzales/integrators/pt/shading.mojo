@@ -12,6 +12,7 @@ from gonzales.scene.appearance.materials import GpuTexture, NormalSlopeMap
 from gonzales.scene.shapes.primitives import Intersection, PrimId, TriangleMesh, Sphere, Instance
 from gonzales.core.geometry import Ray
 from gonzales.scene.shapes.primitives import mesh_pos
+from gonzales.scene.shapes.motion import MotionTable
 from gonzales.scene.appearance.lights import AreaLight, DistantLight, PointLight, InfiniteLight, LightSampler, il_rgb, light_sampler_pdf_at
 from gonzales.scene.appearance.media import Medium, MediumInterface, Grid, NvdbGrid
 from gonzales.scene.shapes.curves import Curve
@@ -645,6 +646,7 @@ def cpu_shade_context(
     filter_glossy: Float32 = Float32(0),
     clamp: SIMD[DType.float32, 2] = SIMD[DType.float32, 2](0),
     cycles: SIMD[DType.int32, 4] = SIMD[DType.int32, 4](0),
+    motion: MotionTable = MotionTable.none(),
 ) -> ShadeContext:
     """The per-render-invariant ShadeContext of the CPU wavefront; build once, set path_idx per path."""
     return ShadeContext(
@@ -665,7 +667,7 @@ def cpu_shade_context(
             distant_lights=distantLights, distant_count=distantLightCount,
             point_lights=pointLights, point_count=pointLightCount,
             infinite_lights=infiniteLights, infinite_count=infiniteLightCount,
-            spheres=spheres, sphere_count=sphereCount, light_sampler=light_sampler), filter_glossy=filter_glossy, clamp=clamp, cycles=cycles, xe=xe_scene_none())
+            spheres=spheres, sphere_count=sphereCount, light_sampler=light_sampler), filter_glossy=filter_glossy, clamp=clamp, cycles=cycles, xe=xe_scene_none(), motion=motion)
 
 
 @always_inline
@@ -735,4 +737,5 @@ def shade_core_cpu_nee_ctx(
     if path_ptr[].active == 0:
         return
     ctx.path_idx = tid
+    ctx.motion = ctx.motion.at(path_ptr[].time)
     shade_nee_core[False, False](path_ptr, intersections[unsafe_offset=tid], ctx, guide_write, restir_io, pixel_idx, sms_io)

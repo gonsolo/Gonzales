@@ -249,7 +249,8 @@ def render_tile[Osp: Origin[mut=True], Oc2w: Origin[mut=True]](
         gi_pending=gi_pending_buf, gi_io=gi_io,
         nmaps=scene.normalSlopeMaps,
         textures=scene.gpuTextures, n_textures=Int(scene.gpuTextureCount),
-        has_glass=scene.hasGlass != Int32(0), bvh4=scene.bvh4, filter_glossy=scene.filterGlossy, clamp=scene.clamp, cycles=scene.cycles)
+        has_glass=scene.hasGlass != Int32(0), bvh4=scene.bvh4, filter_glossy=scene.filterGlossy, clamp=scene.clamp, cycles=scene.cycles,
+        motion=scene.motion)
     shade_ctx.n_mediums = Int(scene.mediumCount)
     shade_ctx.mediums = scene.mediums
     shade_ctx.medium_ifaces = scene.mediumInterfaces
@@ -295,7 +296,8 @@ def render_tile[Osp: Origin[mut=True], Oc2w: Origin[mut=True]](
                 continue
             traverse_dispatch(scene.bvh4, scene.bvh2Nodes, scene.primIds, scene.meshes, scene.curves,
                                paths[unsafe_offset=i].ray, Float32(1.0e38), intersections.unsafe_offset(i),
-                               scene.blasNodesArr, scene.blasPrimIdsArr, scene.instances)
+                               scene.blasNodesArr, scene.blasPrimIdsArr, scene.instances,
+                               motion=scene.motion.at(paths[unsafe_offset=i].time))
             if scene.sphereCount > 0:
                 test_spheres(scene.spheres, Int(scene.sphereCount), paths[unsafe_offset=i].ray, intersections.unsafe_offset(i))
             # Same per-bounce cone growth the GPU does in accumulate_cone_gpu,

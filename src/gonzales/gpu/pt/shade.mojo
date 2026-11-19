@@ -60,6 +60,7 @@ def shade_nee_preamble_gpu(
     var inter = intersections[unsafe_offset=tid]
     # Do NOT early-exit on miss — shade_nee_core adds env-light contribution there.
     var ctx_no_shadow = _shade_context(sd, sobol_matrices, tid, suppress_tasks=suppress_tasks)
+    ctx_no_shadow.motion = ctx_no_shadow.motion.at(path_ptr[].time)
     shade_nee_core[True, False](path_ptr, inter, ctx_no_shadow)
 
 
@@ -88,6 +89,7 @@ def resolve_suppress_gpu(
     var path_ptr = paths.unsafe_offset(tid)
     var inter = intersections[unsafe_offset=tid]
     var ctx = _shade_context(sd, sobol_matrices, tid)
+    ctx.motion = ctx.motion.at(path_ptr[].time)
     var hp = Vec3f(path_ptr[].ray.origin.x, path_ptr[].ray.origin.y, path_ptr[].ray.origin.z) \
              + Vec3f(path_ptr[].ray.direction.x, path_ptr[].ray.direction.y, path_ptr[].ray.direction.z) * inter.tHit
     var w = _mnee_bsdf_weight(ctx, path_ptr, inter, hp) if kind == Int32(1) else _glossy_sms_bsdf_weight(ctx, path_ptr, inter, hp)
@@ -216,6 +218,7 @@ def shade_diffuse_transmit_gpu(
     path_ptr[].pending_mat = Int8(0)
     var inter = intersections[unsafe_offset=tid]
     var ctx = _shade_context(sd, sobol_matrices, path_idx=tid, shadow_tasks=shadow_tasks)
+    ctx.motion = ctx.motion.at(path_ptr[].time)
     shade_diffuse_transmission[True, True](path_ptr, inter, ctx)
 
 
@@ -302,6 +305,7 @@ def shade_conductor_gpu(
     var mat = sd.materials[unsafe_offset=Int(inter.primId.materialIndex)]
     mat = mat.glossy_filtered(path_ptr[].min_ray_pdf, sd.filterGlossy)
     var ctx = _shade_context(sd, sobol_matrices, path_idx=tid, shadow_tasks=shadow_tasks, gsms_queue=gsms_queue)
+    ctx.motion = ctx.motion.at(path_ptr[].time)
     shade_conductor[True, True](path_ptr, inter, ctx, mat)
 
 
@@ -411,6 +415,7 @@ def shade_measured_gpu(
     var inter = intersections[unsafe_offset=tid]
     var mat = sd.materials[unsafe_offset=Int(inter.primId.materialIndex)]
     var ctx = _shade_context(sd, sobol_matrices, path_idx=tid, shadow_tasks=shadow_tasks)
+    ctx.motion = ctx.motion.at(path_ptr[].time)
     shade_measured[True, True](path_ptr, inter, ctx, mat)
 
 
@@ -442,6 +447,7 @@ def shade_dielectric_gpu(
     # tex_filenames is CPU-only (GPU samples the uploaded texture table), so
     # the dangling default is correct on this path.
     var ctx = _shade_context(sd, sobol_matrices, path_idx=tid, shadow_tasks=shadow_tasks)
+    ctx.motion = ctx.motion.at(path_ptr[].time)
     shade_dielectric[True, True](path_ptr, inter, ctx, mat)
 
 
@@ -492,6 +498,7 @@ def shade_coated_conductor_gpu(
     var mat = sd.materials[unsafe_offset=Int(inter.primId.materialIndex)]
     mat = mat.glossy_filtered(path_ptr[].min_ray_pdf, sd.filterGlossy)
     var ctx = _shade_context(sd, sobol_matrices, path_idx=tid, shadow_tasks=shadow_tasks)
+    ctx.motion = ctx.motion.at(path_ptr[].time)
     shade_conductor[True, True](path_ptr, inter, ctx, mat)
 
 
@@ -543,6 +550,7 @@ def shade_hair_gpu(
     var mat = sd.materials[unsafe_offset=Int(inter.primId.materialIndex)]
     mat = mat.glossy_filtered(path_ptr[].min_ray_pdf, sd.filterGlossy)
     var ctx = _shade_context(sd, sobol_matrices, path_idx=tid, shadow_tasks=shadow_tasks)
+    ctx.motion = ctx.motion.at(path_ptr[].time)
     shade_hair[True, True](path_ptr, inter, ctx, mat)
 
 

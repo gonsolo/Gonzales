@@ -1,6 +1,7 @@
 from gonzales.core.spectrum import null_spectral_handle
 from gonzales.scene.accel.bvh import BVH4, BVH2Node
 from gonzales.scene.accel.xert import xe_scene_none
+from gonzales.scene.shapes.motion import MotionTable
 from gonzales.scene.appearance.footprint import CameraFootprint
 from gonzales.scene.appearance.lights import LightSampler, AreaLight, DistantLight, PointLight, InfiniteLight
 from gonzales.scene.appearance.materials import Material, MeasuredBRDF, GpuTexture, NormalSlopeMap
@@ -65,4 +66,5 @@ def make_shade_context(
         grids=Pointer[Grid, MutUntrackedOrigin].unsafe_dangling(), nvdb_grids=Pointer[NvdbGrid, MutUntrackedOrigin].unsafe_dangling(),
         filter_glossy=Float32(0), clamp=SIMD[DType.float32, 2](0), cycles=SIMD[DType.int32, 4](0),
         xe=xe_scene_none(),
+        motion=MotionTable.none(),
     )

@@ -7,6 +7,7 @@ from std.sys import get_defined_int
 from gonzales.scene.accel.bvh import _node_box_hit, _node_hi, _node_lo, _node_oc, _bvh_has_nodes, _shadow_is_null_material, _traverse_instances, BVH2Node, any_hit_bvh2_core, ray_sphere_hit, test_spheres, traverse_bvh2_core, traverse_bvh2_core_defer_curves, SceneView, _displaced_tri_hit
 from gonzales.scene.accel.curve_bvh import curve_bvh_occluded, curve_bvh_closest, curve_bvh_prim
 from gonzales.scene.shapes.curves import CURVE_DEFER_K, Curve, curve_at, curve_piece_endpoints, intersect_curve, curve_hit_normal
+from gonzales.scene.shapes.motion import MotionTable
 from gonzales.core.geometry import INV_FOUR_PI, Point3f, RGB, Vec3f, _is_real_ptr, dot, store_vec3, vec3f
 from gonzales.scene.shapes.primitives import (
     Instance, Intersection, PrimId, Sphere, TriangleMesh, alpha_killed, intersect_triangle, sphere_outward_normal, mesh_vi,
@@ -561,7 +562,7 @@ def traverse_paths_gpu[rare_on: Bool, alpha_on: Bool, count_on: Bool = False](
     traverse_bvh2_core_defer_curves[rare_on, rare_on, alpha_on, count_on](
         sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, paths[unsafe_offset=tid].ray, Float32(1.0e38), results.unsafe_offset(tid),
         curve_cand_prim.unsafe_offset(tid * CURVE_DEFER_K), curve_cand_count.unsafe_offset(tid),
-        sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances,
+        sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances, sd.motion.at(paths[unsafe_offset=tid].time),
     )
     comptime if count_on:
         return
@@ -1443,6 +1444,7 @@ def any_hit_bvh2_gpu[curves_on: Bool, inst_on: Bool, alpha_on: Bool](
     sd: SceneView,
     ray: Ray,
     tMax: Float32,
+    motion: MotionTable = MotionTable.none(),
 ) -> Bool:
     for i in range(Int(sd.sphereCount)):
         if _shadow_is_null_material(sd.materials, Int64(sd.spheres[unsafe_offset=i].materialIndex)):
@@ -1548,7 +1550,7 @@ def any_hit_bvh2_gpu[curves_on: Bool, inst_on: Bool, alpha_on: Bool](
                 cur_oc = _node_oc(_node_hi(nodes_f, current))
     comptime if inst_on:
         if inst_leaf.type == PrimKind.instances:
-            return _traverse_instances[True](inst_leaf, sd.meshes, sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances, ray_org, ray_dir, tMax, True, sd.curves)[0]
+            return _traverse_instances[True](inst_leaf, sd.meshes, sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances, ray_org, ray_dir, tMax, True, sd.curves, motion=motion)[0]
     return False
 
 @__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
@@ -1565,7 +1567,7 @@ def sw_resolve_shadow_gpu[rare_on: Bool, alpha_on: Bool](
     var t = Int(ids[unsafe_offset=i])
     var task = tasks[unsafe_offset=t]
     var ray = Ray(Point3f(task.origin.x, task.origin.y, task.origin.z), Vec3f(task.direction.x, task.direction.y, task.direction.z))
-    tasks[unsafe_offset=t].active = Int32(0) if any_hit_bvh2_gpu[rare_on, rare_on, alpha_on](sd, ray, task.tmax) else Int32(2)
+    tasks[unsafe_offset=t].active = Int32(0) if any_hit_bvh2_gpu[rare_on, rare_on, alpha_on](sd, ray, task.tmax, sd.motion.at(task.time)) else Int32(2)
 
 # Lists the active deferred shadow rays of ALL slots (task index = path * SHADOW_SLOTS + slot) as dense rays.
 @__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))

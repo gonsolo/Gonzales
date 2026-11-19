@@ -1545,11 +1545,12 @@ def _traverse_instance[wide_on: Bool = True](
     curves: Pointer[Curve, MutUntrackedOrigin],
     cnt: Pointer[Int32, MutUntrackedOrigin] = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
     first_hit: Bool = False,
+    motion: MotionTable = MotionTable.none(),
 ) -> Tuple[Bool, Float32, Float32, Float32, PrimId]:
     """One instance: transform the ray into its object space and walk its BLAS, and its curve BVH if the
     template has curves (the template record's id2). Returns (hit, tHit, u, v, primId) with
     primId.instanceIdx set to this instance."""
-    var inst = instances[unsafe_offset=inst_idx]
+    var inst = motion.instance(instances, inst_idx)
     var (o_org, o_dir) = _transform_ray_to_instance_space(inst.world_to_obj(), ray_org, ray_dir)
     var blas_nodes = blasNodesArr[unsafe_offset=Int(inst.blasIdx)]
     var blas_prim_ids = blasPrimIdsArr[unsafe_offset=Int(inst.blasIdx)]
@@ -1654,6 +1655,7 @@ def _traverse_instances[wide_on: Bool = True](
     first_hit: Bool = False,   # a shadow ray: any hit will do
     curves: Pointer[Curve, MutUntrackedOrigin] = Pointer[Curve, MutUntrackedOrigin].unsafe_dangling(),
     cnt: Pointer[Int32, MutUntrackedOrigin] = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
+    motion: MotionTable = MotionTable.none(),
 ) -> Tuple[Bool, Float32, Float32, Float32, PrimId]:
     """Handle the PrimId.type==8 leaf that stands for the scene's instances: walk the BVH over them
     (blasNodesArr[prim.id1]; the instances are stored in its leaf order, so a leaf is an instance range) and
@@ -1700,7 +1702,7 @@ def _traverse_instances[wide_on: Bool = True](
                 if t_c > localTHit:
                     continue
                 var sub = _traverse_instance[wide_on](Int(inst_idx), meshes, blasNodesArr, blasPrimIdsArr, instances,
-                                             ray_org, ray_dir, localTHit, curves, cnt, first_hit)
+                                             ray_org, ray_dir, localTHit, curves, cnt, first_hit, motion)
                 if sub[0]:
                     hasHit = True
                     localTHit = sub[1]; bestU = sub[2]; bestV = sub[3]; hitPrim = sub[4]
@@ -1717,7 +1719,7 @@ def _traverse_instances[wide_on: Bool = True](
         if node.count > 0:
             for j in range(Int(node.count)):
                 var sub = _traverse_instance[wide_on](Int(node.offset) + j, meshes, blasNodesArr, blasPrimIdsArr, instances,
-                                             ray_org, ray_dir, localTHit, curves, cnt, first_hit)
+                                             ray_org, ray_dir, localTHit, curves, cnt, first_hit, motion)
                 if sub[0]:
                     hasHit = True
                     localTHit = sub[1]; bestU = sub[2]; bestV = sub[3]; hitPrim = sub[4]
@@ -1788,6 +1790,7 @@ def traverse_bvh2_core[Or: Origin[mut=True]](
     spheres: Pointer[Sphere, MutUntrackedOrigin] = Pointer[Sphere, MutUntrackedOrigin].unsafe_dangling(),
     n_spheres: Int = 0,
     root: Int = 0,
+    motion: MotionTable = MotionTable.none(),
 ):
     # Callers that never populate any PrimId.type==6 leaf (GPU kernels, which
     # upload their own device-side scene copy with no instance data at all) can
@@ -1857,7 +1860,7 @@ def traverse_bvh2_core[Or: Origin[mut=True]](
                         instHit = False
                     continue
                 elif prim.type == PrimKind.instances:
-                    var sub = _traverse_instances[True](prim, meshes, blasNodesArr, blasPrimIdsArr, instances, ray_org, ray_dir, localTHit, False, curves)
+                    var sub = _traverse_instances[True](prim, meshes, blasNodesArr, blasPrimIdsArr, instances, ray_org, ray_dir, localTHit, False, curves, motion=motion)
                     if sub[0]:
                         localTHit = sub[1]
                         bestU = sub[2]
@@ -1990,6 +1993,7 @@ def traverse_bvh2_core_defer_curves[curves_on: Bool = True, inst_on: Bool = True
     blasNodesArr: Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin] = Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
     blasPrimIdsArr: Pointer[Pointer[PrimId, MutUntrackedOrigin], MutUntrackedOrigin] = Pointer[Pointer[PrimId, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
     instances: Pointer[Instance, MutUntrackedOrigin] = Pointer[Instance, MutUntrackedOrigin].unsafe_dangling(),
+    motion: MotionTable = MotionTable.none(),
 ):
 
     var rdir = Vec3f(Float32(1.0) / ray.direction.x, Float32(1.0) / ray.direction.y, Float32(1.0) / ray.direction.z)
@@ -2141,7 +2145,7 @@ def traverse_bvh2_core_defer_curves[curves_on: Bool = True, inst_on: Bool = True
 
     comptime if inst_on:
         if inst_leaf.type == PrimKind.instances:
-            var sub = _traverse_instances[True](inst_leaf, meshes, blasNodesArr, blasPrimIdsArr, instances, ray_org, ray_dir, localTHit, False, curves, cnt)
+            var sub = _traverse_instances[True](inst_leaf, meshes, blasNodesArr, blasPrimIdsArr, instances, ray_org, ray_dir, localTHit, False, curves, cnt, motion)
             if sub[0]:
                 localTHit = sub[1]
                 bestU = sub[2]
@@ -2200,6 +2204,7 @@ def any_hit_bvh2_core[wide_on: Bool = True](
     ignore_sphere_radius: Float32 = Float32(-1.0),
     materials: Pointer[Material, MutUntrackedOrigin] = Pointer[Material, MutUntrackedOrigin].unsafe_dangling(),
     root: Int = 0,
+    motion: MotionTable = MotionTable.none(),
 ) -> Bool:
     # Analytic spheres live in their own flat array, not the mesh/curve BVH
     # this function walks, so they need their own (cheap, since n_spheres
@@ -2335,7 +2340,7 @@ def any_hit_bvh2_core[wide_on: Bool = True](
                 current = Int(stack_ptr[unsafe_offset=toVisit])
                 cur_oc = _node_oc(_node_hi(nodes_f, current))
     if inst_leaf.type == PrimKind.instances:
-        return _traverse_instances[wide_on](inst_leaf, meshes, blasNodesArr, blasPrimIdsArr, instances, ray_org, ray_dir, tMax, True, curves)[0]
+        return _traverse_instances[wide_on](inst_leaf, meshes, blasNodesArr, blasPrimIdsArr, instances, ray_org, ray_dir, tMax, True, curves, motion=motion)[0]
     return False
 
 
@@ -2642,6 +2647,7 @@ def traverse_bvh4_core[Or: Origin[mut=True]](
     instances: Pointer[Instance, MutUntrackedOrigin] = Pointer[Instance, MutUntrackedOrigin].unsafe_dangling(),
     spheres: Pointer[Sphere, MutUntrackedOrigin] = Pointer[Sphere, MutUntrackedOrigin].unsafe_dangling(),
     n_spheres: Int = 0,
+    motion: MotionTable = MotionTable.none(),
 ):
     """BVH4 twin of traverse_bvh2_core: same leaf handling, same results."""
     var rdir = Vec3f(Float32(1.0) / ray.direction.x, Float32(1.0) / ray.direction.y, Float32(1.0) / ray.direction.z)
@@ -2723,7 +2729,7 @@ def traverse_bvh4_core[Or: Origin[mut=True]](
                         hitIndex = slot
                         instHit = False
                 elif prim.type == PrimKind.instances:
-                    var sub = _traverse_instances[True](prim, meshes, blasNodesArr, blasPrimIdsArr, instances, ray_org, ray_dir, localTHit, False, curves)
+                    var sub = _traverse_instances[True](prim, meshes, blasNodesArr, blasPrimIdsArr, instances, ray_org, ray_dir, localTHit, False, curves, motion=motion)
                     if sub[0]:
                         localTHit = sub[1]
                         bestU = sub[2]
@@ -2816,6 +2822,7 @@ def any_hit_bvh4_core(
     ignore_sphere_center: Vec3f = Vec3f(Float32(0.0), Float32(0.0), Float32(0.0)),
     ignore_sphere_radius: Float32 = Float32(-1.0),
     materials: Pointer[Material, MutUntrackedOrigin] = Pointer[Material, MutUntrackedOrigin].unsafe_dangling(),
+    motion: MotionTable = MotionTable.none(),
 ) -> Bool:
     """BVH4 twin of any_hit_bvh2_core. Children are visited unordered."""
     for i in range(n_spheres):
@@ -2886,7 +2893,7 @@ def any_hit_bvh4_core(
                     if _displaced_tri_hit(meshes[unsafe_offset=Int(prim.id1)], Int(prim.id2), ray_org, ray_dir, tMax)[0]:
                         return True
                 elif prim.type == PrimKind.instances:
-                    if _traverse_instances[True](prim, meshes, blasNodesArr, blasPrimIdsArr, instances, ray_org, ray_dir, tMax, True, curves)[0]:
+                    if _traverse_instances[True](prim, meshes, blasNodesArr, blasPrimIdsArr, instances, ray_org, ray_dir, tMax, True, curves, motion=motion)[0]:
                         return True
         else:
             var node = bvh4.nodes[unsafe_offset=cur]
@@ -2924,16 +2931,17 @@ def traverse_dispatch[Or: Origin[mut=True]](
     instances: Pointer[Instance, MutUntrackedOrigin] = Pointer[Instance, MutUntrackedOrigin].unsafe_dangling(),
     spheres: Pointer[Sphere, MutUntrackedOrigin] = Pointer[Sphere, MutUntrackedOrigin].unsafe_dangling(),
     n_spheres: Int = 0,
+    motion: MotionTable = MotionTable.none(),
 ):
     """BVH4 on the CPU when the scene has one, BVH2 otherwise and always on
     the GPU (the BVH4 branch is not compiled into GPU code)."""
     comptime if not is_gpu():
         if bvh4.is_real():
             traverse_bvh4_core(bvh4, primIds, meshes, curves, ray, tMax, resultPtr,
-                               blasNodesArr, blasPrimIdsArr, instances, spheres, n_spheres)
+                               blasNodesArr, blasPrimIdsArr, instances, spheres, n_spheres, motion)
             return
     traverse_bvh2_core(bvh2Nodes, primIds, meshes, curves, ray, tMax, resultPtr,
-                       blasNodesArr, blasPrimIdsArr, instances, spheres, n_spheres)
+                       blasNodesArr, blasPrimIdsArr, instances, spheres, n_spheres, motion=motion)
 
 
 @always_inline
@@ -2953,15 +2961,16 @@ def any_hit_dispatch(
     ignore_sphere_center: Vec3f = Vec3f(Float32(0.0), Float32(0.0), Float32(0.0)),
     ignore_sphere_radius: Float32 = Float32(-1.0),
     materials: Pointer[Material, MutUntrackedOrigin] = Pointer[Material, MutUntrackedOrigin].unsafe_dangling(),
+    motion: MotionTable = MotionTable.none(),
 ) -> Bool:
     comptime if not is_gpu():
         if bvh4.is_real():
             return any_hit_bvh4_core(bvh4, primIds, meshes, curves, ray, tMax,
                                      blasNodesArr, blasPrimIdsArr, instances, spheres, n_spheres,
-                                     ignore_sphere_center, ignore_sphere_radius, materials)
+                                     ignore_sphere_center, ignore_sphere_radius, materials, motion)
     return any_hit_bvh2_core(bvh2Nodes, primIds, meshes, curves, ray, tMax,
                              blasNodesArr, blasPrimIdsArr, instances, spheres, n_spheres,
-                             ignore_sphere_center, ignore_sphere_radius, materials)
+                             ignore_sphere_center, ignore_sphere_radius, materials, motion=motion)
 
 
 
