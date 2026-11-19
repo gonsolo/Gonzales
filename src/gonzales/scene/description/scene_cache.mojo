@@ -118,6 +118,8 @@ def _unsupported(ref s: ParsedScene_Mojo) -> String:
         return "media"
     if s.measured_count > 0:
         return "measured materials"
+    if s.motion_count > 0:
+        return "motion"
     if s.bvh4.is_real():
         return "a BVH4"
     for mi in range(Int(s.mesh_count)):
