@@ -1,9 +1,8 @@
 from std.atomic import Atomic
 from std.ffi import external_call
-from gonzales.core.env import env_str, env_on
+from gonzales.core.env import env_str, env_on, env_int
 from std.math import ceildiv, sqrt
 from std.memory import OpaquePointer, bitcast
-from std.sys import get_defined_int
 from std.sys.info import is_amd_gpu, is_apple_gpu, is_gpu, is_nvidia_gpu
 from max.gpu import global_idx
 from max.gpu.host import DeviceBuffer, DeviceContext
@@ -91,18 +90,27 @@ def xert_heat_save(ctx: DeviceContext) raises:
         f.write_bytes(Span(counts))
     print("RT hardware (Intel): hit counts written to", xert_heat_path())
 
-comptime XERT_STATS = get_defined_int["XERT_STATS", 0]() != 0
+# The subdiv table's header, XERT_SD_HEADER Int32s before it: 8 Int64 counters, then (word -2) the sub-square candidates a
+# ray tests (0: all) and (word -1) flags: 1 count (GONZALES_XERT_STATS), 2 end the query past the cap.
+comptime XERT_SD_HEADER = 32
 
-# XERT_STATS: rays, other procedural candidates, sub-square candidates, sub-square hits (Int64 each, before the subdiv table).
+def xert_sd_header() raises -> List[Int32]:
+    var h = List[Int32](length=XERT_SD_HEADER, fill=0)
+    h[XERT_SD_HEADER - 2] = Int32(env_int["GONZALES_XERT_SD_CAP"](0))
+    h[XERT_SD_HEADER - 1] = Int32((1 if env_on["GONZALES_XERT_STATS"]() else 0) | (2 if env_on["GONZALES_XERT_SD_CAP_BREAK"]() else 0))
+    return h^
+
+# Counters: rays, other procedural candidates, sub-square candidates and hits, rays with sub-square candidates, the sum of
+# their squares, rays with at least 16, the most of one ray.
 def xert_stats_print(ctx: DeviceContext) raises:
-    comptime if XERT_STATS:
-        var addr = Int(xert_proc_table(9))
-        if addr == 0:
-            return
-        var c = List[Int64](length=4, fill=0)
-        ctx.enqueue_copy(c.unsafe_ptr().unsafe_bitcast[UInt8](), DeviceBuffer[DType.uint8](ctx, MutPointer[UInt8, MutAnyOrigin](unsafe_from_address=addr - 32), 32, owning=False))
-        ctx.synchronize()
-        print("xert stats: rays", c[0], "other candidates", c[1], "sub-square candidates", c[2], "sub-square hits", c[3])
+    var addr = Int(xert_proc_table(9))
+    if addr == 0 or not env_on["GONZALES_XERT_STATS"]():
+        return
+    var c = List[Int64](length=8, fill=0)
+    ctx.enqueue_copy(c.unsafe_ptr().unsafe_bitcast[UInt8](), DeviceBuffer[DType.uint8](ctx, MutPointer[UInt8, MutAnyOrigin](unsafe_from_address=addr - 4 * XERT_SD_HEADER), 64, owning=False))
+    ctx.synchronize()
+    print("xert stats: rays", c[0], "other candidates", c[1], "sub-square candidates", c[2], "sub-square hits", c[3],
+          "rays with some", c[4], "sum of squares", c[5], "rays with 16+", c[6], "most", c[7])
 
 def xert_active() -> Bool:
     return external_call["xert_scene_accel", UInt64]() != 0
@@ -204,6 +212,13 @@ def xert_trace(accel: MutPointer[UInt8, MutAnyOrigin], ray: XeRayDesc, cv: XePro
                 var s0 = Int(cv.subdiv[unsafe_offset=ib]); var s1 = Int(cv.subdiv[unsafe_offset=ib + 1])
                 if s1 > s0 + 1 and pid >= Int(cv.subdiv[unsafe_offset=s0]):
                     n_sd += 1
+                    var cap = Int64(cv.subdiv[unsafe_offset=-2])
+                    if cap > 0 and n_sd > cap:
+                        if (cv.subdiv[unsafe_offset=-1] & 2) != 0:
+                            break
+                        external_call["intel_ray_query_start_traversal", NoneType](q)
+                        external_call["intel_ray_query_sync", NoneType](q)
+                        continue
                     var rec = s0 + 1
                     for j in range(s0 + 1, s1, 3):
                         if pid >= Int(cv.subdiv[unsafe_offset=j]):
@@ -257,15 +272,19 @@ def xert_trace(accel: MutPointer[UInt8, MutAnyOrigin], ray: XeRayDesc, cv: XePro
                     break
             external_call["intel_ray_query_start_traversal", NoneType](q)
             external_call["intel_ray_query_sync", NoneType](q)
-        comptime if XERT_STATS:
-            if Int(cv.subdiv) != 0:
-                var st = cv.subdiv.unsafe_offset(-8).unsafe_bitcast[Int64]()
-                _ = Atomic.fetch_add(st, Int64(1))
-                if n_oth > 0:
-                    _ = Atomic.fetch_add(st.unsafe_offset(1), n_oth)
-                if n_sd > 0:
-                    _ = Atomic.fetch_add(st.unsafe_offset(2), n_sd)
-                    _ = Atomic.fetch_add(st.unsafe_offset(3), n_sdh)
+        if Int(cv.subdiv) != 0 and (cv.subdiv[unsafe_offset=-1] & 1) != 0:
+            var st = cv.subdiv.unsafe_offset(-XERT_SD_HEADER).unsafe_bitcast[Int64]()
+            _ = Atomic.fetch_add(st, Int64(1))
+            if n_oth > 0:
+                _ = Atomic.fetch_add(st.unsafe_offset(1), n_oth)
+            if n_sd > 0:
+                _ = Atomic.fetch_add(st.unsafe_offset(2), n_sd)
+                _ = Atomic.fetch_add(st.unsafe_offset(3), n_sdh)
+                _ = Atomic.fetch_add(st.unsafe_offset(4), Int64(1))
+                _ = Atomic.fetch_add(st.unsafe_offset(5), n_sd * n_sd)
+                if n_sd >= 16:
+                    _ = Atomic.fetch_add(st.unsafe_offset(6), Int64(1))
+                _ = Atomic.max(st.unsafe_offset(7), n_sd)
         var hit = XeHit(-1, 0, 0, -1, -1, -1, -1, -1)
         if external_call["intel_has_committed_hit", Bool](q):
             hit.t = external_call["intel_get_hit_distance", Float32](q, UInt32(0))

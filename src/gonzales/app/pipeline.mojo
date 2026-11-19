@@ -48,7 +48,7 @@ from gonzales.scene.accel.vulkanrt import vulkanrt_build_scene, vulkanrt_destroy
 from gonzales.scene.accel.curve_bvh import CurveBvhDev, gpu_build_curve_bvh, _leaf_range
 from gonzales.scene.accel.optixcurves import gpu_build_optix_curves, oxc_active, oxc_bytes, oxc_destroy, oxc_set_active
 from gonzales.scene.accel.rt_build import rt_build_blas, rt_build_tlas, rt_patch_ids, RtTlas, _fbits
-from gonzales.scene.accel.xert import xert_alignment, xert_instance_bytes, xert_build_blas_geoms, xert_build_tlas, xert_proc_table, xert_set_subdiv, xert_free, xert_heat_path, xert_heat_save, xert_stats_print, xert_set_procs, xert_set_heat, xert_set_pieces, xert_set_scene
+from gonzales.scene.accel.xert import xert_alignment, xert_instance_bytes, xert_build_blas_geoms, xert_build_tlas, xert_proc_table, xert_set_subdiv, xert_free, xert_heat_path, xert_heat_save, xert_stats_print, xert_sd_header, XERT_SD_HEADER, xert_set_procs, xert_set_heat, xert_set_pieces, xert_set_scene
 from gonzales.scene.description.rt_cache import rt_cache_load, rt_cache_save, RtCacheTlas
 from gonzales.scene.description.scene_cache import scene_cache_variant
 from max.algorithm import parallelize
@@ -1399,7 +1399,7 @@ def _xert_attach(ctx: DeviceContext, psc: Pointer[ParsedScene_Mojo, MutUntracked
     xf.unsafe_free(); addr.unsafe_free(); bounds.unsafe_free()
     sd_starts.append(Int32(len(sd_blocks)))
     if sd_total > 0:
-        var tab = List[Int32](length=8, fill=0)   # trace statistics (XERT_STATS) before the table
+        var tab = xert_sd_header()
         for b in range(len(sd_starts)):
             tab.append(Int32(len(sd_starts)) + sd_starts[b])
         for x in sd_blocks:
@@ -1407,7 +1407,7 @@ def _xert_attach(ctx: DeviceContext, psc: Pointer[ParsedScene_Mojo, MutUntracked
         var sd_buf = dev_buf(ctx, 4 * len(tab))
         ctx.enqueue_copy(sd_buf, tab.unsafe_ptr().unsafe_bitcast[UInt8]())
         ctx.synchronize()
-        xert_set_subdiv(UInt64(Int(sd_buf.unsafe_ptr()) + 32))
+        xert_set_subdiv(UInt64(Int(sd_buf.unsafe_ptr()) + 4 * XERT_SD_HEADER))
         print("RT hardware (Intel): displaced subdivision meshes,", sd_total, "sub-squares")
         bufs.append(sd_buf^)
     else:
