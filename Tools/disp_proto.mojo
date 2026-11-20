@@ -126,7 +126,7 @@ def trace_patches[M: Int = -1](d: DispSurface, nodes: Pointer[BNode, MutUntracke
                     if bt[0] and bt[1] < h.t:
                         h.t = bt[1]; h.prim = prim_patch(d, prim)[0]; h.steps += 1
                     continue
-                var r = intersect_displaced[M](d, prim, org, dir, h.t)
+                var r = intersect_displaced[M](d, prim, org, dir, h.t, 1)
                 h.steps += r[4]
                 if r[0] and r[1] < h.t:
                     h.t = r[1]; h.prim = prim_patch(d, prim)[0]; h.s = r[2]; h.u = r[3]; h.size = r[5]
@@ -293,7 +293,7 @@ def _rq_trace[M: Int](accel: MutPointer[UInt8, MutAnyOrigin], d: DispSurface, or
         external_call["intel_ray_query_sync", NoneType](q)
         while not external_call["intel_is_traversal_done", Bool](q):
             var prim = Int(external_call["intel_get_hit_primitive_id", UInt32](q, UInt32(1)))
-            var r = intersect_displaced[M](d, prim, org, dir, h.t)
+            var r = intersect_displaced[M](d, prim, org, dir, h.t, 1)
             h.steps += r[4]
             if r[0] and r[1] < h.t:
                 h.t = r[1]; h.prim = prim_patch(d, prim)[0]; h.s = r[2]; h.u = r[3]; h.size = r[5]
