@@ -333,6 +333,7 @@ def gen_primary_rays_wavefront_gpu(
         Vec3f(Float32(0.0)), Float32(0.0),   # gl_dir, gl_pdf
         SssWalk.none(),
         time,
+        Vec3f(Float32(0.0)), Vec3f(Float32(0.0)), Int8(0),   # pick_p, pick_n, pick_tree
     )
 
 
@@ -2127,6 +2128,7 @@ def gen_primary_rays_gpu(
         Vec3f(Float32(0.0)), Float32(0.0),   # gl_dir, gl_pdf
         SssWalk.none(),
         time,
+        Vec3f(Float32(0.0)), Vec3f(Float32(0.0)), Int8(0),   # pick_p, pick_n, pick_tree
     )
 
 

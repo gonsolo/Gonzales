@@ -15,7 +15,8 @@ from std.time import perf_counter_ns
 from gonzales.core.geometry import _is_real_ptr
 from gonzales.scene.accel.bvh import BVH2Node, BVH4
 from gonzales.scene.shapes.curves import Curve
-from gonzales.scene.appearance.lights import AreaLight, InfiniteLight, DistantLight, PointLight, LightSampler, LIGHT_BOUNDS_STRIDE
+from gonzales.scene.appearance.light_tree import light_tree_words
+from gonzales.scene.appearance.lights import AreaLight, InfiniteLight, DistantLight, PointLight, LightSampler
 from gonzales.scene.appearance.materials import Material
 from gonzales.scene.description.pbrt_parser import ParsedScene_Mojo, _plan_ptex_budget, mojo_parsed_free
 from gonzales.scene.shapes.primitives import Instance, PrimId, Sphere, TriangleMesh, mesh_points_floats
@@ -24,7 +25,7 @@ from gonzales.scene.appearance.host_textures import TexPrefetch
 from gonzales.core.fast_io import read_parallel, PARALLEL_MIN
 
 comptime _MAGIC: Int = 0x474E5A53434143
-comptime _FORMAT: Int = 16   # 14: distant and point lights, normal slope maps; 15: alpha masks; 16: TriangleMesh.patches
+comptime _FORMAT: Int = 17   # 14: distant and point lights, normal slope maps; 15: alpha masks; 16: TriangleMesh.patches; 17: light tree
 
 comptime _Ptr = Pointer[UInt8, MutUntrackedOrigin]
 
@@ -248,7 +249,9 @@ def scene_cache_save(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin], cache_p
     _put[Int32](f, s.template_mesh_start, max(Int(s.blas_count), 1)); _put[Int32](f, s.template_mesh_end, max(Int(s.blas_count), 1))
     _put[Curve](f, s.curves, Int(s.curve_count)); _put[Sphere](f, s.spheres, Int(s.sphere_count))
 
-    _put[Float32](f, s.light_sampler.cdf, max(Int(s.light_sampler.n) + 1, 2) + (Int(s.light_sampler.n) * LIGHT_BOUNDS_STRIDE if s.light_sampler.has_bounds != Int32(0) else 0))
+    _put[Float32](f, s.light_sampler.cdf, max(Int(s.light_sampler.n) + 1, 2))
+    _put_int(f, light_tree_words(s.light_sampler.tree))
+    _put[UInt32](f, s.light_sampler.tree, light_tree_words(s.light_sampler.tree))
     _put[Float32](f, s.light_pick_cdf, max(Int(s.light_pick_n) + 1, 2))
 
     _put[DistantLight](f, s.distant_lights, Int(s.distant_count)); _put[PointLight](f, s.point_lights, Int(s.point_count))
@@ -386,8 +389,9 @@ def scene_cache_load(cache_path: _Ptr, scene_path: _Ptr) -> Pointer[ParsedScene_
     s.template_mesh_start = _get[Int32](f, max(Int(s.blas_count), 1)); s.template_mesh_end = _get[Int32](f, max(Int(s.blas_count), 1))
     s.curves = _get[Curve](f, Int(s.curve_count)); s.spheres = _get[Sphere](f, Int(s.sphere_count))
 
-    var ls_cdf = _get[Float32](f, max(Int(s.light_sampler.n) + 1, 2) + (Int(s.light_sampler.n) * LIGHT_BOUNDS_STRIDE if s.light_sampler.has_bounds != Int32(0) else 0))
-    s.light_sampler = LightSampler(ls_cdf, s.light_sampler.n, s.light_sampler.has_bounds)
+    var ls_cdf = _get[Float32](f, max(Int(s.light_sampler.n) + 1, 2))
+    var lt_words = _get_int(f)
+    s.light_sampler = LightSampler(ls_cdf, s.light_sampler.n, _get[UInt32](f, lt_words))
     s.light_pick_cdf = _get[Float32](f, max(Int(s.light_pick_n) + 1, 2))
 
     s.distant_lights = _get[DistantLight](f, Int(s.distant_count)); s.point_lights = _get[PointLight](f, Int(s.point_count))

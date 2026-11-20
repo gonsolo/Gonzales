@@ -8,6 +8,7 @@
 from std.math import abs, sqrt
 from std.memory.alloc import unsafe_alloc
 from std.testing import assert_true, TestSuite
+from gonzales.scene.appearance.light_tree import light_tree_empty
 from gonzales.scene.shapes.motion import MotionTable
 from gonzales.scene.appearance.footprint import CameraFootprint
 from gonzales.core.geometry import RGB, Point3f, Vec3f
@@ -78,7 +79,7 @@ def _make_ctx(
             Pointer[PointLight, MutUntrackedOrigin].unsafe_dangling(), 0,
             Pointer[InfiniteLight, MutUntrackedOrigin].unsafe_dangling(), 0,
             Pointer[Sphere, MutUntrackedOrigin].unsafe_dangling(), 0,
-            LightSampler(light_sampler_cdf, Int32(area_light_count), Int32(0))),
+            LightSampler(light_sampler_cdf, Int32(area_light_count), light_tree_empty())),
         bvh2Nodes, primIds, materials,
     )
 
@@ -232,7 +233,7 @@ def _make_path() -> PathState:
         UInt32(0),   # sobol_seed
         Int8(0),   # ns_spec
         Vec3f(Float32(0.0)), Float32(0.0),   # gl_dir, gl_pdf
-        SssWalk.none(), Float32(0),
+        SssWalk.none(), Float32(0), Vec3f(Float32(0.0)), Vec3f(Float32(0.0)), Int8(0),
     )
 
 def test_sms_resolve_on_empty_reservoir_is_a_noop() raises:

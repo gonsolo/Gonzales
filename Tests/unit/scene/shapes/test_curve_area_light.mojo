@@ -1,6 +1,7 @@
 from std.math import abs, sqrt
 from std.memory.alloc import unsafe_alloc
 from std.testing import assert_true, TestSuite
+from gonzales.scene.appearance.light_tree import light_tree_empty
 from gonzales.core.geometry import Point3f, Vec3f, RGB, dot, cross
 from gonzales.scene.appearance.materials import Material, MatKind
 from gonzales.transport.render_state import PathState, MIN_RAY_PDF_NONE, SssWalk
@@ -38,7 +39,7 @@ def _dummy_path(ray: Ray, throughput: SpectralSample) -> PathState:
         UInt32(0),   # sobol_seed
         Int8(0),   # ns_spec
         Vec3f(Float32(0.0)), Float32(0.0),   # gl_dir, gl_pdf
-        SssWalk.none(), Float32(0),
+        SssWalk.none(), Float32(0), Vec3f(Float32(0.0)), Vec3f(Float32(0.0)), Int8(0),
     )
 
 # ── Curve area lights (task #59: glowing_hair.pbrt used to render black) ───
@@ -90,7 +91,7 @@ def test_emissive_curve_hit_adds_emission_and_retires_path() raises:
         Pointer[PointLight, MutUntrackedOrigin].unsafe_dangling(), 0,
         Pointer[InfiniteLight, MutUntrackedOrigin].unsafe_dangling(), 0,
         Pointer[Sphere, MutUntrackedOrigin].unsafe_dangling(), 0,
-        LightSampler(Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(), Int32(0), Int32(0)),
+        LightSampler(Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(), Int32(0), light_tree_empty()),
         Pointer[UInt32, MutUntrackedOrigin].unsafe_dangling(),
         null_guide(),
     )
@@ -166,7 +167,7 @@ def test_emissive_curve_bounce_hit_mis_weights_against_its_own_light_pdf() raise
 
     var cdf = unsafe_alloc[Float32](2)
     cdf[unsafe_offset=0] = Float32(0.0); cdf[unsafe_offset=1] = Float32(1.0)
-    var light_sampler = LightSampler(cdf, Int32(1), Int32(0))
+    var light_sampler = LightSampler(cdf, Int32(1), light_tree_empty())
 
     var t_hit: Float32 = 5.0
     var pdf_bsdf: Float32 = 0.4
@@ -193,7 +194,7 @@ def test_emissive_curve_bounce_hit_mis_weights_against_its_own_light_pdf() raise
         UInt32(0),   # sobol_seed
         Int8(0),   # ns_spec
         Vec3f(Float32(0.0)), Float32(0.0),   # gl_dir, gl_pdf
-        SssWalk.none(), Float32(0),
+        SssWalk.none(), Float32(0), Vec3f(Float32(0.0)), Vec3f(Float32(0.0)), Int8(0),
     )
     intersections[unsafe_offset=0] = inter
 

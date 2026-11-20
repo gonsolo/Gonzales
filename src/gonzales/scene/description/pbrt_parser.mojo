@@ -10,6 +10,7 @@ from std.sys.info import num_performance_cores
 from max.algorithm import parallelize
 from std.subprocess import run
 from std.os.path import exists
+from std.os import getenv
 from gonzales.scene.appearance.footprint import camera_footprint
 from gonzales.core.sensors import named_sensor_is_supported, named_sensor_srgb_matrix
 from gonzales.core.diagnostics import warn_unsupported, warn_unsupported_in
@@ -25,8 +26,9 @@ from gonzales.scene.appearance.host_textures import HostTextures, TexPrefetch, d
 from gonzales.scene.shapes.primitives import Sphere, TriangleMesh, PrimId, Instance, encode_normal, mesh_points_floats
 from gonzales.scene.accel.quad_pack import quantise_quads
 from gonzales.scene.appearance.media import Medium, MediumInterface, Grid, NvdbGrid
-from gonzales.scene.appearance.lights import AreaLight, DistantLight, PointLight, InfiniteLight, LightSampler, LIGHT_BOUNDS_STRIDE, LIGHT_IMPORTANCE_MAX, env_build_cdf
-from gonzales.scene.shapes.curves import Curve, CURVE_N_PIECES, curve_piece_bounds, curve_bspline_point, curve_light_tube_area
+from gonzales.scene.appearance.lights import AreaLight, DistantLight, PointLight, InfiniteLight, LightSampler, env_build_cdf
+from gonzales.scene.shapes.curves import Curve, CURVE_N_PIECES, curve_piece_bounds, curve_bspline_point, curve_light_tube_area, curve_piece_endpoints
+from gonzales.scene.appearance.light_tree import LightBounds, build_light_tree, LT_HEADER
 from gonzales.scene.appearance.nanovdb import nvdb_load, nvdb_load_named, nvdb_data, nvdb_size, nvdb_free, nvdb_index_bbox, nvdb_value_range, nvdb_map_invmatf, nvdb_map_vecf
 from gonzales.core.noise import _perlin_perm_table, cloud_density
 from gonzales.core.transform import matrix_multiply, matrix_invert, transform_points, transform_normals
@@ -2616,6 +2618,11 @@ def _cull_small_instances(s: Pointer[SceneParseState, MutUntrackedOrigin], psc: 
     print("Instance culling: kept", n_keep, "of", n, "instances (size limit", limit, "of the image height)")
     return n_keep
 
+def _light_tree_enabled() -> Bool:
+    """GONZALES_LIGHT_TREE=0 keeps the power pick, for comparisons."""
+    return getenv("GONZALES_LIGHT_TREE") != "0"
+
+
 def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
                  psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin],
                  verbose: Bool = False,
@@ -2884,7 +2891,8 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
     # is built further down in "Native curves") — sized for both up front
     # since it's one contiguous allocation.
     var al_list  = unsafe_alloc[AreaLight](max(n_al_mesh + n_al_curve, 1))
-    var al_bounds = unsafe_alloc[Float32](max(n_al_mesh, 1) * LIGHT_BOUNDS_STRIDE)   # per mesh light, see LightSampler
+    var lt_bounds = List[LightBounds]()   # one per emissive triangle and curve light, see light_tree.mojo
+    var lt_base = List[Int]()
     var al_count = Int32(0)
     var al_mat_base = n_regular
 
@@ -2998,53 +3006,37 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
                 tri_cdf[unsafe_offset=ti] = tri_cdf[unsafe_offset=ti] / t_area if t_area > Float32(0) else Float32(ti + 1) / Float32(nt)
             if nt > 0:
                 tri_cdf[unsafe_offset=nt - 1] = Float32(1)   # exact, whatever the rounding
-            var lb = al_bounds.unsafe_offset(al_idx * LIGHT_BOUNDS_STRIDE)
-            var bmin = Vec3f(Float32(3.0e38)); var bmax = Vec3f(Float32(-3.0e38))
-            var nsum = Vec3f(Float32(0.0))
+            lt_base.append(len(lt_bounds))
+            var em_max = max(em.r, max(em.g, em.b)) * PI * (Float32(2) if ma.al_two_sided else Float32(1))
             for ti in range(nt):
-                var q0: Vec3f; var q1: Vec3f; var q2: Vec3f
-                var vid0 = Int(vis_c[unsafe_offset=ti*3+0]); var vid1 = Int(vis_c[unsafe_offset=ti*3+1]); var vid2 = Int(vis_c[unsafe_offset=ti*3+2])
-                q0 = Vec3f(pts_c[unsafe_offset=vid0*4], pts_c[unsafe_offset=vid0*4+1], pts_c[unsafe_offset=vid0*4+2])
-                q1 = Vec3f(pts_c[unsafe_offset=vid1*4], pts_c[unsafe_offset=vid1*4+1], pts_c[unsafe_offset=vid1*4+2])
-                q2 = Vec3f(pts_c[unsafe_offset=vid2*4], pts_c[unsafe_offset=vid2*4+1], pts_c[unsafe_offset=vid2*4+2])
-                for qq in range(3):
-                    var q = q0 if qq == 0 else (q1 if qq == 1 else q2)
-                    bmin = Vec3f(min(bmin.x, q.x), min(bmin.y, q.y), min(bmin.z, q.z))
-                    bmax = Vec3f(max(bmax.x, q.x), max(bmax.y, q.y), max(bmax.z, q.z))
-                var gn = cross(q1 - q0, q2 - q0)
+                var vid = Array[Int, 3](fill=0)
+                var q = Array[Vec3f, 3](fill=Vec3f(Float32(0)))
+                for k in range(3):
+                    vid[k] = Int(vis_c[unsafe_offset=ti*3+k])
+                    q[k] = Vec3f(pts_c[unsafe_offset=vid[k]*4], pts_c[unsafe_offset=vid[k]*4+1], pts_c[unsafe_offset=vid[k]*4+2])
+                var gn = cross(q[1] - q[0], q[2] - q[0])
+                var gl = sqrt(dot(gn, gn))
+                var two = ma.al_two_sided
+                if gl > Float32(0):
+                    gn = gn * (Float32(1) / gl)
+                # The emitting side follows the interpolated normal (_emitter_face_normal): vertices that disagree make both sides emit.
                 if len(ma.normals) > 0:
-                    var sn = Vec3f(ma.normals[vid0*3] + ma.normals[vid1*3] + ma.normals[vid2*3],
-                                   ma.normals[vid0*3+1] + ma.normals[vid1*3+1] + ma.normals[vid2*3+1],
-                                   ma.normals[vid0*3+2] + ma.normals[vid1*3+2] + ma.normals[vid2*3+2])
-                    if dot(gn, sn) < Float32(0.0):
+                    var pos = 0
+                    var neg = 0
+                    for k in range(3):
+                        var d = gn.x * ma.normals[vid[k]*3] + gn.y * ma.normals[vid[k]*3+1] + gn.z * ma.normals[vid[k]*3+2]
+                        if d > Float32(0):
+                            pos += 1
+                        elif d < Float32(0):
+                            neg += 1
+                    if pos == 0 and neg > 0:
                         gn = -gn
-                nsum = nsum + gn
-            var nlen = sqrt(dot(nsum, nsum))
-            var axis = Vec3f(Float32(0.0), Float32(0.0), Float32(1.0))
-            var cos_o = Float32(-1.0)
-            if nlen > Float32(0.0):
-                axis = nsum * (Float32(1.0) / nlen)
-                cos_o = Float32(1.0)
-                for ti in range(nt):
-                    var vid0 = Int(vis_c[unsafe_offset=ti*3+0]); var vid1 = Int(vis_c[unsafe_offset=ti*3+1]); var vid2 = Int(vis_c[unsafe_offset=ti*3+2])
-                    var q0 = Vec3f(pts_c[unsafe_offset=vid0*4], pts_c[unsafe_offset=vid0*4+1], pts_c[unsafe_offset=vid0*4+2])
-                    var q1 = Vec3f(pts_c[unsafe_offset=vid1*4], pts_c[unsafe_offset=vid1*4+1], pts_c[unsafe_offset=vid1*4+2])
-                    var q2 = Vec3f(pts_c[unsafe_offset=vid2*4], pts_c[unsafe_offset=vid2*4+1], pts_c[unsafe_offset=vid2*4+2])
-                    var gn = cross(q1 - q0, q2 - q0)
-                    if len(ma.normals) > 0:
-                        var sn = Vec3f(ma.normals[vid0*3] + ma.normals[vid1*3] + ma.normals[vid2*3],
-                                       ma.normals[vid0*3+1] + ma.normals[vid1*3+1] + ma.normals[vid2*3+1],
-                                       ma.normals[vid0*3+2] + ma.normals[vid1*3+2] + ma.normals[vid2*3+2])
-                        if dot(gn, sn) < Float32(0.0):
-                            gn = -gn
-                    var gl = sqrt(dot(gn, gn))
-                    if gl > Float32(0.0):
-                        cos_o = min(cos_o, dot(axis, gn) * (Float32(1.0) / gl))
-            lb[unsafe_offset=0] = bmin.x; lb[unsafe_offset=1] = bmin.y; lb[unsafe_offset=2] = bmin.z; lb[unsafe_offset=3] = bmax.x; lb[unsafe_offset=4] = bmax.y; lb[unsafe_offset=5] = bmax.z
-            lb[unsafe_offset=6] = axis.x; lb[unsafe_offset=7] = axis.y; lb[unsafe_offset=8] = axis.z
-            lb[unsafe_offset=9] = em.luma() * t_area * (Float32(2.0) if ma.al_two_sided else Float32(1.0))
-            lb[unsafe_offset=10] = cos_o
-            lb[unsafe_offset=11] = Float32(1.0) if ma.al_two_sided else Float32(0.0)
+                    elif pos > 0 and neg > 0:
+                        two = True
+                lt_bounds.append(LightBounds(
+                    Vec3f(min(q[0].x, min(q[1].x, q[2].x)), min(q[0].y, min(q[1].y, q[2].y)), min(q[0].z, min(q[1].z, q[2].z))),
+                    Vec3f(max(q[0].x, max(q[1].x, q[2].x)), max(q[0].y, max(q[1].y, q[2].y)), max(q[0].z, max(q[1].z, q[2].z))),
+                    gn, em_max * Float32(0.5) * gl, Float32(1), Float32(0), two))
             al_list[unsafe_offset=al_idx].tri_cdf    = tri_cdf
             al_list[unsafe_offset=al_idx].meshIdx    = Int32(i)
             al_list[unsafe_offset=al_idx].n_tris     = Int32(nt)
@@ -4300,6 +4292,19 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
             al_list[unsafe_offset=idx].emission   = s[unsafe_offset=0].curves_al_rgb[i]
             al_list[unsafe_offset=idx].total_area = curve_light_tube_area(psc[unsafe_offset=0].curves[unsafe_offset=i])
             al_list[unsafe_offset=idx].kind       = Int8(1)
+            var crv = psc[unsafe_offset=0].curves[unsafe_offset=i]
+            var cmin = Vec3f(Float32(3.0e38))
+            var cmax = Vec3f(Float32(-3.0e38))
+            for piece in range(max(Int(crv.n_pieces), 1)):
+                var (q0, q1, r0, r1) = curve_piece_endpoints(crv, piece)
+                var r = max(r0, r1)
+                cmin = Vec3f(min(cmin.x, min(q0.x, q1.x) - r), min(cmin.y, min(q0.y, q1.y) - r), min(cmin.z, min(q0.z, q1.z) - r))
+                cmax = Vec3f(max(cmax.x, max(q0.x, q1.x) + r), max(cmax.y, max(q0.y, q1.y) + r), max(cmax.z, max(q0.z, q1.z) + r))
+            var cem = s[unsafe_offset=0].curves_al_rgb[i]
+            lt_base.append(len(lt_bounds))
+            lt_bounds.append(LightBounds(cmin, cmax, Vec3f(Float32(0), Float32(0), Float32(1)),
+                                         max(cem.r, max(cem.g, cem.b)) * PI * al_list[unsafe_offset=idx].total_area,
+                                         Float32(-1), Float32(0), True))
             cl_running += 1
     psc[unsafe_offset=0].area_light_count = Int32(n_al_mesh) + cl_running
 
@@ -4448,10 +4453,9 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
         psc[unsafe_offset=0].mediums = Pointer[Medium, MutUntrackedOrigin].unsafe_dangling()
     psc[unsafe_offset=0].medium_count = Int32(nm)
 
-    # ---- Area light picker: power/uniform CDF, plus per-light bounds for the importance pick ----
+    # ---- Area light picker: power/uniform CDF, and pbrt's light tree for the pick at a point ----
     var ls_n = Int(psc[unsafe_offset=0].area_light_count)
-    var ls_bounds = n_al_curve == 0 and ls_n > 0 and ls_n <= LIGHT_IMPORTANCE_MAX
-    var ls_cdf = unsafe_alloc[Float32](max(ls_n + 1, 2) + (ls_n * LIGHT_BOUNDS_STRIDE if ls_bounds else 0))
+    var ls_cdf = unsafe_alloc[Float32](max(ls_n + 1, 2))
     ls_cdf[unsafe_offset=0] = Float32(0.0)
     var ls_total_power = Float32(0.0)
     for i in range(ls_n):
@@ -4464,10 +4468,17 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
         if ls_total_power > Float32(0.0):
             share = Float32(0.5) * share + Float32(0.5) * al.emission.luma() * al.total_area / ls_total_power
         ls_cdf[unsafe_offset=i + 1] = ls_cdf[unsafe_offset=i] + share
-    if ls_bounds:
-        for i in range(ls_n * LIGHT_BOUNDS_STRIDE):
-            ls_cdf[unsafe_offset=ls_n + 1 + i] = al_bounds[unsafe_offset=i]
-    psc[unsafe_offset=0].light_sampler = LightSampler(ls_cdf, Int32(ls_n), Int32(1) if ls_bounds else Int32(0))
+    lt_base.append(len(lt_bounds))
+    var tree_words = List[UInt32](length=LT_HEADER, fill=0)
+    if ls_n > 0 and len(lt_base) == ls_n + 1 and _light_tree_enabled():
+        try:
+            tree_words = build_light_tree(lt_bounds, lt_base)
+        except e:
+            print("Warning: no light tree (", e, "), area lights picked by power")
+    var tree = unsafe_alloc[UInt32](len(tree_words))
+    for w in range(len(tree_words)):
+        tree[unsafe_offset=w] = tree_words[w]
+    psc[unsafe_offset=0].light_sampler = LightSampler(ls_cdf, Int32(ls_n), tree)
     var (lp_cdf, lp_n) = _light_pick_cdf(psc[unsafe_offset=0])   # after the BVH: needs its root
     psc[unsafe_offset=0].light_pick_cdf = lp_cdf
     psc[unsafe_offset=0].light_pick_n = Int32(lp_n)

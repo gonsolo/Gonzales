@@ -11,6 +11,7 @@
 from std.math import abs, sqrt
 from std.memory.alloc import unsafe_alloc
 from std.testing import assert_true, assert_false, TestSuite
+from gonzales.scene.appearance.light_tree import light_tree_empty
 from gonzales.scene.appearance.footprint import CameraFootprint
 from gonzales.core.geometry import RGB, Point3f, Vec3f
 from gonzales.scene.appearance.materials import Material, MeasuredBRDF
@@ -91,7 +92,7 @@ def _make_path(org: Vec3f, dir: Vec3f) -> PathState:
         UInt32(0),   # sobol_seed
         Int8(0),   # ns_spec
         Vec3f(Float32(0.0)), Float32(0.0),   # gl_dir, gl_pdf
-        SssWalk.none(), Float32(0),
+        SssWalk.none(), Float32(0), Vec3f(Float32(0.0)), Vec3f(Float32(0.0)), Int8(0),
     )
 
 # ── _get_tri_verts ────────────────────────────────────────────────────────────
@@ -260,7 +261,7 @@ def test_build_geom_context_full_sphere_prim_returns_exact_analytic_normal() rai
         Pointer[PointLight, MutUntrackedOrigin].unsafe_dangling(), 0,
         Pointer[InfiniteLight, MutUntrackedOrigin].unsafe_dangling(), 0,
         spheres, 1,
-        LightSampler(Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(), Int32(0), Int32(0)),
+        LightSampler(Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(), Int32(0), light_tree_empty()),
     )
     var ctx = make_shade_context(meshes, lights^, materials=materials)
 

@@ -57,7 +57,7 @@ def _di_sample_candidate(
     var al = ctx.lights.area_lights[unsafe_offset=light_idx]
     var r1 = pcg.next_float()
     var r2 = pcg.next_float()
-    var (light_point, light_normal, ldp_du_v, ldp_dv_v) = _sample_light_point_and_normal(ctx, al, r1, r2, pcg, hit_point)
+    var (light_point, light_normal, ldp_du_v, ldp_dv_v, _) = _sample_light_point_and_normal(ctx, al, -1, r1, r2, pcg, hit_point)
     var to_light = light_point - hit_point
     var dist_sq = dot(to_light, to_light)
     if dist_sq <= Float32(1e-8) or al.total_area <= Float32(0.0):

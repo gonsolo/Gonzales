@@ -7,7 +7,8 @@ from gonzales.scene.accel.curve_bvh import CurveBvhDev
 from gonzales.core.geometry import Point3f, _is_real_ptr
 from gonzales.transport.guide import GuideGrid, null_guide
 from gonzales.transport.glossy_sms import gsms_queue_bytes
-from gonzales.scene.appearance.lights import AreaLight, DistantLight, InfiniteLight, PointLight, LightSampler, LIGHT_BOUNDS_STRIDE, env_build_cdf, env_downsample
+from gonzales.scene.appearance.light_tree import light_tree_words
+from gonzales.scene.appearance.lights import AreaLight, DistantLight, InfiniteLight, PointLight, LightSampler, env_build_cdf, env_downsample
 from gonzales.scene.appearance.materials import MatKind, Material, MeasuredBRDF
 from gonzales.scene.appearance.footprint import CameraFootprint
 from gonzales.scene.appearance.media import Grid, MediumInterface, Medium, NvdbGrid
@@ -525,7 +526,7 @@ struct LightBuffers(Movable):
     var n_point_lights: Int
     var light_sampler_buf: DeviceBuffer[DType.uint8]   # (n_area+1) × sizeof(Float32) CDF
     var n_light_sampler: Int                           # n_area lights (CDF has n+1 entries)
-    var light_sampler_bounds: Int                      # 1: per-light bounds follow the CDF
+    var light_tree_buf: DeviceBuffer[DType.uint8]      # light_tree.mojo's blob
     var light_pick_buf: DeviceBuffer[DType.uint8]      # (n_all+1) × Float32, _light_pick_cdf
     var n_light_pick: Int
     var infinite_lights_buf: DeviceBuffer[DType.uint8]  # n_infinite × sizeof(InfiniteLight) (grew when the portal fields were added, see lights.mojo)
@@ -585,13 +586,15 @@ struct LightBuffers(Movable):
         # least 2 entries: pad a host copy, since enqueue_copy copies the whole
         # buffer. (No map_to_host anywhere here: its first use pins a ~1.3 GiB
         # host pool, ~1 s of page faults.)
-        var ls_entries = Int(s.light_sampler.n) + 1 + (Int(s.light_sampler.n) * LIGHT_BOUNDS_STRIDE if s.light_sampler.has_bounds != Int32(0) else 0)
+        var ls_entries = Int(s.light_sampler.n) + 1
         var ls_host = unsafe_alloc[Float32](max(ls_entries, 2))
         ls_host[unsafe_offset=1] = Float32(0)
         unsafe_memcpy(dest=ls_host, src=s.light_sampler.cdf, count=ls_entries)
         var ls_buf = _gpu_upload_array[Float32](ctx, ls_host, max(ls_entries, 2))
         ctx.synchronize()   # ls_host is freed next
         ls_host.unsafe_free()
+        var lt_buf = _gpu_upload_array[UInt32](ctx, s.light_sampler.tree, light_tree_words(s.light_sampler.tree))
+        ctx.synchronize()
         # The parse-time power pick (pbrt_parser's _light_pick_cdf), >= 2 entries.
         var n_pick = Int(s.light_pick_n)
         var lp_buf = _gpu_upload_array[Float32](ctx, s.light_pick_cdf, max(n_pick + 1, 2))
@@ -646,7 +649,7 @@ struct LightBuffers(Movable):
         return Self(area_lights_buf=al_buf^, area_light_cdf_bufs=al_cdf_bufs^, n_area_lights=Int(s.area_light_count),
                     distant_lights_buf=dl_buf^, n_distant_lights=Int(s.distant_count),
                     point_lights_buf=pl_buf^, n_point_lights=Int(s.point_count),
-                    light_sampler_buf=ls_buf^, n_light_sampler=Int(s.light_sampler.n), light_sampler_bounds=Int(s.light_sampler.has_bounds),
+                    light_sampler_buf=ls_buf^, n_light_sampler=Int(s.light_sampler.n), light_tree_buf=lt_buf^,
                     light_pick_buf=lp_buf^, n_light_pick=n_pick,
                     infinite_lights_buf=il_buf^, il_pixels_bufs=il_pixels_bufs^, il_host_bufs=il_host_bufs^, il_cdf_bufs=il_cdf_bufs^,
                     il_w2l_bufs=il_w2l_bufs^, n_infinite_lights=Int(s.infinite_count))
@@ -1050,7 +1053,7 @@ struct GpuSceneHandle(Movable):
             mediumInterfaces=typed_ptr[MediumInterface](self.media.medium_ifaces_buf), mediumIfaceCount=Int64(self.media.n_medium_ifaces),
             grids=typed_ptr[Grid](self.media.grids_buf), gridCount=Int64(self.media.n_grids),
             nvdbGrids=typed_ptr[NvdbGrid](self.media.nvdb_grids_buf), nvdbGridCount=Int64(self.media.n_nvdb_grids),
-            lightSampler=LightSampler(cdf=self.lights.light_sampler_ptr(), n=Int32(self.lights.n_light_sampler), has_bounds=Int32(self.lights.light_sampler_bounds)),
+            lightSampler=LightSampler(cdf=self.lights.light_sampler_ptr(), n=Int32(self.lights.n_light_sampler), tree=typed_ptr[UInt32](self.lights.light_tree_buf)),
             blasNodesArr=self.blas.nodes_arr(), blasPrimIdsArr=self.blas.primids_arr(), blasCount=Int64(self.blas.n_blas),
             instances=Pointer[Instance, MutUntrackedOrigin](unsafe_from_address=self.instances_ext) if self.instances_ext != 0 else typed_ptr[Instance](self.instances_buf), instanceCount=Int64(self.n_instances),
             measuredBrdfs=typed_ptr[MeasuredBRDF](self.measured.brdfs_buf), measuredBrdfCount=Int64(self.measured.n_brdfs),

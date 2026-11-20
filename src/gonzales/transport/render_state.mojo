@@ -254,6 +254,11 @@ struct PathState(TrivialRegisterPassable):
     var gl_pdf: Float32
     var sss: SssWalk
     var time: Float32   # the path's time in the shutter interval: moving instances are placed at it
+    # Where the last vertex picked an area light from pbrt's light tree (pick_tree 1): an emitter hit repeats the pick
+    # there for its MIS weight. 0: the vertex used the power pick, or none.
+    var pick_p: Vec3f
+    var pick_n: Vec3f
+    var pick_tree: Int8
 # <</listing>>
 # PathState layout: 24+12+12+12+4+8+8+1+1+1+1+4+4+4+4+4+4+4+8+20+4+4+4 = 148 bytes (was 144 -- +4 for cone_len);
 # size is computed via size_of[PathState]() everywhere (GPU buffer sizing included), not hardcoded.

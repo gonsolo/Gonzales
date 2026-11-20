@@ -171,7 +171,7 @@ def _shade_principled[enqueue_shadow: Bool, defer_only: Bool](
     var ps = min(max(spec_e / max(spec_e + kd * alb.luma(), Float32(1e-6)), Float32(0.1)), Float32(0.9))
 
     var ss = _draw_sobol_8(path_ptr, ctx.sobol_matrices)
-    var ls_area = _sample_area_light_nee_u(ctx, hit_point, ss.light, ss.bary1, ss.bary2, pcg)
+    var ls_area = _sample_area_light_nee_u(path_ptr, ctx, hit_point, ss.light, ss.bary1, ss.bary2, pcg)
     _principled_nee[enqueue_shadow, defer_only](path_ptr, ctx, hit_point, ls_area, ls_area.dist * Float32(0.9999), normal, wo, Rd, f0, a, ps)
     for li in range(_nee_simple_light_count(ctx)):
         var res = _nee_sample_simple_light(ctx, li, hit_point, pcg, motion=ctx.motion.at(path_ptr[].time))
@@ -655,7 +655,7 @@ def _shade_rough_dielectric[enqueue_shadow: Bool](
     var bsdf = BSDF(LobeKind.rough_dielectric, True, False, n, wo, RGB(Float32(1)), Int32(mat_idx),
                     max(mat.roughU, mat.roughV), Float32(0), Int32(-1), Float32(0), Float32(0), False, False)
     var ss = _draw_sobol_8(path_ptr, ctx.sobol_matrices)
-    var ls_area = _sample_area_light_nee_u(ctx, hit_raw, ss.light, ss.bary1, ss.bary2, pcg)
+    var ls_area = _sample_area_light_nee_u(path_ptr, ctx, hit_raw, ss.light, ss.bary1, ss.bary2, pcg)
     _lobe_nee_with[BSDF, enqueue_shadow](path_ptr, ctx, bsdf, hit_raw, ls_area, Point2f(ss.env1, ss.env2), True, pcg, n)
     var s = bsdf.sample[want_rev=False](ss.rr, ss.scat1, ss.scat2, Float32(0),
                                         LobeTables(ctx.materials, ctx.curves, ctx.measured_brdfs, ctx.spectral, ctx.mediums), path_ptr[].wavelengths)
@@ -917,7 +917,7 @@ def shade_hair[use_gpu: Bool, enqueue_shadow: Bool](
                                 Float32(0), Float32(0), Int32(curve_idx), inter.u, inter.v, False, False), mat, tab)
     var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
     var ss = _draw_sobol_8(path_ptr, ctx.sobol_matrices)
-    var ls_area = _sample_area_light_nee_u(ctx, hit_base, ss.light, ss.bary1, ss.bary2, pcg)
+    var ls_area = _sample_area_light_nee_u(path_ptr, ctx, hit_base, ss.light, ss.bary1, ss.bary2, pcg)
     _lobe_nee_with[HairBSDF, enqueue_shadow](path_ptr, ctx, bsdf, hit_base, ls_area, Point2f(ss.env1, ss.env2), True, pcg)
     var s = bsdf.sample[want_rev=False](ss.rr, ss.scat1, ss.scat2, pcg.next_float(), tab, path_ptr[].wavelengths)
     # Albedo AOV: the TT lobe's colour, the closest hair has to a diffuse one.

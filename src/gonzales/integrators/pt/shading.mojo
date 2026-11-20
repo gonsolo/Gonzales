@@ -4,7 +4,7 @@ from std.collections import Array
 from std.math import sqrt, floor, abs
 from std.ffi import external_call
 from std.memory.alloc import unsafe_alloc
-from gonzales.core.geometry import offset_point, RGB, Point3f, Vec3f, dot, Frame, fast_sincos, PI, TWO_PI, INV_FOUR_PI, _is_real_ptr
+from gonzales.core.geometry import offset_point, RGB, Point3f, Vec3f, dot, cross, Frame, fast_sincos, PI, TWO_PI, INV_FOUR_PI, _is_real_ptr
 from gonzales.transport.render_state import PDF_DROP_DIRECT
 from gonzales.scene.appearance.materials import Material, MatKind, MeasuredBRDF, resolve_mix
 from gonzales.transport.render_state import PathState, ShadowTask, SuppressTask
@@ -13,7 +13,7 @@ from gonzales.scene.shapes.primitives import Intersection, PrimId, TriangleMesh,
 from gonzales.core.geometry import Ray
 from gonzales.scene.shapes.primitives import mesh_pos
 from gonzales.scene.shapes.motion import MotionTable
-from gonzales.scene.appearance.lights import AreaLight, DistantLight, PointLight, InfiniteLight, LightSampler, il_rgb, light_sampler_pdf_at
+from gonzales.scene.appearance.lights import AreaLight, DistantLight, PointLight, InfiniteLight, LightSampler, il_rgb, light_sampler_pdf, light_pdf_area
 from gonzales.scene.appearance.media import Medium, MediumInterface, Grid, NvdbGrid
 from gonzales.scene.shapes.curves import Curve
 from gonzales.core.rng import PCG32
@@ -35,6 +35,15 @@ from gonzales.transport.glossy_sms import glossy_sms_live, GSMS_DEBUG, GLOSSY_SM
 from gonzales.transport.manifold import _mnee_first_probe
 from gonzales.integrators.pt.materials import shade_diffuse_transmission, _shade_sss_exit, shade_coated_diffuse, shade_dielectric, shade_thin_dielectric, shade_conductor, shade_measured, shade_hair, shade_diffuse, shade_interface
 from gonzales.scene.shapes.primitives import PrimKind
+
+
+@always_inline
+def _hit_light_pdf_area(ctx: ShadeContext, path_ptr: Pointer[PathState, MutUntrackedOrigin], al: AreaLight, al_idx: Int,
+                        tri: Int, tri_area: Float32) -> Float32:
+    """NEE's area density for this emitter point, from the pick the last vertex made (PathState.pick_tree)."""
+    if path_ptr[].pick_tree != Int8(0):
+        return light_pdf_area(ctx.lights.light_sampler, al, al_idx, tri, tri_area, path_ptr[].pick_p, path_ptr[].pick_n)
+    return light_sampler_pdf(ctx.lights.light_sampler, Int32(al_idx)) / max(al.total_area, Float32(1e-30))
 
 
 @always_inline
@@ -488,11 +497,11 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
                 var dist  = inter.tHit + path_ptr[].mis_null_dist
                 var dist2 = dist * dist
                 if cos_l > Float32(0.0) and al.total_area > Float32(0.0):
-                    var ls = ctx.lights.light_sampler
-                    var al_sel_pdf = ls.cdf[unsafe_offset=al_idx + 1] - ls.cdf[unsafe_offset=al_idx]
-                    if dot(path_ptr[].last_ns_n, path_ptr[].last_ns_n) > Float32(0.0):
-                        al_sel_pdf = light_sampler_pdf_at(ls, Int32(al_idx), path_ptr[].last_ns_p)
-                    var pdf_light = dist2 * max(al_sel_pdf, Float32(1e-6)) / (cos_l * al.total_area)
+                    var e1 = lp1 - lp0
+                    var e2 = lp2 - lp0
+                    var pdf_area = _hit_light_pdf_area(ctx, path_ptr, al, al_idx, inter.primId.triangle()[1] // 3,
+                                                       Float32(0.5) * sqrt(dot(cross(e1, e2), cross(e1, e2))))
+                    var pdf_light = dist2 * pdf_area / cos_l
                     var w = power_heuristic(pdf_bsdf, pdf_light)
                     path_ptr[].estimate += _clamped(ctx, path_ptr[].throughput * _to_spec_illum(ctx, emission, path_ptr[].wavelengths) * w, Int(path_ptr[].bounce) - 1)
         if mat.type == MatKind.lamp:   # the ray goes on (Cycles' shade_light.h)
@@ -522,11 +531,7 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
                     if al.total_area > Float32(0.0):
                         var dist2 = inter.tHit * inter.tHit
                         if cos_l > Float32(0.0):
-                            var ls = ctx.lights.light_sampler
-                            var al_sel_pdf = ls.cdf[unsafe_offset=al_idx + 1] - ls.cdf[unsafe_offset=al_idx]
-                            if dot(path_ptr[].last_ns_n, path_ptr[].last_ns_n) > Float32(0.0):
-                                al_sel_pdf = light_sampler_pdf_at(ls, Int32(al_idx), path_ptr[].last_ns_p)
-                            var pdf_light = dist2 * max(al_sel_pdf, Float32(1e-6)) / (cos_l * al.total_area)
+                            var pdf_light = dist2 * _hit_light_pdf_area(ctx, path_ptr, al, al_idx, 0, al.total_area) / cos_l
                             var w = power_heuristic(pdf_bsdf, pdf_light)
                             path_ptr[].estimate += _clamped(ctx, path_ptr[].throughput * _to_spec_illum(ctx, emission, path_ptr[].wavelengths) * w, Int(path_ptr[].bounce) - 1)
         path_ptr[].active = 0
@@ -587,6 +592,7 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
         # previous bounce's -- and means forgetting it cannot reproduce the
         # flat-0.5 escape weight documented on PathState.lastEnvNeePdf.
         path_ptr[].lastEnvNeePdf = INV_FOUR_PI
+        path_ptr[].pick_tree = Int8(0)   # until this vertex's NEE picks from the light tree
         # A specular chain now starts HERE, not at an earlier MNEE vertex:
         # forget that vertex unless this one re-marks itself (only the
         # diffuse family's _nee_area_lights does). Glass continues a chain.

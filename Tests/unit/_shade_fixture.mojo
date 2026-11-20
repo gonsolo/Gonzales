@@ -1,3 +1,4 @@
+from gonzales.scene.appearance.light_tree import light_tree_empty
 from gonzales.core.spectrum import null_spectral_handle
 from gonzales.scene.accel.bvh import BVH4, BVH2Node
 from gonzales.scene.accel.xert import xe_scene_none
@@ -25,7 +26,7 @@ def null_light_context() -> LightContext:
         Pointer[PointLight, MutUntrackedOrigin].unsafe_dangling(), 0,
         Pointer[InfiniteLight, MutUntrackedOrigin].unsafe_dangling(), 0,
         Pointer[Sphere, MutUntrackedOrigin].unsafe_dangling(), 0,
-        LightSampler(Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(), Int32(0), Int32(0)),
+        LightSampler(Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(), Int32(0), light_tree_empty()),
     )
 
 

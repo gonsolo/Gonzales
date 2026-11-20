@@ -10,6 +10,8 @@ from std.math import max, min, sqrt
 from gonzales.scene.shapes.motion import MotionTable
 from gonzales.core.geometry import Point3f, Vec3f, RGB, _is_real_ptr
 from gonzales.scene.appearance.portal_light import portal_passes
+from gonzales.scene.appearance.light_tree import (light_tree_present, light_tree_sample, light_tree_pmf, light_tree_emitter,
+                                                   light_tree_light)
 
 # ── Lights ────────────────────────────────────────────────────────────────────
 # See: docs/06_lights_and_materials.md
@@ -197,102 +199,42 @@ def il_rgb(il: InfiniteLight, texel: Int) -> RGB:
     return RGB(il.pixels_ptr[unsafe_offset=texel * 3], il.pixels_ptr[unsafe_offset=texel * 3 + 1], il.pixels_ptr[unsafe_offset=texel * 3 + 2])
 
 
-comptime LIGHT_BOUNDS_STRIDE: Int = 12
-comptime LIGHT_IMPORTANCE_MAX: Int = 32
+@fieldwise_init
+struct LightSampler(TrivialRegisterPassable):
+    """Area-light picker: the power CDF (cdf[0]=0, cdf[n]=1, pdf[i] = cdf[i+1] - cdf[i], mixed with uniform) and pbrt's
+    light tree over every emissive triangle and curve light (light_tree.mojo), header only when off. Built at parse
+    time; on GPU both pointers are patched to device memory."""
+    var cdf: Pointer[Float32, MutUntrackedOrigin]
+    var n: Int32
+    var tree: Pointer[UInt32, MutUntrackedOrigin]
 
 
 @fieldwise_init
-struct LightSampler(TrivialRegisterPassable):
-    """Area-light picker. cdf[0]=0, cdf[n]=1; pdf[i] = cdf[i+1] - cdf[i] (the power pick, mixed with uniform).
-    With has_bounds != 0 (at most LIGHT_IMPORTANCE_MAX lights, all meshes) the buffer continues after the n+1 CDF entries with
-    LIGHT_BOUNDS_STRIDE floats per light (box min, box max, emission axis, power, cos of the normal cone, two-sided), and the
-    pick at a point follows pbrt's light importance instead. Built at parse time; on GPU the pointer is patched to device memory.
-    """
-    var cdf: Pointer[Float32, MutUntrackedOrigin]
-    var n: Int32
-    var has_bounds: Int32
+struct LightPick(TrivialRegisterPassable):
+    """An area light, its triangle (-1: the point sampler picks one by area) and the probability of that pick."""
+    var light: Int
+    var tri: Int
+    var pmf: Float32
 
 
-@always_inline
-def _safe_sqrt(x: Float32) -> Float32:
-    return sqrt(max(x, Float32(0.0)))
+def light_pick(ls: LightSampler, p: Vec3f, n: Vec3f, u: Float32) -> LightPick:
+    """pbrt's light tree at (p, n), the power pick without one; light -1 when nothing can light p."""
+    if light_tree_present(ls.tree):
+        var (e, pmf) = light_tree_sample(ls.tree, p, n, u)
+        if e < 0:
+            return LightPick(-1, -1, Float32(0))
+        var (l, tri) = light_tree_light(ls.tree, e)
+        return LightPick(l, tri, pmf)
+    var (l, pdf) = light_sampler_sample(ls, u)
+    return LightPick(l, -1, pdf)
 
 
-@always_inline
-def _cos_sub_clamped(sin_a: Float32, cos_a: Float32, sin_b: Float32, cos_b: Float32) -> Float32:
-    return Float32(1.0) if cos_a > cos_b else cos_a * cos_b + sin_a * sin_b
-
-
-@always_inline
-def _sin_sub_clamped(sin_a: Float32, cos_a: Float32, sin_b: Float32, cos_b: Float32) -> Float32:
-    return Float32(0.0) if cos_a > cos_b else sin_a * cos_b - cos_a * sin_b
-
-
-@always_inline
-def light_importance(ls: LightSampler, i: Int, p: Vec3f) -> Float32:
-    """pbrt's LightBounds::Importance for a diffuse emitter (cos theta_e = 0), without the receiver-normal factor."""
-    var b = ls.cdf.unsafe_offset(Int(ls.n) + 1 + i * LIGHT_BOUNDS_STRIDE)
-    var cx = Float32(0.5) * (b[unsafe_offset=0] + b[unsafe_offset=3]); var cy = Float32(0.5) * (b[unsafe_offset=1] + b[unsafe_offset=4]); var cz = Float32(0.5) * (b[unsafe_offset=2] + b[unsafe_offset=5])
-    var dx = p.x - cx; var dy = p.y - cy; var dz = p.z - cz
-    var dist2 = dx * dx + dy * dy + dz * dz
-    var ex = b[unsafe_offset=3] - b[unsafe_offset=0]; var ey = b[unsafe_offset=4] - b[unsafe_offset=1]; var ez = b[unsafe_offset=5] - b[unsafe_offset=2]
-    var diag = sqrt(ex * ex + ey * ey + ez * ez)
-    var d2 = max(dist2, Float32(0.5) * diag)
-    var inv = Float32(1.0) / sqrt(max(dist2, Float32(1e-20)))
-    var cos_w = (b[unsafe_offset=6] * dx + b[unsafe_offset=7] * dy + b[unsafe_offset=8] * dz) * inv
-    if b[unsafe_offset=11] != Float32(0.0):
-        cos_w = abs(cos_w)
-    var sin_w = _safe_sqrt(Float32(1.0) - cos_w * cos_w)
-    var r2 = Float32(0.25) * diag * diag
-    var inside = p.x >= b[unsafe_offset=0] and p.x <= b[unsafe_offset=3] and p.y >= b[unsafe_offset=1] and p.y <= b[unsafe_offset=4] and p.z >= b[unsafe_offset=2] and p.z <= b[unsafe_offset=5]
-    var cos_b = Float32(-1.0)
-    if not inside and dist2 >= r2:
-        cos_b = _safe_sqrt(Float32(1.0) - r2 / dist2)
-    var sin_b = _safe_sqrt(Float32(1.0) - cos_b * cos_b)
-    var cos_o = b[unsafe_offset=10]
-    var sin_o = _safe_sqrt(Float32(1.0) - cos_o * cos_o)
-    var cos_x = _cos_sub_clamped(sin_w, cos_w, sin_o, cos_o)
-    var sin_x = _sin_sub_clamped(sin_w, cos_w, sin_o, cos_o)
-    var cos_p = _cos_sub_clamped(sin_x, cos_x, sin_b, cos_b)
-    if cos_p <= Float32(0.0):
-        return Float32(0.0)
-    return max(b[unsafe_offset=9] * cos_p / d2, Float32(0.0))
-
-
-@always_inline
-def light_sampler_sample_at(ls: LightSampler, p: Vec3f, u: Float32) -> Tuple[Int, Float32]:
-    """(light_index, selection_pdf) for a shading point p; (-1, 0) when no light can reach it."""
-    if ls.has_bounds == Int32(0):
-        return light_sampler_sample(ls, u)
-    var total = Float32(0.0)
-    for i in range(Int(ls.n)):
-        total += light_importance(ls, i, p)
-    if total <= Float32(0.0):
-        return (-1, Float32(0.0))
-    var target = u * total
-    var acc = Float32(0.0)
-    var last = -1
-    for i in range(Int(ls.n)):
-        var w = light_importance(ls, i, p)
-        if w > Float32(0.0):
-            last = i
-            acc += w
-            if acc > target:
-                return (i, max(w / total, Float32(1e-6)))
-    return (last, max(light_importance(ls, last, p) / total, Float32(1e-6)))
-
-
-@always_inline
-def light_sampler_pdf_at(ls: LightSampler, light_idx: Int32, p: Vec3f) -> Float32:
-    """The selection pdf light_sampler_sample_at gives light_idx at p."""
-    if ls.has_bounds == Int32(0):
-        return light_sampler_pdf(ls, light_idx)
-    var total = Float32(0.0)
-    for i in range(Int(ls.n)):
-        total += light_importance(ls, i, p)
-    if total <= Float32(0.0):
-        return Float32(0.0)
-    return light_importance(ls, Int(light_idx), p) / total
+def light_pdf_area(ls: LightSampler, al: AreaLight, light: Int, tri: Int, tri_area: Float32, p: Vec3f, n: Vec3f) -> Float32:
+    """The area density light_pick at (p, n) and the point sampler give a point on triangle tri of this light."""
+    if light_tree_present(ls.tree):
+        var pmf = light_tree_pmf(ls.tree, light_tree_emitter(ls.tree, light, tri if al.kind == Int8(0) else 0), p, n)
+        return pmf / max(tri_area if al.kind == Int8(0) else al.total_area, Float32(1e-30))
+    return light_sampler_pdf(ls, Int32(light)) / max(al.total_area, Float32(1e-30))
 
 
 @always_inline

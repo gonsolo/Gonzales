@@ -14,6 +14,7 @@
 from std.math import abs
 from std.memory.alloc import unsafe_alloc
 from std.testing import assert_true, TestSuite
+from gonzales.scene.appearance.light_tree import light_tree_empty
 from gonzales.scene.shapes.curves import CurveBvh
 from gonzales.core.sampling import ThinLens
 from gonzales.scene.appearance.footprint import CameraFootprint
@@ -118,7 +119,7 @@ def _dummy_sd() -> SceneView:
         Pointer[MediumInterface, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
         Pointer[Grid, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
         Pointer[NvdbGrid, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
-        LightSampler(Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(), Int32(0), Int32(0)),
+        LightSampler(Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(), Int32(0), light_tree_empty()),
         Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
         Pointer[Pointer[PrimId, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
         Int64(0),
@@ -344,7 +345,7 @@ def test_bdpt_connect_to_cache_sums_one_paired_light_path() raises:
         Pointer[MediumInterface, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
         Pointer[Grid, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
         Pointer[NvdbGrid, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
-        LightSampler(Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(), Int32(0), Int32(0)),
+        LightSampler(Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(), Int32(0), light_tree_empty()),
         Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
         Pointer[Pointer[PrimId, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
         Int64(0),

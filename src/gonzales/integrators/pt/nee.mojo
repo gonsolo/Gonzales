@@ -11,7 +11,8 @@ from gonzales.transport.render_state import PathState
 from gonzales.scene.shapes.primitives import Intersection, mesh_vi
 from gonzales.core.geometry import Ray
 from gonzales.scene.shapes.primitives import mesh_pos
-from gonzales.scene.appearance.lights import AreaLight, InfiniteLight, light_sampler_sample, light_sampler_sample_at, light_sampler_pdf_at, area_light_pick_triangle
+from gonzales.scene.appearance.lights import AreaLight, InfiniteLight, light_sampler_sample, LightPick, light_pick, light_pdf_area, area_light_pick_triangle
+from gonzales.scene.appearance.light_tree import light_tree_present
 from gonzales.scene.shapes.curves import curve_at, curve_piece_endpoints, _curve_perp_axis
 from gonzales.transport.bxdf import BSDF, NeeLobe, bxdf_pdf_diffuse, _nee_weight_simple_spectral, LobeTables
 from gonzales.core.rng import PCG32
@@ -118,7 +119,7 @@ def _lobe_nee[enqueue_shadow: Bool, defer_only: Bool = False](
     mut pcg: PCG32,
 ):
     """NEE through a BSDF: one area-light sample, every simple light, every environment."""
-    var ls_area = _sample_area_light_nee(ctx, hit_point, pcg)
+    var ls_area = _sample_area_light_nee(path_ptr, ctx, hit_point, pcg)
     _lobe_nee_with[BSDF, enqueue_shadow, defer_only](path_ptr, ctx, bsdf, hit_point, ls_area, Point2f(Float32(0), Float32(0)),
                                                      False, pcg)
 
@@ -235,9 +236,9 @@ def _nee_infinite_light[enqueue_shadow: Bool, defer_only: Bool = False](
 
 @always_inline
 def _sample_light_point_and_normal(
-    ctx: ShadeContext, al: AreaLight, u1: Float32, u2: Float32, mut pcg: PCG32,
+    ctx: ShadeContext, al: AreaLight, tri: Int, u1: Float32, u2: Float32, mut pcg: PCG32,
     ref_point: Vec3f,
-) -> Tuple[Vec3f, Vec3f, Vec3f, Vec3f]:
+) -> Tuple[Vec3f, Vec3f, Vec3f, Vec3f, Float32]:
     """Point + outward normal on an area light's surface for NEE, plus the
     surface's own (dp_du, dp_dv) tangent basis (used only by
     _nee_area_lights' MNEE glass-refraction focusing — meaningless for a
@@ -247,7 +248,9 @@ def _sample_light_point_and_normal(
     position along the picked piece, u2 = angle around the tube). Which
     triangle/piece is picked is its own uniform draw from pcg, independent
     of (u1, u2) — mirrors the pre-existing mesh-light behaviour of picking
-    a uniform random triangle rather than area-weighting by triangle."""
+    a uniform random triangle rather than area-weighting by triangle.
+    A light pick that chose the triangle passes it as `tri` (-1: by area). The last value is the area the point is
+    uniform over, the picked triangle's or the whole light's."""
     if al.kind == Int8(1):
         var curve = curve_at(ctx.curves, Int(al.meshIdx))
         var piece = Int(pcg.next_uint() % UInt32(max(Int(curve.n_pieces), 1)))
@@ -265,10 +268,10 @@ def _sample_light_point_and_normal(
         var radial = u_perp * ctheta + v_perp * stheta
         var point = q0 + axis_dir * (axis_len * u1) + radial * r
         var zero3 = Vec3f(Float32(0.0), Float32(0.0), Float32(0.0))
-        return (point, radial, zero3, zero3)
+        return (point, radial, zero3, zero3, al.total_area)
     else:
         var lmesh = ctx.meshes[unsafe_offset=Int(al.meshIdx)]
-        var lti = area_light_pick_triangle(al, pcg.next_float())
+        var lti = tri if tri >= 0 else area_light_pick_triangle(al, pcg.next_float())
         var lb = lti * 3
         var lv0 = Int(mesh_vi(lmesh, lb))
         var lv1 = Int(mesh_vi(lmesh, lb + 1))
@@ -291,11 +294,31 @@ def _sample_light_point_and_normal(
             normal = lcross * (Float32(1.0) / sqrt(lcross_len))
         if al._pad0 != Int8(0) and dot(normal, point - ref_point) > Float32(0.0):
             normal = -normal   # twosided: emit toward the shading point
-        return (point, normal, lp1 - lp0, lp2 - lp0)
+        var area = al.total_area if tri < 0 else Float32(0.5) * sqrt(dot(cross(lp1 - lp0, lp2 - lp0), cross(lp1 - lp0, lp2 - lp0)))
+        return (point, normal, lp1 - lp0, lp2 - lp0, area)
+
+
+@always_inline
+def _nee_light_pick(path_ptr: Pointer[PathState, MutUntrackedOrigin], ctx: ShadeContext, p: Vec3f, n: Vec3f,
+                    u: Float32) -> LightPick:
+    """light_pick, remembered on the path: an emitter hit repeats it for its MIS weight."""
+    path_ptr[].pick_p = p
+    path_ptr[].pick_n = n
+    path_ptr[].pick_tree = Int8(1) if light_tree_present(ctx.lights.light_sampler.tree) else Int8(0)
+    return light_pick(ctx.lights.light_sampler, p, n, u)
+
+
+@always_inline
+def _power_pick(path_ptr: Pointer[PathState, MutUntrackedOrigin], ctx: ShadeContext, u: Float32) -> LightPick:
+    """The power pick, for strategies that keep it; the emitter hit then weighs with its pdf."""
+    path_ptr[].pick_tree = Int8(0)
+    var (l, pdf) = light_sampler_sample(ctx.lights.light_sampler, u)
+    return LightPick(l, -1, pdf)
 
 
 @always_inline
 def _sample_area_light_nee(
+    path_ptr: Pointer[PathState, MutUntrackedOrigin],
     ctx: ShadeContext,
     hit_point: Vec3f,
     mut pcg: PCG32,
@@ -317,31 +340,31 @@ def _sample_area_light_nee(
     var u_light = pcg.next_float()
     var r1 = pcg.next_float()
     var r2 = pcg.next_float()
-    return _sample_area_light_nee_u(ctx, hit_point, u_light, r1, r2, pcg)
+    return _sample_area_light_nee_u(path_ptr, ctx, hit_point, u_light, r1, r2, pcg)
 
 
-def _sample_area_light_nee_u(ctx: ShadeContext, hit_point: Vec3f, u_light: Float32, r1: Float32, r2: Float32,
-                             mut pcg: PCG32) -> LightSample:
+def _sample_area_light_nee_u(path_ptr: Pointer[PathState, MutUntrackedOrigin], ctx: ShadeContext, hit_point: Vec3f,
+                             u_light: Float32, r1: Float32, r2: Float32, mut pcg: PCG32) -> LightSample:
     """_sample_area_light_nee with the light pick and the point on it given (Sobol dimensions)."""
     var invalid = LightSample(Vec3f(Float32(0.0), Float32(0.0), Float32(0.0)),
                                RGB(Float32(0.0)), Float32(0.0), Float32(0.0), False, False)
     if ctx.lights.area_light_count == 0:
         return invalid.copy()
-    var ls_result = light_sampler_sample(ctx.lights.light_sampler, u_light)
-    var light_idx = ls_result[0]
-    var light_sel_pdf = ls_result[1]
-    var al = ctx.lights.area_lights[unsafe_offset=light_idx]
-    var (light_point, light_normal, _, _) = _sample_light_point_and_normal(ctx, al, r1, r2, pcg, hit_point)
+    var pk = _nee_light_pick(path_ptr, ctx, hit_point, Vec3f(Float32(0)), u_light)
+    if pk.light < 0:
+        return invalid.copy()
+    var al = ctx.lights.area_lights[unsafe_offset=pk.light]
+    var (light_point, light_normal, _, _, area) = _sample_light_point_and_normal(ctx, al, pk.tri, r1, r2, pcg, hit_point)
     var to_light = light_point - hit_point
     var dist_sq = dot(to_light, to_light)
     var dist = sqrt(dist_sq)
-    if dist <= Float32(0.0001) or al.total_area <= Float32(0.0):
+    if dist <= Float32(0.0001) or area <= Float32(0.0):
         return invalid.copy()
     var wi = to_light * (Float32(1.0) / dist)
     var cos_l = -dot(light_normal, wi)
     if cos_l <= Float32(0.0):
         return invalid.copy()
-    var pdf = dist_sq * light_sel_pdf / (cos_l * al.total_area)
+    var pdf = dist_sq * pk.pmf / (cos_l * area)
     if pdf <= Float32(0.0):
         return invalid.copy()
     return LightSample(wi, al.emission, pdf, dist, False, True)
@@ -401,7 +424,10 @@ def _mnee_bsdf_weight(
         return Float32(1.0)
     var al_idx = Int(inter.primId.id1)
     var al = ctx.lights.area_lights[unsafe_offset=al_idx]
-    var pdf_area = light_sampler_pdf_at(ctx.lights.light_sampler, Int32(al_idx), x0) / max(al.total_area, Float32(1e-30))
+    var e1 = mesh_pos(lmesh, lv1) - lp0
+    var e2 = mesh_pos(lmesh, lv2) - lp0
+    var pdf_area = light_pdf_area(ctx.lights.light_sampler, al, al_idx, inter.primId.triangle()[1] // 3,
+                                  Float32(0.5) * sqrt(dot(cross(e1, e2), cross(e1, e2))), x0, path_ptr[].last_ns_n)
     var t_med = _mnee_chain_transmittance(ctx, x0, rp[2], rp[1], light_hit, path_ptr[].current_medium_idx, path_ptr[].wavelengths)
     return Float32(1.0) - _mnee_mis_weight(path_ptr[].last_ns_n, x0, rp[2], rp[1], rp[3], pdf_area, _mnee_pass(t_med))
 
@@ -505,18 +531,18 @@ def _mnee_at_walk_exit(
     path_ptr[].last_ns_n = n
     path_ptr[].last_ns_p = hit_point
     path_ptr[].ns_spec = Int8(0)
-    var (idx, sel_pdf) = light_sampler_sample_at(ctx.lights.light_sampler, hit_point, pcg.next_float())
-    if idx < 0:
+    var pk = light_pick(ctx.lights.light_sampler, hit_point, n, pcg.next_float())
+    if pk.light < 0:
         return
-    var al = ctx.lights.area_lights[unsafe_offset=idx]
-    var (light_point, _, du, dv) = _sample_light_point_and_normal(ctx, al, pcg.next_float(), pcg.next_float(), pcg, hit_point)
+    var al = ctx.lights.area_lights[unsafe_offset=pk.light]
+    var (light_point, _, du, dv, area) = _sample_light_point_and_normal(ctx, al, pk.tri, pcg.next_float(), pcg.next_float(), pcg, hit_point)
     var to_light = light_point - hit_point
     var dist = sqrt(dot(to_light, to_light))
-    if dist <= Float32(0.0001) or al.total_area <= Float32(0) or sel_pdf <= Float32(0):
+    if dist <= Float32(0.0001) or area <= Float32(0) or pk.pmf <= Float32(0):
         return
     path_ptr[].pcgState = pcg.state
     _ = _mnee_area_light_contribute(path_ptr, ctx, n, hit_point, RGB(Float32(1)), to_light * (Float32(1) / dist), dist,
-                                    light_point, du, dv, al, al.total_area / sel_pdf, Float32(1), True, eta)
+                                    light_point, du, dv, al, area / pk.pmf, Float32(1), True, eta)
     pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
 
 
@@ -530,7 +556,7 @@ def _glossy_sms_nee(
     var al = ctx.lights.area_lights[unsafe_offset=idx]
     if al.kind != Int8(0) or al.total_area <= Float32(0):
         return
-    var (y, ln, du, dv) = _sample_light_point_and_normal(ctx, al, u1, u2, pcg, hit_point)
+    var (y, ln, du, dv, _) = _sample_light_point_and_normal(ctx, al, -1, u1, u2, pcg, hit_point)
     var (ldu, ldv) = mnee_orthonormal_basis(du, dv)
     var tab = LobeTables(ctx.materials, ctx.curves, ctx.measured_brdfs, ctx.spectral, ctx.mediums)
     var wl = path_ptr[].wavelengths
@@ -846,22 +872,20 @@ def _nee_area_lights[enqueue_shadow: Bool, mnee: Bool = True, defer_only: Bool =
         path_ptr[].ns_spec = Int8(0)
     # The importance pick at this vertex; the emitter-hit site repeats it from last_ns_p, which this vertex marked.
     var at_point = not (pixel_idx >= 0 and _is_real_ptr(sms_io.read))
-    var ls_result_nee = light_sampler_sample_at(ctx.lights.light_sampler, hit_point, u_light) if at_point else light_sampler_sample(ctx.lights.light_sampler, u_light)
-    var light_idx = ls_result_nee[0]
-    var light_sel_pdf_nee = ls_result_nee[1]
-    if light_idx < 0:
+    var pk = _nee_light_pick(path_ptr, ctx, hit_point, normal, u_light) if at_point else _power_pick(path_ptr, ctx, u_light)
+    if pk.light < 0:
         return
-    var al = ctx.lights.area_lights[unsafe_offset=light_idx]
-    var (light_point, light_normal, ldp_du_v, ldp_dv_v) = _sample_light_point_and_normal(ctx, al, u_bary1, u_bary2, pcg, hit_point)
+    var al = ctx.lights.area_lights[unsafe_offset=pk.light]
+    var (light_point, light_normal, ldp_du_v, ldp_dv_v, area) = _sample_light_point_and_normal(ctx, al, pk.tri, u_bary1, u_bary2, pcg, hit_point)
     var to_light = light_point - hit_point
     var dist_sq = dot(to_light, to_light)
     var dist = sqrt(dist_sq)
-    if dist > Float32(0.0001) and al.total_area > Float32(0.0):
+    if dist > Float32(0.0001) and area > Float32(0.0):
         var shadow_dir = to_light * (Float32(1.0) / dist)
         var cos_s = dot(normal, shadow_dir)
         var cos_l = -dot(light_normal, shadow_dir)
         if cos_s > Float32(0.0) and cos_l > Float32(0.0):
-            var pdf_light = dist_sq * light_sel_pdf_nee / (cos_l * al.total_area)
+            var pdf_light = dist_sq * pk.pmf / (cos_l * area)
             var pdf_bsdf_nee = bxdf_pdf_diffuse(cos_s)
             var w_nee = Float32(1.0) if _emitter_invisible(ctx, al) else power_heuristic(pdf_light, pdf_bsdf_nee)
             var spec_w = _to_spec_diffuse_lit(ctx, alb, al.emission, path_ptr[].wavelengths) * (cos_s * w_nee * lobe_w / pdf_light)
@@ -874,7 +898,7 @@ def _nee_area_lights[enqueue_shadow: Bool, mnee: Bool = True, defer_only: Bool =
                     var used_sms = sms_temporal_step(
                         path_ptr, ctx, hit_point, normal, alb, shadow_dir, dist,
                         light_point, ldp_du_v, ldp_dv_v, al,
-                        al.total_area / light_sel_pdf_nee, pcg, sms_io, pixel_idx)
+                        area / pk.pmf, pcg, sms_io, pixel_idx)
                     if not used_sms:
                         _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, shadow_dir, dist * Float32(0.9999), contrib, guide_write)
                     return
@@ -902,13 +926,13 @@ def _nee_area_lights[enqueue_shadow: Bool, mnee: Bool = True, defer_only: Bool =
                         _ = _mnee_area_light_contribute(
                             path_ptr, ctx, normal, hit_point, alb, shadow_dir, dist,
                             light_point, ldp_du_v, ldp_dv_v, al,
-                            al.total_area / light_sel_pdf_nee, lobe_w, True)
+                            area / pk.pmf, lobe_w, True)
                     used_mnee = True
                 else:
                     used_mnee = _mnee_area_light_contribute(
                         path_ptr, ctx, normal, hit_point, alb, shadow_dir, dist,
                         light_point, ldp_du_v, ldp_dv_v, al,
-                        al.total_area / light_sel_pdf_nee, lobe_w, live)
+                        area / pk.pmf, lobe_w, live)
             if not used_mnee:
                 var contrib = path_ptr[].throughput * spec_w
                 _shadow_contribute[enqueue_shadow, defer_only](path_ptr, ctx, hit_point, shadow_dir, dist * Float32(0.9999), contrib, guide_write)
