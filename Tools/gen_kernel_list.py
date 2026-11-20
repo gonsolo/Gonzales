@@ -9,8 +9,8 @@ OUT = os.path.join(SRC, "gonzales", "app", "kernel_list.mojo")
 LAUNCH = re.compile(r"enqueue_function(?:_checked|_experimental)?\[([A-Za-z_0-9]+)(\[[^\]]*\])?")
 LITERAL = re.compile(r"\[\s*(True|False|-?\d+)(\s*,\s*(True|False|-?\d+))*\s*\]$")
 # Launches whose parameters are the enclosing function's: the instantiations its callers make.
-# IGC runs for hours and tens of GB on these; they still compile lazily when launched.
-SKIP = {"_bdpt_camera_path_bounce_gpu"}
+# Kernels too costly to precompile; they still compile lazily when launched.
+SKIP: set[str] = set()
 EXPAND = {"traverse_paths_gpu[rare_on, alpha_on]":
           ["[True, True]", "[True, False]", "[False, True]", "[False, False]"]}
 

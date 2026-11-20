@@ -87,6 +87,7 @@ from gonzales.gpu.sppm.kernels import sppm_reset_i32_gpu as _k_gonzales_gpu_sppm
 from gonzales.gpu.sppm.kernels import sppm_retrace_vp_gpu as _k_gonzales_gpu_sppm_kernels_sppm_retrace_vp_gpu
 from gonzales.gpu.vcm.kernels import _bdpt_camera_connect_gpu as _k_gonzales_gpu_vcm_kernels__bdpt_camera_connect_gpu
 from gonzales.gpu.vcm.kernels import _bdpt_camera_path_accumulate_gpu as _k_gonzales_gpu_vcm_kernels__bdpt_camera_path_accumulate_gpu
+from gonzales.gpu.vcm.kernels import _bdpt_camera_path_bounce_gpu as _k_gonzales_gpu_vcm_kernels__bdpt_camera_path_bounce_gpu
 from gonzales.gpu.vcm.kernels import _bdpt_camera_path_init_gpu as _k_gonzales_gpu_vcm_kernels__bdpt_camera_path_init_gpu
 from gonzales.gpu.vcm.kernels import _bdpt_camera_path_intersect_gpu as _k_gonzales_gpu_vcm_kernels__bdpt_camera_path_intersect_gpu
 from gonzales.gpu.vcm.kernels import _bdpt_emit_light_paths_gpu as _k_gonzales_gpu_vcm_kernels__bdpt_emit_light_paths_gpu
@@ -951,327 +952,335 @@ def compile_kernels(ctx: DeviceContext, verbose: Bool = False, part: Int = 0, pa
             failed += 1
         if verbose: print("", Float64(perf_counter_ns() - t) / 1.0e9, "s", flush=True)
     if 102 % parts == part:
-        if verbose: print("kernel 102: gonzales.gpu.vcm.kernels._bdpt_camera_path_init_gpu", end="", flush=True)
+        if verbose: print("kernel 102: gonzales.gpu.vcm.kernels._bdpt_camera_path_bounce_gpu", end="", flush=True)
+        t = perf_counter_ns()
+        try:
+            _ = ctx.compile_function[_k_gonzales_gpu_vcm_kernels__bdpt_camera_path_bounce_gpu]()
+        except:
+            failed += 1
+        if verbose: print("", Float64(perf_counter_ns() - t) / 1.0e9, "s", flush=True)
+    if 103 % parts == part:
+        if verbose: print("kernel 103: gonzales.gpu.vcm.kernels._bdpt_camera_path_init_gpu", end="", flush=True)
         t = perf_counter_ns()
         try:
             _ = ctx.compile_function[_k_gonzales_gpu_vcm_kernels__bdpt_camera_path_init_gpu]()
         except:
             failed += 1
         if verbose: print("", Float64(perf_counter_ns() - t) / 1.0e9, "s", flush=True)
-    if 103 % parts == part:
-        if verbose: print("kernel 103: gonzales.gpu.vcm.kernels._bdpt_camera_path_intersect_gpu", end="", flush=True)
+    if 104 % parts == part:
+        if verbose: print("kernel 104: gonzales.gpu.vcm.kernels._bdpt_camera_path_intersect_gpu", end="", flush=True)
         t = perf_counter_ns()
         try:
             _ = ctx.compile_function[_k_gonzales_gpu_vcm_kernels__bdpt_camera_path_intersect_gpu]()
         except:
             failed += 1
         if verbose: print("", Float64(perf_counter_ns() - t) / 1.0e9, "s", flush=True)
-    if 104 % parts == part:
-        if verbose: print("kernel 104: gonzales.gpu.vcm.kernels._bdpt_emit_light_paths_gpu", end="", flush=True)
+    if 105 % parts == part:
+        if verbose: print("kernel 105: gonzales.gpu.vcm.kernels._bdpt_emit_light_paths_gpu", end="", flush=True)
         t = perf_counter_ns()
         try:
             _ = ctx.compile_function[_k_gonzales_gpu_vcm_kernels__bdpt_emit_light_paths_gpu]()
         except:
             failed += 1
         if verbose: print("", Float64(perf_counter_ns() - t) / 1.0e9, "s", flush=True)
-    if 105 % parts == part:
-        if verbose: print("kernel 105: gonzales.gpu.vcm.kernels._bdpt_light_path_bounce_gpu", end="", flush=True)
+    if 106 % parts == part:
+        if verbose: print("kernel 106: gonzales.gpu.vcm.kernels._bdpt_light_path_bounce_gpu", end="", flush=True)
         t = perf_counter_ns()
         try:
             _ = ctx.compile_function[_k_gonzales_gpu_vcm_kernels__bdpt_light_path_bounce_gpu]()
         except:
             failed += 1
         if verbose: print("", Float64(perf_counter_ns() - t) / 1.0e9, "s", flush=True)
-    if 106 % parts == part:
-        if verbose: print("kernel 106: gonzales.gpu.vcm.kernels._bdpt_light_path_init_gpu", end="", flush=True)
+    if 107 % parts == part:
+        if verbose: print("kernel 107: gonzales.gpu.vcm.kernels._bdpt_light_path_init_gpu", end="", flush=True)
         t = perf_counter_ns()
         try:
             _ = ctx.compile_function[_k_gonzales_gpu_vcm_kernels__bdpt_light_path_init_gpu]()
         except:
             failed += 1
         if verbose: print("", Float64(perf_counter_ns() - t) / 1.0e9, "s", flush=True)
-    if 107 % parts == part:
-        if verbose: print("kernel 107: gonzales.gpu.vcm.kernels._bdpt_light_path_intersect_gpu", end="", flush=True)
+    if 108 % parts == part:
+        if verbose: print("kernel 108: gonzales.gpu.vcm.kernels._bdpt_light_path_intersect_gpu", end="", flush=True)
         t = perf_counter_ns()
         try:
             _ = ctx.compile_function[_k_gonzales_gpu_vcm_kernels__bdpt_light_path_intersect_gpu]()
         except:
             failed += 1
         if verbose: print("", Float64(perf_counter_ns() - t) / 1.0e9, "s", flush=True)
-    if 108 % parts == part:
-        if verbose: print("kernel 108: gonzales.gpu.vcm.kernels._bdpt_splat_light_paths_gpu", end="", flush=True)
+    if 109 % parts == part:
+        if verbose: print("kernel 109: gonzales.gpu.vcm.kernels._bdpt_splat_light_paths_gpu", end="", flush=True)
         t = perf_counter_ns()
         try:
             _ = ctx.compile_function[_k_gonzales_gpu_vcm_kernels__bdpt_splat_light_paths_gpu]()
         except:
             failed += 1
         if verbose: print("", Float64(perf_counter_ns() - t) / 1.0e9, "s", flush=True)
-    if 109 % parts == part:
-        if verbose: print("kernel 109: gonzales.gpu.vcm.kernels.bdpt_merge_grid_count_gpu", end="", flush=True)
+    if 110 % parts == part:
+        if verbose: print("kernel 110: gonzales.gpu.vcm.kernels.bdpt_merge_grid_count_gpu", end="", flush=True)
         t = perf_counter_ns()
         try:
             _ = ctx.compile_function[_k_gonzales_gpu_vcm_kernels_bdpt_merge_grid_count_gpu]()
         except:
             failed += 1
         if verbose: print("", Float64(perf_counter_ns() - t) / 1.0e9, "s", flush=True)
-    if 110 % parts == part:
-        if verbose: print("kernel 110: gonzales.gpu.vcm.kernels.bdpt_merge_grid_insert_gpu", end="", flush=True)
+    if 111 % parts == part:
+        if verbose: print("kernel 111: gonzales.gpu.vcm.kernels.bdpt_merge_grid_insert_gpu", end="", flush=True)
         t = perf_counter_ns()
         try:
             _ = ctx.compile_function[_k_gonzales_gpu_vcm_kernels_bdpt_merge_grid_insert_gpu]()
         except:
             failed += 1
         if verbose: print("", Float64(perf_counter_ns() - t) / 1.0e9, "s", flush=True)
-    if 111 % parts == part:
-        if verbose: print("kernel 111: gonzales.gpu.vcm.kernels.bdpt_merge_grid_reset_gpu", end="", flush=True)
+    if 112 % parts == part:
+        if verbose: print("kernel 112: gonzales.gpu.vcm.kernels.bdpt_merge_grid_reset_gpu", end="", flush=True)
         t = perf_counter_ns()
         try:
             _ = ctx.compile_function[_k_gonzales_gpu_vcm_kernels_bdpt_merge_grid_reset_gpu]()
         except:
             failed += 1
         if verbose: print("", Float64(perf_counter_ns() - t) / 1.0e9, "s", flush=True)
-    if 112 % parts == part:
-        if verbose: print("kernel 112: gonzales.gpu.vcm.kernels.bdpt_merge_grid_sort_gpu", end="", flush=True)
+    if 113 % parts == part:
+        if verbose: print("kernel 113: gonzales.gpu.vcm.kernels.bdpt_merge_grid_sort_gpu", end="", flush=True)
         t = perf_counter_ns()
         try:
             _ = ctx.compile_function[_k_gonzales_gpu_vcm_kernels_bdpt_merge_grid_sort_gpu]()
         except:
             failed += 1
         if verbose: print("", Float64(perf_counter_ns() - t) / 1.0e9, "s", flush=True)
-    if 113 % parts == part:
-        if verbose: print("kernel 113: gonzales.gpu.vcm.kernels.reset_shadow_valid_gpu", end="", flush=True)
+    if 114 % parts == part:
+        if verbose: print("kernel 114: gonzales.gpu.vcm.kernels.reset_shadow_valid_gpu", end="", flush=True)
         t = perf_counter_ns()
         try:
             _ = ctx.compile_function[_k_gonzales_gpu_vcm_kernels_reset_shadow_valid_gpu]()
         except:
             failed += 1
         if verbose: print("", Float64(perf_counter_ns() - t) / 1.0e9, "s", flush=True)
-    if 114 % parts == part:
-        if verbose: print("kernel 114: gonzales.gpu.vcm.kernels.resolve_shadow_connect_gpu", end="", flush=True)
+    if 115 % parts == part:
+        if verbose: print("kernel 115: gonzales.gpu.vcm.kernels.resolve_shadow_connect_gpu", end="", flush=True)
         t = perf_counter_ns()
         try:
             _ = ctx.compile_function[_k_gonzales_gpu_vcm_kernels_resolve_shadow_connect_gpu]()
         except:
             failed += 1
         if verbose: print("", Float64(perf_counter_ns() - t) / 1.0e9, "s", flush=True)
-    if 115 % parts == part:
-        if verbose: print("kernel 115: gonzales.gpu.vcm.kernels.sum_shadow_connect_gpu", end="", flush=True)
+    if 116 % parts == part:
+        if verbose: print("kernel 116: gonzales.gpu.vcm.kernels.sum_shadow_connect_gpu", end="", flush=True)
         t = perf_counter_ns()
         try:
             _ = ctx.compile_function[_k_gonzales_gpu_vcm_kernels_sum_shadow_connect_gpu]()
         except:
             failed += 1
         if verbose: print("", Float64(perf_counter_ns() - t) / 1.0e9, "s", flush=True)
-    if 116 % parts == part:
-        if verbose: print("kernel 116: gonzales.gpu.vcm.kernels.vcm_budget_reduce_gpu", end="", flush=True)
+    if 117 % parts == part:
+        if verbose: print("kernel 117: gonzales.gpu.vcm.kernels.vcm_budget_reduce_gpu", end="", flush=True)
         t = perf_counter_ns()
         try:
             _ = ctx.compile_function[_k_gonzales_gpu_vcm_kernels_vcm_budget_reduce_gpu]()
         except:
             failed += 1
         if verbose: print("", Float64(perf_counter_ns() - t) / 1.0e9, "s", flush=True)
-    if 117 % parts == part:
-        if verbose: print("kernel 117: gonzales.gpu.vcm.rt.vulkaninterop_pack_all_shadow_rays_kernel", end="", flush=True)
+    if 118 % parts == part:
+        if verbose: print("kernel 118: gonzales.gpu.vcm.rt.vulkaninterop_pack_all_shadow_rays_kernel", end="", flush=True)
         t = perf_counter_ns()
         try:
             _ = ctx.compile_function[_k_gonzales_gpu_vcm_rt_vulkaninterop_pack_all_shadow_rays_kernel]()
         except:
             failed += 1
         if verbose: print("", Float64(perf_counter_ns() - t) / 1.0e9, "s", flush=True)
-    if 118 % parts == part:
-        if verbose: print("kernel 118: gonzales.gpu.vcm.rt.vulkaninterop_pack_camera_rays_kernel", end="", flush=True)
+    if 119 % parts == part:
+        if verbose: print("kernel 119: gonzales.gpu.vcm.rt.vulkaninterop_pack_camera_rays_kernel", end="", flush=True)
         t = perf_counter_ns()
         try:
             _ = ctx.compile_function[_k_gonzales_gpu_vcm_rt_vulkaninterop_pack_camera_rays_kernel]()
         except:
             failed += 1
         if verbose: print("", Float64(perf_counter_ns() - t) / 1.0e9, "s", flush=True)
-    if 119 % parts == part:
-        if verbose: print("kernel 119: gonzales.gpu.vcm.rt.vulkaninterop_pack_light_rays_kernel", end="", flush=True)
+    if 120 % parts == part:
+        if verbose: print("kernel 120: gonzales.gpu.vcm.rt.vulkaninterop_pack_light_rays_kernel", end="", flush=True)
         t = perf_counter_ns()
         try:
             _ = ctx.compile_function[_k_gonzales_gpu_vcm_rt_vulkaninterop_pack_light_rays_kernel]()
         except:
             failed += 1
         if verbose: print("", Float64(perf_counter_ns() - t) / 1.0e9, "s", flush=True)
-    if 120 % parts == part:
-        if verbose: print("kernel 120: gonzales.scene.accel.curve_bvh._bin_kernel", end="", flush=True)
+    if 121 % parts == part:
+        if verbose: print("kernel 121: gonzales.scene.accel.curve_bvh._bin_kernel", end="", flush=True)
         t = perf_counter_ns()
         try:
             _ = ctx.compile_function[_k_gonzales_scene_accel_curve_bvh__bin_kernel]()
         except:
             failed += 1
         if verbose: print("", Float64(perf_counter_ns() - t) / 1.0e9, "s", flush=True)
-    if 121 % parts == part:
-        if verbose: print("kernel 121: gonzales.scene.accel.curve_bvh._fill_kernel", end="", flush=True)
+    if 122 % parts == part:
+        if verbose: print("kernel 122: gonzales.scene.accel.curve_bvh._fill_kernel", end="", flush=True)
         t = perf_counter_ns()
         try:
             _ = ctx.compile_function[_k_gonzales_scene_accel_curve_bvh__fill_kernel]()
         except:
             failed += 1
         if verbose: print("", Float64(perf_counter_ns() - t) / 1.0e9, "s", flush=True)
-    if 122 % parts == part:
-        if verbose: print("kernel 122: gonzales.scene.accel.curve_bvh._frame_boxes_kernel", end="", flush=True)
+    if 123 % parts == part:
+        if verbose: print("kernel 123: gonzales.scene.accel.curve_bvh._frame_boxes_kernel", end="", flush=True)
         t = perf_counter_ns()
         try:
             _ = ctx.compile_function[_k_gonzales_scene_accel_curve_bvh__frame_boxes_kernel]()
         except:
             failed += 1
         if verbose: print("", Float64(perf_counter_ns() - t) / 1.0e9, "s", flush=True)
-    if 123 % parts == part:
-        if verbose: print("kernel 123: gonzales.scene.accel.curve_bvh._frames_kernel", end="", flush=True)
+    if 124 % parts == part:
+        if verbose: print("kernel 124: gonzales.scene.accel.curve_bvh._frames_kernel", end="", flush=True)
         t = perf_counter_ns()
         try:
             _ = ctx.compile_function[_k_gonzales_scene_accel_curve_bvh__frames_kernel]()
         except:
             failed += 1
         if verbose: print("", Float64(perf_counter_ns() - t) / 1.0e9, "s", flush=True)
-    if 124 % parts == part:
-        if verbose: print("kernel 124: gonzales.scene.accel.curve_bvh._node_bounds_kernel", end="", flush=True)
+    if 125 % parts == part:
+        if verbose: print("kernel 125: gonzales.scene.accel.curve_bvh._node_bounds_kernel", end="", flush=True)
         t = perf_counter_ns()
         try:
             _ = ctx.compile_function[_k_gonzales_scene_accel_curve_bvh__node_bounds_kernel]()
         except:
             failed += 1
         if verbose: print("", Float64(perf_counter_ns() - t) / 1.0e9, "s", flush=True)
-    if 125 % parts == part:
-        if verbose: print("kernel 125: gonzales.scene.accel.curve_bvh._partition_kernel", end="", flush=True)
+    if 126 % parts == part:
+        if verbose: print("kernel 126: gonzales.scene.accel.curve_bvh._partition_kernel", end="", flush=True)
         t = perf_counter_ns()
         try:
             _ = ctx.compile_function[_k_gonzales_scene_accel_curve_bvh__partition_kernel]()
         except:
             failed += 1
         if verbose: print("", Float64(perf_counter_ns() - t) / 1.0e9, "s", flush=True)
-    if 126 % parts == part:
-        if verbose: print("kernel 126: gonzales.scene.accel.curve_bvh._sah_clusters_kernel", end="", flush=True)
+    if 127 % parts == part:
+        if verbose: print("kernel 127: gonzales.scene.accel.curve_bvh._sah_clusters_kernel", end="", flush=True)
         t = perf_counter_ns()
         try:
             _ = ctx.compile_function[_k_gonzales_scene_accel_curve_bvh__sah_clusters_kernel]()
         except:
             failed += 1
         if verbose: print("", Float64(perf_counter_ns() - t) / 1.0e9, "s", flush=True)
-    if 127 % parts == part:
-        if verbose: print("kernel 127: gonzales.scene.accel.curve_bvh._seg_kernel", end="", flush=True)
+    if 128 % parts == part:
+        if verbose: print("kernel 128: gonzales.scene.accel.curve_bvh._seg_kernel", end="", flush=True)
         t = perf_counter_ns()
         try:
             _ = ctx.compile_function[_k_gonzales_scene_accel_curve_bvh__seg_kernel]()
         except:
             failed += 1
         if verbose: print("", Float64(perf_counter_ns() - t) / 1.0e9, "s", flush=True)
-    if 128 % parts == part:
-        if verbose: print("kernel 128: gonzales.scene.accel.curve_bvh._world_boxes_kernel", end="", flush=True)
+    if 129 % parts == part:
+        if verbose: print("kernel 129: gonzales.scene.accel.curve_bvh._world_boxes_kernel", end="", flush=True)
         t = perf_counter_ns()
         try:
             _ = ctx.compile_function[_k_gonzales_scene_accel_curve_bvh__world_boxes_kernel]()
         except:
             failed += 1
         if verbose: print("", Float64(perf_counter_ns() - t) / 1.0e9, "s", flush=True)
-    if 129 % parts == part:
-        if verbose: print("kernel 129: gonzales.scene.accel.gpu_bvh._bounds_init_kernel", end="", flush=True)
+    if 130 % parts == part:
+        if verbose: print("kernel 130: gonzales.scene.accel.gpu_bvh._bounds_init_kernel", end="", flush=True)
         t = perf_counter_ns()
         try:
             _ = ctx.compile_function[_k_gonzales_scene_accel_gpu_bvh__bounds_init_kernel]()
         except:
             failed += 1
         if verbose: print("", Float64(perf_counter_ns() - t) / 1.0e9, "s", flush=True)
-    if 130 % parts == part:
-        if verbose: print("kernel 130: gonzales.scene.accel.gpu_bvh._bounds_kernel", end="", flush=True)
+    if 131 % parts == part:
+        if verbose: print("kernel 131: gonzales.scene.accel.gpu_bvh._bounds_kernel", end="", flush=True)
         t = perf_counter_ns()
         try:
             _ = ctx.compile_function[_k_gonzales_scene_accel_gpu_bvh__bounds_kernel]()
         except:
             failed += 1
         if verbose: print("", Float64(perf_counter_ns() - t) / 1.0e9, "s", flush=True)
-    if 131 % parts == part:
-        if verbose: print("kernel 131: gonzales.scene.accel.gpu_bvh._front_kernel", end="", flush=True)
+    if 132 % parts == part:
+        if verbose: print("kernel 132: gonzales.scene.accel.gpu_bvh._front_kernel", end="", flush=True)
         t = perf_counter_ns()
         try:
             _ = ctx.compile_function[_k_gonzales_scene_accel_gpu_bvh__front_kernel]()
         except:
             failed += 1
         if verbose: print("", Float64(perf_counter_ns() - t) / 1.0e9, "s", flush=True)
-    if 132 % parts == part:
-        if verbose: print("kernel 132: gonzales.scene.accel.gpu_bvh._hploc_kernel", end="", flush=True)
+    if 133 % parts == part:
+        if verbose: print("kernel 133: gonzales.scene.accel.gpu_bvh._hploc_kernel", end="", flush=True)
         t = perf_counter_ns()
         try:
             _ = ctx.compile_function[_k_gonzales_scene_accel_gpu_bvh__hploc_kernel]()
         except:
             failed += 1
         if verbose: print("", Float64(perf_counter_ns() - t) / 1.0e9, "s", flush=True)
-    if 133 % parts == part:
-        if verbose: print("kernel 133: gonzales.scene.accel.gpu_bvh._layout_kernel", end="", flush=True)
+    if 134 % parts == part:
+        if verbose: print("kernel 134: gonzales.scene.accel.gpu_bvh._layout_kernel", end="", flush=True)
         t = perf_counter_ns()
         try:
             _ = ctx.compile_function[_k_gonzales_scene_accel_gpu_bvh__layout_kernel]()
         except:
             failed += 1
         if verbose: print("", Float64(perf_counter_ns() - t) / 1.0e9, "s", flush=True)
-    if 134 % parts == part:
-        if verbose: print("kernel 134: gonzales.scene.accel.gpu_bvh._leaves_kernel", end="", flush=True)
+    if 135 % parts == part:
+        if verbose: print("kernel 135: gonzales.scene.accel.gpu_bvh._leaves_kernel", end="", flush=True)
         t = perf_counter_ns()
         try:
             _ = ctx.compile_function[_k_gonzales_scene_accel_gpu_bvh__leaves_kernel]()
         except:
             failed += 1
         if verbose: print("", Float64(perf_counter_ns() - t) / 1.0e9, "s", flush=True)
-    if 135 % parts == part:
-        if verbose: print("kernel 135: gonzales.scene.accel.gpu_bvh._morton_kernel", end="", flush=True)
+    if 136 % parts == part:
+        if verbose: print("kernel 136: gonzales.scene.accel.gpu_bvh._morton_kernel", end="", flush=True)
         t = perf_counter_ns()
         try:
             _ = ctx.compile_function[_k_gonzales_scene_accel_gpu_bvh__morton_kernel]()
         except:
             failed += 1
         if verbose: print("", Float64(perf_counter_ns() - t) / 1.0e9, "s", flush=True)
-    if 136 % parts == part:
-        if verbose: print("kernel 136: gonzales.scene.accel.gpu_bvh._radix_hist_kernel", end="", flush=True)
+    if 137 % parts == part:
+        if verbose: print("kernel 137: gonzales.scene.accel.gpu_bvh._radix_hist_kernel", end="", flush=True)
         t = perf_counter_ns()
         try:
             _ = ctx.compile_function[_k_gonzales_scene_accel_gpu_bvh__radix_hist_kernel]()
         except:
             failed += 1
         if verbose: print("", Float64(perf_counter_ns() - t) / 1.0e9, "s", flush=True)
-    if 137 % parts == part:
-        if verbose: print("kernel 137: gonzales.scene.accel.gpu_bvh._radix_scatter_kernel", end="", flush=True)
+    if 138 % parts == part:
+        if verbose: print("kernel 138: gonzales.scene.accel.gpu_bvh._radix_scatter_kernel", end="", flush=True)
         t = perf_counter_ns()
         try:
             _ = ctx.compile_function[_k_gonzales_scene_accel_gpu_bvh__radix_scatter_kernel]()
         except:
             failed += 1
         if verbose: print("", Float64(perf_counter_ns() - t) / 1.0e9, "s", flush=True)
-    if 138 % parts == part:
-        if verbose: print("kernel 138: gonzales.scene.accel.gpu_bvh._roots_kernel", end="", flush=True)
+    if 139 % parts == part:
+        if verbose: print("kernel 139: gonzales.scene.accel.gpu_bvh._roots_kernel", end="", flush=True)
         t = perf_counter_ns()
         try:
             _ = ctx.compile_function[_k_gonzales_scene_accel_gpu_bvh__roots_kernel]()
         except:
             failed += 1
         if verbose: print("", Float64(perf_counter_ns() - t) / 1.0e9, "s", flush=True)
-    if 139 % parts == part:
-        if verbose: print("kernel 139: gonzales.scene.accel.gpu_bvh._scan_add_kernel", end="", flush=True)
+    if 140 % parts == part:
+        if verbose: print("kernel 140: gonzales.scene.accel.gpu_bvh._scan_add_kernel", end="", flush=True)
         t = perf_counter_ns()
         try:
             _ = ctx.compile_function[_k_gonzales_scene_accel_gpu_bvh__scan_add_kernel]()
         except:
             failed += 1
         if verbose: print("", Float64(perf_counter_ns() - t) / 1.0e9, "s", flush=True)
-    if 140 % parts == part:
-        if verbose: print("kernel 140: gonzales.scene.accel.gpu_bvh._scan_kernel", end="", flush=True)
+    if 141 % parts == part:
+        if verbose: print("kernel 141: gonzales.scene.accel.gpu_bvh._scan_kernel", end="", flush=True)
         t = perf_counter_ns()
         try:
             _ = ctx.compile_function[_k_gonzales_scene_accel_gpu_bvh__scan_kernel]()
         except:
             failed += 1
         if verbose: print("", Float64(perf_counter_ns() - t) / 1.0e9, "s", flush=True)
-    if 141 % parts == part:
-        if verbose: print("kernel 141: gonzales.scene.accel.optixcurves._segments_kernel", end="", flush=True)
+    if 142 % parts == part:
+        if verbose: print("kernel 142: gonzales.scene.accel.optixcurves._segments_kernel", end="", flush=True)
         t = perf_counter_ns()
         try:
             _ = ctx.compile_function[_k_gonzales_scene_accel_optixcurves__segments_kernel]()
         except:
             failed += 1
         if verbose: print("", Float64(perf_counter_ns() - t) / 1.0e9, "s", flush=True)
-    if 142 % parts == part:
-        if verbose: print("kernel 142: gonzales.scene.accel.xert.xert_trace_interop_gpu", end="", flush=True)
+    if 143 % parts == part:
+        if verbose: print("kernel 143: gonzales.scene.accel.xert.xert_trace_interop_gpu", end="", flush=True)
         t = perf_counter_ns()
         try:
             _ = ctx.compile_function[_k_gonzales_scene_accel_xert_xert_trace_interop_gpu]()
