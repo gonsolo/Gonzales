@@ -9,7 +9,7 @@ from std.runtime import initialize_runtime
 from max.gpu.host import DeviceContext
 from gonzales.core.geometry import RGB, _is_real_ptr
 from gonzales.scene.appearance.materials import MatKind
-from gonzales.scene.description.parse_types import SceneParseState, NamedMaterial
+from gonzales.scene.description.parse_types import SceneParseState, NamedMaterial, set_static_ctm
 from gonzales.scene.description.pbrt_parser import ParsedScene_Mojo, finalize_scene, mojo_apply_overrides
 from gonzales.app.pipeline import (_generate_sobol_matrices, RenderSession, SessionPtr, session_new, session_set_camera, session_set_samples, session_set_lens, session_set_filter_glossy, session_set_adaptive, session_set_clamp, session_set_bounces, session_set_integrator,
                                session_render, session_resolve, session_free)
@@ -106,8 +106,7 @@ def gz_scene_add_mesh(s: ScenePtr, xform: F32Ptr, points: F32Ptr, n_verts: Int32
                       normals: F32Ptr, uvs: F32Ptr, material: Int32) abi("C"):
     """`xform` is object-to-world in USD's GfMatrix4d layout, which is Gonzales's CTM layout.
     `normals` (world space, unit length) and `uvs` are per vertex, or null."""
-    for i in range(16):
-        s[unsafe_offset=0].ctm[i] = xform[unsafe_offset=i]
+    set_static_ctm(s, xform)
     s[unsafe_offset=0].cur_attr.mat_idx = material
     store_mesh(s, points, indices, n_verts, n_tris)
     ref m = s[unsafe_offset=0].meshes[len(s[unsafe_offset=0].meshes) - 1]
@@ -122,8 +121,7 @@ def gz_scene_add_mesh(s: ScenePtr, xform: F32Ptr, points: F32Ptr, n_verts: Int32
 def gz_scene_add_area_light(s: ScenePtr, xform: F32Ptr, points: F32Ptr, n_verts: Int32,
                             indices: I32Ptr, n_tris: Int32, r: Float32, g: Float32, b: Float32) abi("C"):
     """A one-sided emitter of radiance (r, g, b), transparent like a Cycles lamp."""
-    for i in range(16):
-        s[unsafe_offset=0].ctm[i] = xform[unsafe_offset=i]
+    set_static_ctm(s, xform)
     s[unsafe_offset=0].cur_attr.mat_idx = Int32(-1)
     s[unsafe_offset=0].cur_attr.is_alight = True
     s[unsafe_offset=0].cur_attr.al_transparent = True

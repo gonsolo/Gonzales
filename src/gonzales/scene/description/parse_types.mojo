@@ -656,6 +656,12 @@ def ctm_pop(mut s: SceneParseState):
         s.ctm = s.ctm_stack.pop()
         s.ctm_end = s.ctm_end_stack.pop()
 
+def set_static_ctm(s: Pointer[SceneParseState, MutUntrackedOrigin], m: Pointer[Float32, MutUntrackedOrigin]):
+    """A front end without motion sets the CTM: the end-of-shutter CTM equals it."""
+    for k in range(16):
+        s[unsafe_offset=0].ctm[k] = m[unsafe_offset=k]
+        s[unsafe_offset=0].ctm_end[k] = m[unsafe_offset=k]
+
 def ctm_moving(s: SceneParseState) -> Bool:
     for i in range(16):
         if s.ctm[i] != s.ctm_end[i]:

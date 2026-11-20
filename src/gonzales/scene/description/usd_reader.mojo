@@ -10,7 +10,7 @@ from gonzales.core.env import env_str
 from gonzales.core.geometry import RGB
 from gonzales.core.transform import matrix_invert, transform_normals, transform_points
 from gonzales.scene.appearance.materials import MatKind
-from gonzales.scene.description.parse_types import SceneParseState, NamedMaterial
+from gonzales.scene.description.parse_types import SceneParseState, NamedMaterial, set_static_ctm
 from gonzales.scene.description.scene_builder import store_mesh
 from gonzales.scene.description.pbrt_parser import ParsedScene_Mojo, finalize_scene, _psc_finish_object_def, _psc_emit_object_instance, psc_alpha_mask, _plan_ptex_budget
 
@@ -20,13 +20,13 @@ def _f32(arr: PythonObject) raises -> Pointer[Float32, MutUntrackedOrigin]:
 
 
 def _set_ctm(s: Pointer[SceneParseState, MutUntrackedOrigin], m: Pointer[Float32, MutUntrackedOrigin]):
-    for k in range(16):
-        s[unsafe_offset=0].ctm[k] = m[unsafe_offset=k]
+    set_static_ctm(s, m)
 
 
 def _set_identity(s: Pointer[SceneParseState, MutUntrackedOrigin]):
     for k in range(16):
         s[unsafe_offset=0].ctm[k] = Float32(1) if k % 5 == 0 else Float32(0)
+        s[unsafe_offset=0].ctm_end[k] = s[unsafe_offset=0].ctm[k]
 
 
 def _usd_camera(s: Pointer[SceneParseState, MutUntrackedOrigin], cam: Pointer[Float32, MutUntrackedOrigin], fov: Float32):
