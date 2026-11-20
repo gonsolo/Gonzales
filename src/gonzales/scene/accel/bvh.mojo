@@ -1773,22 +1773,21 @@ def _transform_ray_to_instance_space(
 
 # ── Unified traversal core (CPU + GPU) ────────────────────────────────────────
 
-@always_inline
-def traverse_bvh2_core[Or: Origin[mut=True]](
+@no_inline   # one copy per kernel: VCM's camera bounce inlined ~73 traversals
+def _traverse_bvh2_hit(
     bvh2Nodes: Pointer[BVH2Node, MutUntrackedOrigin],
     primIds: Pointer[PrimId, MutUntrackedOrigin],
     meshes: Pointer[TriangleMesh, MutUntrackedOrigin],
     curves: Pointer[Curve, MutUntrackedOrigin],
     ray: Ray,
     tMax: Float32,
-    resultPtr: Pointer[Intersection, Or],
     blasNodesArr: Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin] = Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
     blasPrimIdsArr: Pointer[Pointer[PrimId, MutUntrackedOrigin], MutUntrackedOrigin] = Pointer[Pointer[PrimId, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
     instances: Pointer[Instance, MutUntrackedOrigin] = Pointer[Instance, MutUntrackedOrigin].unsafe_dangling(),
     spheres: Pointer[Sphere, MutUntrackedOrigin] = Pointer[Sphere, MutUntrackedOrigin].unsafe_dangling(),
     n_spheres: Int = 0,
     root: Int = 0,
-):
+) -> Intersection:
     # Callers that never populate any PrimId.type==6 leaf (GPU kernels, which
     # upload their own device-side scene copy with no instance data at all) can
     # omit blasNodesArr/blasPrimIdsArr/instances entirely — the dangling
@@ -1953,14 +1952,14 @@ def traverse_bvh2_core[Or: Origin[mut=True]](
 
     if sphereHit:
         var spId = PrimId(Int64(sphereIdx), Int64(-1), Int64(spheres[unsafe_offset=sphereIdx].materialIndex), Int32(-1), PrimKind.sphere, Int8(0), Int8(0), Int8(0))
-        resultPtr[unsafe_offset=0] = Intersection(spId, localTHit, Float32(0), Float32(0), Int8(1), 0, 0, 0)
+        return Intersection(spId, localTHit, Float32(0), Float32(0), Int8(1), 0, 0, 0)
     elif instHit:
-        resultPtr[unsafe_offset=0] = Intersection(surface_prim(instHitPrim), localTHit, bestU, bestV, Int8(1), 0, 0, 0)
+        return Intersection(surface_prim(instHitPrim), localTHit, bestU, bestV, Int8(1), 0, 0, 0)
     elif hitIndex != -1:
-        resultPtr[unsafe_offset=0] = Intersection(surface_prim(primIds[unsafe_offset=hitIndex]), localTHit, bestU, bestV, Int8(1), 0, 0, 0)
+        return Intersection(surface_prim(primIds[unsafe_offset=hitIndex]), localTHit, bestU, bestV, Int8(1), 0, 0, 0)
     else:
         var dummyId = PrimId(-1, -1, 0, -1, 0, 0, 0, 0)
-        resultPtr[unsafe_offset=0] = Intersection(dummyId, tMax, 0.0, 0.0, Int8(0), 0, 0, 0)
+        return Intersection(dummyId, tMax, 0.0, 0.0, Int8(0), 0, 0, 0)
 
 
 # Divergence-mitigation experiment for traverse_paths_gpu: identical traversal to
@@ -1976,6 +1975,26 @@ def traverse_bvh2_core[Or: Origin[mut=True]](
 # On overflow (>CURVE_DEFER_K candidates for one ray) this falls back to the
 # immediate intersect_curve call, so correctness never depends on K being large
 # enough — it only affects how many rays get the compaction benefit.
+
+
+@always_inline
+def traverse_bvh2_core[Or: Origin[mut=True]](
+    bvh2Nodes: Pointer[BVH2Node, MutUntrackedOrigin],
+    primIds: Pointer[PrimId, MutUntrackedOrigin],
+    meshes: Pointer[TriangleMesh, MutUntrackedOrigin],
+    curves: Pointer[Curve, MutUntrackedOrigin],
+    ray: Ray,
+    tMax: Float32,
+    resultPtr: Pointer[Intersection, Or],
+    blasNodesArr: Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin] = Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
+    blasPrimIdsArr: Pointer[Pointer[PrimId, MutUntrackedOrigin], MutUntrackedOrigin] = Pointer[Pointer[PrimId, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
+    instances: Pointer[Instance, MutUntrackedOrigin] = Pointer[Instance, MutUntrackedOrigin].unsafe_dangling(),
+    spheres: Pointer[Sphere, MutUntrackedOrigin] = Pointer[Sphere, MutUntrackedOrigin].unsafe_dangling(),
+    n_spheres: Int = 0,
+    root: Int = 0,
+):
+    resultPtr[unsafe_offset=0] = _traverse_bvh2_hit(bvh2Nodes, primIds, meshes, curves, ray, tMax, blasNodesArr, blasPrimIdsArr,
+                                                    instances, spheres, n_spheres, root)
 @always_inline
 def traverse_bvh2_core_defer_curves[curves_on: Bool = True, inst_on: Bool = True, alpha_on: Bool = True, count_on: Bool = False](
     bvh2Nodes: Pointer[BVH2Node, MutUntrackedOrigin],
@@ -2183,7 +2202,8 @@ def _shadow_is_null_material(
     if mat_idx < Int64(0):
         return False
     return materials[unsafe_offset=Int(mat_idx)].passes_rays()
-
+@no_inline   # one copy per kernel, as _traverse_bvh2_hit
+@no_inline   # one copy per kernel; it returns its answer, no pointer into the caller's private memory
 def any_hit_bvh2_core[wide_on: Bool = True](
     bvh2Nodes: Pointer[BVH2Node, MutUntrackedOrigin],
     primIds: Pointer[PrimId, MutUntrackedOrigin],
