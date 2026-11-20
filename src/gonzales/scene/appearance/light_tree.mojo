@@ -1,12 +1,14 @@
 """pbrt-v4's BVHLightSampler (Conty and Kulla 2018): a light BVH over every emitter, sampled by importance at a point.
 
 One UInt32 blob, so the GPU upload and the scene cache move a single buffer:
-  header (LT_HEADER words): n_nodes, n_emitters, off_nodes, off_trails, 4 unused, all-bounds min xyz and max xyz (f32 bits)
+  header (LT_HEADER words): n_nodes, n_emitters, off_nodes, off_trails, off_base, n_lights, 2 unused, all-bounds min xyz
+    and max xyz (f32 bits)
   nodes (LT_NODE words each, pbrt's CompactLightBounds + LightBVHNode, depth first, child 0 follows its parent):
     0..2 quantized bounds (16 bits each: min x y, min z max x, max y z), 3 octahedral axis, 4 phi (f32),
     5 cos_o (15 bits) | cos_e (15 bits) << 15 | two_sided << 30, 6 child 1 or emitter index | leaf << 31
   trails (2 words per emitter): the child bits from the root, bit d at depth d; LT_ABSENT in the high word when the
     emitter has no power and so is not in the tree.
+  base (n_lights + 1 words): light l owns emitters base[l] ..< base[l + 1], a mesh light one per triangle.
 """
 
 from std.math import sqrt, acos, cos, sin, floor, ceil, max, min, abs
@@ -244,8 +246,8 @@ def _bucket(pc: Vec3f, cmin: Vec3f, cmax: Vec3f, dim: Int) -> Int:
     return min(max(b, 0), LT_BUCKETS - 1)
 
 
-def build_light_tree(bounds: List[LightBounds]) raises -> List[UInt32]:
-    """The blob for these emitters; emitters with no power stay out of the tree (pbrt) and get pmf 0."""
+def build_light_tree(bounds: List[LightBounds], base: List[Int]) raises -> List[UInt32]:
+    """The blob for these emitters, grouped into lights by base; emitters with no power stay out of the tree (pbrt)."""
     var n = len(bounds)
     var order = List[Int]()
     var amin = Vec3f(3.0e38)
@@ -270,6 +272,10 @@ def build_light_tree(bounds: List[LightBounds]) raises -> List[UInt32]:
     for e in range(n):
         words.append(UInt32(trails[e] & 0xFFFFFFFF))
         words.append(UInt32(trails[e] >> 32))
+    words[4] = UInt32(len(words))
+    words[5] = UInt32(len(base) - 1)
+    for l in range(len(base)):
+        words.append(UInt32(base[l]))
     return words^
 
 
@@ -348,6 +354,38 @@ def light_tree_importance(t: Pointer[UInt32, MutUntrackedOrigin], node: Int, p: 
 @always_inline
 def light_tree_present(t: Pointer[UInt32, MutUntrackedOrigin]) -> Bool:
     return _word(t, 0) != 0
+
+
+def light_tree_empty() -> Pointer[UInt32, MutUntrackedOrigin]:
+    """A blob with no tree: the light sampler then picks by power."""
+    var t = unsafe_alloc[UInt32](LT_HEADER)
+    for i in range(LT_HEADER):
+        t[unsafe_offset=i] = 0
+    return t
+
+
+def light_tree_words(t: Pointer[UInt32, MutUntrackedOrigin]) -> Int:
+    """The blob's length in words."""
+    return Int(_word(t, 4)) + Int(_word(t, 5)) + 1 if _word(t, 4) != 0 else LT_HEADER
+
+
+@always_inline
+def light_tree_emitter(t: Pointer[UInt32, MutUntrackedOrigin], light: Int, tri: Int) -> Int:
+    return Int(_word(t, Int(_word(t, 4)) + light)) + tri
+
+
+def light_tree_light(t: Pointer[UInt32, MutUntrackedOrigin], e: Int) -> Tuple[Int, Int]:
+    """(light, triangle) of emitter e."""
+    var b = Int(_word(t, 4))
+    var lo = 0
+    var hi = Int(_word(t, 5)) - 1
+    while lo < hi:
+        var mid = (lo + hi + 1) >> 1
+        if Int(_word(t, b + mid)) <= e:
+            lo = mid
+        else:
+            hi = mid - 1
+    return (lo, e - Int(_word(t, b + lo)))
 
 
 def light_tree_sample(t: Pointer[UInt32, MutUntrackedOrigin], p: Vec3f, n: Vec3f, u_in: Float32) -> Tuple[Int, Float32]:
