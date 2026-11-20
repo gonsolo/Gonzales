@@ -193,7 +193,7 @@ def gather_ball_reach[probes: Int = GATHER_BALL_PROBES](ref sd: SceneView, p: Po
     var t1 = Vec3f(Float32(1) + sgn * n.x * n.x * ka, sgn * kb, -sgn * n.x)
     var t2 = Vec3f(kb, sgn + n.y * n.y * ka, -n.y)
     var reach = r
-    comptime for i in range(probes):
+    for i in range(probes):   # a runtime loop: one inlined traversal, not one per probe
         var z = Float32(1) - (Float32(2 * i) + Float32(1)) / Float32(probes)
         var rho = sqrt(max(Float32(1) - z * z, Float32(0)))
         var ang = rot + Float32(i) * Float32(2.39996323)
@@ -269,7 +269,7 @@ def gather_disk_coverage[probes: Int = GATHER_COVERAGE_PROBES](
     var rot = Float32(grid_coin_bits(salt, p)) * Float32(2.3283064e-10) * Float32(6.2831853)
     var lift = Float32(0.1) * r
     var hits = 0
-    comptime for i in range(probes):
+    for i in range(probes):   # a runtime loop: one inlined traversal, not one per probe
         var rad = r * sqrt((Float32(i) + Float32(0.5)) / Float32(probes))
         var ang = rot + Float32(i) * Float32(2.39996323)
         var ca = cos(ang) * rad
