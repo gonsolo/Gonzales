@@ -65,6 +65,7 @@ comptime ENV_SWITCHES: List[EnvSwitch] = [
     EnvSwitch("GONZALES_XERT_STATS", "Intel Xe2: print per-ray procedural and sub-square candidate counts"),
     EnvSwitch("GONZALES_XERT_SD_CAP", "Intel Xe2 debug: sub-square candidates a ray tests (default all; -1: none, traversal only)"),
     EnvSwitch("GONZALES_XERT_SD_CAP_BREAK", "Intel Xe2 debug: past GONZALES_XERT_SD_CAP, end the ray's query"),
+    EnvSwitch("GONZALES_XERT_SD_SLAB", "Intel Xe2: reject a displaced sub-square whose mean-normal slab the ray misses before walking it"),
     # Logs, timing, dumps
     EnvSwitch("GONZALES_TIMING", "set: stage times of Hydra sessions and the curve setup"),
     EnvSwitch("GZ_VCM_TIMING", "1: GPU time of each VCM wavefront phase; 2: also each launch as it runs"),

@@ -97,7 +97,7 @@ comptime XERT_SD_HEADER = 32
 def xert_sd_header() raises -> List[Int32]:
     var h = List[Int32](length=XERT_SD_HEADER, fill=0)
     h[XERT_SD_HEADER - 2] = Int32(env_int["GONZALES_XERT_SD_CAP"](0))
-    h[XERT_SD_HEADER - 1] = Int32((1 if env_on["GONZALES_XERT_STATS"]() else 0) | (2 if env_on["GONZALES_XERT_SD_CAP_BREAK"]() else 0))
+    h[XERT_SD_HEADER - 1] = Int32((1 if env_on["GONZALES_XERT_STATS"]() else 0) | (2 if env_on["GONZALES_XERT_SD_CAP_BREAK"]() else 0) | (4 if env_on["GONZALES_XERT_SD_SLAB"]() else 0))
     return h^
 
 # Counters: rays, other procedural candidates, sub-square candidates and hits, rays with sub-square candidates, the sum of
@@ -106,11 +106,11 @@ def xert_stats_print(ctx: DeviceContext) raises:
     var addr = Int(xert_proc_table(9))
     if addr == 0 or not env_on["GONZALES_XERT_STATS"]():
         return
-    var c = List[Int64](length=8, fill=0)
-    ctx.enqueue_copy(c.unsafe_ptr().unsafe_bitcast[UInt8](), DeviceBuffer[DType.uint8](ctx, MutPointer[UInt8, MutAnyOrigin](unsafe_from_address=addr - 4 * XERT_SD_HEADER), 64, owning=False))
+    var c = List[Int64](length=14, fill=0)
+    ctx.enqueue_copy(c.unsafe_ptr().unsafe_bitcast[UInt8](), DeviceBuffer[DType.uint8](ctx, MutPointer[UInt8, MutAnyOrigin](unsafe_from_address=addr - 4 * XERT_SD_HEADER), 112, owning=False))
     ctx.synchronize()
     print("xert stats: rays", c[0], "other candidates", c[1], "sub-square candidates", c[2], "sub-square hits", c[3],
-          "rays with some", c[4], "sum of squares", c[5], "rays with 16+", c[6], "most", c[7])
+          "rays with some", c[4], "sum of squares", c[5], "rays with 16+", c[6], "most", c[7], "walk steps", c[8] & 0xFFFFFFFF, "leaves outside their height bounds", c[8] >> 32, "slab rejects", c[9], "rejects that hit", c[10], "fixed by margin", c[11] & 0xFFFFF, "by pad", (c[11] >> 20) & 0xFFFFF, "root cut", c[11] >> 40, "max off surface", c[12], "max outside root slab", c[13], "(1e-4 box)")
 
 def xert_active() -> Bool:
     return external_call["xert_scene_accel", UInt64]() != 0
@@ -197,7 +197,7 @@ def xert_trace(accel: MutPointer[UInt8, MutAnyOrigin], ray: XeRayDesc, cv: XePro
         var ch_v = Float32(0)
         var sd_tri = Int32(-1)
         var sd_geom = Int32(-1)
-        var n_oth = Int64(0); var n_sd = Int64(0); var n_sdh = Int64(0)
+        var n_oth = Int64(0); var n_sd = Int64(0); var n_sdh = Int64(0); var n_st = Int64(0); var n_rej = Int64(0); var n_bad = Int64(0); var n_why = Int64(0); var n_dev = Int64(0); var n_ex = Int64(0)
         while not external_call["intel_is_traversal_done", Bool](q):
             var level = external_call["intel_get_hit_bvh_level", UInt32](q, UInt32(1))
             var org = SIMD[DType.float32, 4](0)
@@ -227,7 +227,12 @@ def xert_trace(accel: MutPointer[UInt8, MutAnyOrigin], ray: XeRayDesc, cv: XePro
                     var t_lim = min(ray.tmax, external_call["intel_get_hit_distance", Float32](q, UInt32(0)))
                     var dl = sqrt(dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2])
                     var sh = intersect_displaced[5](sub.d, pid - Int(cv.subdiv[unsafe_offset=rec]), Vec3f(org[0], org[1], org[2]),
-                                                    Vec3f(dir[0], dir[1], dir[2]) * (Float32(1) / dl), t_lim * dl)
+                                                    Vec3f(dir[0], dir[1], dir[2]) * (Float32(1) / dl), t_lim * dl,
+                                                    (1 if (cv.subdiv[unsafe_offset=-1] & 4) != 0 else 0))
+                    n_st += Int64(max(sh[4], 0)); n_rej += Int64(1 if sh[4] == 0 else 0); n_bad += Int64(1 if sh[4] < 0 else 0)
+                    if sh[4] < 0:
+                        n_why += Int64(((-sh[4]) >> 1) & 1) + (Int64(((-sh[4]) >> 2) & 1) << 20) + (Int64(((-sh[4]) >> 3) & 1) << 40)
+                        n_dev = max(n_dev, Int64(((-sh[4]) >> 4) & ((1 << 26) - 1))); n_ex = max(n_ex, Int64((-sh[4]) >> 30))
                     var st = sh[1] / dl
                     if sh[0] and st >= ray.tmin and st < t_lim:   # reported as the cage triangle under the hit's Ptex (u, v)
                         var pi = prim_patch(sub.d, pid - Int(cv.subdiv[unsafe_offset=rec]))[0]
@@ -285,6 +290,13 @@ def xert_trace(accel: MutPointer[UInt8, MutAnyOrigin], ray: XeRayDesc, cv: XePro
                 if n_sd >= 16:
                     _ = Atomic.fetch_add(st.unsafe_offset(6), Int64(1))
                 _ = Atomic.max(st.unsafe_offset(7), n_sd)
+                _ = Atomic.fetch_add(st.unsafe_offset(8), n_st)
+                if n_rej > 0:
+                    _ = Atomic.fetch_add(st.unsafe_offset(9), n_rej)
+                if n_bad > 0:
+                    _ = Atomic.fetch_add(st.unsafe_offset(10), n_bad)
+                    _ = Atomic.fetch_add(st.unsafe_offset(11), n_why)
+                    Atomic.max(st.unsafe_offset(12), n_dev); Atomic.max(st.unsafe_offset(13), n_ex)
         var hit = XeHit(-1, 0, 0, -1, -1, -1, -1, -1)
         if external_call["intel_has_committed_hit", Bool](q):
             hit.t = external_call["intel_get_hit_distance", Float32](q, UInt32(0))
