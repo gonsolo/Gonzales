@@ -1,5 +1,5 @@
 from std.math import sqrt, log, exp, cos, sin
-from std.bit import count_trailing_zeros, bit_reverse
+from std.bit import count_trailing_zeros
 from gonzales.core.rng import mix_bits_u64
 from gonzales.core.geometry import Vec3f, Point3f, dot, cross, Frame, PI, TWO_PI, _is_real_ptr, fast_sincos, Ray
 from gonzales.core.spectrum import SampledWavelengths, sample_wavelengths
@@ -579,8 +579,16 @@ struct ThinLens(TrivialRegisterPassable):
         return self.shutter[0] + (self.shutter[1] - self.shutter[0]) * u if self.timed else Float32(0)
 
     def pass_time(self, pass_idx: Int) -> Float32:
-        """pbrt's SPPM: one time per pass for all its camera and light paths, the base-2 radical inverse."""
-        return self.sample_time(Float32(bit_reverse(UInt32(pass_idx))) * Float32(2.3283064365386963e-10))
+        """One time per pass for all its camera and light paths, as pbrt's SPPM."""
+        # Base 3: pass_wavelengths is base 2 over the same index, which ties the color to the time.
+        var u = Float32(0)
+        var f = Float32(1) / 3
+        var i = pass_idx
+        while i > 0:
+            u += Float32(i % 3) * f
+            i //= 3
+            f /= 3
+        return self.sample_time(u)
 
     @staticmethod
     def pinhole() -> ThinLens:
