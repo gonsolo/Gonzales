@@ -10,7 +10,6 @@ from std.sys.info import num_performance_cores
 from max.algorithm import parallelize
 from std.subprocess import run
 from std.os.path import exists
-from std.os import getenv
 from gonzales.scene.appearance.footprint import camera_footprint
 from gonzales.core.sensors import named_sensor_is_supported, named_sensor_srgb_matrix
 from gonzales.core.diagnostics import warn_unsupported, warn_unsupported_in
@@ -2618,10 +2617,6 @@ def _cull_small_instances(s: Pointer[SceneParseState, MutUntrackedOrigin], psc: 
     print("Instance culling: kept", n_keep, "of", n, "instances (size limit", limit, "of the image height)")
     return n_keep
 
-def _light_tree_enabled() -> Bool:
-    """GONZALES_LIGHT_TREE=0 keeps the power pick, for comparisons."""
-    return getenv("GONZALES_LIGHT_TREE") != "0"
-
 
 def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
                  psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin],
@@ -4470,7 +4465,7 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
         ls_cdf[unsafe_offset=i + 1] = ls_cdf[unsafe_offset=i] + share
     lt_base.append(len(lt_bounds))
     var tree_words = List[UInt32](length=LT_HEADER, fill=0)
-    if ls_n > 0 and len(lt_base) == ls_n + 1 and _light_tree_enabled():
+    if ls_n > 0 and len(lt_base) == ls_n + 1 and env_str["GONZALES_LIGHT_TREE"]() != "0":
         try:
             tree_words = build_light_tree(lt_bounds, lt_base)
         except e:
