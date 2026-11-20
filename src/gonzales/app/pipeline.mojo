@@ -430,8 +430,9 @@ def _motion_unsupported(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin]):
 
 
 def _motion_off_rt(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin], rt_wanted: Bool) -> Bool:
-    """Whether a scene with motion turns the RT hardware off: its structures hold everything at the start."""
-    if rt_wanted and psc[unsafe_offset=0].motion_count > Int32(0):
+    """Whether a scene with motion turns the RT hardware off. Intel leaves the moving instances out of its structures
+    and traces them in software after each hardware trace (hw_motion_pass); the other backends do not yet."""
+    if rt_wanted and psc[unsafe_offset=0].motion_count > Int32(0) and xert_alignment() == 0:
         print("Warning: motion blur traces on the software BVH; the RT hardware is off for this scene.")
         return True
     return False
@@ -1378,6 +1379,13 @@ def _xert_attach(ctx: DeviceContext, psc: Pointer[ParsedScene_Mojo, MutUntracked
         for q in range(12):
             xf[unsafe_offset=12 * u + q] = xf[unsafe_offset=12 * Int(pieces.entry_rec[j]) + q]
         blas_of[unsafe_offset=u] = Int32(p) if sizes[p] > 0 else Int32(-1)
+    var mv = psc[unsafe_offset=0].motion_table()
+    for j in range(Int(mv.n_moving)):   # moving instances are traced in software after the hardware (hw_motion_pass)
+        blas_of[unsafe_offset=Int(mv.moving[unsafe_offset=j])] = Int32(-1)
+    for j in range(len(pieces.entry_rec)):
+        var rec = Int(pieces.entry_rec[j])
+        if rec < ni and mv.count > Int32(0) and mv.index[unsafe_offset=rec] >= Int32(0):
+            blas_of[unsafe_offset=ni + n_ord + j] = Int32(-1)
     var tlas_size = Int64(0)
     var tlas = xert_build_tlas(Int64(n_inst), xf, blas_of, addr, bounds, Pointer(to=tlas_size).unsafe_origin_cast[MutUntrackedOrigin]())
     xf.unsafe_free(); addr.unsafe_free(); bounds.unsafe_free()

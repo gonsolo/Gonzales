@@ -17,7 +17,7 @@ from gonzales.scene.shapes.curves import Curve, curve_at, curve_piece_endpoints,
 from gonzales.transport.bxdf import BxDFSample, GeomContext, SobolSamples8, BxDFFlags
 from gonzales.core.rng import PCG32
 from gonzales.scene.appearance.footprint import CameraFootprint, UVFootprint, TriWorld, tri_world, hit_uv_footprint
-from gonzales.scene.accel.bvh import any_hit_dispatch, curve_offset_eps, ray_sphere_hit
+from gonzales.scene.accel.bvh import any_hit_dispatch, curve_offset_eps, ray_sphere_hit, trace_moving
 from gonzales.scene.accel.xert import xert_occluded, xert_closest
 from gonzales.core.sampling import sobol_sample_n, sobol_dim_seed
 from gonzales.core.transform import transform_normal, Mat4
@@ -406,10 +406,15 @@ def _emitter_invisible(ctx: ShadeContext, al: AreaLight) -> Bool:
 @always_inline
 # On Intel the software BVH may hold no triangles (GONZALES_RT_PRUNE): ask the hardware, and test the analytic spheres here.
 @always_inline
-def _xe_blocked(ctx: ShadeContext, ray: Ray, tmax: Float32) -> Bool:
+def _xe_blocked(ctx: ShadeContext, ray: Ray, tmax: Float32, *, motion: MotionTable) -> Bool:
     for k in range(ctx.lights.sphere_count):
-        if ray_sphere_hit(ctx.lights.spheres[unsafe_offset=k].center, ctx.lights.spheres[unsafe_offset=k].radius, ray, Float32(1e-4), tmax) > Float32(0):
+        var sph = motion.sphere(ctx.lights.spheres, k)
+        if ray_sphere_hit(sph.center, sph.radius, ray, Float32(1e-4), tmax) > Float32(0):
             return True
+    if motion.n_moving > Int32(0) and trace_moving(ctx.meshes, ctx.blasNodesArr, ctx.blasPrimIdsArr, ctx.instances, ctx.curves,
+                                                   Vec3f(ray.origin.x, ray.origin.y, ray.origin.z), ray.direction, tmax, True,
+                                                   motion=motion)[0]:
+        return True
     if ctx.xe.alpha == 0:
         return xert_occluded(ctx.xe, ray.origin.x, ray.origin.y, ray.origin.z, ray.direction.x, ray.direction.y, ray.direction.z, tmax)
     var tmin = Float32(0)
@@ -440,7 +445,7 @@ def _shadow_blocked(ctx: ShadeContext, origin: Vec3f, dir: Vec3f, tmax: Float32,
     """The plain any-hit shadow test of _shadow_contribute."""
     var shadow_ray = Ray(Point3f(origin[0], origin[1], origin[2]), Vec3f(dir[0], dir[1], dir[2]))
     if _is_real_ptr(ctx.xe.accel):
-        return _xe_blocked(ctx, shadow_ray, tmax)
+        return _xe_blocked(ctx, shadow_ray, tmax, motion=ctx.motion.at(time))
     return any_hit_dispatch(ctx.bvh4, ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves, shadow_ray, tmax,
                              ctx.blasNodesArr, ctx.blasPrimIdsArr, ctx.instances,
                              ctx.lights.spheres, ctx.lights.sphere_count,
@@ -498,7 +503,7 @@ def _shadow_contribute[enqueue_shadow: Bool, defer_only: Bool = False](
                                   ctx.spectral, path_ptr[].wavelengths, pcg, ctx.motion.at(path_ptr[].time))
         blocked = tr.is_black()
     elif _is_real_ptr(ctx.xe.accel):
-        blocked = _xe_blocked(ctx, shadow_ray, tmax)
+        blocked = _xe_blocked(ctx, shadow_ray, tmax, motion=ctx.motion.at(path_ptr[].time))
     else:
         blocked = any_hit_dispatch(ctx.bvh4, ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves, shadow_ray, tmax,
                                     ctx.blasNodesArr, ctx.blasPrimIdsArr, ctx.instances,

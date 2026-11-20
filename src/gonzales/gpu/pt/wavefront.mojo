@@ -4,7 +4,7 @@ from std.time import perf_counter_ns
 from std.utils import StaticTuple
 from gonzales.core.gpu_tuning import MINCTA_TRAVERSE
 from std.sys import get_defined_int
-from gonzales.scene.accel.bvh import _node_box_hit, _node_hi, _node_lo, _node_oc, _bvh_has_nodes, _shadow_is_null_material, _traverse_instances, BVH2Node, any_hit_bvh2_core, ray_sphere_hit, test_spheres, traverse_bvh2_core, traverse_bvh2_core_defer_curves, SceneView, _displaced_tri_hit
+from gonzales.scene.accel.bvh import trace_moving, _node_box_hit, _node_hi, _node_lo, _node_oc, _bvh_has_nodes, _shadow_is_null_material, _traverse_instances, BVH2Node, any_hit_bvh2_core, ray_sphere_hit, test_spheres, traverse_bvh2_core, traverse_bvh2_core_defer_curves, SceneView, _displaced_tri_hit
 from gonzales.scene.accel.curve_bvh import curve_bvh_occluded, curve_bvh_closest, curve_bvh_prim
 from gonzales.scene.shapes.curves import CURVE_DEFER_K, Curve, curve_at, curve_piece_endpoints, intersect_curve, curve_hit_normal
 from gonzales.scene.shapes.motion import MotionTable
@@ -23,7 +23,7 @@ from gonzales.core.transform import transform_normal, Mat4
 from gonzales.scene.accel.vulkaninterop import VulkanInteropRtSceneHandle, vulkaninterop_rt_trace
 from std.builtin.device_passable import DevicePassable, DeviceTypeEncoder
 from gonzales.scene.accel.xert import XeScene, xert_active, xert_scene, xert_trace_interop_one
-from gonzales.scene.accel.hw_rt import hw_alpha, hw_curves, hw_rt_active, hw_trace_interop, hw_trace_shadow
+from gonzales.scene.accel.hw_rt import RayTimes, hw_motion_pass, hw_alpha, hw_curves, hw_rt_active, hw_trace_interop, hw_trace_shadow
 from gonzales.scene.accel.optixcurves import oxc_active, oxc_scratch, oxc_trace_closest, oxc_trace_shadow
 from max.gpu import WARP_SIZE, barrier, block_dim, block_idx, lane_id, thread_idx
 from max.gpu.memory import AddressSpace
@@ -36,7 +36,7 @@ from max.gpu.host import DeviceBuffer, DeviceContext
 from max.gpu.host._nvidia_cuda import CUDA
 from std.atomic import Atomic
 from std.math import ceildiv, sqrt
-from std.sys import has_accelerator
+from std.sys import has_accelerator, size_of
 from gonzales.gpu.scene import GpuSceneHandle
 from gonzales.transport.sss_walk import _sss_walk_step, WalkTracer
 from gonzales.scene.shapes.primitives import PrimKind, is_surface_tri
@@ -425,6 +425,12 @@ struct XeWalkTracer(WalkTracer, DevicePassable):
                           self.mesh_material_idx, self.mesh_al_idx, Int(self.n_meshes), self.instance_base_mesh,
                           Pointer[PathState, MutUntrackedOrigin].unsafe_dangling(), sd.meshes)
         _ = res
+        if motion.n_moving > Int32(0):
+            var h = trace_moving(sd.meshes, sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances, sd.curves,
+                                 Vec3f(ray.origin.x, ray.origin.y, ray.origin.z), ray.direction,
+                                 store[].tHit if store[].hit != Int8(0) else Float32(1.0e8), False, motion=motion)
+            if h[0]:
+                store[] = Intersection(h[4], h[1], h[2], h[3], Int8(1), Int8(0), Int8(0), Int8(0))
 
     def _to_device_type(self, mut encoder: Some[DeviceTypeEncoder], target: MutOpaquePointer[_]):
         encoder.encode(self, target)
@@ -762,6 +768,7 @@ def vulkaninterop_test_spheres_gpu(
     spheres: Pointer[Sphere, MutUntrackedOrigin],
     n_spheres_dp: Int64,
     count_dp: Int64,
+    motion: MotionTable,
 ):
     var n_spheres = Int(n_spheres_dp)
     var count = Int(count_dp)
@@ -770,7 +777,7 @@ def vulkaninterop_test_spheres_gpu(
         return
     if paths[unsafe_offset=tid].active == 0:
         return
-    test_spheres(spheres, n_spheres, paths[unsafe_offset=tid].ray, inter.unsafe_offset(tid), motion=MotionTable.none())
+    test_spheres(spheres, n_spheres, paths[unsafe_offset=tid].ray, inter.unsafe_offset(tid), motion=motion.at(paths[unsafe_offset=tid].time))
 
 # Host driver: enqueues pack -> interop ray-query dispatch -> unpack, ALL
 # on ctx.stream() in strict program order, with NO ctx.synchronize()
@@ -1112,6 +1119,8 @@ def rtcore_spheres_from_rays_gpu(
     spheres: Pointer[Sphere, MutUntrackedOrigin],
     n_spheres_dp: Int64,
     count_dp: Int64,
+    motion: MotionTable,
+    time0: Pointer[Float32, MutUntrackedOrigin], stride: Int64, ids: Pointer[Int32, MutUntrackedOrigin], div: Int64, fixed_time: Float32,
 ):
     var count = Int(count_dp)
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
@@ -1120,7 +1129,7 @@ def rtcore_spheres_from_rays_gpu(
     var idx = tid * 8
     var ray = Ray(Point3f(rays[unsafe_offset=idx], rays[unsafe_offset=idx + 1], rays[unsafe_offset=idx + 2]),
                   Vec3f(rays[unsafe_offset=idx + 4], rays[unsafe_offset=idx + 5], rays[unsafe_offset=idx + 6]))
-    test_spheres(spheres, Int(n_spheres_dp), ray, inter.unsafe_offset(tid), motion=MotionTable.none())
+    test_spheres(spheres, Int(n_spheres_dp), ray, inter.unsafe_offset(tid), motion=motion.at(RayTimes(time0, stride, ids, div, fixed_time).of(tid)))
 
 comptime CURVE_BLOCK: Int = get_defined_int["CURVE_BLOCK", 32]()
 
@@ -1189,6 +1198,7 @@ def rtcore_trace_unpack_gpu(
     n_meshes: Int,
     n_total: Int,
     instance_base_mesh_buf: Optional[DeviceBuffer[DType.uint8]],
+    times: RayTimes,
 ) raises:
     comptime block_size = 256
     var grid = ceildiv(n_total, block_size)
@@ -1209,6 +1219,7 @@ def rtcore_trace_unpack_gpu(
             ctx.enqueue_function[rtcore_curve_clip_gpu[True]](sd, rp, sp, Int64(n_total), grid_dim=grid, block_dim=block_size)
         else:
             ctx.enqueue_function[rtcore_curve_clip_gpu[False]](sd, rp, sp, Int64(n_total), grid_dim=grid, block_dim=block_size)
+    hw_motion_pass(ctx, sd, Int(rays_buf.unsafe_ptr()), Int(results_buf.unsafe_ptr()), times, instance_base_mesh_ptr, n_meshes, False, n_total)
     ctx.enqueue_function[vulkaninterop_unpack_results_kernel](
         results_buf.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
         inter_buf.unsafe_ptr().unsafe_bitcast[Intersection]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
@@ -1235,6 +1246,12 @@ def rtcore_trace_unpack_gpu(
 # Most paths are dead after a few bounces and most shadow slots are empty, yet every full-grid pack/trace/convert/unpack
 # pass touched all n_pixels * WAVEFRONT_BATCH slots. These kernels list only the live rays (one atomic per warp) so every
 # later pass runs over a short dense array; the host reads the count back once per stage.
+def path_times(paths: Pointer[PathState, MutUntrackedOrigin], ids: Pointer[Int32, MutUntrackedOrigin]) -> RayTimes:
+    """The paths' shutter times behind ray slots (ids[i], or i when ids dangles)."""
+    return RayTimes(Pointer(to=paths[unsafe_offset=0].time).unsafe_origin_cast[MutUntrackedOrigin](),
+                    Int64(size_of[PathState]() // 4), ids, Int64(1), Float32(0))
+
+
 @__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
 @__llvm_metadata(`nvvm.minctasm`=SIMDLength(1))    # NVIDIA keeps its old register budget; AMD ignores this
 def rt_pack_compact_kernel(
@@ -1372,6 +1389,7 @@ def rtcore_closest_hit_gpu(
             ctx.enqueue_function[rtcore_curve_clip_gpu[True]](sd, rays, results, Int64(m), grid_dim=ceildiv(m, CURVE_BLOCK), block_dim=CURVE_BLOCK)
         else:
             ctx.enqueue_function[rtcore_curve_clip_gpu[False]](sd, rays, results, Int64(m), grid_dim=ceildiv(m, CURVE_BLOCK), block_dim=CURVE_BLOCK)
+    hw_motion_pass(ctx, sd, Int(rays), Int(results), path_times(paths, ids), instance_base_mesh_ptr, n_meshes, False, m)
     var fuse_paths = paths if n_spheres == 0 else Pointer[PathState, MutUntrackedOrigin].unsafe_dangling()
     ctx.enqueue_function[vulkaninterop_unpack_results_kernel](
         results, inter,
@@ -1387,7 +1405,7 @@ def rtcore_closest_hit_gpu(
         )
     if n_spheres > 0:
         ctx.enqueue_function[vulkaninterop_test_spheres_gpu](
-            paths, inter, spheres, Int64(n_spheres), Int64(n_total),
+            paths, inter, spheres, Int64(n_spheres), Int64(n_total), sd.motion,
             grid_dim=grid, block_dim=block_size,
         )
         ctx.enqueue_function[accumulate_cone_gpu](paths, inter, Int64(n_total), grid_dim=grid, block_dim=block_size)
@@ -1756,6 +1774,7 @@ def rtcore_sss_walk_gpu(
             if m == 0:
                 return
         hw_trace_interop(ctx, Int(rays), Int(results), m)
+        hw_motion_pass(ctx, sd, Int(rays), Int(results), path_times(paths, lists[1 - a]), instance_base_mesh, n_meshes, False, m)
         if m < SSS_RT_MIN or step == SSS_RT_STEPS - 1:
             ctx.enqueue_function[vulkaninterop_unpack_results_kernel](
                 results, inter, mm, mal, Int64(n_meshes), Int64(m), instance_base_mesh, lists[1 - a], rt_no_paths(), sd.meshes,
@@ -1812,6 +1831,11 @@ def rtcore_shadow_rays_compact_gpu(
             rtcore_alpha_passes(ctx, interop_rays_buf, interop_results_buf, scratch_buf, sd.meshes, n_meshes, instance_base_mesh, m)
         else:
             converted = hw_trace_shadow(ctx, Int(interop_rays_buf.unsafe_ptr()), Int(interop_results_buf.unsafe_ptr()), m)
+        if converted:
+            hw_motion_pass(ctx, sd, Int(interop_rays_buf.unsafe_ptr()), Int(interop_results_buf.unsafe_ptr()),
+                           RayTimes(Pointer(to=tasks[unsafe_offset=0].time).unsafe_origin_cast[MutUntrackedOrigin](),
+                                    Int64(size_of[ShadowTask]() // 4), ids, Int64(1), Float32(0)),
+                           instance_base_mesh, n_meshes, True, m)
         var counts = counter_buf.unsafe_ptr().unsafe_bitcast[Int32]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]().unsafe_offset(SHADOW_COUNTS)
         var lists = ids_base.unsafe_offset(3 * n_total)          # the shading kinds' list, done with by now
         ctx.enqueue_function[shadow_survivors_kernel](
@@ -1900,7 +1924,8 @@ def vulkaninterop_rt_traverse_paths_gpu(
     # ray-query shader. Same rays buffer, same Result layout.
     if hw_rt_active() and rt_scratch_buf:
         rtcore_trace_unpack_gpu(ctx, inter_buf, sd, interop_rays_buf, interop_results_buf, rt_scratch_buf.value(),
-                                mesh_material_idx_buf, mesh_al_idx_buf, n_meshes, n_total, instance_base_mesh_buf)
+                                mesh_material_idx_buf, mesh_al_idx_buf, n_meshes, n_total, instance_base_mesh_buf,
+                                path_times(path_buf.unsafe_ptr().unsafe_bitcast[PathState]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](), rt_no_ids()))
     else:
         _ = vulkaninterop_rt_trace(interop_scene, Int32(n_total), CUDA(ctx.stream()))
         var instance_base_mesh_ptr = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling()
@@ -1938,6 +1963,7 @@ def vulkaninterop_rt_traverse_paths_gpu(
             spheres,
             Int64(n_spheres),
             Int64(n_total),
+            sd.motion,
             grid_dim=grid, block_dim=block_size,
         )
 
@@ -2111,6 +2137,7 @@ def pack_center_rays_gpu(
     c2w: Pointer[Float32, MutUntrackedOrigin],
     rays: Pointer[Float32, MutUntrackedOrigin],
     fw_dp: Int64, fh_dp: Int64,
+    motion: MotionTable,
 ):
     var fw = Int(fw_dp)
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
@@ -2133,14 +2160,15 @@ def pack_center_rays_gpu(
     )
     var dl = dir.length()
     if dl > Float32(0): dir = dir / dl
+    var ray = motion.camera_ray(Ray(Point3f(c2w[unsafe_offset=12], c2w[unsafe_offset=13], c2w[unsafe_offset=14]), dir))
     var idx = tid * 8
-    rays[unsafe_offset=idx + 0] = c2w[unsafe_offset=12]
-    rays[unsafe_offset=idx + 1] = c2w[unsafe_offset=13]
-    rays[unsafe_offset=idx + 2] = c2w[unsafe_offset=14]
+    rays[unsafe_offset=idx + 0] = ray.origin.x
+    rays[unsafe_offset=idx + 1] = ray.origin.y
+    rays[unsafe_offset=idx + 2] = ray.origin.z
     rays[unsafe_offset=idx + 3] = Float32(1e-4)
-    rays[unsafe_offset=idx + 4] = dir.x
-    rays[unsafe_offset=idx + 5] = dir.y
-    rays[unsafe_offset=idx + 6] = dir.z
+    rays[unsafe_offset=idx + 4] = ray.direction.x
+    rays[unsafe_offset=idx + 5] = ray.direction.y
+    rays[unsafe_offset=idx + 6] = ray.direction.z
     rays[unsafe_offset=idx + 7] = Float32(1.0e8)
 
 
@@ -2292,12 +2320,13 @@ def gpu_gen_aux_buffers[Oc: Origin[mut=True]](
                     handle[].c2w_buf.unsafe_ptr().unsafe_bitcast[Float32](),
                     rt_rays.value().unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
                     Int64(handle[].film.width), Int64(handle[].film.height),
+                    handle[].scene_descriptor().motion.at(handle[].scene_descriptor().lens.mid_time()),
                     grid_dim=grid_n, block_dim=block_size,
                 )
                 rtcore_trace_unpack_gpu(
                     handle[].ctx, handle[].inter_buf, handle[].scene_descriptor(), rt_rays.value(), rt_results.value(),
                     handle[].rt_scratch_buf, rt_mesh_material_idx.value(), rt_mesh_al_idx.value(), rt_n_meshes, n_pix,
-                    rt_instance_base_mesh)
+                    rt_instance_base_mesh, RayTimes.fixed(handle[].scene_descriptor().lens.mid_time()))
                 rt_hits = Int32(1)
             handle[].ctx.enqueue_function[gen_aux_buffers_gpu](
                 handle[].r2c_buf.unsafe_ptr().unsafe_bitcast[Float32](),

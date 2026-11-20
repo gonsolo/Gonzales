@@ -657,8 +657,10 @@ def resolve_shadow_connect_gpu(
             # Analytic spheres are not in the acceleration structure (--rt-hardware): one in the way needs the full
             # (dielectric / medium aware) visibility trace.
             var sray = Ray(org, dir)
+            var smotion = sd.motion.at(cam_states[unsafe_offset=idx // _BDPT_MAX_VERTS].time)
             for si in range(Int(sd.sphereCount)):
-                if ray_sphere_hit(sd.spheres[unsafe_offset=si].center, sd.spheres[unsafe_offset=si].radius, sray, Float32(1e-4), dist * Float32(0.9995)) > Float32(0.0):
+                var sph = smotion.sphere(sd.spheres, si)
+                if ray_sphere_hit(sph.center, sph.radius, sray, Float32(1e-4), dist * Float32(0.9995)) > Float32(0.0):
                     needs_fallback = True
         # else: fully visible (Tr=1), pending already holds the correct
         # unweighted contribution -- nothing to multiply.

@@ -3243,6 +3243,9 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
             prune_mask = env_int["GONZALES_RT_PRUNE"](0)
         except:
             prune_mask = 0
+    if prune_mask != 0 and len(s[unsafe_offset=0].motion_mats) > 0:
+        print("GONZALES_RT_PRUNE: off, moving instances are traced in software after the RT hardware")
+        prune_mask = 0
     if prune_mask == 1:
         prune_mask = 7          # all; 8 + bits selects single steps (debugging)
     elif prune_mask >= 8:

@@ -464,7 +464,7 @@ struct VcmGpu(Movable):
                 var instance_base = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling()
                 if rt.instance_base_mesh:
                     instance_base = rt.instance_base_mesh.value().unsafe_ptr().unsafe_bitcast[Int32]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
-                rt.trace_shadow(ctx, self.shadow_rays, self.shadow_valid, shadow_cap, sd)
+                rt.trace_shadow(ctx, self.shadow_rays, self.shadow_valid, shadow_cap, sd, sd.lens.pass_time(si))
                 ctx.enqueue_function[resolve_shadow_connect_gpu](
                     rt.results.value().unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
                     rt.mesh_material_idx.value().unsafe_ptr().unsafe_bitcast[Int64]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
