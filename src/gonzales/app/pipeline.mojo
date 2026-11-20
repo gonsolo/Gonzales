@@ -3258,8 +3258,8 @@ def render_interactive(
     if use_gpu and env_on["GONZALES_RTCORE"]() and not use_restir:
         try:
             rtb = _rt_wavefront_setup(handle, psc, n_pixels * WAVEFRONT_BATCH)
-        except:
-            print("RT hardware: setup failed, using the CUDA intersection")
+        except e:
+            print("RT hardware: setup failed, using the CUDA intersection:", e)
         if rtb.on:
             print("RT hardware: interactive frames trace on the RT cores")
 
