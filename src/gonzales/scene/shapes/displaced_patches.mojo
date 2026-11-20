@@ -1010,6 +1010,13 @@ def _bl_leaf(d: DispSurface, pi: Int, f: Int, fr: BLFrame, s0q: Float32, t0q: Fl
     return _leaf_hit(cp, s0, s1, t0, t1, dir, t_max)
 
 
+def _in_box(p: Vec3f, c: Tuple[Vec3f, Vec3f, Float32]) -> Bool:
+    """Whether point p lies in box c, widened by the leaf tests' overlap: they can return far roots off the patch."""
+    var lo = c[0]; var hi = c[1]
+    var e = max(max(hi.x - lo.x, hi.y - lo.y), hi.z - lo.z) * Float32(5e-3) + Float32(1e-5) * (abs(p.x) + abs(p.y) + abs(p.z)) + Float32(1e-6)
+    return p.x >= lo.x - e and p.x <= hi.x + e and p.y >= lo.y - e and p.y <= hi.y + e and p.z >= lo.z - e and p.z <= hi.z + e
+
+
 def _intersect_bl(d: DispSurface, prim: Int, org: Vec3f, dir: Vec3f, t_max: Float32) -> Tuple[Bool, Float32, Float32, Float32, Int, Float32]:
     """The sub-square's base as the bilinear patch through its limit corners, displaced along the bilinear blend of their
     unit normals: X = B + h N. Neighbours share the corners, so their edges agree; no bicubic is touched after entry."""
@@ -1028,7 +1035,7 @@ def _intersect_bl(d: DispSurface, prim: Int, org: Vec3f, dir: Vec3f, t_max: Floa
     var lo0 = Vec3f(fr.px.reduce_min(), fr.py.reduce_min(), fr.pz.reduce_min()); var hi0 = Vec3f(fr.px.reduce_max(), fr.py.reduce_max(), fr.pz.reduce_max())
     if S * texels <= Float32(1) or (d.leaf_mode == 5 and max(max(hi0.x - lo0.x, hi0.y - lo0.y), hi0.z - lo0.z) <= _leaf_size(lo0, hi0, cam, d.pixel)[1]):
         var lh = _bl_leaf(d, pi, f, fr, sq[0], sq[1], inv_s, dom, dir, best)   # a leaf already; the caller tested its box
-        return (lh[0], lh[1], lh[2], lh[3], 1, S)
+        return (lh[0] and _in_box(dir * lh[1], _bl_box(d, pi, f, fr, sq[0], sq[1], inv_s, dom)), lh[1], lh[2], lh[3], 1, S)
     var cur = _bl_box(d, pi, f, fr, sq[0], sq[1], inv_s, dom)
     var cur_hit = _slab(cur[0], cur[1], inv, best)
     while True:
@@ -1038,7 +1045,7 @@ def _intersect_bl(d: DispSurface, prim: Int, org: Vec3f, dir: Vec3f, t_max: Floa
             var sz = _leaf_size(cur[0], cur[1], cam, d.pixel)
             if depth >= PATCH_MAX_DEPTH or max(dom[2], dom[3]) * texels <= Float32(1) or (d.leaf_mode == 5 and cur[2] <= sz[1]):
                 var lh = _bl_leaf(d, pi, f, _bl_frame(d, pi, kq, org), sq[0], sq[1], inv_s, dom, dir, best)
-                if lh[0]:
+                if lh[0] and _in_box(dir * lh[1], cur):
                     best = lh[1]; hit = True; hs = lh[2]; ht = lh[3]; hsz = max(dom[2], dom[3])
             else:
                 var along_u = depth % 2 == 0
