@@ -168,6 +168,8 @@ struct MotionTable(TrivialRegisterPassable, DevicePassable):
     var point_index: Pointer[Int32, MutUntrackedOrigin]    # point light -> record, -1 static
     var distant_index: Pointer[Int32, MutUntrackedOrigin]  # distant light -> record, -1 static
     var records: Pointer[InstanceMotion, MutUntrackedOrigin]
+    var moving: Pointer[Int32, MutUntrackedOrigin]   # the moving instances, for the software pass after an RT-hardware trace
+    var n_moving: Int32
     var count: Int32
     var camera: Int32
     var t0: Float32
@@ -188,6 +190,7 @@ struct MotionTable(TrivialRegisterPassable, DevicePassable):
                            Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
                            Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
                            Pointer[InstanceMotion, MutUntrackedOrigin].unsafe_dangling(),
+                           Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(), Int32(0),
                            Int32(0), Int32(-1), Float32(0), Float32(1), Float32(0))
 
     @always_inline

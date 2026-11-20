@@ -1574,6 +1574,25 @@ def _traverse_instance[wide_on: Bool = True](
     return (False, tMax, Float32(0), Float32(0), hit_prim)
 
 
+def trace_moving(meshes: Pointer[TriangleMesh, MutUntrackedOrigin],
+                 blasNodesArr: Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin],
+                 blasPrimIdsArr: Pointer[Pointer[PrimId, MutUntrackedOrigin], MutUntrackedOrigin],
+                 instances: Pointer[Instance, MutUntrackedOrigin], curves: Pointer[Curve, MutUntrackedOrigin],
+                 org: Vec3f, dir: Vec3f, t_max: Float32, first_hit: Bool, *, motion: MotionTable
+                 ) -> Tuple[Bool, Float32, Float32, Float32, PrimId]:
+    """The moving instances, which the RT hardware structures leave out: the nearest hit before t_max."""
+    var best = (False, t_max, Float32(0), Float32(0), PrimId(Int64(-1), Int64(-1), Int64(0), Int32(-1), PrimKind.triangle,
+                                                             Int8(0), Int8(0), Int8(0)))
+    for j in range(Int(motion.n_moving)):
+        var sub = _traverse_instance(Int(motion.moving[unsafe_offset=j]), meshes, blasNodesArr, blasPrimIdsArr,
+                                     instances, org, dir, best[1], curves, first_hit=first_hit, motion=motion)
+        if sub[0] and sub[1] < best[1]:
+            best = sub
+            if first_hit:
+                break
+    return best
+
+
 @always_inline
 def _traverse_blas_curves(
     nodes: Pointer[BVH2Node, MutUntrackedOrigin],

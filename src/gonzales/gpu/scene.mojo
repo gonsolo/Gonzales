@@ -910,6 +910,7 @@ struct GpuSceneHandle(Movable):
     var motion_point_buf: DeviceBuffer[DType.uint8]
     var motion_distant_buf: DeviceBuffer[DType.uint8]
     var motion_buf: DeviceBuffer[DType.uint8]
+    var motion_moving_buf: DeviceBuffer[DType.uint8]
     var motion: MotionTable         # its count and TransformTimes; the pointers are the two buffers above
     var meshes: MeshBuffers
     var materials_buf: DeviceBuffer[DType.uint8]
@@ -1084,6 +1085,7 @@ struct GpuSceneHandle(Movable):
             motion=MotionTable(typed_ptr[Int32](self.motion_index_buf), typed_ptr[Int32](self.motion_sphere_buf),
                                typed_ptr[Int32](self.motion_point_buf), typed_ptr[Int32](self.motion_distant_buf),
                                typed_ptr[InstanceMotion](self.motion_buf),
+                               typed_ptr[Int32](self.motion_moving_buf), self.motion.n_moving,
                                self.motion.count, self.motion.camera, self.motion.t0, self.motion.t1, Float32(0)) if self.motion.count > 0 else MotionTable.none(),
         )
 
@@ -1559,6 +1561,7 @@ def gpu_upload_scene(
             var motion_point_buf = _gpu_upload_array[Int32](ctx, s.point_motion, Int(s.point_count) if motion.count > 0 else 0)
             var motion_distant_buf = _gpu_upload_array[Int32](ctx, s.distant_motion, Int(s.distant_count) if motion.count > 0 else 0)
             var motion_buf = _gpu_upload_array[InstanceMotion](ctx, s.motions, Int(motion.count))
+            var motion_moving_buf = _gpu_upload_array[Int32](ctx, s.moving_instances, Int(motion.n_moving))
             var host_plan = _host_plan(ctx, s, n_pixels)
             var meshes = MeshBuffers.upload(ctx, s, host_plan[0])
             var instances_ext = 0
@@ -1655,6 +1658,7 @@ def gpu_upload_scene(
                 n_instances=Int(s.instance_count),
                 instances_ext=instances_ext,
                 motion_index_buf=motion_index_buf^,
+                motion_moving_buf=motion_moving_buf^,
                 motion_sphere_buf=motion_sphere_buf^,
                 motion_point_buf=motion_point_buf^,
                 motion_distant_buf=motion_distant_buf^,

@@ -164,6 +164,8 @@ struct ParsedScene_Mojo:
     var instance_prefix:  Int32   # pruned: the instances of templates with curves come first; the software structures reach only these
     var instance_motion:  Pointer[Int32, MutUntrackedOrigin]            # per instance: index into motions, -1 static
     var motions:          Pointer[InstanceMotion, MutUntrackedOrigin]
+    var moving_instances: Pointer[Int32, MutUntrackedOrigin]            # the instances with a motion record
+    var moving_count:     Int32
     var motion_count:     Int32
     var camera_motion:    Int32   # the camera's record in motions, -1 static
     var transform_times:  SIMD[DType.float32, 2]   # pbrt's TransformTimes
@@ -190,7 +192,8 @@ struct ParsedScene_Mojo:
     def motion_table(self) -> MotionTable:
         if self.motion_count == Int32(0):
             return MotionTable.none()
-        return MotionTable(self.instance_motion, self.sphere_motion, self.point_motion, self.distant_motion, self.motions, self.motion_count, self.camera_motion,
+        return MotionTable(self.instance_motion, self.sphere_motion, self.point_motion, self.distant_motion, self.motions,
+                           self.moving_instances, self.moving_count, self.motion_count, self.camera_motion,
                            self.transform_times[0], self.transform_times[1], Float32(0))
 
     def sample_clamp(self) -> Float32:
@@ -3992,6 +3995,17 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
     psc[unsafe_offset=0].instance_count   = total_instances
     psc[unsafe_offset=0].instance_prefix  = Int32(n_ci) if prune_inst else Int32(0)
     psc[unsafe_offset=0].instance_motion  = inst_motion
+    var n_moving = 0
+    for k in range(Int(total_instances)):
+        if inst_motion[unsafe_offset=k] >= Int32(0): n_moving += 1
+    var moving = unsafe_alloc[Int32](max(n_moving, 1))
+    n_moving = 0
+    for k in range(Int(total_instances)):
+        if inst_motion[unsafe_offset=k] >= Int32(0):
+            moving[unsafe_offset=n_moving] = Int32(k)
+            n_moving += 1
+    psc[unsafe_offset=0].moving_instances = moving
+    psc[unsafe_offset=0].moving_count     = Int32(n_moving)
     psc[unsafe_offset=0].motions          = motions
     psc[unsafe_offset=0].motion_count     = Int32(n_motion)
     psc[unsafe_offset=0].camera_motion    = s[unsafe_offset=0].camera_motion
@@ -4764,6 +4778,7 @@ def mojo_parsed_free(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin]):
     psc[unsafe_offset=0].blas_primid_counts.unsafe_free()
     psc[unsafe_offset=0].instances.unsafe_free()
     psc[unsafe_offset=0].instance_motion.unsafe_free()
+    psc[unsafe_offset=0].moving_instances.unsafe_free()
     psc[unsafe_offset=0].sphere_motion.unsafe_free()
     psc[unsafe_offset=0].point_motion.unsafe_free()
     psc[unsafe_offset=0].distant_motion.unsafe_free()
