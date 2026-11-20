@@ -97,7 +97,7 @@ comptime XERT_SD_HEADER = 32
 def xert_sd_header() raises -> List[Int32]:
     var h = List[Int32](length=XERT_SD_HEADER, fill=0)
     h[XERT_SD_HEADER - 2] = Int32(env_int["GONZALES_XERT_SD_CAP"](0))
-    h[XERT_SD_HEADER - 1] = Int32((1 if env_on["GONZALES_XERT_STATS"]() else 0) | (2 if env_on["GONZALES_XERT_SD_CAP_BREAK"]() else 0) | (4 if env_on["GONZALES_XERT_SD_SLAB"]() else 0))
+    h[XERT_SD_HEADER - 1] = Int32((1 if env_on["GONZALES_XERT_STATS"]() else 0) | (2 if env_on["GONZALES_XERT_SD_CAP_BREAK"]() else 0) | (0 if env_on["GONZALES_XERT_SD_NO_SLAB"]() else 4))
     return h^
 
 # Counters: rays, other procedural candidates, sub-square candidates and hits, rays with sub-square candidates, the sum of
