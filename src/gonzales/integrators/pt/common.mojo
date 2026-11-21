@@ -23,7 +23,8 @@ from gonzales.core.sampling import sobol_sample_n, sobol_dim_seed
 from gonzales.core.transform import transform_normal, Mat4
 from gonzales.transport.guide import GuideGrid, guide_pos_to_cell, guide_record, null_guide, guide_is_active
 from gonzales.core.spectrum import spec_refl_unbounded, SpectralSample, SampledWavelengths, rgb_to_spectral_sample, rgb_illuminant_to_spectral_sample
-from gonzales.transport.texturing import _apply_surface_maps, _decode_tangent_normal, _get_tri_verts, _ptex_ask, _ptex_need, _ptex_tri, _tex_lookup, sample_texture
+from gonzales.scene.appearance.tile_cache import TILE_WITHHOLD_CAMERA
+from gonzales.transport.texturing import _apply_surface_maps, _decode_tangent_normal, _get_tri_verts, _ptex_ask, _ptex_need, _ptex_tri, ptex_tiled_missing, _tex_lookup, sample_texture
 from gonzales.transport.shade_context import GIPendingX1, ShadeContext
 from gonzales.transport.glossy_sms import GSMS_DEBUG
 from gonzales.transport.manifold import _emitter_face_normal, _interp_vertex_normal
@@ -134,7 +135,8 @@ def _shading_normal(
 
 @always_inline
 def _ptex_missed(textures: Pointer[GpuTexture, MutUntrackedOrigin], n_textures: Int, ti: Int,
-                 inter: Intersection, mesh: TriangleMesh, fp_width: Float32) -> Bool:
+                 inter: Intersection, mesh: TriangleMesh, fp_width: Float32, v0: Int = 0, v1: Int = 0, v2: Int = 0,
+                 bounce: Int = 0, tiled_only: Bool = False) -> Bool:
     """Whether texture `ti` is a paged Ptex whose face at this hit is coarser than the lookup needs and can
     still be loaded (wanted byte 255 = nothing finer exists, 254 = no room). Texel 0 of the pool switches
     the test off, for the final passes that take what is there."""
@@ -146,6 +148,18 @@ def _ptex_missed(textures: Pointer[GpuTexture, MutUntrackedOrigin], n_textures: 
     if face < 0 or face >= n_faces:
         face = 0
     var entry = tex.data.unsafe_offset(face * 8)
+    if (Int(entry[unsafe_offset=7]) & 16) != 0:   # tiled: the tile this hit reads, at its own (u, v)
+        if Int(tex.pool[unsafe_offset=2]) == TILE_WITHHOLD_CAMERA and bounce > 0:
+            return False   # the lookup itself still asks for the tile
+        var pu = inter.u + inter.v
+        var pv = inter.v
+        if (mesh.uv_corners != Int32(0) or _is_real_ptr(mesh.uvs)):
+            var pw0 = Float32(1.0) - inter.u - inter.v
+            pu = pw0 * mesh_uv(mesh, v0)[0] + inter.u * mesh_uv(mesh, v1)[0] + inter.v * mesh_uv(mesh, v2)[0]
+            pv = pw0 * mesh_uv(mesh, v0)[1] + inter.u * mesh_uv(mesh, v1)[1] + inter.v * mesh_uv(mesh, v2)[1]
+        return ptex_tiled_missing(tex, face, pu, pv, fp_width) and tex.pool[unsafe_offset=0] != UInt8(0)
+    if tiled_only:
+        return False
     var want = Int(entry[unsafe_offset=6])
     var need = _ptex_need(fp_width)
     if want >= 254 or need <= max(Int(entry[unsafe_offset=4]), Int(entry[unsafe_offset=5])):
@@ -757,8 +771,10 @@ def _pt_hit_footprint(
     var hit = ray_org + ray_dir * inter.tHit
     var fp = hit_uv_footprint(cam, tri, mesh, v0, v1, v2, hit, ray_dir, cone_w)
     # Ptex demand paging: a face this hit needs is not loaded yet, so the sample is rendered again later.
-    if _ptex_missed(textures, n_textures, Int(mat.tex_idx), inter, mesh, fp.width) or \
-       _ptex_missed(textures, n_textures, Int(mat.bump_tex_idx), inter, mesh, fp.width):
+    if _ptex_missed(textures, n_textures, Int(mat.tex_idx), inter, mesh, fp.width, v0, v1, v2, Int(path_ptr[].bounce)) or \
+       _ptex_missed(textures, n_textures, Int(mat.bump_tex_idx), inter, mesh, fp.width, v0, v1, v2, Int(path_ptr[].bounce)) or \
+       _ptex_missed(textures, n_textures, Int(mat.normal_tex_idx), inter, mesh, fp.width, v0, v1, v2, Int(path_ptr[].bounce), True) or \
+       _ptex_missed(textures, n_textures, Int(mat.rough_tex_idx), inter, mesh, fp.width, v0, v1, v2, Int(path_ptr[].bounce), True):
         path_ptr[].ptex_missed = Int8(1)
     return (tri, fp)
 

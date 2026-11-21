@@ -41,7 +41,7 @@ from gonzales.integrators.pt.restir_sms import SMSReservoir, sms_reservoir_init,
 from gonzales.integrators.pt.restir_vol import VolReservoir, vol_reservoir_init, vol_reservoir_io_null
 from gonzales.gpu.pt.driver import gpu_render_sample, gpu_render_wavefront, gpu_adaptive_update, gpu_download_albedo, gpu_clear_film, gpu_clear_restir, gpu_clear_restir_vol
 from gonzales.scene.accel.dev_buf import dev_buf
-from gonzales.gpu.scene import _gpu_free_log, GpuSceneHandle, XertPieces, heat_fill, mesh_host_bytes, xert_heat, xert_mesh_blas, WAVEFRONT_BATCH, gpu_available, gpu_upload_scene, gpu_alloc_pixel_buffers, gpu_free_scene, gpu_ptex_begin, gpu_ptex_finish, gpu_ptex_withhold, gpu_ptex_withheld, gpu_ptex_redo_upload, gpu_ptex_stream_start, gpu_ptex_poll, gpu_ptex_stream_finish, gpu_ptex_make_room, gpu_set_curve_bvh_dev, typed_ptr
+from gonzales.gpu.scene import _gpu_free_log, gpu_tiles_size_pool, gpu_ptex_loading, gpu_ptex_ready, gpu_ptex_denied, GpuSceneHandle, XertPieces, heat_fill, mesh_host_bytes, xert_heat, xert_mesh_blas, WAVEFRONT_BATCH, gpu_available, gpu_upload_scene, gpu_alloc_pixel_buffers, gpu_free_scene, gpu_ptex_begin, gpu_ptex_finish, gpu_ptex_withhold, gpu_ptex_withheld, gpu_ptex_redo_upload, gpu_ptex_stream_start, gpu_ptex_poll, gpu_ptex_stream_finish, gpu_ptex_make_room, gpu_set_curve_bvh_dev, typed_ptr
 from gonzales.gpu.denoise import gpu_atrous_denoise
 from gonzales.gpu.pt.wavefront import gpu_gen_aux_buffers
 from gonzales.app.viewer import CameraState, viewer_create, viewer_update_framebuffer, viewer_should_close, viewer_poll_events, viewer_get_camera_state, viewer_set_camera_state, viewer_destroy, viewer_denoise_enabled, viewer_monitor_size, build_camera_to_world
@@ -59,6 +59,7 @@ from std.atomic import Atomic
 from std.sys.info import num_performance_cores
 from gonzales.scene.accel.rtcore import rtcore_set_gid_compact, rtcore_create_own_scene, rtcore_create_own, rtcore_set_shadow, rtcore_set_alpha, rtcore_create_scene, rtcore_set_domains, rtcore_set_instance_decode, rtcore_instance_records, RtCoreHandle, rtcore_create, rtcore_set_meshes, rtcore_set_active, rtcore_active, rtcore_destroy
 from gonzales.core.env import env_str, env_on, env_int
+from gonzales.scene.appearance.tile_cache import TILE_WITHHOLD_ALL, TILE_WITHHOLD_LOADING, TILE_WITHHOLD_LOADING2, TILE_WITHHOLD_CAMERA
 from std.os.path import exists, getsize
 from std.ffi import external_call
 from gonzales.integrators.outputs import _cstr
@@ -2050,6 +2051,8 @@ struct GpuGuidedRenderer(GuidedRenderer):
     var ptex_seconds: Float64   # time spent waiting for loads
     var ptex_redone: Int
     var ptex_evict_at: Int      # sample count from which the pool may next evict
+    var ptex_withhold: Bool     # withhold samples that miss a page (GONZALES_PTEX_WITHHOLD=0: take the coarser level)
+    var ptex_warmup: Int        # withholding stops at this sample count (GONZALES_PTEX_WITHHOLD=warmup:N), -1 never
     var ptex_scratch: Pointer[UInt8, MutUntrackedOrigin]   # a byte per path_buf slot
     var ptex_si_of: Pointer[Int32, MutUntrackedOrigin]     # the sample each slot renders again
     var pend_px: List[Int32]
@@ -2074,6 +2077,7 @@ struct GpuGuidedRenderer(GuidedRenderer):
         self.mesh_material_idx_buf = mesh_material_idx_buf^; self.mesh_al_idx_buf = mesh_al_idx_buf^
         self.n_meshes_vk = n_meshes_vk; self.instance_base_mesh_buf = instance_base_mesh_buf^
         self.ptex_on = False; self.ptex_seconds = 0.0; self.ptex_redone = 0; self.ptex_evict_at = 2 * WAVEFRONT_BATCH
+        self.ptex_withhold = True; self.ptex_warmup = -1
         self.ptex_scratch = Pointer[UInt8, MutUntrackedOrigin].unsafe_dangling()
         self.ptex_si_of = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling()
         self.pend_px = List[Int32](); self.pend_si = List[Int32]()
@@ -2087,7 +2091,29 @@ struct GpuGuidedRenderer(GuidedRenderer):
         # One spare word: the withheld-sample scan reads the byte scratch 8 bytes at a time.
         self.ptex_scratch = unsafe_alloc[UInt8](self.n_pixels * WAVEFRONT_BATCH + 8).unsafe_origin_cast[MutUntrackedOrigin]()
         self.ptex_si_of = unsafe_alloc[Int32](self.n_pixels * WAVEFRONT_BATCH).unsafe_origin_cast[MutUntrackedOrigin]()
-        gpu_ptex_withhold(self.handle, True)
+        # GONZALES_PTEX_WITHHOLD: 1 every miss (default for faces), 0 none (default for tiles); tiled: inflight, inflight2, camera, warmup:N.
+        var mode = env_str["GONZALES_PTEX_WITHHOLD"]()
+        if mode == "":   # tiles: a miss takes the coarser level (no visible difference on ALab, and no samples redone)
+            mode = "0" if self.handle[].textures.tiled else "1"
+        self.ptex_withhold = mode != "0"
+        self.ptex_warmup = -1
+        var policy = TILE_WITHHOLD_ALL
+        if mode == "inflight":
+            policy = TILE_WITHHOLD_LOADING
+        elif mode == "inflight2":
+            policy = TILE_WITHHOLD_LOADING2
+        elif mode == "camera":
+            policy = TILE_WITHHOLD_CAMERA
+        elif mode.startswith("warmup:"):
+            self.ptex_warmup = 0
+            for i in range(7, mode.byte_length()):
+                var d = Int(mode.as_bytes()[i]) - 48
+                if d >= 0 and d <= 9:
+                    self.ptex_warmup = self.ptex_warmup * 10 + d
+        if self.handle[].textures.tiled:
+            gpu_tiles_size_pool(self.handle)
+        self.handle[].textures.ptex_cache.pool[unsafe_offset=2] = UInt8(policy)
+        gpu_ptex_withhold(self.handle, self.ptex_withhold)
         self._dispatch(0, 1, Int32(1), Int32(1))
         gpu_clear_film(self.handle, Int64(self.n_pixels))
         _ = gpu_ptex_begin(self.handle)
@@ -2107,13 +2133,16 @@ struct GpuGuidedRenderer(GuidedRenderer):
     def _ptex_step(mut self, si: Int, batch: Int) raises:
         """After a batch: note the samples it withheld; once the load in flight is done put it on the
         device, start loading what was asked for since and render the withheld samples again."""
+        if self.ptex_warmup >= 0 and si + batch >= self.ptex_warmup and self.ptex_withhold:
+            self.ptex_withhold = False   # warm-up over: later misses take the coarser level
+            gpu_ptex_withhold(self.handle, False)
         var before = len(self.pend_px)
         gpu_ptex_withheld(self.handle, self.n_pixels, batch, self.ptex_scratch, si, self.ptex_si_of, self.pend_px, self.pend_si)
         var missed = len(self.pend_px) - before
         var loaded = 0
-        if self.handle[].textures.ptex_cache.loading:
+        if gpu_ptex_loading(self.handle):
             # Keep rendering behind the load, unless most of a batch would only be withheld again.
-            if not self.handle[].textures.ptex_cache.ready() and missed * 4 < self.n_pixels * batch:
+            if not gpu_ptex_ready(self.handle) and missed * 4 < self.n_pixels * batch:
                 return
             var t0 = perf_counter_ns()
             # Room is made at doubling sample counts only: the faces in the pool need time to show they are used.
@@ -2122,12 +2151,17 @@ struct GpuGuidedRenderer(GuidedRenderer):
                 self.ptex_evict_at = (si + batch) * 2
             loaded = gpu_ptex_finish(self.handle, may_evict)
             self.ptex_seconds += Float64(perf_counter_ns() - t0) / 1.0e9
-        if len(self.pend_px) == 0:
+        if len(self.pend_px) == 0 and self.ptex_withhold:
             return
-        var no_room = self.handle[].textures.ptex_cache.denied
-        _ = gpu_ptex_begin(self.handle)
+        var no_room = gpu_ptex_denied(self.handle)
+        var placed = gpu_ptex_begin(self.handle)
+        if self.handle[].textures.tiled and env_on["GONZALES_GPU_LOG"]():
+            ref tc = self.handle[].textures.tile_cache
+            print("tiles: spp", si + batch, "withheld", missed, "pending", len(self.pend_px), "loaded", loaded, "| asked", tc.asked,
+                  "pages", tc.asked_pages, "placed", placed, "| free", len(tc.free), "of", tc.n_slots, "freed", tc.evicted,
+                  "no room", tc.denied)
         # Only a finished load or a face that will never come lets a withheld sample complete.
-        if loaded > 0 or self.handle[].textures.ptex_cache.denied > no_room:
+        if loaded > 0 or gpu_ptex_denied(self.handle) > no_room:
             self._ptex_redo()
 
     def _ptex_redo(mut self) raises:
@@ -2163,16 +2197,16 @@ struct GpuGuidedRenderer(GuidedRenderer):
         var t0 = perf_counter_ns()
         var idle = 0
         while True:
-            if self.handle[].textures.ptex_cache.loading:
+            if gpu_ptex_loading(self.handle):
                 _ = gpu_ptex_finish(self.handle)
             if len(self.pend_px) == 0:
                 break
             self._ptex_redo()
             if len(self.pend_px) == 0:
                 break
-            var no_room = self.handle[].textures.ptex_cache.denied
+            var no_room = gpu_ptex_denied(self.handle)
             var placed = gpu_ptex_begin(self.handle)
-            idle = 0 if placed > 0 or self.handle[].textures.ptex_cache.denied > no_room else idle + 1
+            idle = 0 if placed > 0 or gpu_ptex_denied(self.handle) > no_room else idle + 1
             if idle >= 2:
                 _ = gpu_ptex_finish(self.handle)
                 gpu_ptex_withhold(self.handle, False)
@@ -2964,12 +2998,18 @@ def parse_and_render(
             else:
                 renderer.render_samples(0, spp)
             _ = renderer.progress.finish()
-            if renderer.ptex_on:
+            if renderer.ptex_on and handle[].textures.tiled:
+                ref tc = handle[].textures.tile_cache
+                print("Ptex tiles:", tc.loaded, "tile(s) loaded,", tc.evicted, "freed,", tc.denied, "found no room;",
+                      tc.n_slots - len(tc.free), "of", tc.n_slots, "slots (" + String(tc.n_slots * 13068 // (1024 * 1024)) + " MB);",
+                      renderer.ptex_redone, "sample(s) rendered again; waited", Float64(Int(renderer.ptex_seconds * 100.0)) / 100.0, "s")
+            elif renderer.ptex_on:
                 print("Ptex paging:", handle[].textures.ptex_cache.loaded, "face(s) loaded,", handle[].textures.ptex_cache.evicted,
                       "evicted,", handle[].textures.ptex_cache.denied, "found no room; pool",
                       (handle[].textures.ptex_cache.top - handle[].textures.ptex_cache.dead) * 3 // (1024 * 1024), "of",
                       handle[].textures.ptex_cache.cap * 3 // (1024 * 1024), "MB;", renderer.ptex_redone,
                       "sample(s) rendered again; waited", Float64(Int(renderer.ptex_seconds * 100.0)) / 100.0, "s")
+            if renderer.ptex_on:
                 renderer.ptex_scratch.unsafe_free(); renderer.ptex_si_of.unsafe_free()
         if use_vk and not rtb.on:
             var rt_hw_end = rtcore_active()

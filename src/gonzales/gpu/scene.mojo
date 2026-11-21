@@ -16,7 +16,7 @@ from gonzales.scene.shapes.primitives import Instance, Intersection, PrimId, Sph
 from gonzales.core.sampling import FILTER_LUT_N, fill_filter_lut, ThinLens
 from gonzales.transport.render_state import FilmDims, FilterParams, PathState, ShadowTask, SHADOW_SLOTS
 from gonzales.scene.appearance.materials import GpuTexture, NormalSlopeMap
-from gonzales.core.env import env_str, env_on
+from gonzales.core.env import env_str, env_on, env_int
 from std.os.path import exists, getsize
 from gonzales.core.spectrum import SpectralHandle
 from gonzales.scene.accel.rtcore import rtcore_device_free, rtcore_host_register, rtcore_device_total
@@ -26,6 +26,7 @@ from gonzales.scene.appearance.host_textures import decode_host_textures, set_te
 from gonzales.scene.shapes.displacement import DisplacedMesh, DisplacedTri, Rmip
 from gonzales.scene.shapes.patches import BezierPatch
 from gonzales.scene.appearance.ptex_cache import PtexCache, PTEX_QUEUE_CAP
+from gonzales.scene.appearance.tile_cache import TileCache, TILE_REQ_MAX, TILE_STAGE_CHUNK, PTEX_SLOT_BYTES, TILE_REQ_COUNT, TILE_REQS
 from gonzales.transport.restir_di import DIReservoir
 from gonzales.integrators.pt.restir_vol import VolReservoir
 from max.gpu import block_dim, block_idx, thread_idx
@@ -435,6 +436,11 @@ struct TextureBuffers(Movable):
     var ptex_cache: PtexCache
     var ptex_bufs: List[Int]
     var ptex_tables_buf: DeviceBuffer[DType.uint64]
+    var tiled: Bool               # paged files are tiled (tile_cache.mojo); ptex_cache then holds only the header byte
+    var tile_cache: TileCache
+    var tile_staging_buf: DeviceBuffer[DType.uint8]
+    var free0: Int                # device bytes free, and bytes Gonzales had asked for, when the textures went up
+    var acct0: Int
 
     @always_inline
     def textures_ptr(mut self) -> Pointer[GpuTexture, MutUntrackedOrigin]:
@@ -455,9 +461,22 @@ struct TextureBuffers(Movable):
         var lut_dev = lut_buf.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
 
         var pool_bytes = Int(external_call["ptex_pool_size", Int64]())
+        var tiled = external_call["ptex_tiled_on", Int32]() != Int32(0)
+        var free0 = Int(ctx.get_memory_info()[0])
+        var acct0 = dev_requested()
+        if tiled:
+            pool_bytes = TILE_REQS + TILE_REQ_MAX * 8 + 256   # sized when paging starts (gpu_tiles_size_pool)
         var ptex_pool_buf = dev_buf(ctx, max(pool_bytes, 1))
         var pool_dev = ptex_pool_buf.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
-        var ptex_cache = PtexCache(pool_bytes)
+        var ptex_cache = PtexCache(0 if tiled else pool_bytes)
+        var tile_cache = TileCache(pool_bytes if tiled else 0)
+        if tiled:   # the header, and no slot used yet
+            var hdr = tile_cache.header()
+            var hsub = ptex_pool_buf.create_sub_buffer[DType.uint8](0, len(hdr))
+            ctx.enqueue_copy(hsub, hdr.unsafe_ptr())
+            if tile_cache.n_slots > 0:
+                ctx.enqueue_memset(ptex_pool_buf.create_sub_buffer[DType.uint8](tile_cache.used_off, tile_cache.n_slots), UInt8(0))
+            ctx.synchronize()
         var ptex_bufs = List[Int]()
 
         # The GPU reads an environment light's own pixels, never its texture: no upload unless a material shares it.
@@ -486,7 +505,10 @@ struct TextureBuffers(Movable):
                 lut = lut_dev.unsafe_offset(Int(ht.lut_off))
             var height = ht.height   # a paged Ptex: its index in the cache, which the request queue names
             if Int(ht.format) == GpuTexture.FORMAT_PTEX and ht.height >= Int32(0):
-                height = Int32(ptex_cache.add_file(s.tex_filenames[unsafe_offset=ti], ht.data, Int(ht.width)))
+                if tiled:
+                    height = Int32(tile_cache.add_file(s.tex_filenames[unsafe_offset=ti], ht.data, Int(ht.width), ht.n_bytes))
+                else:
+                    height = Int32(ptex_cache.add_file(s.tex_filenames[unsafe_offset=ti], ht.data, Int(ht.width)))
                 ptex_bufs.append(len(tex_data_bufs))
             gpu_textures_host[unsafe_offset=ti] = GpuTexture(_gpu_upload_owned[UInt8](ctx, tex_data_bufs, ht.data, ht.n_bytes),
                 lut, pool_dev, ht.width, height, ht.n_levels, ht.channels, ht.format, GpuTexture.UV_IDENTITY)
@@ -513,7 +535,8 @@ struct TextureBuffers(Movable):
             ctx.enqueue_copy(ptex_tables_buf, addrs.unsafe_ptr())
             ctx.synchronize()
         return Self(tex_data_bufs=tex_data_bufs^, textures_buf=textures_gpu_buf^, lut_buf=lut_buf^, n_textures=n_textures_int,
-                    ptex_pool_buf=ptex_pool_buf^, ptex_cache=ptex_cache^, ptex_bufs=ptex_bufs^, ptex_tables_buf=ptex_tables_buf^)
+                    ptex_pool_buf=ptex_pool_buf^, ptex_cache=ptex_cache^, ptex_bufs=ptex_bufs^, ptex_tables_buf=ptex_tables_buf^,
+                    tiled=tiled, tile_cache=tile_cache^, tile_staging_buf=dev_buf(ctx, 1), free0=free0, acct0=acct0)
 
 @fieldwise_init
 struct LightBuffers(Movable):
@@ -1873,9 +1896,180 @@ def _ptex_feed_all(handle: Pointer[GpuSceneHandle, MutUntrackedOrigin], scratch:
         handle[].textures.ptex_cache.feed(k, scratch.unsafe_offset(at))
         at += handle[].textures.ptex_cache.n_faces[k] * 8
 
+# ── Tiled paging (tile_cache.mojo) ──
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+def tile_copy_gpu(pool: Pointer[UInt8, MutUntrackedOrigin], staging: Pointer[UInt8, MutUntrackedOrigin],
+                  slots: Pointer[UInt32, MutUntrackedOrigin], slots_off: Int64, n_dp: Int64):
+    """Tile i of `staging` into its slot, a word a thread."""
+    comptime W = PTEX_SLOT_BYTES // 4
+    var i = Int(block_idx.x * block_dim.x + thread_idx.x)
+    if i >= Int(n_dp) * W:
+        return
+    var t = i // W; var w = i - t * W
+    var dst = pool.unsafe_offset(Int(slots_off) + Int(slots[unsafe_offset=t]) * PTEX_SLOT_BYTES).unsafe_bitcast[UInt32]()
+    dst[unsafe_offset=w] = staging.unsafe_offset(t * PTEX_SLOT_BYTES).unsafe_bitcast[UInt32]()[unsafe_offset=w]
+
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+def tile_patch_gpu(tables: Pointer[UInt64, MutUntrackedOrigin], patches: Pointer[UInt32, MutUntrackedOrigin], n_dp: Int64):
+    """Page entries: (file, entry byte offset in its blob, value) triples."""
+    var i = Int(block_idx.x * block_dim.x + thread_idx.x)
+    if i >= Int(n_dp):
+        return
+    var blob = Pointer[UInt8, MutUntrackedOrigin](unsafe_from_address=Int(tables[unsafe_offset=Int(patches[unsafe_offset=3 * i])]))
+    blob.unsafe_offset(Int(patches[unsafe_offset=3 * i + 1])).unsafe_bitcast[UInt32]()[unsafe_offset=0] = patches[unsafe_offset=3 * i + 2]
+
+def _tiles_patch(handle: Pointer[GpuSceneHandle, MutUntrackedOrigin]) raises:
+    """The cache's page entry patches to the device, in chunks: a large copy from plain host memory faulted on the B580."""
+    comptime CHUNK = 65536
+    ref tc = handle[].textures.tile_cache
+    var n = len(tc.patches) // 3
+    if n == 0:
+        return
+    var buf = handle[].ctx.enqueue_create_buffer[DType.uint32](min(n, CHUNK) * 3)
+    var at = 0
+    while at < n:
+        var m = min(n - at, CHUNK)
+        handle[].ctx.enqueue_copy(buf.create_sub_buffer[DType.uint32](0, m * 3), tc.patches.unsafe_ptr().unsafe_offset(at * 3))
+        handle[].ctx.enqueue_function[tile_patch_gpu](
+            handle[].textures.ptex_tables_buf.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
+            buf.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](), Int64(m),
+            grid_dim=ceildiv(m, 256), block_dim=256)
+        handle[].ctx.synchronize()
+        at += m
+    tc.patches.clear()
+
+def _tiles_sweep(handle: Pointer[GpuSceneHandle, MutUntrackedOrigin]) raises -> Int:
+    """Free the slots no lookup used since the last sweep, then start the used bytes over."""
+    ref tc = handle[].textures.tile_cache
+    if tc.n_slots == 0:
+        return 0
+    var used = unsafe_alloc[UInt8](tc.n_slots).unsafe_origin_cast[MutUntrackedOrigin]()
+    var sub = handle[].textures.ptex_pool_buf.create_sub_buffer[DType.uint8](tc.used_off, tc.n_slots)
+    handle[].ctx.synchronize()
+    handle[].ctx.enqueue_copy(used, sub)
+    handle[].ctx.synchronize()
+    var freed = tc.sweep(used)
+    used.unsafe_free()
+    handle[].ctx.enqueue_memset(sub, UInt8(0))
+    _tiles_patch(handle)
+    return freed
+
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+def tile_set_pool_gpu(textures: Pointer[GpuTexture, MutUntrackedOrigin], pool: Pointer[UInt8, MutUntrackedOrigin], n_dp: Int64):
+    var i = Int(block_idx.x * block_dim.x + thread_idx.x)
+    if i < Int(n_dp):
+        textures[unsafe_offset=i].pool = pool
+
+def gpu_tiles_size_pool(handle: Pointer[GpuSceneHandle, MutUntrackedOrigin]) raises:
+    """Size the tile pool from what is left on the device once everything else is up: the free bytes at
+    texture upload, less what Gonzales asked for since and a margin for staging; GONZALES_PTEX_POOL_MB caps it."""
+    ref tb = handle[].textures
+    comptime MARGIN = 2 << 30   # kernel code and launch scratch are not counted; 1 GiB ran out on ALab at 1440p
+    var left = tb.free0 - (dev_requested() - tb.acct0) - MARGIN
+    var cap = env_int["GONZALES_PTEX_POOL_MB"](-1)
+    var pool_bytes = max(left, 64 << 20)
+    if cap > 0:
+        pool_bytes = min(pool_bytes, cap << 20)
+    var buf = dev_buf(handle[].ctx, pool_bytes)
+    tb.tile_cache.set_pool(pool_bytes)
+    var hdr = tb.tile_cache.header()
+    handle[].ctx.enqueue_copy(buf.create_sub_buffer[DType.uint8](0, len(hdr)), hdr.unsafe_ptr())
+    if tb.tile_cache.n_slots > 0:
+        handle[].ctx.enqueue_memset(buf.create_sub_buffer[DType.uint8](tb.tile_cache.used_off, tb.tile_cache.n_slots), UInt8(0))
+    var p = buf.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
+    if tb.n_textures > 0:
+        handle[].ctx.enqueue_function[tile_set_pool_gpu](tb.textures_ptr(), p, Int64(tb.n_textures),
+                                                         grid_dim=ceildiv(tb.n_textures, 256), block_dim=256)
+    handle[].ctx.synchronize()
+    tb.ptex_pool_buf = buf^
+    print("Ptex tiles: pool", pool_bytes >> 20, "MB,", tb.tile_cache.n_slots, "slots (" + String(left >> 20) + " MB left on the device)")
+
+def gpu_tiles_begin(handle: Pointer[GpuSceneHandle, MutUntrackedOrigin]) raises -> Int:
+    """Read the pages the last samples asked for, sweep if free slots run short, start loading.
+    Returns the number of tiles being loaded."""
+    ref tc = handle[].textures.tile_cache
+    var hdr = unsafe_alloc[UInt32](1).unsafe_origin_cast[MutUntrackedOrigin]()
+    var hsub = handle[].textures.ptex_pool_buf.create_sub_buffer[DType.uint8](TILE_REQ_COUNT, 4)
+    handle[].ctx.synchronize()
+    handle[].ctx.enqueue_copy(hdr.unsafe_bitcast[UInt8](), hsub)
+    handle[].ctx.synchronize()
+    var n = min(Int(hdr[unsafe_offset=0]), tc.req_cap)
+    hdr[unsafe_offset=0] = UInt32(0)
+    handle[].ctx.enqueue_copy(hsub, hdr.unsafe_bitcast[UInt8]())
+    handle[].ctx.synchronize()
+    hdr.unsafe_free()
+    if n == 0 and len(tc.backlog) == 0:
+        tc.loading = True   # an empty load, so finish() pairs up
+        tc.loads.clear()
+        return 0
+    var reqs = unsafe_alloc[UInt32](max(n, 1) * 2).unsafe_origin_cast[MutUntrackedOrigin]()
+    if n > 0:
+        var rsub = handle[].textures.ptex_pool_buf.create_sub_buffer[DType.uint8](TILE_REQS, n * 8)
+        handle[].ctx.enqueue_copy(reqs.unsafe_bitcast[UInt8](), rsub)
+        handle[].ctx.synchronize()
+    if len(tc.free) < n:
+        _ = _tiles_sweep(handle)
+    var placed = tc.begin(reqs, n)
+    reqs.unsafe_free()
+    if env_on["GONZALES_GPU_LOG"]():
+        var flag = unsafe_alloc[UInt8](4).unsafe_origin_cast[MutUntrackedOrigin]()
+        handle[].ctx.enqueue_copy(flag, handle[].textures.ptex_pool_buf.create_sub_buffer[DType.uint8](0, 4))
+        handle[].ctx.synchronize()
+        if flag[unsafe_offset=3] != UInt8(0):
+            print("tiles begin: CORRUPT page entry seen by a lookup")
+        flag.unsafe_free()
+        print("tiles begin: rejected", tc.rejected, "backlog", len(tc.backlog), "requests", n, "pages", tc.asked_pages, "placed", placed, "patches", len(tc.patches) // 3, "free", len(tc.free))
+    _tiles_patch(handle)   # the pages that found no room
+    return placed
+
+def gpu_tiles_finish(handle: Pointer[GpuSceneHandle, MutUntrackedOrigin]) raises -> Int:
+    """Wait for the load in flight, copy its tiles into their slots and set their page entries."""
+    ref tc = handle[].textures.tile_cache
+    var n = tc.finish()
+    if n > 0:
+        var chunk = min(n, TILE_STAGE_CHUNK)
+        if len(handle[].textures.tile_staging_buf) < chunk * PTEX_SLOT_BYTES:
+            handle[].textures.tile_staging_buf = dev_buf(handle[].ctx, chunk * PTEX_SLOT_BYTES)
+        var slots = List[UInt32](capacity=n)
+        for i in range(n): slots.append(UInt32(tc.loads[i * 3 + 2]))
+        var sbuf = handle[].ctx.enqueue_create_buffer[DType.uint32](chunk)
+        comptime W = PTEX_SLOT_BYTES // 4
+        var at = 0
+        while at < n:   # through a fixed device staging buffer, a chunk at a time
+            var m = min(n - at, chunk)
+            handle[].ctx.enqueue_copy(handle[].textures.tile_staging_buf.create_sub_buffer[DType.uint8](0, m * PTEX_SLOT_BYTES),
+                                      tc.staging.unsafe_offset(at * PTEX_SLOT_BYTES))
+            handle[].ctx.enqueue_copy(sbuf.create_sub_buffer[DType.uint32](0, m), slots.unsafe_ptr().unsafe_offset(at))
+            handle[].ctx.enqueue_function[tile_copy_gpu](
+                handle[].textures.ptex_pool_buf.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
+                handle[].textures.tile_staging_buf.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
+                sbuf.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](), Int64(tc.slots_off), Int64(m),
+                grid_dim=ceildiv(m * W, 256), block_dim=256)
+            handle[].ctx.synchronize()
+            at += m
+    _tiles_patch(handle)
+    return n
+
+def gpu_ptex_loading(handle: Pointer[GpuSceneHandle, MutUntrackedOrigin]) -> Bool:
+    if handle[].textures.tiled:
+        return handle[].textures.tile_cache.loading
+    return handle[].textures.ptex_cache.loading
+
+def gpu_ptex_ready(handle: Pointer[GpuSceneHandle, MutUntrackedOrigin]) -> Bool:
+    if handle[].textures.tiled:
+        return handle[].textures.tile_cache.ready() or len(handle[].textures.tile_cache.loads) == 0
+    return handle[].textures.ptex_cache.ready()
+
+def gpu_ptex_denied(handle: Pointer[GpuSceneHandle, MutUntrackedOrigin]) -> Int:
+    if handle[].textures.tiled:
+        return handle[].textures.tile_cache.denied
+    return handle[].textures.ptex_cache.denied
+
 def gpu_ptex_begin(handle: Pointer[GpuSceneHandle, MutUntrackedOrigin]) raises -> Int:
     """Read back what the last samples asked for and start loading it in the background.
     Returns the number of faces being loaded."""
+    if handle[].textures.tiled:
+        return gpu_tiles_begin(handle)
     var scratch = _ptex_scratch(handle)
     _ptex_feed_all(handle, scratch)
     var n = handle[].textures.ptex_cache.begin()
@@ -1886,6 +2080,8 @@ def gpu_ptex_begin(handle: Pointer[GpuSceneHandle, MutUntrackedOrigin]) raises -
 
 def gpu_ptex_finish(handle: Pointer[GpuSceneHandle, MutUntrackedOrigin], may_evict: Bool = False) raises -> Int:
     """Wait for the load in flight and put it on the device. Returns the number of faces loaded."""
+    if handle[].textures.tiled:
+        return gpu_tiles_finish(handle)
     var (n, lo, hi) = handle[].textures.ptex_cache.finish(may_evict)
     handle[].ctx.synchronize()
     if hi > lo:
