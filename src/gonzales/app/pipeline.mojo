@@ -54,7 +54,7 @@ from gonzales.scene.accel.xert import xert_alignment, xert_instance_bytes, xert_
 from gonzales.scene.description.rt_cache import rt_cache_load, rt_cache_save, RtCacheTlas
 from gonzales.scene.description.scene_cache import scene_cache_variant
 from max.algorithm import parallelize
-from gonzales.scene.shapes.displaced_patches import sub_box, sub_relief_px, LEVELS
+from gonzales.scene.shapes.displaced_patches import sub_box, sub_relief_px, sub_square_corners, LEVELS
 from std.sys import exit
 from std.atomic import Atomic
 from std.sys.info import num_performance_cores
@@ -1222,9 +1222,18 @@ def _xert_attach(ctx: DeviceContext, psc: Pointer[ParsedScene_Mojo, MutUntracked
         print("RT hardware (Intel):", len(pieces.tmpl), "pieces of large templates,", len(pieces.entry_rec), "piece instances")
     var leaves = List[PrimId]()
     var leaf_base = List[Int32]()
-    var sd_starts = List[Int32]()   # per structure its block in sd_blocks: leaf count, then (first id, mesh, geometry) a subdiv mesh
-    var sd_blocks = List[Int32]()
+    var sd_starts = List[Int32]()   # per structure its block in sd_blocks: leaf count, then (first id, mesh, geometry, cage
+    var sd_blocks = List[Int32]()   # triangles, flat table at) a subdiv mesh
+    var sd_flat = List[Int32]()     # per sub-square that went into the geometry as two triangles: its primitive id
+    var sd_fix = List[Int]()        # sd_blocks entries holding an sd_flat offset, made table offsets on upload
+    var tri_px = Float32(0)         # sub-squares whose relief spans fewer pixels become two hardware triangles
+    try:
+        if env_str["GONZALES_SUBDIV_TRI_PX"]() != "":
+            tri_px = Float32(atof(env_str["GONZALES_SUBDIV_TRI_PX"]()))
+    except:
+        pass
     var sd_total = 0
+    var n_flat_total = 0
     var blas = List[Pointer[UInt8, MutUntrackedOrigin]]()
     var sizes = List[Int]()
     var bounds = unsafe_alloc[Float32](6 * max(n_blas, 1))
@@ -1258,11 +1267,17 @@ def _xert_attach(ctx: DeviceContext, psc: Pointer[ParsedScene_Mojo, MutUntracked
         var n_procs = len(leaves) - Int(leaf_base[b])
         sd_starts.append(Int32(len(sd_blocks))); sd_blocks.append(Int32(n_procs))
         var n_sub = 0
+        var rec_at = List[Int](length=max(len(ms), 1), fill=-1)
+        var flat_v = List[List[Float32]]()
+        for _ in range(max(len(ms), 1)):
+            flat_v.append(List[Float32]())
         if b < n_base:   # displaced subdivision meshes: their sub-squares follow the leaves (scene/accel/xert.mojo)
             for g in range(len(ms)):
                 var sm = psc[unsafe_offset=0].meshes[unsafe_offset=ms[g]]
                 if _is_real_ptr(sm.subdiv):
+                    rec_at[g] = len(sd_blocks)
                     sd_blocks.append(Int32(n_procs + n_sub)); sd_blocks.append(Int32(ms[g])); sd_blocks.append(Int32(g))
+                    sd_blocks.append(Int32(psc[unsafe_offset=0].mesh_n_tris[unsafe_offset=ms[g]])); sd_blocks.append(Int32(-1))
                     n_sub += Int(sm.subdiv[unsafe_offset=0].d.lv[].prim[LEVELS])
         sd_total += n_sub
         var proc_bounds = unsafe_alloc[Float32](6 * max(n_procs + n_sub, 1))
@@ -1305,6 +1320,44 @@ def _xert_attach(ctx: DeviceContext, psc: Pointer[ParsedScene_Mojo, MutUntracked
                             if r < Float32(0.125) * Float32(1 << k):
                                 nf[k] += 1
                     print("sub-square relief: of", cnt, "under 1/8, 1/4, 1/2, 1 px:", nf[0], nf[1], nf[2], nf[3])
+                if tri_px > Float32(0):   # flat sub-squares: two triangles through their displaced corners, a point box
+                    var flag = List[UInt8](length=cnt, fill=0)
+                    var fp = flag.unsafe_ptr()
+                    def classify(c: Int) {imm}:
+                        for j in range(c * 4096, min(cnt, c * 4096 + 4096)):
+                            var o6 = 6 * (at + j)
+                            var r = sub_relief_px(hd, j, Vec3f(proc_bounds[unsafe_offset=o6], proc_bounds[unsafe_offset=o6 + 1], proc_bounds[unsafe_offset=o6 + 2]),
+                                                  Vec3f(proc_bounds[unsafe_offset=o6 + 3], proc_bounds[unsafe_offset=o6 + 4], proc_bounds[unsafe_offset=o6 + 5]))
+                            fp[unsafe_offset=j] = UInt8(1) if r < tri_px else UInt8(0)
+                    parallelize(classify, (cnt + 4095) // 4096)
+                    var idx = List[Int32](length=cnt, fill=-1)
+                    var nfl = 0
+                    for j in range(cnt):
+                        if flag[j] != 0:
+                            idx[j] = Int32(nfl); nfl += 1
+                    if nfl > 0:
+                        sd_blocks[rec_at[g] + 4] = Int32(len(sd_flat)); sd_fix.append(rec_at[g] + 4)
+                        for j in range(cnt):
+                            if flag[j] != 0:
+                                sd_flat.append(Int32(j))
+                        var cv12 = List[Float32](length=12 * nfl, fill=0)
+                        var cp = cv12.unsafe_ptr(); var ip = idx.unsafe_ptr()
+                        def corners(c: Int) {imm}:
+                            for j in range(c * 4096, min(cnt, c * 4096 + 4096)):
+                                var k = Int(ip[unsafe_offset=j])
+                                if k < 0:
+                                    continue
+                                var q = sub_square_corners(hd, j)
+                                cp[unsafe_offset=12 * k] = q[0].x; cp[unsafe_offset=12 * k + 1] = q[0].y; cp[unsafe_offset=12 * k + 2] = q[0].z
+                                cp[unsafe_offset=12 * k + 3] = q[1].x; cp[unsafe_offset=12 * k + 4] = q[1].y; cp[unsafe_offset=12 * k + 5] = q[1].z
+                                cp[unsafe_offset=12 * k + 6] = q[2].x; cp[unsafe_offset=12 * k + 7] = q[2].y; cp[unsafe_offset=12 * k + 8] = q[2].z
+                                cp[unsafe_offset=12 * k + 9] = q[3].x; cp[unsafe_offset=12 * k + 10] = q[3].y; cp[unsafe_offset=12 * k + 11] = q[3].z
+                                var o6 = 6 * (at + j)
+                                for a in range(3):
+                                    proc_bounds[unsafe_offset=o6 + a] = cp[unsafe_offset=12 * k + a]; proc_bounds[unsafe_offset=o6 + 3 + a] = cp[unsafe_offset=12 * k + a]
+                        parallelize(corners, (cnt + 4095) // 4096)
+                        flat_v[g] = cv12^
+                        n_flat_total += nfl
                 sd_at += cnt
         n_procs += n_sub
         if len(ms) == 0 and n_procs == 0:
@@ -1328,11 +1381,14 @@ def _xert_attach(ctx: DeviceContext, psc: Pointer[ParsedScene_Mojo, MutUntracked
             var t0 = pieces.lo[b - n_base] if cut else 0
             if cut:
                 n = pieces.hi[b - n_base] - t0
-            var v = unsafe_alloc[Float32](3 * max(nv, 1))
+            var nfl = len(flat_v[g]) // 12 if not cut else 0
+            var v = unsafe_alloc[Float32](3 * max(nv + 4 * nfl, 1))
             for k in range(nv):
                 var p = mesh_pos(mesh, k)
                 v[unsafe_offset=3 * k] = p.x; v[unsafe_offset=3 * k + 1] = p.y; v[unsafe_offset=3 * k + 2] = p.z
-            var t = unsafe_alloc[UInt32](3 * max(n, 1))
+            for k in range(12 * nfl):
+                v[unsafe_offset=3 * nv + k] = flat_v[g][k]
+            var t = unsafe_alloc[UInt32](3 * max(n + 2 * nfl, 1))
             for k in range(3 * n):
                 t[unsafe_offset=k] = UInt32(mesh_vi(mesh, 3 * t0 + k))
             if _is_real_ptr(mesh.disp):   # a displaced triangle is a point here: its procedural box answers for it
@@ -1342,8 +1398,12 @@ def _xert_attach(ctx: DeviceContext, psc: Pointer[ParsedScene_Mojo, MutUntracked
             elif _is_real_ptr(mesh.patches) or _is_real_ptr(mesh.subdiv):   # so is a patch's stand-in triangle, and a subdivision cage
                 for k in range(n):
                     t[unsafe_offset=3 * k + 1] = t[unsafe_offset=3 * k]; t[unsafe_offset=3 * k + 2] = t[unsafe_offset=3 * k]
+            for k in range(nfl):   # (0,0) (1,0) (1,1), then (0,0) (1,1) (0,1) of the sub-square (xert.mojo maps them back)
+                var c0 = UInt32(nv + 4 * k)
+                t[unsafe_offset=3 * (n + 2 * k)] = c0; t[unsafe_offset=3 * (n + 2 * k) + 1] = c0 + 1; t[unsafe_offset=3 * (n + 2 * k) + 2] = c0 + 2
+                t[unsafe_offset=3 * (n + 2 * k) + 3] = c0; t[unsafe_offset=3 * (n + 2 * k) + 4] = c0 + 2; t[unsafe_offset=3 * (n + 2 * k) + 5] = c0 + 3
             verts[unsafe_offset=g] = v; tris[unsafe_offset=g] = t
-            n_verts[unsafe_offset=g] = Int64(nv); n_tris[unsafe_offset=g] = Int64(n)
+            n_verts[unsafe_offset=g] = Int64(nv + 4 * nfl); n_tris[unsafe_offset=g] = Int64(n + 2 * nfl)
         var size = Int64(0)
         var r = xert_build_blas_geoms(Int32(len(ms)), verts, n_verts, tris, n_tris, Int64(n_procs), proc_bounds,
                                       Pointer(to=size).unsafe_origin_cast[MutUntrackedOrigin](), bounds.unsafe_offset(6 * b))
@@ -1428,13 +1488,18 @@ def _xert_attach(ctx: DeviceContext, psc: Pointer[ParsedScene_Mojo, MutUntracked
         var tab = xert_sd_header()
         for b in range(len(sd_starts)):
             tab.append(Int32(len(sd_starts)) + sd_starts[b])
+        var flat_at = Int32(len(sd_starts) + len(sd_blocks))
+        for i in sd_fix:
+            sd_blocks[i] += flat_at
         for x in sd_blocks:
+            tab.append(x)
+        for x in sd_flat:
             tab.append(x)
         var sd_buf = dev_buf(ctx, 4 * len(tab))
         ctx.enqueue_copy(sd_buf, tab.unsafe_ptr().unsafe_bitcast[UInt8]())
         ctx.synchronize()
         xert_set_subdiv(UInt64(Int(sd_buf.unsafe_ptr()) + 4 * XERT_SD_HEADER))
-        print("RT hardware (Intel): displaced subdivision meshes,", sd_total, "sub-squares")
+        print("RT hardware (Intel): displaced subdivision meshes,", sd_total, "sub-squares,", n_flat_total, "of them as triangles")
         bufs.append(sd_buf^)
     else:
         xert_set_subdiv(0)

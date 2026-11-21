@@ -437,6 +437,19 @@ def sub_relief_px(d: DispSurface, prim: Int, lo: Vec3f, hi: Vec3f) -> Float32:
     return (hr[1] - hr[0]) * d.scale / (d.pixel * max(sqrt(dx * dx + dy * dy + dz * dz), Float32(1e-6)))
 
 
+def sub_square_corners(d: DispSurface, prim: Int) -> Tuple[Vec3f, Vec3f, Vec3f, Vec3f]:
+    """Primitive prim's displaced corners at (s, t) = (0, 0), (1, 0), (1, 1), (0, 1): the points its leaves start from."""
+    var pk = prim_patch(d, prim); var pi = pk[0]; var sq = sub_square(pk[2], pk[1])
+    var fr = _bl_frame(d, pi, pk[1], Vec3f(0, 0, 0))
+    var s1 = sq[0] + sq[2]; var t1 = sq[1] + sq[2]
+    var cs = SIMD[DType.float32, 8](sq[0], s1, s1, sq[0], sq[0], sq[0], sq[0], sq[0])
+    var ct = SIMD[DType.float32, 8](sq[1], sq[1], t1, t1, sq[1], sq[1], sq[1], sq[1])
+    var h = _heights8(d, Int(d.face[unsafe_offset=pi]), d.sq[unsafe_offset=3 * pi], d.sq[unsafe_offset=3 * pi + 1], d.sq[unsafe_offset=3 * pi + 2], cs, ct)
+    var inv = Float32(1) / sq[2]
+    return (_bl_point(d, fr, sq[0], sq[1], inv, cs[0], ct[0], h[0]), _bl_point(d, fr, sq[0], sq[1], inv, cs[1], ct[1], h[1]),
+            _bl_point(d, fr, sq[0], sq[1], inv, cs[2], ct[2], h[2]), _bl_point(d, fr, sq[0], sq[1], inv, cs[3], ct[3], h[3]))
+
+
 @always_inline
 def _tri_hit(a: Vec3f, b: Vec3f, c: Vec3f, dir: Vec3f, t_max: Float32) -> Tuple[Bool, Float32, Float32, Float32]:
     """Ray (from the origin) against triangle a b c (Moller-Trumbore, a hair of overlap): (hit, t, b1, b2)."""

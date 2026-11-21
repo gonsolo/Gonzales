@@ -13,7 +13,7 @@ from gonzales.scene.appearance.materials import Material
 from gonzales.scene.shapes.primitives import PrimId, PrimKind, TriangleMesh, is_surface_tri
 from gonzales.scene.shapes.displacement import displaced_hit
 from gonzales.scene.shapes.patches import intersect_patch
-from gonzales.scene.shapes.displaced_patches import intersect_displaced, prim_patch
+from gonzales.scene.shapes.displaced_patches import intersect_displaced, prim_patch, sub_square
 
 # Hardware ray tracing on Intel Xe2 (src/xert): the driver builds the acceleration structures, kernels trace them with
 # IGC's ray-query built-ins (opencl-c-intel.h, cl_intel_rt_production), linked by name from IGC's built-in library.
@@ -220,7 +220,7 @@ def xert_trace(accel: MutPointer[UInt8, MutAnyOrigin], ray: XeRayDesc, cv: XePro
                         external_call["intel_ray_query_sync", NoneType](q)
                         continue
                     var rec = s0 + 1
-                    for j in range(s0 + 1, s1, 3):
+                    for j in range(s0 + 1, s1, 5):
                         if pid >= Int(cv.subdiv[unsafe_offset=j]):
                             rec = j
                     var sub = cv.meshes[unsafe_offset=Int(cv.subdiv[unsafe_offset=rec + 1])].subdiv[unsafe_offset=0]
@@ -322,6 +322,23 @@ def xert_trace(accel: MutPointer[UInt8, MutAnyOrigin], ray: XeRayDesc, cv: XePro
                 external_call["intel_get_hit_barycentrics", NoneType](Pointer(to=uv), q, UInt32(0))   # struct return: sret first
                 hit.u = uv[0]
                 hit.v = uv[1]
+                if Int(cv.subdiv) != 0 and hit.slot < cv.piece_base:   # a flat sub-square's triangle: back to its cage triangle and (u, v)
+                    var ib = Int(cv.inst_blas[unsafe_offset=Int(hit.slot)])
+                    var s0 = Int(cv.subdiv[unsafe_offset=ib]); var s1 = Int(cv.subdiv[unsafe_offset=ib + 1])
+                    for j in range(s0 + 1, s1, 5):
+                        if cv.subdiv[unsafe_offset=j + 2] == hit.geom and cv.subdiv[unsafe_offset=j + 4] >= 0 and hit.prim >= cv.subdiv[unsafe_offset=j + 3]:
+                            var k = Int(hit.prim - cv.subdiv[unsafe_offset=j + 3])
+                            var sub = cv.meshes[unsafe_offset=Int(cv.subdiv[unsafe_offset=j + 1])].subdiv[unsafe_offset=0]
+                            var prim = Int(cv.subdiv[unsafe_offset=Int(cv.subdiv[unsafe_offset=j + 4]) + k // 2])
+                            var pk = prim_patch(sub.d, prim); var pi = pk[0]; var sq = sub_square(pk[2], pk[1])
+                            var ls = uv[0] + uv[1] if k % 2 == 0 else uv[0]
+                            var lt = uv[1] if k % 2 == 0 else uv[0] + uv[1]
+                            var fu = sub.d.sq[unsafe_offset=3 * pi] + (sq[0] + ls * sq[2]) * sub.d.sq[unsafe_offset=3 * pi + 2]
+                            var fv = sub.d.sq[unsafe_offset=3 * pi + 1] + (sq[1] + lt * sq[2]) * sub.d.sq[unsafe_offset=3 * pi + 2]
+                            var upper = fu < fv
+                            hit.u = fu if upper else fu - fv; hit.v = fv - fu if upper else fv
+                            hit.prim = Int32(2 * Int(sub.d.face[unsafe_offset=pi]) + (1 if upper else 0))
+                            break
         external_call["intel_ray_query_abandon", NoneType](q)
         return hit
     else:

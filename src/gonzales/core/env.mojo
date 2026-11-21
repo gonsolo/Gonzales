@@ -59,6 +59,7 @@ comptime ENV_SWITCHES: List[EnvSwitch] = [
     EnvSwitch("GONZALES_SUBDIV_SCALE", "displaced surfaces' heights times this, for pictures (default 1)"),
     EnvSwitch("GONZALES_SUBDIV_PPS", "pixels a displaced surface's sub-square spans at least (default 0.5)"),
     EnvSwitch("GONZALES_SUBDIV_FLATSTAT", "set: count the sub-squares whose height range is under 1/8 to 1 pixel"),
+    EnvSwitch("GONZALES_SUBDIV_TRI_PX", "Intel Xe2: sub-squares whose relief spans fewer pixels become two hardware triangles (default 0: none)"),
     EnvSwitch("GONZALES_SUBDIV_LOD", "pixels below which a displaced surface's finer height levels are dropped (default 0.25)"),
     EnvSwitch("GONZALES_PTEX_LOG2RES", "(C++) log2 of a uniform per-face Ptex resolution cap; no paging"),
     EnvSwitch("GONZALES_XERT_VRAM_MB", "Intel Xe2: MiB of RT structures and mesh arrays in VRAM (default automatic)"),
