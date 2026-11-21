@@ -20,6 +20,7 @@ from gonzales.scene.appearance.lights import AreaLight, InfiniteLight, DistantLi
 from gonzales.scene.appearance.materials import Material
 from gonzales.scene.description.pbrt_parser import ParsedScene_Mojo, _plan_ptex_budget, mojo_parsed_free
 from gonzales.scene.shapes.primitives import Instance, PrimId, Sphere, TriangleMesh, mesh_points_floats
+from gonzales.scene.shapes.motion import InstanceMotion
 from gonzales.scene.appearance.materials import GpuTexture, NormalSlopeMap, normal_slope_map_none
 from gonzales.scene.appearance.host_textures import TexPrefetch
 from gonzales.core.fast_io import read_parallel, PARALLEL_MIN
@@ -291,6 +292,14 @@ def scene_cache_save(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin], cache_p
     return True
 
 
+def _static(n: Int) -> Pointer[Int32, MutUntrackedOrigin]:
+    """A no-motion index array: only scenes without motion are cached."""
+    var p = unsafe_alloc[Int32](max(n, 1))
+    for i in range(max(n, 1)):
+        p[unsafe_offset=i] = Int32(-1)
+    return p
+
+
 def scene_cache_load(cache_path: _Ptr, scene_path: _Ptr) -> Pointer[ParsedScene_Mojo, MutUntrackedOrigin]:
     """The cached scene, or a dangling pointer (not _is_real_ptr) when there is no usable cache."""
     var none = Pointer[ParsedScene_Mojo, MutUntrackedOrigin].unsafe_dangling()
@@ -320,6 +329,9 @@ def scene_cache_load(cache_path: _Ptr, scene_path: _Ptr) -> Pointer[ParsedScene_
 
     var psc = _get[ParsedScene_Mojo](f, 1)
     ref s = psc[unsafe_offset=0]
+    s.instance_motion = _static(Int(s.instance_count)); s.sphere_motion = _static(Int(s.sphere_count))
+    s.point_motion = _static(Int(s.point_count)); s.distant_motion = _static(Int(s.distant_count))
+    s.moving_instances = _static(0); s.moving_count = 0; s.motions = unsafe_alloc[InstanceMotion](1)
     s.raster_to_camera = _get[Float32](f, 16); s.camera_to_world = _get[Float32](f, 16)
     s.film_filename = _get_cstr(f)
     s.materials = _get[Material](f, Int(s.material_count))
