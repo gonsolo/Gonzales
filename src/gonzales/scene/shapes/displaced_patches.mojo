@@ -467,6 +467,12 @@ def _tri_hit(a: Vec3f, b: Vec3f, c: Vec3f, dir: Vec3f, t_max: Float32) -> Tuple[
     comptime e = Float32(1e-3)
     if u < -e or v < -e or u + v > Float32(1) + e or t <= Float32(0) or t >= t_max:
         return (False, t_max, Float32(0), Float32(0))
+    # The leaves' edge fans are slivers: det nearly vanishes and Cramer's rule loses t. Keep the hit only if its point
+    # lies on the ray.
+    var res = a + e1 * u + e2 * v - dir * t
+    var tol = e * (sqrt(dot(e1, e1)) + sqrt(dot(e2, e2))) + Float32(1e-6) * (abs(a.x) + abs(a.y) + abs(a.z))
+    if dot(res, res) > tol * tol:
+        return (False, t_max, Float32(0), Float32(0))
     return (True, t, u, v)
 
 
@@ -505,6 +511,12 @@ def _bilinear_hit(q00: Vec3f, q10: Vec3f, q11: Vec3f, q01: Vec3f, dir: Vec3f, t_
         var tr = dot(n, pb) / dd
         var vr = dot(n, dir)
         if vr >= -e * dd and vr <= (Float32(1) + e) * dd and tr > Float32(0) and tr < t:
+            # A ray nearly parallel to the patch's v line makes dd vanish and t meaningless: keep the root only if the
+            # patch point it names lies on the ray.
+            var res = pa + pb * (vr / dd) - dir * tr
+            var tol = e * (sqrt(dot(e10, e10)) + sqrt(dot(e00, e00)) + sqrt(dot(e11, e11))) + Float32(1e-6) * (abs(pa.x) + abs(pa.y) + abs(pa.z))
+            if dot(res, res) > tol * tol:
+                continue
             t = tr; u = min(max(ur, Float32(0)), Float32(1)); v = min(max(vr / dd, Float32(0)), Float32(1)); hit = True
     return (hit, t, u, v)
 
@@ -1057,13 +1069,6 @@ def _bound_miss(d: DispSurface, pi: Int, f: Int, dom: Tuple[Float32, Float32, Fl
     return 1 if hs.reduce_min() < max(a[0], b[0]) - Float32(0.5) or hs.reduce_max() > min(a[1], b[1]) + Float32(0.5) else 0
 
 
-def _in_box(p: Vec3f, c: Tuple[Vec3f, Vec3f, Float32]) -> Bool:
-    """Whether point p lies in box c, widened by the leaf tests' overlap: they can return far roots off the patch."""
-    var lo = c[0]; var hi = c[1]
-    var e = max(max(hi.x - lo.x, hi.y - lo.y), hi.z - lo.z) * Float32(5e-3) + Float32(1e-5) * (abs(p.x) + abs(p.y) + abs(p.z)) + Float32(1e-6)
-    return p.x >= lo.x - e and p.x <= hi.x + e and p.y >= lo.y - e and p.y <= hi.y + e and p.z >= lo.z - e and p.z <= hi.z + e
-
-
 def _mean_normal(fr: BLFrame) -> Vec3f:
     """The base's unit normal from its diagonals (zero when degenerate: no slab cuts)."""
     var n = cross(Vec3f(fr.px[2] - fr.px[0], fr.py[2] - fr.py[0], fr.pz[2] - fr.pz[0]), Vec3f(fr.px[3] - fr.px[1], fr.py[3] - fr.py[1], fr.pz[3] - fr.pz[1]))
@@ -1146,7 +1151,7 @@ def _intersect_bl_walk(d: DispSurface, pi: Int, prim: Int, f: Int, fr: BLFrame, 
         var lh = _bl_leaf(d, pi, f, fr, sq[0], sq[1], inv_s, dom, dir, best)   # a leaf already; the caller tested its box
         comptime if _SLAB_CHECK:
             viol = _bound_miss(d, pi, f, dom, dom)
-        return (lh[0] and _in_box(dir * lh[1], cur), lh[1], lh[2], lh[3], 1 + (viol << 32), S)
+        return (lh[0], lh[1], lh[2], lh[3], 1 + (viol << 32), S)
     var cur_hit = _slab(cur[0], cur[1], inv, best)
     while True:
         steps += 1
@@ -1157,7 +1162,7 @@ def _intersect_bl_walk(d: DispSurface, pi: Int, prim: Int, f: Int, fr: BLFrame, 
                 var lh = _bl_leaf(d, pi, f, _bl_frame(d, pi, kq, org), sq[0], sq[1], inv_s, dom, dir, best)
                 comptime if _SLAB_CHECK:
                     viol = max(viol, _bound_miss(d, pi, f, dom, (sq[0], sq[1], S, S)))
-                if lh[0] and _in_box(dir * lh[1], cur):
+                if lh[0]:
                     best = lh[1]; hit = True; hs = lh[2]; ht = lh[3]; hsz = max(dom[2], dom[3])
             else:
                 var along_u = depth % 2 == 0
