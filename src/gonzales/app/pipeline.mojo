@@ -54,7 +54,7 @@ from gonzales.scene.accel.xert import xert_alignment, xert_instance_bytes, xert_
 from gonzales.scene.description.rt_cache import rt_cache_load, rt_cache_save, RtCacheTlas
 from gonzales.scene.description.scene_cache import scene_cache_variant
 from max.algorithm import parallelize
-from gonzales.scene.shapes.displaced_patches import sub_box, LEVELS
+from gonzales.scene.shapes.displaced_patches import sub_box, sub_relief_px, LEVELS
 from std.sys import exit
 from std.atomic import Atomic
 from std.sys.info import num_performance_cores
@@ -1295,6 +1295,16 @@ def _xert_attach(ctx: DeviceContext, psc: Pointer[ParsedScene_Mojo, MutUntracked
                         proc_bounds[unsafe_offset=6 * (at + j) + 2] = sb[0].z; proc_bounds[unsafe_offset=6 * (at + j) + 3] = sb[1].x
                         proc_bounds[unsafe_offset=6 * (at + j) + 4] = sb[1].y; proc_bounds[unsafe_offset=6 * (at + j) + 5] = sb[1].z
                 parallelize(sub_boxes, (cnt + 4095) // 4096)
+                if env_on["GONZALES_SUBDIV_FLATSTAT"]():   # how many sub-squares have sub-pixel relief
+                    var nf = List[Int](length=4, fill=0)
+                    for j in range(cnt):
+                        var o6 = 6 * (at + j)
+                        var r = sub_relief_px(hd, j, Vec3f(proc_bounds[unsafe_offset=o6], proc_bounds[unsafe_offset=o6 + 1], proc_bounds[unsafe_offset=o6 + 2]),
+                                              Vec3f(proc_bounds[unsafe_offset=o6 + 3], proc_bounds[unsafe_offset=o6 + 4], proc_bounds[unsafe_offset=o6 + 5]))
+                        for k in range(4):
+                            if r < Float32(0.125) * Float32(1 << k):
+                                nf[k] += 1
+                    print("sub-square relief: of", cnt, "under 1/8, 1/4, 1/2, 1 px:", nf[0], nf[1], nf[2], nf[3])
                 sd_at += cnt
         n_procs += n_sub
         if len(ms) == 0 and n_procs == 0:

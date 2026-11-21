@@ -427,6 +427,16 @@ def sub_box(d: DispSurface, prim: Int) -> Tuple[Vec3f, Vec3f]:
     return (b[0], b[1])
 
 
+def sub_relief_px(d: DispSurface, prim: Int, lo: Vec3f, hi: Vec3f) -> Float32:
+    """Primitive prim's height range in pixels at its box (lo, hi) nearest to the camera."""
+    var pk = prim_patch(d, prim); var pi = pk[0]; var sq = sub_square(pk[2], pk[1])
+    var sz = d.sq[unsafe_offset=3 * pi + 2]; var u0 = d.sq[unsafe_offset=3 * pi] + sq[0] * sz; var v0 = d.sq[unsafe_offset=3 * pi + 1] + sq[1] * sz
+    var hr = height_range(d, Int(d.face[unsafe_offset=pi]), u0, u0 + sq[2] * sz, v0, v0 + sq[2] * sz)
+    var dx = max(max(lo.x - d.cam.x, d.cam.x - hi.x), Float32(0)); var dy = max(max(lo.y - d.cam.y, d.cam.y - hi.y), Float32(0))
+    var dz = max(max(lo.z - d.cam.z, d.cam.z - hi.z), Float32(0))
+    return (hr[1] - hr[0]) * d.scale / (d.pixel * max(sqrt(dx * dx + dy * dy + dz * dz), Float32(1e-6)))
+
+
 @always_inline
 def _tri_hit(a: Vec3f, b: Vec3f, c: Vec3f, dir: Vec3f, t_max: Float32) -> Tuple[Bool, Float32, Float32, Float32]:
     """Ray (from the origin) against triangle a b c (Moller-Trumbore, a hair of overlap): (hit, t, b1, b2)."""
