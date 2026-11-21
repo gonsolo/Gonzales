@@ -961,7 +961,8 @@ static void udim_read_chain(const UdimTex &t, int f, int ul, int vl, unsigned ch
                                         ay1 = std::min((y1 + spec.tile_height - 1) / spec.tile_height * spec.tile_height, lh);
                                 }
                                 const int rw = ax1 - ax0, rh = ay1 - ay0;
-                                px.resize(static_cast<size_t>(rw) * rh * nc);
+                                // Scanlines come as whole rows.
+                                px.resize(static_cast<size_t>(spec.tile_width > 0 ? rw : lw) * rh * nc);
                                 const bool read = spec.tile_width > 0
                                         ? in->read_tiles(0, level, ax0, ax1, ay0, ay1, 0, 1, 0, nc, OIIO::TypeDesc::FLOAT, px.data())
                                         : in->read_scanlines(0, level, ay0, ay1, 0, 0, nc, OIIO::TypeDesc::FLOAT, px.data());
