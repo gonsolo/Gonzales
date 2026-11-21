@@ -2,6 +2,8 @@
 from std.atomic import Atomic
 from gonzales.scene.shapes.motion import MotionTable
 from gonzales.scene.appearance.ptex_cache import PTEX_QUEUE_CAP
+from gonzales.scene.appearance.tile_cache import (PTEX_TILE_LOG2, PTEX_SLOT_W, PTEX_SLOT_BYTES, TILE_REQ_COUNT,
+    TILE_USED_OFF, TILE_SLOTS_OFF, TILE_SLOTS, TILE_REQS, TILE_WITHHOLD_LOADING, TILE_WITHHOLD_LOADING2, _tiles_at)
 from std.math import sqrt, floor, log2, ceil, abs
 from std.ffi import external_call
 from std.memory.alloc import unsafe_alloc
@@ -85,6 +87,146 @@ def _ptex_ask(tex: GpuTexture, entry: Pointer[UInt8, MutUntrackedOrigin], face: 
             break
 
 
+# ── Tiled Ptex (face flag 16; layout in oiio.cc ptex_pack_tiled, pool in tile_cache.mojo) ──
+# Levels finer than a face's resident tail are 64x64 tiles in the shared pool, each slot 66 x 66 texels with
+# its border. A page entry is 0 (absent), 1 (asked for), 2 (no room) or 16 + the slot.
+@always_inline
+def _tile_ask(tex: GpuTexture, pt: Pointer[UInt32, MutUntrackedOrigin], idx: Int, entry_byte: Int):
+    """Mark the page asked for and append it to the request list; a full list takes the mark back."""
+    var e = pt.unsafe_offset(idx)
+    var absent = UInt32(0)
+    if not Atomic[UInt32].compare_exchange(e, absent, UInt32(1)):
+        return
+    var hdr = tex.pool.unsafe_offset(TILE_REQ_COUNT).unsafe_bitcast[UInt32]()
+    var i = Int(Atomic.fetch_add(hdr, UInt32(1)))
+    if i < Int(hdr[unsafe_offset=1]):
+        var q = tex.pool.unsafe_offset(TILE_REQS).unsafe_bitcast[UInt32]()
+        q[unsafe_offset=2 * i] = UInt32(tex.height)
+        q[unsafe_offset=2 * i + 1] = UInt32(entry_byte)
+        return
+    var asked = UInt32(1)
+    _ = Atomic[UInt32].compare_exchange(e, asked, UInt32(0))
+
+@always_inline
+def _ptex_tiled_level(tex: GpuTexture, face: Int, l: Int, u: Float32, v: Float32, ask: Bool, mut state: Int) -> RGB:
+    """Level l (0 = full resolution) of a tiled face. state: 0 = sampled, 1 = absent (asked for if `ask`),
+    2 = absent with no room, 3 = loading."""
+    var n_faces = Int(tex.width)
+    var entry = tex.data.unsafe_offset(face * 8)
+    var info = tex.data.unsafe_offset((n_faces + face) * 8)
+    var fu = Int(info[unsafe_offset=4]); var fv = Int(info[unsafe_offset=5]); var lb = Int(info[unsafe_offset=6])
+    state = 0
+    if l >= lb:   # the resident tail
+        var ul = Int(entry[unsafe_offset=4]); var vl = Int(entry[unsafe_offset=5])
+        var off = Int(entry.unsafe_bitcast[UInt32]()[unsafe_offset=0])
+        for _k in range(l - lb):
+            off += ((1 << ul) + 2) * ((1 << vl) + 2)
+            ul = max(ul - 1, 0); vl = max(vl - 1, 0)
+        return _ptex_level(tex, tex.data.unsafe_offset(n_faces * 16), off, 1 << ul, 1 << vl, u, v)
+    var ul = max(fu - l, 0); var vl = max(fv - l, 0)
+    var w = 1 << ul; var h = 1 << vl
+    var tw = min(w, 1 << PTEX_TILE_LOG2); var th = min(h, 1 << PTEX_TILE_LOG2)
+    var fx = min(max(u, Float32(0.0)), Float32(1.0)) * Float32(w) + Float32(0.5)   # bordered texel coordinates
+    var fy = min(max(v, Float32(0.0)), Float32(1.0)) * Float32(h) + Float32(0.5)
+    var x0 = min(Int(floor(fx)), w); var y0 = min(Int(floor(fy)), h)
+    var wx = fx - Float32(x0); var wy = fy - Float32(y0)
+    var tx = min(max(x0 - 1, 0) // tw, w // tw - 1); var ty = min(max(y0 - 1, 0) // th, h // th - 1)
+    var idx = ty * (w // tw) + tx
+    for k in range(l):
+        idx += _tiles_at(max(fu - k, 0), max(fv - k, 0))
+    var pt_off = Int(info.unsafe_bitcast[UInt32]()[unsafe_offset=0])
+    var pt = tex.data.unsafe_offset(pt_off).unsafe_bitcast[UInt32]()
+    var e = Int(pt[unsafe_offset=idx])
+    if e < 16:
+        state = e if e == 2 or e == 3 else 1
+        if ask and e == 0:
+            _tile_ask(tex, pt, idx, pt_off + idx * 4)
+        return RGB(Float32(0.0))
+    var slot = e - 16
+    if slot >= Int(tex.pool.unsafe_offset(TILE_SLOTS).unsafe_bitcast[UInt32]()[unsafe_offset=0]):
+        tex.pool[unsafe_offset=3] = UInt8(1)   # a corrupt page entry: reported by the host (GONZALES_GPU_LOG)
+        state = 1
+        return RGB(Float32(0.0))
+    tex.pool[unsafe_offset=Int(tex.pool.unsafe_offset(TILE_USED_OFF).unsafe_bitcast[UInt64]()[unsafe_offset=0]) + slot] = UInt8(1)
+    var texels = tex.pool.unsafe_offset(Int(tex.pool.unsafe_offset(TILE_SLOTS_OFF).unsafe_bitcast[UInt64]()[unsafe_offset=0])
+                                        + slot * PTEX_SLOT_BYTES)
+    var row = (y0 - ty * th) * PTEX_SLOT_W + (x0 - tx * tw)
+    var c00 = _ptex_texel(tex, texels, row)
+    var c10 = _ptex_texel(tex, texels, row + 1)
+    var c01 = _ptex_texel(tex, texels, row + PTEX_SLOT_W)
+    var c11 = _ptex_texel(tex, texels, row + PTEX_SLOT_W + 1)
+    return (c00 * (Float32(1.0) - wx) + c10 * wx) * (Float32(1.0) - wy) + (c01 * (Float32(1.0) - wx) + c11 * wx) * wy
+
+@always_inline
+def _ptex_face_uv(tex: GpuTexture, face_in: Int, u_in: Float32, v_in: Float32, fp_in: Float32) -> Tuple[Int, Float32, Float32, Float32]:
+    """The face, its own (u, v) and the footprint in its units; UDIM (u, v) span the atlas of all tiles."""
+    var n_faces = Int(tex.width)
+    var face = face_in; var u = u_in; var v = v_in; var fp_width = fp_in
+    if tex.n_levels < Int32(0):
+        var cols = Int(-tex.n_levels) * UDIM_SUB; var rows = max(n_faces // cols, 1)
+        var uu = u * Float32(cols); var vv = v * Float32(rows)
+        var ut = min(max(Int(floor(uu)), 0), cols - 1); var vt = min(max(Int(floor(vv)), 0), rows - 1)
+        face = vt * cols + ut
+        u = uu - Float32(ut); v = vv - Float32(vt)
+        fp_width = fp_width * Float32(max(cols, rows))
+    if face < 0 or face >= n_faces:
+        face = 0
+    return (face, u, v, fp_width)
+
+@always_inline
+def _ptex_tiled_lod(tex: GpuTexture, face: Int, fp_width: Float32) -> Float32:
+    """The full-resolution mip level a footprint reads (0 = finest); a negative one reads its own level unblended."""
+    var info = tex.data.unsafe_offset((Int(tex.width) + face) * 8)
+    var top = max(Int(info[unsafe_offset=4]), Int(info[unsafe_offset=5]))
+    var fp_texels = abs(fp_width) * Float32(1 << top)
+    if fp_width == Float32(0.0) or fp_texels <= Float32(1.0):
+        return Float32(0.0)
+    return min(log2(fp_texels), Float32(top))
+
+@always_inline
+def _sample_ptex_tiled(tex: GpuTexture, face: Int, u: Float32, v: Float32, fp_width: Float32) -> RGB:
+    # UDIM lookups without a footprint keep what is resident.
+    var ask = fp_width != Float32(0.0) or tex.n_levels >= Int32(0)
+    var lod = _ptex_tiled_lod(tex, face, fp_width)
+    var l0 = Int(floor(lod))
+    var state = 0
+    var c0 = _ptex_tiled_level(tex, face, l0, u, v, ask, state)
+    var l = l0
+    while state != 0:   # the finest resident level below; the resident tail always is
+        l += 1
+        c0 = _ptex_tiled_level(tex, face, l, u, v, False, state)
+    var f = lod - Float32(l0)
+    if l != l0 or fp_width < Float32(0.0) or f <= Float32(0.0):
+        return c0
+    var c1 = _ptex_tiled_level(tex, face, l0 + 1, u, v, False, state)
+    if state != 0:
+        return c0
+    return c0 + (c1 - c0) * f
+
+def ptex_tiled_missing(tex: GpuTexture, face_in: Int, u_in: Float32, v_in: Float32, fp_in: Float32) -> Bool:
+    """Whether to withhold a sample whose lookup misses its tile (asking for it), by pool header byte 2:
+    every miss that can still come, only tiles loading, or only those two or more levels finer than what is resident."""
+    var (face, u, v, fp_width) = _ptex_face_uv(tex, face_in, u_in, v_in, fp_in)
+    if fp_width == Float32(0.0) and tex.n_levels < Int32(0):
+        return False
+    var state = 0
+    var l0 = Int(floor(_ptex_tiled_lod(tex, face, fp_width)))
+    _ = _ptex_tiled_level(tex, face, l0, u, v, True, state)
+    var policy = Int(tex.pool[unsafe_offset=2])
+    if policy != TILE_WITHHOLD_LOADING and policy != TILE_WITHHOLD_LOADING2:
+        return state == 1 or state == 3
+    if state != 3:
+        return False
+    if policy == TILE_WITHHOLD_LOADING:
+        return True
+    var l = l0 + 1   # the resident fallback: withhold only if it is two or more levels coarser
+    var s = 1
+    while s != 0 and l < l0 + 2:
+        _ = _ptex_tiled_level(tex, face, l, u, v, False, s)
+        l += 1
+    return s != 0
+
+
 @always_inline
 def _sample_ptex(tex: GpuTexture, face_in: Int, u_in: Float32, v_in: Float32, fp_width_in: Float32) -> RGB:
     var n_faces = Int(tex.width)
@@ -100,6 +242,8 @@ def _sample_ptex(tex: GpuTexture, face_in: Int, u_in: Float32, v_in: Float32, fp
     if face < 0 or face >= n_faces:
         face = 0
     var entry = tex.data.unsafe_offset(face * 8)
+    if (Int(entry[unsafe_offset=7]) & 16) != 0:
+        return _sample_ptex_tiled(tex, face, u, v, fp_width)
     var off = Int(entry.unsafe_bitcast[UInt32]()[unsafe_offset=0])
     var ul = Int(entry[unsafe_offset=4]); var vl = Int(entry[unsafe_offset=5])
     var texels = tex.data.unsafe_offset(n_faces * 8)

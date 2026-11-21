@@ -744,6 +744,17 @@ extern "C" void ptex_set_plan(int cap, int base, long long pool_bytes) {
         ptex_pool_budget = pool_bytes;
 }
 extern "C" void ptex_set_paging(int on) { ptex_paging_on = on != 0; }
+// Tiled paging: faces keep a resident tail of their mip chain; finer levels are paged as 64x64 tiles
+// (texturing.mojo, tile_cache.mojo). Blob = nfaces * 8 face entries (flags 16), nfaces * 8 tile entries
+// (uint32 byte offset of the face's page table, uint8 full log2 width, full log2 height, first resident
+// level), the resident texels, then the uint32 page tables (0 = absent), each face's levels from the finest.
+static bool ptex_tiles_on = false;
+extern "C" void ptex_set_tiles(int on) { ptex_tiles_on = on != 0; }
+static bool ptex_tiled() { return ptex_paging() && ptex_tiles_on; }
+static const int PTEX_TILE_LOG2 = 6;
+static int ptex_tiles_at(int ul, int vl) {
+        return (1 << std::max(ul - PTEX_TILE_LOG2, 0)) * (1 << std::max(vl - PTEX_TILE_LOG2, 0));
+}
 
 // Every level carries a one-texel border copied from the neighbouring faces, so a bilinear
 // lookup blends across face edges: a 2^ul x 2^vl level takes (2^ul + 2) * (2^vl + 2) texels.
@@ -1054,6 +1065,76 @@ extern "C" void ptex_read_face(void *tex, int f, int ul, int vl, unsigned char *
         static_cast<PagedTex *>(tex)->read(f, ul, vl, dst);
 }
 
+// The tiled blob (ptex_set_tiles): each face's chain from the first level whose larger side is at most 2^cap.
+static int ptex_pack_tiled(const char *filename, PagedTex *tex, int nfaces, int cap, long long *nbytes, int *nfaces_out,
+                           int *paged_id) {
+        const size_t n = static_cast<size_t>(nfaces);
+        std::vector<unsigned char> head(n * 16);
+        size_t texels = 0, pages = 0;
+        for (int f = 0; f < nfaces; ++f) {
+                const std::array<int, 2> full = tex->res(f);
+                const int lb = std::max(std::max(full[0], full[1]) - cap, 0);
+                const int ul = std::max(full[0] - lb, 0), vl = std::max(full[1] - lb, 0);
+                unsigned char *e = &head[static_cast<size_t>(f) * 8];
+                const uint32_t off = static_cast<uint32_t>(texels);
+                std::memcpy(e, &off, 4);
+                e[4] = static_cast<unsigned char>(ul);
+                e[5] = static_cast<unsigned char>(vl);
+                e[6] = lb > 0 ? 0 : 255;
+                e[7] = 16;
+                unsigned char *t = &head[(n + f) * 8];
+                const uint32_t pt = static_cast<uint32_t>(pages);   // fixed up to a byte offset below
+                std::memcpy(t, &pt, 4);
+                t[4] = static_cast<unsigned char>(full[0]);
+                t[5] = static_cast<unsigned char>(full[1]);
+                t[6] = static_cast<unsigned char>(lb);
+                t[7] = 0;
+                texels += ptex_chain_texels(ul, vl);
+                for (int l = 0; l < lb; ++l)
+                        pages += ptex_tiles_at(std::max(full[0] - l, 0), std::max(full[1] - l, 0));
+        }
+        const size_t pt0 = (n * 16 + texels * 3 + 3) / 4 * 4;
+        if (pt0 + pages * 4 > 0xFFFFFFFFull)
+                return 0;
+        std::vector<unsigned char> blob(pt0 + pages * 4, 0);
+        std::memcpy(blob.data(), head.data(), head.size());
+        for (int f = 0; f < nfaces; ++f) {
+                unsigned char *t = &blob[(n + f) * 8];
+                uint32_t pt;
+                std::memcpy(&pt, t, 4);
+                pt = static_cast<uint32_t>(pt0 + static_cast<size_t>(pt) * 4);
+                std::memcpy(t, &pt, 4);
+                const unsigned char *e = &blob[static_cast<size_t>(f) * 8];
+                uint32_t off;
+                std::memcpy(&off, e, 4);
+                tex->read(f, e[4], e[5], &blob[n * 16 + static_cast<size_t>(off) * 3]);
+        }
+        *nbytes = static_cast<long long>(blob.size());
+        *nfaces_out = nfaces;
+        *paged_id = 0;
+        std::lock_guard<std::mutex> lock(ptex_blob_mu);
+        ptex_blobs[filename] = std::move(blob);
+        return 1;
+}
+extern "C" int ptex_tiled_on() { return ptex_tiled() ? 1 : 0; }
+
+// Face f's level 2^ul x 2^vl with its border, (2^ul + 2) * (2^vl + 2) RGB8 texels.
+extern "C" void ptex_read_level(void *tex, int f, int ul, int vl, unsigned char *dst) {
+        std::vector<unsigned char> chain(ptex_chain_texels(ul, vl) * 3);
+        static_cast<PagedTex *>(tex)->read(f, ul, vl, chain.data());
+        std::memcpy(dst, chain.data(), static_cast<size_t>((1 << ul) + 2) * ((1 << vl) + 2) * 3);
+}
+
+// Tile (tx, ty) of a bordered level into a slot of 66 x 66 texels: its texels -1..T on each axis, T = min(64, side).
+extern "C" void ptex_crop_tile(const unsigned char *level, int ul, int vl, int tx, int ty, unsigned char *slot) {
+        const int w = 1 << ul, h = 1 << vl, tw = std::min(w, 1 << PTEX_TILE_LOG2), th = std::min(h, 1 << PTEX_TILE_LOG2);
+        const int sw = (1 << PTEX_TILE_LOG2) + 2;
+        for (int y = 0; y < th + 2; ++y)
+                std::memcpy(slot + static_cast<size_t>(y) * sw * 3,
+                            level + (static_cast<size_t>(ty * th + y) * (w + 2) + static_cast<size_t>(tx * tw)) * 3,
+                            static_cast<size_t>(tw + 2) * 3);
+}
+
 // Pack `filename`; *paged_id is 0 when its faces can be paged in at finer resolutions, else -1.
 extern "C" int ptex_packed_size(const char *filename, long long *nbytes, int *nfaces_out, int *paged_id) {
         std::unique_ptr<PagedTex, void (*)(PagedTex *)> tex(paged_open(filename), paged_close);
@@ -1064,6 +1145,8 @@ extern "C" int ptex_packed_size(const char *filename, long long *nbytes, int *nf
                 return 0;
         const int cap = ptex_max_log2();
         const bool paged = ptex_paging();
+        if (ptex_tiled())
+                return ptex_pack_tiled(filename, tex.get(), nfaces, cap, nbytes, nfaces_out, paged_id);
         std::vector<unsigned char> blob(static_cast<size_t>(nfaces) * 8);
         size_t texels = 0;
         for (int f = 0; f < nfaces; ++f) {
