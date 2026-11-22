@@ -427,6 +427,91 @@ def sub_box(d: DispSurface, prim: Int) -> Tuple[Vec3f, Vec3f]:
     return (b[0], b[1])
 
 
+def _comb_norm(cl: BezierPatch, ch: BezierPatch, w: SIMD[DType.float32, 16]) -> Float32:
+    """The largest norm of sum w_k b_k over the interval net [cl, ch]."""
+    var ax = w * cl.x; var bx = w * ch.x; var ay = w * cl.y; var by = w * ch.y; var az = w * cl.z; var bz = w * ch.z
+    var x = max(abs(min(ax, bx).reduce_add()), abs(max(ax, bx).reduce_add()))
+    var y = max(abs(min(ay, by).reduce_add()), abs(max(ay, by).reduce_add()))
+    var z = max(abs(min(az, bz).reduce_add()), abs(max(az, bz).reduce_add()))
+    return sqrt(x * x + y * y + z * z)
+
+
+@always_inline
+def _diff_w(k: Int) -> SIMD[DType.float32, 4]:
+    """Weights of the k-th forward difference."""
+    if k == 1:
+        return SIMD[DType.float32, 4](-1, 1, 0, 0)
+    if k == 2:
+        return SIMD[DType.float32, 4](1, -2, 1, 0)
+    if k == 3:
+        return SIMD[DType.float32, 4](-1, 3, -3, 1)
+    return SIMD[DType.float32, 4](1, 0, 0, 0)
+
+
+def _deriv_max(cl: BezierPatch, ch: BezierPatch, ds: Int, dt: Int) -> Float32:
+    """A bound on |d^(ds+dt) P / ds^ds dt^dt| over the (cropped, local [0,1]^2) patch: its derivative net's largest point."""
+    var ws = _diff_w(ds); var wt = _diff_w(dt)
+    var f = Float32(1)   # 3! / (3 - k)! per direction
+    for k in range(ds):
+        f *= Float32(3 - k)
+    for k in range(dt):
+        f *= Float32(3 - k)
+    var worst = Float32(0)
+    for j0 in range(4 - dt):
+        for i0 in range(4 - ds):
+            var w = SIMD[DType.float32, 16](0)
+            for jj in range(dt + 1):
+                for ii in range(ds + 1):
+                    w[(j0 + jj) * 4 + i0 + ii] = ws[ii] * wt[jj]
+            worst = max(worst, _comb_norm(cl, ch, w))
+    return worst * f
+
+
+def _normal_bilerp_error(cl: BezierPatch, ch: BezierPatch) -> Float32:
+    """A bound on |n - bilerp(n at the corners)| over the cropped patch, n the unit normal: (|n_ss| + |n_tt|) / 8 with
+    |n_ss| <= |m_ss| / |m| + 3 |m_s|^2 / |m|^2 for m = P_s x P_t, and |m| bounded below by its value at the centre less
+    half its s and t derivatives (and, for a Gregory interval net, the spread of P_s and P_t). Infinite where |m| may
+    vanish: the patch then refines."""
+    var ms = _deriv_max(cl, ch, 1, 0); var mt = _deriv_max(cl, ch, 0, 1)
+    var mss = _deriv_max(cl, ch, 2, 0); var mtt = _deriv_max(cl, ch, 0, 2); var mst = _deriv_max(cl, ch, 1, 1)
+    var dm_s = mss * mt + ms * mst; var dm_t = mst * mt + ms * mtt
+    var dm_ss = _deriv_max(cl, ch, 3, 0) * mt + Float32(2) * mss * mst + ms * _deriv_max(cl, ch, 2, 1)
+    var dm_tt = _deriv_max(cl, ch, 1, 2) * mt + Float32(2) * mst * mtt + ms * _deriv_max(cl, ch, 0, 3)
+    var c = BezierPatch((cl.x + ch.x) * Float32(0.5), (cl.y + ch.y) * Float32(0.5), (cl.z + ch.z) * Float32(0.5))
+    var hl = BezierPatch((cl.x - ch.x) * Float32(0.5), (cl.y - ch.y) * Float32(0.5), (cl.z - ch.z) * Float32(0.5))
+    var hh = BezierPatch((ch.x - cl.x) * Float32(0.5), (ch.y - cl.y) * Float32(0.5), (ch.z - cl.z) * Float32(0.5))
+    var e = patch_eval(c, Float32(0.5), Float32(0.5))
+    var slack = _deriv_max(hl, hh, 1, 0) * mt + ms * _deriv_max(hl, hh, 0, 1)
+    var mmin = _len(cross(e[1], e[2])) - Float32(0.5) * (dm_s + dm_t) - slack
+    if not (mmin > Float32(0)):
+        return Float32(1e30)
+    var nss = dm_ss / mmin + Float32(3) * dm_s * dm_s / (mmin * mmin)
+    var ntt = dm_tt / mmin + Float32(3) * dm_t * dm_t / (mmin * mmin)
+    return (nss + ntt) * Float32(0.125)
+
+
+def sub_base_error(d: DispSurface, pi: Int, s0: Float32, s1: Float32, t0: Float32, t1: Float32) -> Tuple[Float32, Float32, Vec3f, Vec3f]:
+    """A bound on how far the bilinear base through the exact limit corners of [s0, s1] x [t0, t1], displaced along the
+    blend of the corners' unit normals, lies from the displaced limit surface: the convex hull of the cropped (interval) net
+    minus the bilinear's degree-elevated points, plus |h| times the width of the unit normal's range. With the box."""
+    var n = _inet(d, pi, d.patches[unsafe_offset=pi], Vec3f(0, 0, 0), s0, s1, t0, t1)
+    var cl = _crop(n.lo, s0, s1, t0, t1)
+    var ch = cl if d.greg[unsafe_offset=pi] != 1 else _crop(n.hi, s0, s1, t0, t1)
+    var lx = _bilerp[16](SIMD[DType.float32, 4](cl.x[0], cl.x[3], cl.x[15], cl.x[12]), _A16, _B16)
+    var ly = _bilerp[16](SIMD[DType.float32, 4](cl.y[0], cl.y[3], cl.y[15], cl.y[12]), _A16, _B16)
+    var lz = _bilerp[16](SIMD[DType.float32, 4](cl.z[0], cl.z[3], cl.z[15], cl.z[12]), _A16, _B16)
+    var dx = max(abs(cl.x - lx), abs(ch.x - lx)); var dy = max(abs(cl.y - ly), abs(ch.y - ly)); var dz = max(abs(cl.z - lz), abs(ch.z - lz))
+    var e = sqrt(dx * dx + dy * dy + dz * dz).reduce_max()
+    var en = Float32(0)
+    if d.scale > Float32(0):
+        var sz = d.sq[unsafe_offset=3 * pi + 2]; var u0 = d.sq[unsafe_offset=3 * pi]; var v0 = d.sq[unsafe_offset=3 * pi + 1]
+        var hr = height_range(d, Int(d.face[unsafe_offset=pi]), u0 + s0 * sz, u0 + s1 * sz, v0 + t0 * sz, v0 + t1 * sz)
+        var nr = _net_normal_range(n, d.greg[unsafe_offset=pi] != 1, s0, s1, t0, t1)   # first order, finite where |m| may vanish
+        var dn = min(_normal_bilerp_error(cl, ch), _len(nr[1] - nr[0]))
+        en = max(abs(hr[0]), abs(hr[1])) * d.scale * (dn + Float32(4e-4))   # 4e-4: the octahedral normals
+    return (e, en, Vec3f(cl.x.reduce_min(), cl.y.reduce_min(), cl.z.reduce_min()), Vec3f(ch.x.reduce_max(), ch.y.reduce_max(), ch.z.reduce_max()))
+
+
 def sub_relief_px(d: DispSurface, prim: Int, lo: Vec3f, hi: Vec3f) -> Float32:
     """Primitive prim's height range in pixels at its box (lo, hi) nearest to the camera."""
     var pk = prim_patch(d, prim); var pi = pk[0]; var sq = sub_square(pk[2], pk[1])

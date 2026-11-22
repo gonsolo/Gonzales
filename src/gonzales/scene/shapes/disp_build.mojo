@@ -11,7 +11,7 @@ from max.algorithm import parallelize
 from gonzales.core.geometry import Vec3f, dot
 from gonzales.scene.shapes.patches import BezierPatch
 from gonzales.scene.shapes.displaced_patches import DispSurface, SubdivSurface, Levels, LEVELS, make_levels, patch_box, \
-    corner_off, corner_step, corner_grid, weld_corner_grid
+    corner_off, corner_step, corner_grid, weld_corner_grid, sub_base_error
 
 
 @fieldwise_init
@@ -31,6 +31,8 @@ struct DispOptions(TrivialRegisterPassable):
     var lmin: Int
     var grid: Int
     var weld: Bool
+    var eps: Float32      # > 0: patches refine until their bilinear base is within eps / 2 pixels of the limit surface
+    var hscale: Float32   # world units per height byte, for that bound
 
 
 @fieldwise_init
@@ -144,10 +146,22 @@ def disp_bounds(ptx: String) raises -> Tuple[Vec3f, Vec3f]:
 
 def disp_levels(np: Int, patches: Pointer[BezierPatch, MutUntrackedOrigin], sq: Pointer[Float32, MutUntrackedOrigin],
                 face: Pointer[Int32, MutUntrackedOrigin], hdr: Pointer[Int32, MutUntrackedOrigin], fdrop: Pointer[UInt8, MutUntrackedOrigin],
-                o: DispOptions) -> List[Int]:
-    """Each patch's sub-square level, from its full Ptex resolution (dropped height levels keep the grid)."""
+                o: DispOptions, dt: DispSurface) -> List[Int]:
+    """Each patch's sub-square level, from its full Ptex resolution (dropped height levels keep the grid); with o.eps, finer
+    until every sub-square's bilinear base is within eps / 2 pixels of the limit surface (dt: the surface for that bound).
+    Half: a finer patch's edge to a coarser one follows the coarser side's points, which are within eps / 2 themselves."""
     var lev = List[Int](length=np, fill=0)
-    for p in range(np):
+    var lp = lev.unsafe_ptr()
+    var capped = List[UInt8](length=np, fill=0)
+    var cp = capped.unsafe_ptr()
+    var qerr = Float32(0)
+    if o.eps > Float32(0):   # the corner grid's 16-bit positions (disp_build.load_disp_mesh)
+        var pext = Float32(0)
+        for p in range(np):
+            var b = patch_box(dt, p)
+            pext = max(pext, max(b[1].x - b[0].x, max(b[1].y - b[0].y, b[1].z - b[0].z)))
+        qerr = Float32(0.8660254) * corner_step(pext)
+    def one(p: Int) {imm}:
         var l = 0
         if o.grid >= 0:
             l = min(o.grid, LEVELS - 1)
@@ -167,8 +181,35 @@ def disp_levels(np: Int, patches: Pointer[BezierPatch, MutUntrackedOrigin], sq: 
                 while l > 0 and px / Float32(1 << l) < o.pps:
                     l -= 1
             l = max(l, min(o.lmin, LEVELS - 1))
-        lev[p] = l
+            if o.eps > Float32(0) and o.pixel > Float32(0):
+                var err = _level_error_px(dt, p, l, o, qerr)
+                while l < LEVELS - 1 and err > Float32(0.5) * o.eps:
+                    l += 1
+                    err = _level_error_px(dt, p, l, o, qerr)
+                if err > Float32(0.5) * o.eps:
+                    cp[unsafe_offset=p] = UInt8(1)
+        lp[unsafe_offset=p] = l
+    parallelize(one, np)
+    if o.eps > Float32(0) and o.pixel > Float32(0):
+        var k = 0
+        for p in range(np):
+            k += Int(capped[p])
+        print("subdiv displacement: bilinear base within", o.eps, "px of the limit surface except", k, "of", np, "patches at the finest level")
     return lev^
+
+
+def _level_error_px(dt: DispSurface, p: Int, l: Int, o: DispOptions, qerr: Float32) -> Float32:
+    """The largest bilinear-base error bound (sub_base_error, plus the corners' quantization) of patch p's level-l
+    sub-squares, in pixels at each one's nearest point to the eye."""
+    var n = 1 << l; var w = Float32(1) / Float32(n); var worst = Float32(0)
+    for j in range(n):
+        for i in range(n):
+            var r = sub_base_error(dt, p, Float32(i) * w, Float32(i + 1) * w, Float32(j) * w, Float32(j + 1) * w)
+            var lo = r[2]; var hi = r[3]
+            var dx = max(max(lo.x - o.eye.x, o.eye.x - hi.x), Float32(0)); var dy = max(max(lo.y - o.eye.y, o.eye.y - hi.y), Float32(0))
+            var dz = max(max(lo.z - o.eye.z, o.eye.z - hi.z), Float32(0))
+            worst = max(worst, (r[0] + r[1] + qerr) / (o.pixel * max(sqrt(dx * dx + dy * dy + dz * dz), Float32(1e-6))))
+    return worst
 
 
 def load_disp_mesh(ptx: String, o: DispOptions, corners: Int = 0) raises -> DispMesh:
@@ -204,7 +245,9 @@ def load_disp_mesh(ptx: String, o: DispOptions, corners: Int = 0) raises -> Disp
             x[k] = cpf[unsafe_offset=48 * p + 3 * k]; y[k] = cpf[unsafe_offset=48 * p + 3 * k + 1]; z[k] = cpf[unsafe_offset=48 * p + 3 * k + 2]
         patches[unsafe_offset=p] = BezierPatch(x, y, z)
     cpf.unsafe_free()
-    var plev = disp_levels(np, patches, sq, face, hdr, fdrop, o)
+    var dt = DispSurface(patches, sq, face, hdr, pyr, o.hscale, o.eye, o.pixel, chain_off, chain, fm, greg,
+                         Pointer[Levels, MutUntrackedOrigin].unsafe_dangling(), Int32(5), Pointer[Float32, MutUntrackedOrigin].unsafe_dangling())
+    var plev = disp_levels(np, patches, sq, face, hdr, fdrop, o, dt)
     fdrop.unsafe_free()
     # Patches sorted by level: a primitive's patch follows from its index (prim_patch).
     var p2 = unsafe_alloc[BezierPatch](np); var sq2 = unsafe_alloc[Float32](3 * np); var face2 = unsafe_alloc[Int32](np)

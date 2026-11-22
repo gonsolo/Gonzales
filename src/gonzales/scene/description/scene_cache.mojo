@@ -152,7 +152,8 @@ def scene_cache_variant() -> Int:
     if sd != "" and sd != "0":   # displaced surfaces: their levels and heights follow these settings
         var h = 0
         for c in (sd + "@" + env_str["GONZALES_SUBDIV_LOD"]() + "@" + env_str["GONZALES_SUBDIV_PPS"]() + "@" +
-                  env_str["GONZALES_SUBDIV_MINPX"]() + "@" + env_str["GONZALES_SUBDIV_SCALE"]()).as_bytes():
+                  env_str["GONZALES_SUBDIV_MINPX"]() + "@" + env_str["GONZALES_SUBDIV_SCALE"]() +
+                  ("@" + env_str["GONZALES_SUBDIV_EXACT_PX"]() if env_str["GONZALES_SUBDIV_EXACT_PX"]() != "" else "")).as_bytes():
             h = (h * 31 + Int(c)) & 0xFFFFFFF
         v = v * 1000003 + h + 1
     return v + 2 * prune

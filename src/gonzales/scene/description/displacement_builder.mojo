@@ -281,7 +281,7 @@ def load_subdiv_meshes(s: Pointer[SceneParseState, MutUntrackedOrigin]):
             var d = _view_dist(e, f, cam[3], boxes[k], FAR)
             if d < best_d[k]:
                 best_d[k] = d; best_e[k] = e; best_f[k] = f
-    var lod = Float32(0.25); var pps = Float32(0.5); var minpx = Float32(1)
+    var lod = Float32(0.25); var pps = Float32(0.5); var minpx = Float32(1); var eps = Float32(0)
     try:
         if getenv("GONZALES_SUBDIV_MINPX").byte_length() > 0:
             minpx = Float32(atof(getenv("GONZALES_SUBDIV_MINPX")))
@@ -289,6 +289,8 @@ def load_subdiv_meshes(s: Pointer[SceneParseState, MutUntrackedOrigin]):
             lod = Float32(atof(getenv("GONZALES_SUBDIV_LOD")))
         if getenv("GONZALES_SUBDIV_PPS").byte_length() > 0:
             pps = Float32(atof(getenv("GONZALES_SUBDIV_PPS")))
+        if getenv("GONZALES_SUBDIV_EXACT_PX").byte_length() > 0:
+            eps = Float32(atof(getenv("GONZALES_SUBDIV_EXACT_PX")))
     except:
         pass
     var uses = List[Int](length=n, fill=0)
@@ -306,7 +308,8 @@ def load_subdiv_meshes(s: Pointer[SceneParseState, MutUntrackedOrigin]):
             continue
         var t0 = perf_counter_ns()
         try:
-            var m = load_disp_mesh(file, DispOptions(best_e[k], best_f[k], cam[3], FAR, cam[1], lod, pps, Float32(5), 2, -1, True),
+            var m = load_disp_mesh(file, DispOptions(best_e[k], best_f[k], cam[3], FAR, cam[1], lod, pps, Float32(5), 2, -1, True, eps,
+                                               s[unsafe_offset=0].subdiv_scale[k] * _exag() / Float32(255)),
                                    Int(s[unsafe_offset=0].subdiv_corners[k].unsafe_ptr()))
             var mb = Float64(m.nchain + m.npyr + 4 * m.ncg + m.np * (64 * 3 + 12 + 4 + 48 + 1)) / Float64(1 << 20)
             print("subdiv displacement:", file, ":", uses[k], "meshes,", m.np, "patches,", m.prims(), "sub-squares,", m.texels, "texels kept,",
