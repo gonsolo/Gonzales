@@ -23,6 +23,7 @@ comptime ENV_SWITCHES: List[EnvSwitch] = [
     EnvSwitch("GONZALES_RTCORE_CUBIN", "file: RT-core trace cubin (default rt_trace.cubin next to the binary)"),
     EnvSwitch("GONZALES_HYDRA_DIR", "(Python) Blender add-on: directory of the Hydra plugin"),
     # Features
+    EnvSwitch("GONZALES_FILM_EXR", "set: the film is written as .exr whatever extension the scene names (HDR training data)"),
     EnvSwitch("GONZALES_NO_DENOISE", "set: --interactive-frames output is not denoised"),
     EnvSwitch("GONZALES_NO_MNEE", "set: the GPU path tracer runs no MNEE through smooth glass"),
     EnvSwitch("GONZALES_LIGHT_TREE", "0: lights picked by power, not by the light tree (comparisons)"),

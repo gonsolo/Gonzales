@@ -1,6 +1,6 @@
 from std.collections import Array
 from std.ffi import external_call
-from gonzales.core.env import env_str, env_int
+from gonzales.core.env import env_str, env_int, env_on
 from std.time import perf_counter_ns
 from std.memory.alloc import unsafe_alloc
 from std.memory import unsafe_memcpy
@@ -3927,6 +3927,13 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
     var fnstr = s[unsafe_offset=0].film_filename
     var fnlen = min(fnstr.byte_length(), PSC_FILE_MAX - 1)
     for fi in range(fnlen): fname[unsafe_offset=fi] = fnstr.unsafe_ptr()[unsafe_offset=fi]
+    if env_on["GONZALES_FILM_EXR"]() and fnlen < PSC_FILE_MAX - 5:   # an HDR film whatever the scene asks (training data)
+        var dot = fnlen
+        for fi in range(fnlen):
+            if fname[unsafe_offset=fi] == UInt8(46): dot = fi
+        var ext = String(".exr")
+        for k in range(4): fname[unsafe_offset=dot + k] = ext.unsafe_ptr()[unsafe_offset=k]
+        fnlen = dot + 4
     fname[unsafe_offset=fnlen] = UInt8(0)
 
     # ---- Texture filename table ----
