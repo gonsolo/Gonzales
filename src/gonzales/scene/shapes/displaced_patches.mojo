@@ -497,6 +497,64 @@ def _normal_bilerp_error(cl: BezierPatch, ch: BezierPatch) -> Float32:
     return (nss + ntt) * Float32(0.125)
 
 
+def _acr(u: Vec3f, v: Vec3f) -> Vec3f:
+    """|u| x |v| with the minus signs made plus: a bound on the cross product's spread for nonnegative radii."""
+    return Vec3f(u.y * v.z + u.z * v.y, u.z * v.x + u.x * v.z, u.x * v.y + u.y * v.x)
+
+
+def _vabs(v: Vec3f) -> Vec3f:
+    return Vec3f(abs(v.x), abs(v.y), abs(v.z))
+
+
+def _normal_bilerp_error_m(cl: BezierPatch, ch: BezierPatch) -> Float32:
+    """As _normal_bilerp_error, from m = P_s x P_t's 6 x 6 Bezier net: |m| bounded below by the net's projection on its
+    mean direction, m's derivatives by its differences. For an interval net, the mid net's bound plus 4 max|m_r| / |m|_min:
+    the normal of any net in the interval (a Gregory patch's at each (s, t)) lies within 2 |m_r| / |m| of the mid net's."""
+    var c = List[Vec3f](); var r = List[Vec3f]()
+    for k in range(16):
+        c.append(Vec3f((cl.x[k] + ch.x[k]) * 0.5, (cl.y[k] + ch.y[k]) * 0.5, (cl.z[k] + ch.z[k]) * 0.5))
+        r.append(Vec3f((ch.x[k] - cl.x[k]) * 0.5, (ch.y[k] - cl.y[k]) * 0.5, (ch.z[k] - cl.z[k]) * 0.5))
+    var b2 = SIMD[DType.float32, 4](1, 2, 1, 0); var b3 = SIMD[DType.float32, 4](1, 3, 3, 1)
+    var b5 = SIMD[DType.float32, 8](1, 5, 10, 10, 5, 1, 0, 0)
+    var mc = List[Vec3f](length=36, fill=Vec3f(0, 0, 0)); var mr = List[Vec3f](length=36, fill=Vec3f(0, 0, 0))
+    for j in range(4):
+        for i in range(3):   # P_s net point (i, j)
+            var ac = (c[j * 4 + i + 1] - c[j * 4 + i]) * Float32(3); var ar = (r[j * 4 + i + 1] + r[j * 4 + i]) * Float32(3)
+            for l in range(3):
+                for k in range(4):   # P_t net point (k, l)
+                    var bc = (c[(l + 1) * 4 + k] - c[l * 4 + k]) * Float32(3); var br = (r[(l + 1) * 4 + k] + r[l * 4 + k]) * Float32(3)
+                    var w = b2[i] * b3[k] * b3[j] * b2[l] / (b5[i + k] * b5[j + l]); var q = (j + l) * 6 + i + k
+                    mc[q] = mc[q] + cross(ac, bc) * w
+                    mr[q] = mr[q] + (_acr(_vabs(ac), br) + _acr(ar, _vabs(bc)) + _acr(ar, br)) * w
+    var dsum = Vec3f(0, 0, 0)
+    for q in range(36):
+        dsum = dsum + mc[q]
+    if not (_len(dsum) > Float32(0)):
+        return Float32(1e30)
+    var d = dsum * (Float32(1) / _len(dsum)); var ad = _vabs(d)
+    var mmin = Float32(1e30); var rmax = Float32(0)
+    for q in range(36):
+        mmin = min(mmin, dot(mc[q], d)); rmax = max(rmax, _len(mr[q]))
+    if not (mmin > Float32(0)):
+        return Float32(1e30)
+    var ms = Float32(0); var mt = Float32(0); var mss = Float32(0); var mtt = Float32(0)
+    for j in range(6):
+        for i in range(6):
+            var q = j * 6 + i
+            if i < 5:
+                ms = max(ms, _len(mc[q + 1] - mc[q]))
+            if j < 5:
+                mt = max(mt, _len(mc[q + 6] - mc[q]))
+            if i < 4:
+                mss = max(mss, _len(mc[q + 2] - mc[q + 1] * Float32(2) + mc[q]))
+            if j < 4:
+                mtt = max(mtt, _len(mc[q + 12] - mc[q + 6] * Float32(2) + mc[q]))
+    ms *= Float32(5); mt *= Float32(5); mss *= Float32(20); mtt *= Float32(20)
+    var nss = mss / mmin + Float32(3) * ms * ms / (mmin * mmin)
+    var ntt = mtt / mmin + Float32(3) * mt * mt / (mmin * mmin)
+    return (nss + ntt) * Float32(0.125) + Float32(4) * rmax / mmin
+
+
 def sub_base_error(d: DispSurface, pi: Int, s0: Float32, s1: Float32, t0: Float32, t1: Float32) -> Tuple[Float32, Float32, Vec3f, Vec3f]:
     """A bound on how far the bilinear base through the exact limit corners of [s0, s1] x [t0, t1], displaced along the
     blend of the corners' unit normals, lies from the displaced limit surface: the convex hull of the cropped (interval) net
@@ -515,7 +573,9 @@ def sub_base_error(d: DispSurface, pi: Int, s0: Float32, s1: Float32, t0: Float3
         var sz = d.sq[unsafe_offset=3 * pi + 2]; var u0 = d.sq[unsafe_offset=3 * pi]; var v0 = d.sq[unsafe_offset=3 * pi + 1]
         var hr = height_range(d, Int(d.face[unsafe_offset=pi]), u0 + s0 * sz, u0 + s1 * sz, v0 + t0 * sz, v0 + t1 * sz)
         var nr = _net_normal_range(n, d.greg[unsafe_offset=pi] != 1, s0, s1, t0, t1)   # first order, finite where |m| may vanish
-        var dn = min(_normal_bilerp_error(cl, ch), _len(nr[1] - nr[0]))
+        var dn = min(_normal_bilerp_error_m(cl, ch), _len(nr[1] - nr[0]))
+        if d.greg[unsafe_offset=pi] != 1:   # the older bound holds for a fixed net only
+            dn = min(dn, _normal_bilerp_error(cl, ch))
         en = max(abs(hr[0]), abs(hr[1])) * d.scale * (dn + Float32(4e-4))   # 4e-4: the octahedral normals
     return (e, en, Vec3f(cl.x.reduce_min(), cl.y.reduce_min(), cl.z.reduce_min()) + org, Vec3f(ch.x.reduce_max(), ch.y.reduce_max(), ch.z.reduce_max()) + org)
 
