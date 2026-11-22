@@ -17,6 +17,7 @@ from gonzales.scene.shapes.patches import BezierPatch
 from gonzales.scene.shapes.displaced_patches import sub_base_error, sub_square, patch_eval_at, height_range, _len
 from gonzales.scene.shapes.displaced_patches import DispSurface, Levels, make_levels, prim_patch, prim_total, corner_off, patch_level, LEVELS, patch_box, sub_box, patch_at, intersect_displaced, displaced_normal, displaced_point, displaced_point_n, chain_color, _bl_frame, _bl_point, corner_grid, corner_words, corner_step, weld_corner_grid, face_height
 from gonzales.scene.shapes.disp_build import DispOptions, DispMesh, load_disp_mesh, disp_bounds, _cstr, upload_surface
+from gonzales.scene.shapes.rmip import Rmip, rmip_build, rmip_prism_box, intersect_rmip
 from gonzales.scene.accel.xert import XeRayDesc, xert_alignment, xert_build_blas_geoms, xert_free
 from std.memory import OpaquePointer
 from std.sys.info import is_gpu
@@ -282,7 +283,8 @@ def trace_tris(pts: Pointer[Vec3f, MutUntrackedOrigin], tri: Pointer[Int32, MutU
 
 
 @always_inline
-def _rq_trace[M: Int](accel: MutPointer[UInt8, MutAnyOrigin], d: DispSurface, org: Vec3f, dir: Vec3f, procedural: Bool) -> Hit:
+def _rq_trace[M: Int, R: Bool = False](accel: MutPointer[UInt8, MutAnyOrigin], d: DispSurface, org: Vec3f, dir: Vec3f, procedural: Bool,
+                                      rm: Rmip, march: Float32) -> Hit:
     """Closest hit through Intel's ray queries: the hardware commits triangles; each sub-square it reports runs the
     subdivision loop, whose hit is committed (prim: the triangle, or the patch with its s, u and leaf size)."""
     var h = Hit(Float32(1e30), -1, Float32(0), Float32(0), 0, Float32(0))
@@ -294,6 +296,16 @@ def _rq_trace[M: Int](accel: MutPointer[UInt8, MutAnyOrigin], d: DispSurface, or
         external_call["intel_ray_query_sync", NoneType](q)
         while not external_call["intel_is_traversal_done", Bool](q):
             var prim = Int(external_call["intel_get_hit_primitive_id", UInt32](q, UInt32(1)))
+            comptime if R:   # RMIP: primitive prim is half prim & 1 of sub-square prim >> 1
+                var rr = intersect_rmip(d, rm, prim, org, dir, h.t, march)
+                h.steps += rr[4]
+                if rr[0] and rr[1] < h.t:
+                    h.t = rr[1]; h.prim = prim_patch(d, prim >> 1)[0]; h.s = rr[2]; h.u = rr[3]; h.size = Float32(0)
+                    var uv = SIMD[DType.float32, 2](rr[2], rr[3])
+                    external_call["intel_ray_query_commit_potential_hit_override", NoneType](q, rr[1], Pointer(to=uv))
+                external_call["intel_ray_query_start_traversal", NoneType](q)
+                external_call["intel_ray_query_sync", NoneType](q)
+                continue
             var r = intersect_displaced[M](d, prim, org, dir, h.t, 1)
             h.steps += r[4]
             if r[0] and r[1] < h.t:
@@ -312,9 +324,9 @@ def _rq_trace[M: Int](accel: MutPointer[UInt8, MutAnyOrigin], d: DispSurface, or
     return h
 
 
-def render_hw[M: Int](accel: MutPointer[UInt8, MutAnyOrigin], d: DispSurface, tri_base: Pointer[Int32, MutUntrackedOrigin],
+def render_hw[M: Int, R: Bool = False](accel: MutPointer[UInt8, MutAnyOrigin], d: DispSurface, tri_base: Pointer[Int32, MutUntrackedOrigin],
               grid_n: Pointer[Int32, MutUntrackedOrigin], ext: Pointer[Float32, MutUntrackedOrigin], np: Int32, procedural: Int32,
-              img: Pointer[Float32, MutUntrackedOrigin], steps: Pointer[Int32, MutUntrackedOrigin], cam: GCam):
+              img: Pointer[Float32, MutUntrackedOrigin], steps: Pointer[Int32, MutUntrackedOrigin], cam: GCam, rm: Rmip, march: Float32):
     """render_gpu through the hardware: a hit triangle maps back to its patch and (s, t), shaded as ours."""
     var i = global_idx.x
     var W = Int(cam.w); var H = Int(cam.h)
@@ -325,7 +337,7 @@ def render_hw[M: Int](accel: MutPointer[UInt8, MutAnyOrigin], d: DispSurface, tr
     var py = (Float32(1) - Float32(2) * (Float32(y) + Float32(0.5)) / Float32(H)) * cam.tan_h * Float32(H) / Float32(W)
     var dir = cam.fwd + cam.right * px + cam.up * py
     dir = dir * (Float32(1) / sqrt(dot(dir, dir)))
-    var hh = _rq_trace[M](accel, d, cam.eye, dir, procedural != 0)
+    var hh = _rq_trace[M, R](accel, d, cam.eye, dir, procedural != 0, rm, march)
     steps[unsafe_offset=y * W + x] = Int32(hh.steps)
     if cam.prof == 4:   # the hit patch and its (s, t) in 8 bits each instead of steps, -1 for none
         steps[unsafe_offset=y * W + x] = Int32(hh.prim * 65536 + Int(hh.s * Float32(255.99)) * 256 + Int(hh.u * Float32(255.99))) if hh.prim >= 0 else Int32(-1)
@@ -367,6 +379,18 @@ def _hw_render(ctx: DeviceContext, mut bufs: List[DeviceBuffer[DType.uint8]], d:
         ext[unsafe_offset=p] = max(max(bp.x.reduce_max() - bp.x.reduce_min(), bp.y.reduce_max() - bp.y.reduce_min()), bp.z.reduce_max() - bp.z.reduce_min())
     var size = Int64(0); var bounds = unsafe_alloc[Float32](6)
     var rtas: Pointer[UInt8, MutUntrackedOrigin]
+    var use_rmip = procedural and getenv("RMIP") == "1"; var march = Float32(atof(getenv("RMIP_MARCH", "8")))
+    var nfa = 0
+    for p in range(np):
+        nfa = max(nfa, Int(d.face[unsafe_offset=p]) + 1)
+    var rm_h = Rmip(Pointer[UInt32, MutUntrackedOrigin].unsafe_dangling(), Pointer[UInt8, MutUntrackedOrigin].unsafe_dangling())
+    var rm_d = rm_h; var rm_bytes = 0
+    if use_rmip:
+        var tr = perf_counter_ns()
+        var rb = rmip_build(d, nfa); rm_h = rb[0]; rm_bytes = rb[1]
+        var nent = (rm_bytes - 8 * nfa) // 2
+        rm_d = Rmip(_up(ctx, bufs, rm_h.off, 2 * nfa), _up(ctx, bufs, rm_h.mm, 2 * nent))
+        print(name + ": RMIP", rm_bytes // 1024, "KiB for", nfa, "faces, built in", (perf_counter_ns() - tr) // 1000000, "ms, marching below", march, "texels")
     var t0 = perf_counter_ns(); var t1 = t0; var in_bytes = 0; var nprim = 0
     if not procedural:
         var nt = 0; var nv = 0
@@ -411,11 +435,11 @@ def _hw_render(ctx: DeviceContext, mut bufs: List[DeviceBuffer[DType.uint8]], d:
         t1 = perf_counter_ns()
         vb.unsafe_free(); ib.unsafe_free(); vp.unsafe_free(); ip.unsafe_free(); nvp.unsafe_free(); ntp.unsafe_free(); vo.unsafe_free()
     else:
-        var npr = prim_total(d); nprim = npr
+        var npr = prim_total(d) * (2 if use_rmip else 1); nprim = npr
         var pb = unsafe_alloc[Float32](6 * npr)
         def boxes(c: Int) {imm}:
             for k in range(c * 4096, min(npr, c * 4096 + 4096)):
-                var b = sub_box(d, k); var o = 6 * k
+                var b = rmip_prism_box(d, rm_h, k) if use_rmip else sub_box(d, k); var o = 6 * k
                 pb[unsafe_offset=o] = b[0].x; pb[unsafe_offset=o + 1] = b[0].y; pb[unsafe_offset=o + 2] = b[0].z
                 pb[unsafe_offset=o + 3] = b[1].x; pb[unsafe_offset=o + 4] = b[1].y; pb[unsafe_offset=o + 5] = b[1].z
         parallelize(boxes, (npr + 4095) // 4096)
@@ -447,10 +471,12 @@ def _hw_render(ctx: DeviceContext, mut bufs: List[DeviceBuffer[DType.uint8]], d:
         var best = 1 << 62
         for _ in range(4):
             var ta = perf_counter_ns()
-            if dd.leaf_mode >= 5:
-                ctx.enqueue_function[render_hw[5]](acc_d, dd, tb_d, gn_d, ext_d, Int32(np), pr, img_d, st_d, g, grid_dim=ceildiv(W * hgt, 64), block_dim=64)
+            if use_rmip:
+                ctx.enqueue_function[render_hw[5, True]](acc_d, dd, tb_d, gn_d, ext_d, Int32(np), pr, img_d, st_d, g, rm_d, march, grid_dim=ceildiv(W * hgt, 64), block_dim=64)
+            elif dd.leaf_mode >= 5:
+                ctx.enqueue_function[render_hw[5]](acc_d, dd, tb_d, gn_d, ext_d, Int32(np), pr, img_d, st_d, g, rm_d, march, grid_dim=ceildiv(W * hgt, 64), block_dim=64)
             else:
-                ctx.enqueue_function[render_hw[-1]](acc_d, dd, tb_d, gn_d, ext_d, Int32(np), pr, img_d, st_d, g, grid_dim=ceildiv(W * hgt, 64), block_dim=64)
+                ctx.enqueue_function[render_hw[-1]](acc_d, dd, tb_d, gn_d, ext_d, Int32(np), pr, img_d, st_d, g, rm_d, march, grid_dim=ceildiv(W * hgt, 64), block_dim=64)
             ctx.synchronize()
             best = min(best, Int(perf_counter_ns()) - Int(ta))
         print(name + ": HW", W, "x", hgt, "render", Float32(best) * Float32(1e-6), "ms,", Float32(W * hgt) / (Float32(best) * Float32(1e-9)) / Float32(1e6), "Mrays/s")
@@ -693,7 +719,8 @@ def demo_gpu[M: Int, HWT: Bool](d: DispSurface, nodes: Pointer[BNode, MutUntrack
     dir = dir * (Float32(1) / sqrt(dot(dir, dir)))
     var hh: Hit
     comptime if HWT:
-        hh = _rq_trace[M](accel, d, cam.eye, dir, True)
+        var no_rm = Rmip(Pointer[UInt32, MutUntrackedOrigin].unsafe_dangling(), Pointer[UInt8, MutUntrackedOrigin].unsafe_dangling())
+        hh = _rq_trace[M](accel, d, cam.eye, dir, True, no_rm, Float32(0))
     else:
         hh = trace_patches[M](d, nodes, order, cam.eye, dir)
     var c = Vec3f(Float32(0.02), Float32(0.022), Float32(0.03))   # background
