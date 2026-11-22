@@ -390,6 +390,7 @@ UNIT_TEST_SRCS := $(shell find Tests/unit -name "test_*.mojo" | sort)
 GPU_ONLY_TEST_SRCS := Tests/unit/gpu/test_gpu.mojo \
                       Tests/unit/gpu/test_displacement_gpu.mojo \
                       Tests/unit/gpu/test_shadow_media_gpu.mojo \
+                      Tests/unit/gpu/test_ptex_tiles_gpu.mojo \
                       Tests/unit/scene/accel/test_gpu_bvh.mojo \
                       Tests/unit/scene/accel/test_vulkaninterop.mojo \
                       Tests/unit/scene/accel/test_vulkaninterop_rt.mojo \
