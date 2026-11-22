@@ -501,7 +501,8 @@ def sub_base_error(d: DispSurface, pi: Int, s0: Float32, s1: Float32, t0: Float3
     """A bound on how far the bilinear base through the exact limit corners of [s0, s1] x [t0, t1], displaced along the
     blend of the corners' unit normals, lies from the displaced limit surface: the convex hull of the cropped (interval) net
     minus the bilinear's degree-elevated points, plus |h| times the width of the unit normal's range. With the box."""
-    var n = _inet(d, pi, d.patches[unsafe_offset=pi], Vec3f(0, 0, 0), s0, s1, t0, t1)
+    var p = d.patches[unsafe_offset=pi]; var org = Vec3f(p.x[0], p.y[0], p.z[0])   # crop near 0: float32 keeps the tiny sub-squares
+    var n = _inet(d, pi, BezierPatch(p.x - org.x, p.y - org.y, p.z - org.z), org, s0, s1, t0, t1)
     var cl = _crop(n.lo, s0, s1, t0, t1)
     var ch = cl if d.greg[unsafe_offset=pi] != 1 else _crop(n.hi, s0, s1, t0, t1)
     var lx = _bilerp[16](SIMD[DType.float32, 4](cl.x[0], cl.x[3], cl.x[15], cl.x[12]), _A16, _B16)
@@ -516,7 +517,7 @@ def sub_base_error(d: DispSurface, pi: Int, s0: Float32, s1: Float32, t0: Float3
         var nr = _net_normal_range(n, d.greg[unsafe_offset=pi] != 1, s0, s1, t0, t1)   # first order, finite where |m| may vanish
         var dn = min(_normal_bilerp_error(cl, ch), _len(nr[1] - nr[0]))
         en = max(abs(hr[0]), abs(hr[1])) * d.scale * (dn + Float32(4e-4))   # 4e-4: the octahedral normals
-    return (e, en, Vec3f(cl.x.reduce_min(), cl.y.reduce_min(), cl.z.reduce_min()), Vec3f(ch.x.reduce_max(), ch.y.reduce_max(), ch.z.reduce_max()))
+    return (e, en, Vec3f(cl.x.reduce_min(), cl.y.reduce_min(), cl.z.reduce_min()) + org, Vec3f(ch.x.reduce_max(), ch.y.reduce_max(), ch.z.reduce_max()) + org)
 
 
 def sub_relief_px(d: DispSurface, prim: Int, lo: Vec3f, hi: Vec3f) -> Float32:
