@@ -352,6 +352,13 @@ def patch_at(d: DispSurface, pi: Int, s: Float32, t: Float32) -> BezierPatch:
     return p
 
 
+def patch_eval_at(d: DispSurface, pi: Int, s: Float32, t: Float32) -> Tuple[Vec3f, Vec3f, Vec3f]:
+    """patch_eval of patch_at, relative to the net's first point: float32 derivatives of small patches far from 0."""
+    var q = patch_at(d, pi, s, t); var o = Vec3f(q.x[0], q.y[0], q.z[0])
+    var e = patch_eval(BezierPatch(q.x - o.x, q.y - o.y, q.z - o.z), s, t)
+    return (e[0] + o, e[1], e[2])
+
+
 def displaced_box(d: DispSurface, pi: Int, o: BezierPatch, org: Vec3f, s0: Float32, s1: Float32, t0: Float32, t1: Float32,
                   parent_lo: Vec3f = Vec3f(-1, -1, -1), parent_hi: Vec3f = Vec3f(1, 1, 1)) -> Tuple[Vec3f, Vec3f, Vec3f, Vec3f, Float32]:
     """The box of patch pi's displaced surface over [s0, s1] x [t0, t1] (o: the patch anchored at org), and its unit-normal
@@ -888,7 +895,7 @@ struct BLFrame(TrivialRegisterPassable):
 def grid_vertex(d: DispSurface, pi: Int, i: Int, j: Int, n: Int) -> Tuple[Vec3f, Vec3f]:
     """Grid point (i, j) of patch pi's n x n sub-squares: the limit point and its unit normal (0 where degenerate)."""
     var s = Float32(i) / Float32(n); var t = Float32(j) / Float32(n)
-    var e = patch_eval(patch_at(d, pi, s, t), s, t)
+    var e = patch_eval_at(d, pi, s, t)
     var nv = cross(e[1], e[2]); var ln = sqrt(dot(nv, nv))
     return (e[0], nv * (Float32(1) / ln) if ln > Float32(0) else Vec3f(0, 0, 0))
 
@@ -1402,7 +1409,7 @@ def _level_slope(d: DispSurface, f: Int, lvl: Int, u: Float32, v: Float32) -> Tu
 def displaced_normal(d: DispSurface, pi: Int, s: Float32, t: Float32, step: Float32) -> Vec3f:
     """The displaced surface's normal at (s, t) with slopes from the prefiltered level whose texels match `step` (the leaf
     square's size in patch units), blended between the two nearest levels: Su = Pu + hu N, Sv = Pv + hv N."""
-    var e = patch_eval(patch_at(d, pi, s, t), s, t)
+    var e = patch_eval_at(d, pi, s, t)
     var n = cross(e[1], e[2])
     var ln = sqrt(dot(n, n))
     if ln <= Float32(0):
@@ -1429,7 +1436,7 @@ def displaced_normal(d: DispSurface, pi: Int, s: Float32, t: Float32, step: Floa
 
 def displaced_point(d: DispSurface, pi: Int, s: Float32, t: Float32) -> Vec3f:
     """The displaced surface at (s, t) (the tessellated reference)."""
-    var e = patch_eval(patch_at(d, pi, s, t), s, t)
+    var e = patch_eval_at(d, pi, s, t)
     var n = cross(e[1], e[2])
     var ln = sqrt(dot(n, n))
     if ln <= Float32(0) or d.scale <= Float32(0):
@@ -1458,7 +1465,7 @@ def level_height(d: DispSurface, f: Int, lvl: Int, u: Float32, v: Float32) -> Fl
 
 def displaced_point_n(d: DispSurface, pi: Int, s: Float32, t: Float32, n: Int) -> Vec3f:
     """displaced_point with heights from the level whose texels match an n x n grid on the patch (a tessellation's)."""
-    var e = patch_eval(patch_at(d, pi, s, t), s, t)
+    var e = patch_eval_at(d, pi, s, t)
     var nn = cross(e[1], e[2])
     var ln = sqrt(dot(nn, nn))
     if ln <= Float32(0) or d.scale <= Float32(0):
