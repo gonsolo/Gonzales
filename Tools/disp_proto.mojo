@@ -14,6 +14,7 @@ from std.builtin.device_passable import DevicePassable, DeviceTypeEncoder
 from std.math import ceildiv
 from gonzales.core.geometry import Vec3f, cross, dot
 from gonzales.scene.shapes.patches import BezierPatch
+from gonzales.scene.shapes.displaced_patches import sub_base_error, sub_square
 from gonzales.scene.shapes.displaced_patches import DispSurface, Levels, make_levels, prim_patch, prim_total, corner_off, patch_level, LEVELS, patch_box, sub_box, patch_at, intersect_displaced, displaced_normal, displaced_point, displaced_point_n, chain_color, _bl_frame, _bl_point, corner_grid, corner_words, corner_step, weld_corner_grid, face_height
 from gonzales.scene.shapes.disp_build import DispOptions, DispMesh, load_disp_mesh, disp_bounds, _cstr, upload_surface
 from gonzales.scene.accel.xert import XeRayDesc, xert_alignment, xert_build_blas_geoms, xert_free
@@ -953,7 +954,8 @@ def main() raises:
         while (1 << (grid + 1)) <= atol(g_env):
             grid += 1
     var o = DispOptions(Vec3f(0, 0, 0), Vec3f(0, 0, 0), Float32(-2), Float32(1), Float32(0), _env_f("LOD", Float32(0)), _env_f("PPS", Float32(0.5)), _env_f("TPS", Float32(5)),
-                        Int(_env_f("LMIN", Float32(2))), grid, getenv("WELD") != "0")
+                        Int(_env_f("LMIN", Float32(2))), grid, getenv("WELD") != "0", _env_f("GONZALES_SUBDIV_EXACT_PX", Float32(0)),
+                        _env_f("EXAG", Float32(1)) / Float32(255))
     if o.lod > Float32(0) or o.pps > Float32(0):   # the camera below, from the cage's box: LOD and PPS use it
         var bb = disp_bounds(ptx)
         var cc = (bb[0] + bb[1]) * Float32(0.5); var e = bb[1] - bb[0]; var dg = sqrt(dot(e, e)); var nr = _env_f("CAM_DIST", Float32(1.1))
@@ -968,6 +970,26 @@ def main() raises:
     for l in range(LEVELS):
         lcount += String(" ", Int(lvt.patch[l + 1] - lvt.patch[l]), "@", 1 << l)
     print("sub-square levels (patches @ n x n):", lcount, ";", dm.prims(), "primitives")
+    if getenv("BOUND_STATS") == "1":   # the bilinear-base bound's two terms, in pixels, over all sub-squares
+        var bd = dm.surface(_env_f("EXAG", Float32(1)) / Float32(255), o.eye, o.pixel, Int32(5))
+        var nb = List[Int](length=4, fill=0); var nn = List[Int](length=4, fill=0); var nt = List[Int](length=4, fill=0)
+        var sb = Float64(0); var sn = Float64(0)
+        for j in range(dm.prims()):
+            var pk = prim_patch(bd, j); var ss = sub_square(pk[2], pk[1])
+            var r = sub_base_error(bd, pk[0], ss[0], ss[0] + ss[2], ss[1], ss[1] + ss[2])
+            var lo = r[2]; var hi = r[3]
+            var dx = max(max(lo.x - o.eye.x, o.eye.x - hi.x), Float32(0)); var dy = max(max(lo.y - o.eye.y, o.eye.y - hi.y), Float32(0))
+            var dz = max(max(lo.z - o.eye.z, o.eye.z - hi.z), Float32(0))
+            var k = o.pixel * max(sqrt(dx * dx + dy * dy + dz * dz), Float32(1e-6))
+            var b = r[0] / k; var nrm = r[1] / k
+            sb += Float64(b); sn += Float64(nrm)
+            for q in range(4):
+                var th = Float32(0.4) / Float32(1 << (2 * q))   # 0.4, 0.1, 0.025, 0.00625 px
+                if b > th: nb[q] += 1
+                if nrm > th: nn[q] += 1
+                if b + nrm > th: nt[q] += 1
+        print("bound stats over", dm.prims(), "sub-squares: mean base", sb / Float64(dm.prims()), "px, mean normal term", sn / Float64(dm.prims()), "px")
+        print("  over 0.4 / 0.1 / 0.025 / 0.00625 px: base", nb[0], nb[1], nb[2], nb[3], "| normal", nn[0], nn[1], nn[2], nn[3], "| total", nt[0], nt[1], nt[2], nt[3])
     var texels = 0
     for f in range(nf):
         texels += (1 << Int(hdr[unsafe_offset=3 * f + 1])) * (1 << Int(hdr[unsafe_offset=3 * f + 2]))
