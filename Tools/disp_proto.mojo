@@ -14,7 +14,7 @@ from std.builtin.device_passable import DevicePassable, DeviceTypeEncoder
 from std.math import ceildiv
 from gonzales.core.geometry import Vec3f, cross, dot
 from gonzales.scene.shapes.patches import BezierPatch
-from gonzales.scene.shapes.displaced_patches import sub_base_error, sub_square
+from gonzales.scene.shapes.displaced_patches import sub_base_error, sub_square, patch_eval_at, height_range, _len
 from gonzales.scene.shapes.displaced_patches import DispSurface, Levels, make_levels, prim_patch, prim_total, corner_off, patch_level, LEVELS, patch_box, sub_box, patch_at, intersect_displaced, displaced_normal, displaced_point, displaced_point_n, chain_color, _bl_frame, _bl_point, corner_grid, corner_words, corner_step, weld_corner_grid, face_height
 from gonzales.scene.shapes.disp_build import DispOptions, DispMesh, load_disp_mesh, disp_bounds, _cstr, upload_surface
 from gonzales.scene.accel.xert import XeRayDesc, xert_alignment, xert_build_blas_geoms, xert_free
@@ -603,7 +603,7 @@ def _geo_err(d: DispSurface, np: Int, pixel: Float32, eye: Vec3f) raises:
                 var e = sqrt(dot(dt, dt))
                 if e > best:
                     best = e; bs = s; bt = t
-        var ev = patch_eval(patch_at(d, wp, bs, bt), bs, bt); var nv = cross(ev[1], ev[2])
+        var ev = patch_eval_at(d, wp, bs, bt); var nv = cross(ev[1], ev[2])
         print("worst patch", wp, "face", f, "greg", d.greg[unsafe_offset=wp], "at s t", bs, bt, "err", best, "|du x dv|", sqrt(dot(nv, nv)),
               "|du|", sqrt(dot(ev[1], ev[1])), "|dv|", sqrt(dot(ev[2], ev[2])), "h", face_height(d, f, d.sq[unsafe_offset=3 * wp] + bs * sz, d.sq[unsafe_offset=3 * wp + 1] + bt * sz))
     print("geometric error vs the exact displaced limit surface, in pixels:", Int(r[4]), "samples; base mean", r[0] / r[4], "max", r[1],
@@ -943,6 +943,46 @@ def run_demo(patches: Pointer[BezierPatch, MutUntrackedOrigin], sq: Pointer[Floa
     _ = len(bufs); _ = len(nodes); _ = len(order)
 
 
+
+def _pos_rel(d: DispSurface, pi: Int, s: Float32, t: Float32, c0: Vec3f) -> Vec3f:
+    """Patch pi's exact (Gregory-blended) point at (s, t), relative to c0."""
+    var q = patch_at(d, pi, s, t)
+    var r = BezierPatch(q.x - c0.x, q.y - c0.y, q.z - c0.z)
+    return patch_eval(r, s, t)[0]
+
+
+def _true_normal(d: DispSurface, pi: Int, s: Float32, t: Float32, h: Float32, c0: Vec3f) -> Vec3f:
+    if getenv("SAMPLE_FD") != "1":   # the system's normal: the Gregory net blended for (s, t), held fixed
+        var e = patch_eval_at(d, pi, s, t); var n = cross(e[1], e[2])
+        return n * (Float32(1) / max(_len(n), Float32(1e-30)))
+    var m = cross(_pos_rel(d, pi, s + h, t, c0) - _pos_rel(d, pi, s - h, t, c0), _pos_rel(d, pi, s, t + h, c0) - _pos_rel(d, pi, s, t - h, c0))
+    return m * (Float32(1) / max(_len(m), Float32(1e-30)))
+
+
+def _sampled_base_error(d: DispSurface, pi: Int, s0: Float32, s1: Float32, t0: Float32, t1: Float32) -> Tuple[Float32, Float32, Float32]:
+    """The bound's two terms sampled on a 9 x 9 grid of the exact surface (SAMPLE_FD=1: finite-difference normals), and
+    the unit normal's error alone."""
+    var c0 = patch_eval(d.patches[unsafe_offset=pi], s0, t0)[0]
+    var h = Float32(0.01) * (s1 - s0); var ins = Float32(2) * h if getenv("SAMPLE_FD") == "1" else Float32(0)
+    var cp = List[Vec3f](); var cn = List[Vec3f]()
+    for q in range(4):
+        var u = s0 if q == 0 or q == 3 else s1; var v = t0 if q < 2 else t1
+        cp.append(_pos_rel(d, pi, u, v, c0))
+        cn.append(_true_normal(d, pi, min(max(u, s0 + ins), s1 - ins), min(max(v, t0 + ins), t1 - ins), h, c0))
+    var eb = Float32(0); var en = Float32(0)
+    for j in range(9):
+        for i in range(9):
+            var u = Float32(i) / Float32(8); var v = Float32(j) / Float32(8)
+            var ss = s0 + (s1 - s0) * u; var tt = t0 + (t1 - t0) * v
+            var nn = _true_normal(d, pi, min(max(ss, s0 + ins), s1 - ins), min(max(tt, t0 + ins), t1 - ins), h, c0)
+            var w0 = (1 - u) * (1 - v); var w1 = u * (1 - v); var w2 = u * v; var w3 = (1 - u) * v
+            var bp = cp[0] * w0 + cp[1] * w1 + cp[2] * w2 + cp[3] * w3; var bn = cn[0] * w0 + cn[1] * w1 + cn[2] * w2 + cn[3] * w3
+            eb = max(eb, _len(_pos_rel(d, pi, ss, tt, c0) - bp)); en = max(en, _len(nn - bn))
+    var sz = d.sq[unsafe_offset=3 * pi + 2]; var u0 = d.sq[unsafe_offset=3 * pi]; var v0 = d.sq[unsafe_offset=3 * pi + 1]
+    var hr = height_range(d, Int(d.face[unsafe_offset=pi]), u0 + s0 * sz, u0 + s1 * sz, v0 + t0 * sz, v0 + t1 * sz)
+    return (eb, max(abs(hr[0]), abs(hr[1])) * d.scale * en, en)
+
+
 def main() raises:
     var out_dir = String("/tmp/claude-1000/-home-gonsolo-work-moana-3060-paper/5a168d33-8d85-45d2-a94f-7e6bdd0ebff6/scratchpad/rock/")
     var ss = Int(_env_f("SS", Float32(1)))   # SS=4: 4 x 4 samples per 960 x 720 pixel, as a larger image
@@ -990,6 +1030,50 @@ def main() raises:
                 if b + nrm > th: nt[q] += 1
         print("bound stats over", dm.prims(), "sub-squares: mean base", sb / Float64(dm.prims()), "px, mean normal term", sn / Float64(dm.prims()), "px")
         print("  over 0.4 / 0.1 / 0.025 / 0.00625 px: base", nb[0], nb[1], nb[2], nb[3], "| normal", nn[0], nn[1], nn[2], nn[3], "| total", nt[0], nt[1], nt[2], nt[3])
+        if getenv("CHECK_ALL") == "1":   # the bound against the sample on every sub-square: violations per term
+            var vb = 0; var vn = 0; var vg = 0; var xr = Float32(0); var xb = Float32(0); var xn = Float32(0); var wq = 0
+            for j in range(dm.prims()):
+                var pk = prim_patch(bd, j); var ss = sub_square(pk[2], pk[1])
+                var r = sub_base_error(bd, pk[0], ss[0], ss[0] + ss[2], ss[1], ss[1] + ss[2])
+                var t = _sampled_base_error(bd, pk[0], ss[0], ss[0] + ss[2], ss[1], ss[1] + ss[2])
+                var lo = r[2]; var hi = r[3]
+                var dx = max(max(lo.x - o.eye.x, o.eye.x - hi.x), Float32(0)); var dy = max(max(lo.y - o.eye.y, o.eye.y - hi.y), Float32(0))
+                var dz = max(max(lo.z - o.eye.z, o.eye.z - hi.z), Float32(0))
+                var k = o.pixel * max(sqrt(dx * dx + dy * dy + dz * dz), Float32(1e-6))
+                if t[0] > r[0] * Float32(1.01) + Float32(1e-4):
+                    vb += 1; xb = max(xb, (t[0] - r[0]) / k)
+                if t[1] > r[1] * Float32(1.01) + Float32(1e-6):
+                    vn += 1
+                    if bd.greg[unsafe_offset=pk[0]] == 1: vg += 1
+                    else: xr = max(xr, (t[1] - r[1]) / k)
+                    if (t[1] - r[1]) / k > xn:
+                        xn = (t[1] - r[1]) / k; wq = j
+            print("  check all: base violations", vb, "max excess", xb, "px | normal violations", vn, "(", vg, "Gregory; regular max excess", xr, "px)", "max excess", xn, "px at prim", wq, "patch", prim_patch(bd, wq)[0], "Gregory", bd.greg[unsafe_offset=prim_patch(bd, wq)[0]])
+        var pover = List[Int](length=Int(bd.lv[].patch[LEVELS]), fill=0); var nq = List[Int](length=3, fill=0)
+        var ns = 0; var nover = 0; var rb = Float64(0); var rn = Float64(0); var worst = Float32(0)
+        for j in range(dm.prims()):   # where the bound exceeds 0.05 px: the sampled error, and how loose each term is
+            var pk = prim_patch(bd, j); var ss = sub_square(pk[2], pk[1])
+            var r = sub_base_error(bd, pk[0], ss[0], ss[0] + ss[2], ss[1], ss[1] + ss[2])
+            var lo = r[2]; var hi = r[3]
+            var dx = max(max(lo.x - o.eye.x, o.eye.x - hi.x), Float32(0)); var dy = max(max(lo.y - o.eye.y, o.eye.y - hi.y), Float32(0))
+            var dz = max(max(lo.z - o.eye.z, o.eye.z - hi.z), Float32(0))
+            var k = o.pixel * max(sqrt(dx * dx + dy * dy + dz * dz), Float32(1e-6))
+            if (r[0] + r[1]) / k <= Float32(0.05): continue
+            var t = _sampled_base_error(bd, pk[0], ss[0], ss[0] + ss[2], ss[1], ss[1] + ss[2])
+            ns += 1; rb += Float64(r[0] / max(t[0], Float32(1e-12))); rn += Float64(r[1] / max(t[1], Float32(1e-12)))
+            worst = max(worst, (t[0] + t[1]) / k)
+            if (t[0] + t[1]) / k > Float32(0.05):
+                nover += 1; pover[pk[0]] = 1
+            for q in range(3):
+                if (t[0] + t[1]) / k > Float32(0.1) * Float32(1 << (2 * q)): nq[q] += 1
+        if ns > 0:
+            print("  sampled where the bound > 0.05 px:", ns, "sub-squares,", nover, "truly over; bound / sampled: base", rb / Float64(ns), "normal", rn / Float64(ns), "| worst sampled", worst, "px")
+            var pp = 0; var pg = 0
+            for q in range(len(pover)):
+                if pover[q] == 1:
+                    pp += 1
+                    if bd.greg[unsafe_offset=q] == 1: pg += 1
+            print("  truly over in", pp, "patches,", pg, "of them Gregory; sampled over 0.1 / 0.4 / 1.6 px:", nq[0], nq[1], nq[2])
     var texels = 0
     for f in range(nf):
         texels += (1 << Int(hdr[unsafe_offset=3 * f + 1])) * (1 << Int(hdr[unsafe_offset=3 * f + 2]))
