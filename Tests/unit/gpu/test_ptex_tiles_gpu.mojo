@@ -8,7 +8,7 @@ from std.sys import has_accelerator
 from max.gpu.host import DeviceContext
 from gonzales.core.rng import PCG32
 from gonzales.scene.appearance.materials import GpuTexture
-from gonzales.scene.appearance.tile_cache import (TileCache, PTEX_SLOT_BYTES, TILE_REQ_COUNT, TILE_REQ_CAP, TILE_USED_OFF, TILE_SLOTS,
+from gonzales.scene.appearance.tile_cache import (TileCache, PTEX_SLOT_BYTES, TILE_REQ_COUNT, TILE_REQ_CAP, TILE_USED_OFF,
                                                   TILE_SLOTS, TILE_SLOTS_OFF, TILE_REQS)
 from gonzales.transport.texturing import _sample_ptex
 from gonzales.gpu.scene import tile_copy_gpu, tile_patch_gpu
