@@ -936,8 +936,8 @@ def run_demo(patches: Pointer[BezierPatch, MutUntrackedOrigin], sq: Pointer[Floa
     for i in range(col.byte_length()):
         cn[unsafe_offset=i] = col.unsafe_ptr()[unsafe_offset=i]
     cn[unsafe_offset=col.byte_length()] = UInt8(0)
-    var ncb = unsafe_alloc[Int64](1)
-    var ch = external_call["disp_color_chains", Int](cn, ncb)
+    var ncb = unsafe_alloc[Int64](1); ncb[unsafe_offset=0] = 0
+    var ch = external_call["disp_color_chains", Int](cn, ncb) if col != "none" else 0   # none: grey
     var color_on = ch != 0
     var coff_h = unsafe_alloc[Int32](max(nf, 1)); var crgb_h = unsafe_alloc[UInt8](max(Int(ncb[0]), 1) if color_on else 1)
     if color_on:
@@ -1266,7 +1266,7 @@ def main() raises:
     var only = getenv("ONLY")
     var spp_n = Int(sqrt(_env_f("SPP", Float32(1))) + Float32(0.5))   # SPP=64: 8 x 8
     var col_path = getenv("COLOR")   # a colour Ptex: an RGB image as well
-    var color_on = col_path.byte_length() > 0
+    var color_on = col_path.byte_length() > 0 and col_path != "none"
     if color_on:
         var cc = unsafe_alloc[UInt8](col_path.byte_length() + 1)
         for i in range(col_path.byte_length()):
