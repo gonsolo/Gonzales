@@ -1063,7 +1063,9 @@ def run_demo(patches: Pointer[BezierPatch, MutUntrackedOrigin], sq: Pointer[Floa
         var cam = DCam(eye, fwd, right, up, light, tan_h, exposure, Int32(rw), Int32(rh), Int32(frame), Int32(headlight), Int32(1 if color_on else 0))
         var t0 = perf_counter_ns()
         var acc_d = accel_buf.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutAnyOrigin]()
-        if use_hw and dd.leaf_mode >= 5:
+        if use_hw and dd.leaf_mode == 7:
+            ctx.enqueue_function[demo_gpu[7, True]](dd, dnodes, dorder, acc_d, crgb, coff, daccum, cam, grid_dim=ceildiv(rw * rh, 64), block_dim=64)
+        elif use_hw and dd.leaf_mode >= 5:
             ctx.enqueue_function[demo_gpu[5, True]](dd, dnodes, dorder, acc_d, crgb, coff, daccum, cam, grid_dim=ceildiv(rw * rh, 64), block_dim=64)
         elif use_hw:
             ctx.enqueue_function[demo_gpu[-1, True]](dd, dnodes, dorder, acc_d, crgb, coff, daccum, cam, grid_dim=ceildiv(rw * rh, 64), block_dim=64)
