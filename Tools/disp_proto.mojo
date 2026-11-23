@@ -997,7 +997,7 @@ def run_demo(patches: Pointer[BezierPatch, MutUntrackedOrigin], sq: Pointer[Floa
               "0 limit surface, L headlight, Esc quit")
     var n_frames = Int(atof(frames_env)) if headless else 0
     var frame = 0; var headlight = 0
-    var t_last = perf_counter_ns(); var frames_since = 0; var moving_ms = Float64(0); var moving_n = 0; var still_ms = Float64(0); var still_n = 0
+    var t_last = perf_counter_ns(); var frames_since = 0; var moving_ms = Float64(0); var moving_n = 0; var moving_max = Float64(0); var still_ms = Float64(0); var still_n = 0
     var it = 0
     var host = List[Float32](length=3 * W * H, fill=Float32(0))
     var cur_w = W; var cur_h = H
@@ -1075,8 +1075,10 @@ def run_demo(patches: Pointer[BezierPatch, MutUntrackedOrigin], sq: Pointer[Floa
             ctx.enqueue_function[demo_gpu[-1, False]](dd, dnodes, dorder, acc_d, crgb, coff, daccum, cam, grid_dim=ceildiv(rw * rh, 64), block_dim=64)
         ctx.synchronize()
         var ms = Float64(perf_counter_ns() - t0) * 1e-6
-        if moved:
-            moving_ms += ms; moving_n += 1
+        if headless and it == 0:   # warm-up, not counted
+            print("first frame ms", ms)
+        elif moved:
+            moving_ms += ms; moving_n += 1; moving_max = max(moving_max, ms)
         else:
             still_ms += ms; still_n += 1
         frame += 1
@@ -1094,7 +1096,7 @@ def run_demo(patches: Pointer[BezierPatch, MutUntrackedOrigin], sq: Pointer[Floa
                   moving_ms / Float64(max(moving_n, 1)), "still", still_ms / Float64(max(still_n, 1)))
             t_last = now; frames_since = 0
         it += 1
-    print("GPU ms per frame:", moving_ms / Float64(max(moving_n, 1)), "moving (", moving_n, "frames ),", still_ms / Float64(max(still_n, 1)), "still (", still_n, "frames ); exag", exag)
+    print("GPU ms per frame:", moving_ms / Float64(max(moving_n, 1)), "moving (", moving_n, "frames ),", still_ms / Float64(max(still_n, 1)), "still (", still_n, "frames ); exag", exag, "; moving max", moving_max)
     if headless:   # the viewer's display transform: Reinhard, then gamma
         for k in range(3 * W * H):
             host[k] = host[k] / (host[k] + Float32(1))
