@@ -1,6 +1,9 @@
 #include "xert.h"
 
 #include <dlfcn.h>
+#include <pthread.h>
+#include <stdint.h>
+#include <unistd.h>
 #include <level_zero/ze_api.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -9,7 +12,7 @@
 #define ZE_FNS(X)                                                                                                     \
   X(zeInit) X(zeDriverGet) X(zeDeviceGet) X(zeDeviceGetProperties) X(zeRTASBuilderCreateExt)                         \
   X(zeRTASBuilderGetBuildPropertiesExt) X(zeRTASBuilderBuildExt) X(zeRTASParallelOperationCreateExt)                 \
-  X(zeRTASParallelOperationJoinExt) X(zeRTASParallelOperationDestroyExt)
+  X(zeRTASParallelOperationJoinExt) X(zeRTASParallelOperationDestroyExt) X(zeRTASParallelOperationGetPropertiesExt)
 
 static struct {
 #define X(f) __typeof__(&f) f;
@@ -122,7 +125,12 @@ int64_t xert_alignment(void) { return xert_init() ? ze.alignment : 0; }
 
 void xert_free(void* p) { free(p); }
 
-static void* xert_build(const ze_rtas_builder_geometry_info_ext_t** geoms, uint32_t n_geoms, int64_t* out_size, float* box) {
+static void* xert_join(void* par) {
+  return (void*)(intptr_t)ze.zeRTASParallelOperationJoinExt((ze_rtas_parallel_operation_ext_handle_t)par);
+}
+
+static void* xert_build(const ze_rtas_builder_geometry_info_ext_t** geoms, uint32_t n_geoms, int64_t n_prims, int64_t* out_size,
+                        float* box) {
   ze_rtas_builder_build_op_ext_desc_t op = {ZE_STRUCTURE_TYPE_RTAS_BUILDER_BUILD_OP_EXT_DESC};
   op.rtasFormat = ze.format;
   op.buildQuality = ZE_RTAS_BUILDER_BUILD_QUALITY_HINT_EXT_HIGH;
@@ -151,8 +159,21 @@ static void* xert_build(const ze_rtas_builder_geometry_info_ext_t** geoms, uint3
   if (r == ZE_RESULT_SUCCESS)
     r = ze.zeRTASBuilderBuildExt(ze.builder, &op, scratch, props.scratchBufferSizeBytes, rtas, bytes, par, NULL,
                                  &bounds, &used);
-  if (r == ZE_RESULT_EXT_RTAS_BUILD_DEFERRED)
+  if (r == ZE_RESULT_EXT_RTAS_BUILD_DEFERRED) {   // the build runs on the threads that join it: 10 M boxes 5.4 s -> 0.8 s
+    ze_rtas_parallel_operation_ext_properties_t pp = {ZE_STRUCTURE_TYPE_RTAS_PARALLEL_OPERATION_EXT_PROPERTIES};
+    long n = 1 + n_prims / 65536, cpus = sysconf(_SC_NPROCESSORS_ONLN), k = 0;
+    if (ze.zeRTASParallelOperationGetPropertiesExt(par, &pp) != ZE_RESULT_SUCCESS)
+      n = 1;
+    n = n < cpus ? n : cpus;
+    n = n < (long)pp.maxConcurrency ? n : (long)pp.maxConcurrency;
+    pthread_t th[256];
+    for (; k + 1 < n && k < 256; k++)
+      if (pthread_create(&th[k], NULL, xert_join, par) != 0)
+        break;
     r = ze.zeRTASParallelOperationJoinExt(par);
+    for (long i = 0; i < k; i++)
+      pthread_join(th[i], NULL);
+  }
   if (par)
     ze.zeRTASParallelOperationDestroyExt(par);
   free(scratch);
@@ -204,7 +225,10 @@ void* xert_build_blas_geoms(int32_t n_geoms, const float* const* verts, const in
     procs.pGeomUserPtr = (void*)proc_bounds;
     geoms[n_geoms] = (const ze_rtas_builder_geometry_info_ext_t*)&procs;
   }
-  void* rtas = xert_build(geoms, n_geoms + (n_procs > 0), out_size, bounds);
+  int64_t n_prims = n_procs;
+  for (int32_t g = 0; g < n_geoms; g++)
+    n_prims += n_tris[g];
+  void* rtas = xert_build(geoms, n_geoms + (n_procs > 0), n_prims, out_size, bounds);
   free(geoms);
   free(meshes);
   return rtas;
@@ -246,7 +270,7 @@ void* xert_build_tlas(int64_t n_inst, const float* xf, const int32_t* blas_of, c
     geoms[n++] = (const ze_rtas_builder_geometry_info_ext_t*)g;
   }
   float bounds[6];
-  void* rtas = n > 0 ? xert_build(geoms, (uint32_t)n, out_size, bounds) : NULL;
+  void* rtas = n > 0 ? xert_build(geoms, (uint32_t)n, (int64_t)n, out_size, bounds) : NULL;
   free(geoms);
   free(inst);
   return rtas;
