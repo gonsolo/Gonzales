@@ -918,7 +918,8 @@ def _demo_upload(ctx: DeviceContext, nb_buf: DeviceBuffer[DType.uint8], or_buf: 
 def run_demo(patches: Pointer[BezierPatch, MutUntrackedOrigin], sq: Pointer[Float32, MutUntrackedOrigin], face: Pointer[Int32, MutUntrackedOrigin],
              hdr: Pointer[Int32, MutUntrackedOrigin], pyr: Pointer[UInt8, MutUntrackedOrigin], npyr: Int, chain_off: Pointer[Int32, MutUntrackedOrigin],
              chain: Pointer[UInt8, MutUntrackedOrigin], nchain: Int, fm: Pointer[Float32, MutUntrackedOrigin], greg: Pointer[UInt8, MutUntrackedOrigin],
-             np: Int, nf: Int, blo: Vec3f, bhi: Vec3f, out_dir: String, cgrid: Pointer[Float32, MutUntrackedOrigin], ncg: Int, dm: DispMesh) raises:
+             np: Int, nf: Int, blo: Vec3f, bhi: Vec3f, out_dir: String, cgrid: Pointer[Float32, MutUntrackedOrigin], ncg: Int, dm: DispMesh,
+             ptx: String, o: DispOptions) raises:
     """INTERACTIVE=1: fly around the rock in the Vulkan viewer; DEMO_FRAMES=N: N frames along an orbit without a window."""
     var W = Int(_env_f("W", Float32(960))); var H = Int(_env_f("H", Float32(540)))
     var frames_env = getenv("DEMO_FRAMES")
@@ -1004,6 +1005,18 @@ def run_demo(patches: Pointer[BezierPatch, MutUntrackedOrigin], sq: Pointer[Floa
     var t_last = perf_counter_ns(); var frames_since = 0; var moving_ms = Float64(0); var moving_n = 0; var moving_max = Float64(0); var still_ms = Float64(0); var still_n = 0
     var it = 0
     var host = List[Float32](length=3 * W * H, fill=Float32(0))
+    # STREAM=k: every k moving frames the view's surface from a cache of what any view reads (FLY=f: the orbit closes in to f).
+    var stream = Int(_env_f("STREAM", Float32(0))); var fly = _env_f("FLY", Float32(1))
+    var cache = 0; var cur = dm.copy(); var own_cur = False; var since = stream
+    var sb_n = 0; var sb_view = Float64(0); var sb_up = Float64(0); var sb_bvh = Float64(0); var sb_max = Float64(0); var sb_res = 0
+    if stream > 0:
+        var tc = perf_counter_ns()
+        var pc = _cstr(ptx)
+        cache = external_call["disp_cache_open", Int](pc, Int32(2), Int(0))
+        pc.unsafe_free()
+        if cache == 0:
+            raise Error("cannot cache " + ptx)
+        print("stream cache:", Int(external_call["disp_cache_bytes", Int64](cache)) >> 20, "MiB,", Float64(perf_counter_ns() - tc) * 1e-9, "s")
     var cur_w = W; var cur_h = H
     while True:
         var moved = False; var rebuild = False
@@ -1014,8 +1027,9 @@ def run_demo(patches: Pointer[BezierPatch, MutUntrackedOrigin], sq: Pointer[Floa
                 exag = Float32(8); rebuild = True
             if it < n_frames:   # an orbit around the rock, then 32 still frames
                 var a = Float32(2) * Float32(3.14159265) * Float32(it) / Float32(max(n_frames, 1))
-                var r = diag * near * Float32(0.83)
-                eye = Vec3f(c.x + r * sin(a + Float32(0.57)), c.y + Float32(0.55) * diag * near, c.z + r * cos(a + Float32(0.57)))
+                var kf = Float32(1) + (fly - Float32(1)) * Float32(it) / Float32(max(n_frames - 1, 1))
+                var r = diag * near * Float32(0.83) * kf
+                eye = Vec3f(c.x + r * sin(a + Float32(0.57)), c.y + Float32(0.55) * diag * near * kf, c.z + r * cos(a + Float32(0.57)))
                 fwd = c - eye
                 fwd = fwd * (Float32(1) / sqrt(dot(fwd, fwd)))
                 moved = True
@@ -1043,10 +1057,33 @@ def run_demo(patches: Pointer[BezierPatch, MutUntrackedOrigin], sq: Pointer[Floa
                 moved = True
             eye = Vec3f(cs[unsafe_offset=0].position.x, cs[unsafe_offset=0].position.y, cs[unsafe_offset=0].position.z)
             fwd = cs[unsafe_offset=0].direction
+        if stream > 0 and moved and since >= stream:
+            var t0s = perf_counter_ns()
+            var ov = o
+            ov.eye = eye; ov.pixel = Float32(2) * tan_h / Float32(W)
+            var nm = load_disp_mesh(ptx, ov, 0, cache)
+            var t1s = perf_counter_ns()
+            var nb = List[DeviceBuffer[DType.uint8]]()
+            var ns = upload_surface(ctx, nb, nm.surface(Float32(0), Vec3f(0, 0, 0), Float32(0), _leaf_mode()), nm.nf, nm.npyr, nm.nchain)
+            ctx.synchronize()
+            var t2s = perf_counter_ns()
+            var nh = nm.surface(exag / Float32(255), Vec3f(0, 0, 0), Float32(0), _leaf_mode())
+            accel_buf = _proc_rtas(ctx, nh, nm.np)
+            var t3s = perf_counter_ns()
+            dsurf = ns; host_d = nh; sbufs = nb^
+            if own_cur:
+                cur.free()
+            cur = nm^; own_cur = True; since = 0
+            var res = cur.nchain + cur.npyr + 4 * cur.ncg + len(accel_buf)
+            var v_ms = Float64(t1s - t0s) * 1e-6; var u_ms = Float64(t2s - t1s) * 1e-6; var b_ms = Float64(t3s - t2s) * 1e-6
+            sb_n += 1; sb_view += v_ms; sb_up += u_ms; sb_bvh += b_ms; sb_max = max(sb_max, v_ms + u_ms + b_ms); sb_res = max(sb_res, res)
+            print("stream build", it, ": view", v_ms, "ms, upload", u_ms, "ms, BVH", b_ms, "ms;", cur.prims(), "sub-squares,", cur.nchain >> 20,
+                  "MiB chains,", (4 * cur.ncg) >> 20, "MiB corners,", len(accel_buf) >> 20, "MiB RTAS")
+        since += 1
         if rebuild:
-            host_d = dm.surface(exag / Float32(255), Vec3f(0, 0, 0), Float32(0), _leaf_mode())
+            host_d = cur.surface(exag / Float32(255), Vec3f(0, 0, 0), Float32(0), _leaf_mode())
             if use_hw:
-                accel_buf = _proc_rtas(ctx, host_d, np)
+                accel_buf = _proc_rtas(ctx, host_d, cur.np)
             else:
                 _demo_bvh(host_d, np, nodes, order)
                 _demo_upload(ctx, nb_buf, or_buf, nb_stage, nb_cap, nodes, order)   # nodes and the patch order they index
@@ -1101,6 +1138,9 @@ def run_demo(patches: Pointer[BezierPatch, MutUntrackedOrigin], sq: Pointer[Floa
             t_last = now; frames_since = 0
         it += 1
     print("GPU ms per frame:", moving_ms / Float64(max(moving_n, 1)), "moving (", moving_n, "frames ),", still_ms / Float64(max(still_n, 1)), "still (", still_n, "frames ); exag", exag, "; moving max", moving_max)
+    if sb_n > 0:
+        print("stream builds:", sb_n, "; mean ms view", sb_view / Float64(sb_n), "upload", sb_up / Float64(sb_n), "BVH", sb_bvh / Float64(sb_n),
+              "; slowest", sb_max, "ms; most resident", sb_res >> 20, "MiB")
     if headless:   # the viewer's display transform: Reinhard, then gamma
         for k in range(3 * W * H):
             host[k] = host[k] / (host[k] + Float32(1))
@@ -1293,7 +1333,7 @@ def main() raises:
     print("Gregory patches:", ngreg, "of", np, "(", np * (size_of[BezierPatch]() + 16) + ngreg * 48, "patch bytes incl. Fm )")
 
     if getenv("INTERACTIVE") == "1" or getenv("DEMO_FRAMES").byte_length() > 0:
-        run_demo(patches, sq, face, hdr, pyr, npyr, chain_off, chain, nchain, fm, greg, np, nf, blo, bhi, out_dir, cgrid, ncg, dm)
+        run_demo(patches, sq, face, hdr, pyr, npyr, chain_off, chain, nchain, fm, greg, np, nf, blo, bhi, out_dir, cgrid, ncg, dm, ptx, o)
         return
 
     var lo_b = List[Vec3f](); var hi_b = List[Vec3f]()
