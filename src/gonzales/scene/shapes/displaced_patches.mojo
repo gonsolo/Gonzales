@@ -1544,11 +1544,11 @@ def _rgb_texel(rgb: _U8, off: Int, w: Int, x: Int, y: Int) -> Vec3f:
     return Vec3f(Float32(Int(rgb[unsafe_offset=i])), Float32(Int(rgb[unsafe_offset=i + 1])), Float32(Int(rgb[unsafe_offset=i + 2])))
 
 
-def chain_color(d: DispSurface, rgb: _U8, rgb_off: _I32, pi: Int, s: Float32, t: Float32, step: Float32) -> Vec3f:
+def chain_color(d: DispSurface, rgb: _U8, rgb_off: _I32, rgb_res: _I32, pi: Int, s: Float32, t: Float32, step: Float32) -> Vec3f:
     """Linear colour at (s, t) of patch pi from bordered RGB8 chains with the displacement's faces (src/oiio/disp.cc), bilinear
     at the level whose texels match `step` (the leaf square's size in patch units); the borders hide the face edges."""
     var f = Int(d.face[unsafe_offset=pi]); var u0 = d.sq[unsafe_offset=3 * pi]; var v0 = d.sq[unsafe_offset=3 * pi + 1]; var sz = d.sq[unsafe_offset=3 * pi + 2]
-    var ul = Int(d.hdr[unsafe_offset=3 * f + 1]); var vl = Int(d.hdr[unsafe_offset=3 * f + 2])
+    var ul = Int(rgb_res[unsafe_offset=2 * f]); var vl = Int(rgb_res[unsafe_offset=2 * f + 1])   # the colour's own levels
     var lvl = Int(min(max(log2(max(step * sz * Float32(1 << max(ul, vl)), Float32(1e-6))), Float32(0)), Float32(max(ul, vl))))
     var off = Int(rgb_off[unsafe_offset=f])
     var l = 0; var cul = ul; var cvl = vl

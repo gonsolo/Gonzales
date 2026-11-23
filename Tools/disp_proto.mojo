@@ -836,6 +836,7 @@ def _hash01(a: UInt32) -> Float32:
 
 def demo_gpu[M: Int, HWT: Bool](d: DispSurface, nodes: Pointer[BNode, MutUntrackedOrigin], order: Pointer[Int32, MutUntrackedOrigin],
              accel: MutPointer[UInt8, MutAnyOrigin], crgb: Pointer[UInt8, MutUntrackedOrigin], coff: Pointer[Int32, MutUntrackedOrigin],
+             cres: Pointer[Int32, MutUntrackedOrigin],
              accum: Pointer[Float32, MutUntrackedOrigin], cam: DCam):
     """One jittered sample a pixel, averaged into accum (linear RGB). HWT: the top level in Intel's RTAS (accel), else the BVH."""
     var i = global_idx.x
@@ -862,7 +863,7 @@ def demo_gpu[M: Int, HWT: Bool](d: DispSurface, nodes: Pointer[BNode, MutUntrack
         if dot(n, dir) > Float32(0):
             n = -n
         var l = -dir if cam.headlight != 0 else cam.light
-        var albedo = chain_color(d, crgb, coff, hh.prim, hh.s, hh.u, step) if cam.color != 0 else Vec3f(Float32(0.5), Float32(0.5), Float32(0.5))
+        var albedo = chain_color(d, crgb, coff, cres, hh.prim, hh.s, hh.u, step) if cam.color != 0 else Vec3f(Float32(0.5), Float32(0.5), Float32(0.5))
         c = albedo * ((Float32(0.12) + max(dot(n, l), Float32(0))) * cam.exposure)
     var k = Float32(Int(cam.frame))
     var a = Vec3f(accum[unsafe_offset=3 * i], accum[unsafe_offset=3 * i + 1], accum[unsafe_offset=3 * i + 2]) if cam.frame > 0 else Vec3f(0, 0, 0)
@@ -939,15 +940,18 @@ def run_demo(patches: Pointer[BezierPatch, MutUntrackedOrigin], sq: Pointer[Floa
     var ncb = unsafe_alloc[Int64](1); ncb[unsafe_offset=0] = 0
     var ch = external_call["disp_color_chains", Int](cn, ncb) if col != "none" else 0   # none: grey
     var color_on = ch != 0
-    var coff_h = unsafe_alloc[Int32](max(nf, 1)); var crgb_h = unsafe_alloc[UInt8](max(Int(ncb[0]), 1) if color_on else 1)
+    var cres_h = unsafe_alloc[Int32](max(2 * nf, 1)); var coff_h = unsafe_alloc[Int32](max(nf, 1)); var crgb_h = unsafe_alloc[UInt8](max(Int(ncb[0]), 1) if color_on else 1)
     if color_on:
+        external_call["disp_color_res", NoneType](ch, cres_h)
         external_call["disp_color_chains_take", NoneType](ch, coff_h, crgb_h)
         print("colour chains:", Int(ncb[0]), "bytes")
     else:
         print("no colour:", col)
     var crgb = _up(ctx, bufs, crgb_h, Int(ncb[0]) if color_on else 1)
     var coff = _up(ctx, bufs, coff_h, nf)
-    var dsurf = upload_surface(ctx, bufs, dm.surface(Float32(0), Vec3f(0, 0, 0), Float32(0), _leaf_mode()), nf, npyr, nchain)
+    var cres = _up(ctx, bufs, cres_h, 2 * nf)
+    var sbufs = List[DeviceBuffer[DType.uint8]]()   # the surface's arrays, replaced by streaming
+    var dsurf = upload_surface(ctx, sbufs, dm.surface(Float32(0), Vec3f(0, 0, 0), Float32(0), _leaf_mode()), nf, npyr, nchain)
     var host_d = dm.surface(exag / Float32(255), Vec3f(0, 0, 0), Float32(0), _leaf_mode())
     var nodes = List[BNode](); var order = List[Int32]()
     var use_hw = getenv("HW") != "0" and xert_alignment() != 0   # the top level in Intel's RTAS (HW=0: our BVH)
@@ -1064,15 +1068,15 @@ def run_demo(patches: Pointer[BezierPatch, MutUntrackedOrigin], sq: Pointer[Floa
         var t0 = perf_counter_ns()
         var acc_d = accel_buf.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutAnyOrigin]()
         if use_hw and dd.leaf_mode == 7:
-            ctx.enqueue_function[demo_gpu[7, True]](dd, dnodes, dorder, acc_d, crgb, coff, daccum, cam, grid_dim=ceildiv(rw * rh, 64), block_dim=64)
+            ctx.enqueue_function[demo_gpu[7, True]](dd, dnodes, dorder, acc_d, crgb, coff, cres, daccum, cam, grid_dim=ceildiv(rw * rh, 64), block_dim=64)
         elif use_hw and dd.leaf_mode >= 5:
-            ctx.enqueue_function[demo_gpu[5, True]](dd, dnodes, dorder, acc_d, crgb, coff, daccum, cam, grid_dim=ceildiv(rw * rh, 64), block_dim=64)
+            ctx.enqueue_function[demo_gpu[5, True]](dd, dnodes, dorder, acc_d, crgb, coff, cres, daccum, cam, grid_dim=ceildiv(rw * rh, 64), block_dim=64)
         elif use_hw:
-            ctx.enqueue_function[demo_gpu[-1, True]](dd, dnodes, dorder, acc_d, crgb, coff, daccum, cam, grid_dim=ceildiv(rw * rh, 64), block_dim=64)
+            ctx.enqueue_function[demo_gpu[-1, True]](dd, dnodes, dorder, acc_d, crgb, coff, cres, daccum, cam, grid_dim=ceildiv(rw * rh, 64), block_dim=64)
         elif dd.leaf_mode >= 5:
-            ctx.enqueue_function[demo_gpu[5, False]](dd, dnodes, dorder, acc_d, crgb, coff, daccum, cam, grid_dim=ceildiv(rw * rh, 64), block_dim=64)
+            ctx.enqueue_function[demo_gpu[5, False]](dd, dnodes, dorder, acc_d, crgb, coff, cres, daccum, cam, grid_dim=ceildiv(rw * rh, 64), block_dim=64)
         else:
-            ctx.enqueue_function[demo_gpu[-1, False]](dd, dnodes, dorder, acc_d, crgb, coff, daccum, cam, grid_dim=ceildiv(rw * rh, 64), block_dim=64)
+            ctx.enqueue_function[demo_gpu[-1, False]](dd, dnodes, dorder, acc_d, crgb, coff, cres, daccum, cam, grid_dim=ceildiv(rw * rh, 64), block_dim=64)
         ctx.synchronize()
         var ms = Float64(perf_counter_ns() - t0) * 1e-6
         if headless and it == 0:   # warm-up, not counted
@@ -1103,7 +1107,7 @@ def run_demo(patches: Pointer[BezierPatch, MutUntrackedOrigin], sq: Pointer[Floa
         _write_ppm_rgb(out_dir + "demo_last.ppm", host, W, H)
     else:
         viewer_destroy(viewer)
-    _ = len(bufs); _ = len(nodes); _ = len(order)
+    _ = len(bufs); _ = len(sbufs); _ = len(nodes); _ = len(order)
 
 
 

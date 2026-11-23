@@ -531,6 +531,7 @@ void *disp_color_chains(const char *ptx, long long *n) {
                                 break;
                 }
                 c->chain_off.push_back(static_cast<int>(c->chain.size()));
+                c->hdr.insert(c->hdr.end(), {r.ulog2, r.vlog2});
                 const size_t at = c->chain.size();
                 c->chain.resize(at + texels * 3);
                 ptex_read_face(pt, f, r.ulog2, r.vlog2, c->chain.data() + at);
@@ -538,6 +539,12 @@ void *disp_color_chains(const char *ptx, long long *n) {
         ptex_close(pt);
         *n = static_cast<long long>(c->chain.size());
         return c;
+}
+
+// Per face the colour chain's log2 width and height (2 ints); call before disp_color_chains_take.
+void disp_color_res(void *h, int *res) {
+        auto *c = static_cast<Disp *>(h);
+        std::memcpy(res, c->hdr.data(), c->hdr.size() * sizeof(int));
 }
 
 // Copy the colour chains out (per face its offset in RGB texels, then the bytes) and free them.
