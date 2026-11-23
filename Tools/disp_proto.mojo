@@ -6,6 +6,7 @@ from std.memory.alloc import unsafe_alloc
 from std.memory import unsafe_memcpy
 from std.os import getenv
 from std.sys.info import size_of
+from std.sys import get_defined_int
 from std.time import perf_counter_ns
 from max.algorithm import parallelize
 from max.gpu import global_idx
@@ -18,6 +19,8 @@ from gonzales.scene.shapes.displaced_patches import sub_base_error, sub_square, 
 from gonzales.scene.shapes.displaced_patches import DispSurface, Levels, make_levels, prim_patch, prim_total, corner_off, patch_level, LEVELS, patch_box, sub_box, patch_at, intersect_displaced, displaced_normal, displaced_point, displaced_point_n, chain_color, _bl_frame, _bl_point, corner_grid, corner_words, corner_step, weld_corner_grid, face_height
 from gonzales.scene.shapes.disp_build import DispOptions, DispMesh, load_disp_mesh, disp_bounds, _cstr, upload_surface
 from gonzales.scene.shapes.rmip import Rmip, rmip_build, rmip_prism_box, intersect_rmip
+from gonzales.scene.shapes.pdm import intersect_pdm
+from gonzales.scene.shapes.march import intersect_march
 from gonzales.scene.accel.xert import XeRayDesc, xert_alignment, xert_build_blas_geoms, xert_free
 from std.memory import OpaquePointer
 from std.sys.info import is_gpu
@@ -283,7 +286,7 @@ def trace_tris(pts: Pointer[Vec3f, MutUntrackedOrigin], tri: Pointer[Int32, MutU
 
 
 @always_inline
-def _rq_trace[M: Int, R: Bool = False](accel: MutPointer[UInt8, MutAnyOrigin], d: DispSurface, org: Vec3f, dir: Vec3f, procedural: Bool,
+def _rq_trace[M: Int, R: Bool = False, PD: Bool = False](accel: MutPointer[UInt8, MutAnyOrigin], d: DispSurface, org: Vec3f, dir: Vec3f, procedural: Bool,
                                       rm: Rmip, march: Float32) -> Hit:
     """Closest hit through Intel's ray queries: the hardware commits triangles; each sub-square it reports runs the
     subdivision loop, whose hit is committed (prim: the triangle, or the patch with its s, u and leaf size)."""
@@ -297,7 +300,11 @@ def _rq_trace[M: Int, R: Bool = False](accel: MutPointer[UInt8, MutAnyOrigin], d
         while not external_call["intel_is_traversal_done", Bool](q):
             var prim = Int(external_call["intel_get_hit_primitive_id", UInt32](q, UInt32(1)))
             comptime if R:   # RMIP: primitive prim is half prim & 1 of sub-square prim >> 1
-                var rr = intersect_rmip(d, rm, prim, org, dir, h.t, march)
+                var rr: Tuple[Bool, Float32, Float32, Float32, Int]
+                comptime if PD:   # projective displacement mapping on the same triangles, march = its step in texels
+                    rr = intersect_pdm(d, rm, prim, org, dir, h.t, march)
+                else:
+                    rr = intersect_rmip(d, rm, prim, org, dir, h.t, march)
                 h.steps += rr[4]
                 if rr[0] and rr[1] < h.t:
                     h.t = rr[1]; h.prim = prim_patch(d, prim >> 1)[0]; h.s = rr[2]; h.u = rr[3]; h.size = Float32(0)
@@ -306,8 +313,15 @@ def _rq_trace[M: Int, R: Bool = False](accel: MutPointer[UInt8, MutAnyOrigin], d
                 external_call["intel_ray_query_start_traversal", NoneType](q)
                 external_call["intel_ray_query_sync", NoneType](q)
                 continue
-            var r = intersect_displaced[M](d, prim, org, dir, h.t, 1)
-            h.steps += r[4]
+            var r: Tuple[Bool, Float32, Float32, Float32, Int, Float32]
+            comptime if M == 7:   # LEAF=march: the marching traversal, in a kernel of its own
+                r = intersect_march(d, prim, org, dir, h.t)
+            else:
+                r = intersect_displaced[M](d, prim, org, dir, h.t, 1)
+            comptime if get_defined_int["GZ_COUNT_CAND", 0]() != 0:   # steps/ray then counts the hardware's candidates
+                h.steps += 1
+            else:
+                h.steps += r[4]
             if r[0] and r[1] < h.t:
                 h.t = r[1]; h.prim = prim_patch(d, prim)[0]; h.s = r[2]; h.u = r[3]; h.size = r[5]
                 var uv = SIMD[DType.float32, 2](r[2], r[3])
@@ -324,7 +338,7 @@ def _rq_trace[M: Int, R: Bool = False](accel: MutPointer[UInt8, MutAnyOrigin], d
     return h
 
 
-def render_hw[M: Int, R: Bool = False](accel: MutPointer[UInt8, MutAnyOrigin], d: DispSurface, tri_base: Pointer[Int32, MutUntrackedOrigin],
+def render_hw[M: Int, R: Bool = False, PD: Bool = False](accel: MutPointer[UInt8, MutAnyOrigin], d: DispSurface, tri_base: Pointer[Int32, MutUntrackedOrigin],
               grid_n: Pointer[Int32, MutUntrackedOrigin], ext: Pointer[Float32, MutUntrackedOrigin], np: Int32, procedural: Int32,
               img: Pointer[Float32, MutUntrackedOrigin], steps: Pointer[Int32, MutUntrackedOrigin], cam: GCam, rm: Rmip, march: Float32):
     """render_gpu through the hardware: a hit triangle maps back to its patch and (s, t), shaded as ours."""
@@ -337,7 +351,7 @@ def render_hw[M: Int, R: Bool = False](accel: MutPointer[UInt8, MutAnyOrigin], d
     var py = (Float32(1) - Float32(2) * (Float32(y) + Float32(0.5)) / Float32(H)) * cam.tan_h * Float32(H) / Float32(W)
     var dir = cam.fwd + cam.right * px + cam.up * py
     dir = dir * (Float32(1) / sqrt(dot(dir, dir)))
-    var hh = _rq_trace[M, R](accel, d, cam.eye, dir, procedural != 0, rm, march)
+    var hh = _rq_trace[M, R, PD](accel, d, cam.eye, dir, procedural != 0, rm, march)
     steps[unsafe_offset=y * W + x] = Int32(hh.steps)
     if cam.prof == 4:   # the hit patch and its (s, t) in 8 bits each instead of steps, -1 for none
         steps[unsafe_offset=y * W + x] = Int32(hh.prim * 65536 + Int(hh.s * Float32(255.99)) * 256 + Int(hh.u * Float32(255.99))) if hh.prim >= 0 else Int32(-1)
@@ -376,10 +390,12 @@ def _hw_render(ctx: DeviceContext, mut bufs: List[DeviceBuffer[DType.uint8]], d:
     var tb = unsafe_alloc[Int32](np + 1); var gn = unsafe_alloc[Int32](np); var ext = unsafe_alloc[Float32](np)
     for p in range(np):
         var bp = d.patches[unsafe_offset=p]
-        ext[unsafe_offset=p] = max(max(bp.x.reduce_max() - bp.x.reduce_min(), bp.y.reduce_max() - bp.y.reduce_min()), bp.z.reduce_max() - bp.z.reduce_min())
+        ext[unsafe_offset=p] = max(max(bp.x.reduce_max() - bp.x.reduce_min(), bp.y.reduce_max() - bp.y.reduce_min()), bp.z.reduce_max() - bp.z.reduce_min()) * _env_f("FOOTPRINT", Float32(1))   # shade at the display pixel whatever the leaves' footprint
     var size = Int64(0); var bounds = unsafe_alloc[Float32](6)
     var rtas: Pointer[UInt8, MutUntrackedOrigin]
-    var use_rmip = procedural and getenv("RMIP") == "1"; var march = Float32(atof(getenv("RMIP_MARCH", "8")))
+    var use_pdm = procedural and getenv("PDM") == "1"
+    var use_rmip = procedural and (getenv("RMIP") == "1" or use_pdm)
+    var march = Float32(atof(getenv("PDM_STEP", "0.5"))) if use_pdm else Float32(atof(getenv("RMIP_MARCH", "8")))
     var nfa = 0
     for p in range(np):
         nfa = max(nfa, Int(d.face[unsafe_offset=p]) + 1)
@@ -390,6 +406,26 @@ def _hw_render(ctx: DeviceContext, mut bufs: List[DeviceBuffer[DType.uint8]], d:
         var rb = rmip_build(d, nfa); rm_h = rb[0]; rm_bytes = rb[1]
         var nent = (rm_bytes - 8 * nfa) // 2
         rm_d = Rmip(_up(ctx, bufs, rm_h.off, 2 * nfa), _up(ctx, bufs, rm_h.mm, 2 * nent))
+        var ppix = getenv("PIX_TRACE")
+        if ppix.byte_length() > 0:   # one pixel on the CPU: PDM and RMIP on every sub-square box the ray enters
+            var parts = ppix.split(",")
+            var X = Float32(atof(parts[0])); var Y = Float32(atof(parts[1])); var Wf = Float32(gc.w); var Hf = Float32(gc.h)
+            var dir = gc.fwd + gc.right * ((Float32(2) * (X + Float32(0.5)) / Wf - Float32(1)) * gc.tan_h) + gc.up * (
+                (Float32(1) - Float32(2) * (Y + Float32(0.5)) / Hf) * gc.tan_h * Hf / Wf)
+            dir = dir * (Float32(1) / sqrt(dot(dir, dir)))
+            var inv = Vec3f(Float32(1) / dir.x, Float32(1) / dir.y, Float32(1) / dir.z)
+            for k in range(prim_total(d)):
+                var b = sub_box(d, k); var lo = b[0] - gc.eye; var hi = b[1] - gc.eye
+                var ax = lo.x * inv.x; var bx = hi.x * inv.x; var ay = lo.y * inv.y; var by = hi.y * inv.y; var az = lo.z * inv.z; var bz = hi.z * inv.z
+                if min(min(max(ax, bx), max(ay, by)), max(az, bz)) < max(max(max(min(ax, bx), min(ay, by)), min(az, bz)), Float32(0)):
+                    continue
+                for g in range(2):
+                    if getenv("PIX_K").byte_length() > 0 and atol(getenv("PIX_K")) == k:
+                        print("  trace", k, g); _ = intersect_pdm[True](d, rm_h, 2 * k + g, gc.eye, dir, Float32(1e30), Float32(0.25))
+                    var p0 = intersect_pdm(d, rm_h, 2 * k + g, gc.eye, dir, Float32(1e30), Float32(0.25))
+                    var r0 = intersect_rmip(d, rm_h, 2 * k + g, gc.eye, dir, Float32(1e30), Float32(8))
+                    print("  sub-square", k, "half", g, "| pdm", p0[0], p0[1], p0[4], "| rmip", r0[0], r0[1], r0[4])
+            raise Error("pixel trace done")
         print(name + ": RMIP", rm_bytes // 1024, "KiB for", nfa, "faces, built in", (perf_counter_ns() - tr) // 1000000, "ms, marching below", march, "texels")
     var t0 = perf_counter_ns(); var t1 = t0; var in_bytes = 0; var nprim = 0
     if not procedural:
@@ -471,8 +507,12 @@ def _hw_render(ctx: DeviceContext, mut bufs: List[DeviceBuffer[DType.uint8]], d:
         var best = 1 << 62
         for _ in range(4):
             var ta = perf_counter_ns()
-            if use_rmip:
+            if use_pdm:
+                ctx.enqueue_function[render_hw[5, True, True]](acc_d, dd, tb_d, gn_d, ext_d, Int32(np), pr, img_d, st_d, g, rm_d, march, grid_dim=ceildiv(W * hgt, 64), block_dim=64)
+            elif use_rmip:
                 ctx.enqueue_function[render_hw[5, True]](acc_d, dd, tb_d, gn_d, ext_d, Int32(np), pr, img_d, st_d, g, rm_d, march, grid_dim=ceildiv(W * hgt, 64), block_dim=64)
+            elif dd.leaf_mode == 7:
+                ctx.enqueue_function[render_hw[7]](acc_d, dd, tb_d, gn_d, ext_d, Int32(np), pr, img_d, st_d, g, rm_d, march, grid_dim=ceildiv(W * hgt, 64), block_dim=64)
             elif dd.leaf_mode >= 5:
                 ctx.enqueue_function[render_hw[5]](acc_d, dd, tb_d, gn_d, ext_d, Int32(np), pr, img_d, st_d, g, rm_d, march, grid_dim=ceildiv(W * hgt, 64), block_dim=64)
             else:
@@ -507,6 +547,8 @@ def _leaf_mode() -> Int32:
         return 3
     if l == "crop":
         return 4
+    if l == "march":
+        return 7
     return 6 if l == "bltexel" else 5
 
 
