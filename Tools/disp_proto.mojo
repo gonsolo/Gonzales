@@ -3,7 +3,7 @@
 from std.ffi import external_call
 from std.math import pow, max, min, sqrt, abs, tan, acos, sin, cos
 from std.memory.alloc import unsafe_alloc
-from std.memory import unsafe_memcpy
+from std.memory import unsafe_memcpy, bitcast
 from std.os import getenv
 from std.sys.info import size_of
 from std.sys import get_defined_int
@@ -384,8 +384,53 @@ def render_hw[M: Int, R: Bool = False, PD: Bool = False, XU: Bool = False](accel
     img[unsafe_offset=y * W + x] = shade
 
 
+def _put_bytes(mut out: List[UInt8], p: Pointer[UInt8, MutUntrackedOrigin], n: Int):
+    var o = len(out)
+    out.resize(o + n, UInt8(0))
+    unsafe_memcpy(dest=out.unsafe_ptr().unsafe_offset(o).unsafe_origin_cast[MutUntrackedOrigin](), src=p, count=n)
+
+
+def _put_i32(mut out: List[UInt8], v: Int):
+    var b = bitcast[DType.uint8, 4](Int32(v))
+    for k in range(4):
+        out.append(b[k])
+
+
+def _put_f32(mut out: List[UInt8], v: Float32):
+    var b = bitcast[DType.uint8, 4](v)
+    for k in range(4):
+        out.append(b[k])
+
+
+def _dump_surface(path: String, d: DispSurface, np: Int, nf: Int, npyr: Int, nchain: Int, nprim: Int, boxes: Pointer[Float32, MutUntrackedOrigin],
+                  gc: GCam) raises:
+    """The march's inputs for Tools/optix_disp: the surface's arrays, the sub-square boxes and the camera."""
+    var ncw = Int(d.lv[].corner[LEVELS])
+    var o = List[UInt8]()
+    _put_i32(o, 0x53445A47); _put_i32(o, 1)
+    for v in [np, nf, npyr, nchain, ncw, nprim, Int(gc.w), Int(gc.h)]:
+        _put_i32(o, v)
+    for v in [d.scale, d.cam.x, d.cam.y, d.cam.z, d.pixel, gc.tan_h, gc.eye.x, gc.eye.y, gc.eye.z, gc.fwd.x, gc.fwd.y, gc.fwd.z,
+              gc.right.x, gc.right.y, gc.right.z, gc.up.x, gc.up.y, gc.up.z, gc.light.x, gc.light.y, gc.light.z]:
+        _put_f32(o, v)
+    for l in range(8):
+        _put_i32(o, Int(d.lv[].patch[l]))
+    for l in range(8):
+        _put_i32(o, Int(d.lv[].prim[l]))
+    for l in range(8):
+        _put_i32(o, Int(d.lv[].corner[l]))
+    _put_bytes(o, d.sq.unsafe_bitcast[UInt8](), 12 * np); _put_bytes(o, d.face.unsafe_bitcast[UInt8](), 4 * np)
+    _put_bytes(o, d.hdr.unsafe_bitcast[UInt8](), 12 * nf); _put_bytes(o, d.chain_off.unsafe_bitcast[UInt8](), 4 * nf)
+    _put_bytes(o, d.corners.unsafe_bitcast[UInt8](), 4 * ncw); _put_bytes(o, boxes.unsafe_bitcast[UInt8](), 24 * nprim)
+    _put_bytes(o, d.pyr, npyr); _put_bytes(o, d.chain, nchain)
+    with open(path, "w") as f:
+        f.write_bytes(Span(o))
+    print("surface dumped to", path, ":", len(o) // 1048576, "MiB,", nprim, "sub-squares")
+
+
 def _hw_render(ctx: DeviceContext, mut bufs: List[DeviceBuffer[DType.uint8]], d: DispSurface, dd: DispSurface, np: Int, name: String,
-               gc: GCam, mut img: List[Float32], mut hitmask: List[UInt8], mut steps: List[Int], mut maxs: List[Int]) raises:
+               gc: GCam, mut img: List[Float32], mut hitmask: List[UInt8], mut steps: List[Int], mut maxs: List[Int],
+               nf: Int, npyr: Int, nchain: Int) raises:
     """Intel hardware ray tracing. REF_HW=8/16/32/64/texel: the displaced surface tessellated n x n a patch (or a quad a
     texel), heights from the level matching n; else our sub-squares as procedural primitives (HW=1)."""
     var rmode = getenv("REF_HW"); var procedural = rmode.byte_length() == 0
@@ -488,6 +533,8 @@ def _hw_render(ctx: DeviceContext, mut bufs: List[DeviceBuffer[DType.uint8]], d:
                 pb[unsafe_offset=o] = b[0].x; pb[unsafe_offset=o + 1] = b[0].y; pb[unsafe_offset=o + 2] = b[0].z
                 pb[unsafe_offset=o + 3] = b[1].x; pb[unsafe_offset=o + 4] = b[1].y; pb[unsafe_offset=o + 5] = b[1].z
         parallelize(boxes, (npr + 4095) // 4096)
+        if getenv("DUMP").byte_length() > 0 and not use_rmip:
+            _dump_surface(getenv("DUMP"), d, np, nf, npyr, nchain, npr, pb, gc)
         t0 = perf_counter_ns()
         rtas = xert_build_blas_geoms(0, Pointer[Pointer[Float32, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
                                      Pointer[Int64, MutUntrackedOrigin].unsafe_dangling(), Pointer[Pointer[UInt32, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
@@ -510,6 +557,36 @@ def _hw_render(ctx: DeviceContext, mut bufs: List[DeviceBuffer[DType.uint8]], d:
     var st_d = st_b.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
     var acc_d = accel.unsafe_origin_cast[MutAnyOrigin]()
     var pr = Int32(1 if procedural else 0)
+    if getenv("HITS").byte_length() > 0:   # shade the hits of Tools/optix_disp: t, patch, s, t per pixel (patch -1: none)
+        var hb: List[UInt8]
+        with open(getenv("HITS"), "r") as f:
+            hb = f.read_bytes()
+        if len(hb) < 16 * W * H:
+            raise Error("HITS: short file")
+        var hp = hb.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
+        var nh = 0
+        for k in range(W * H):
+            var t = hp.unsafe_offset(16 * k).unsafe_bitcast[Float32]()[]; var p = Int(hp.unsafe_offset(16 * k + 4).unsafe_bitcast[Int32]()[])
+            var s = hp.unsafe_offset(16 * k + 8).unsafe_bitcast[Float32]()[]; var u = hp.unsafe_offset(16 * k + 12).unsafe_bitcast[Float32]()[]
+            var x = k % W; var y = k // W
+            var px = (Float32(2) * (Float32(x) + Float32(0.5)) / Float32(W) - Float32(1)) * gc.tan_h
+            var py = (Float32(1) - Float32(2) * (Float32(y) + Float32(0.5)) / Float32(H)) * gc.tan_h * Float32(H) / Float32(W)
+            var dir = gc.fwd + gc.right * px + gc.up * py
+            dir = dir * (Float32(1) / sqrt(dot(dir, dir)))
+            var shade = Float32(0)
+            if p >= 0:
+                nh += 1
+                var n = displaced_normal(d, p, s, u, max(d.pixel * t / ext[unsafe_offset=p], Float32(1.0 / 512.0)))
+                if dot(n, dir) > Float32(0):
+                    n = -n
+                shade = Float32(0.08) + Float32(0.75) * max(dot(n, gc.light), Float32(0))
+            img[k] = shade
+            if shade > Float32(0):
+                hitmask[k] = UInt8(1)
+        _ = len(hb)   # hb lives until here: hp does not keep it
+        print(name + ": shaded", nh, "hits from", getenv("HITS"))
+        tb.unsafe_free(); gn.unsafe_free(); ext.unsafe_free(); bounds.unsafe_free()
+        return
     ctx.synchronize()
     for hgt in [540, H]:   # the fastest of three launches after one with the compile
         var g = GCam(gc.eye, gc.fwd, gc.right, gc.up, gc.light, gc.tan_h, gc.w, Int32(hgt), gc.tile, gc.prof)
@@ -1282,7 +1359,7 @@ def main() raises:
                 var st_d = st_b.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
                 var gc = GCam(eye, fwd, right, up, light, tan_h, Int32(W), Int32(H), Int32(0) if getenv("TILE") == "0" else Int32(1), Int32(atol(getenv("PROF", "0"))))
                 if getenv("REF_HW").byte_length() > 0 or getenv("HW") == "1":
-                    _hw_render(ctx, bufs, d, dd, np, name, gc, img, hitmask, steps, maxs)
+                    _hw_render(ctx, bufs, d, dd, np, name, gc, img, hitmask, steps, maxs, nf, npyr, nchain)
                     _write_ppm(out_dir + name + "_hw.ppm", img, W, H)
                     with open(out_dir + name + "_hw.mask", "w") as f:
                         f.write_bytes(Span(hitmask))
