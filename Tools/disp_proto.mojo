@@ -20,6 +20,7 @@ from gonzales.scene.shapes.displaced_patches import DispSurface, Levels, make_le
 from gonzales.scene.shapes.disp_build import DispOptions, DispMesh, load_disp_mesh, disp_bounds, _cstr, upload_surface
 from gonzales.scene.shapes.rmip import Rmip, rmip_build, rmip_prism_box, intersect_rmip
 from gonzales.scene.shapes.pdm import intersect_pdm
+from gonzales.scene.shapes.xu import intersect_xu
 from gonzales.scene.shapes.march import intersect_march
 from gonzales.scene.accel.xert import XeRayDesc, xert_alignment, xert_build_blas_geoms, xert_free
 from std.memory import OpaquePointer
@@ -286,7 +287,7 @@ def trace_tris(pts: Pointer[Vec3f, MutUntrackedOrigin], tri: Pointer[Int32, MutU
 
 
 @always_inline
-def _rq_trace[M: Int, R: Bool = False, PD: Bool = False](accel: MutPointer[UInt8, MutAnyOrigin], d: DispSurface, org: Vec3f, dir: Vec3f, procedural: Bool,
+def _rq_trace[M: Int, R: Bool = False, PD: Bool = False, XU: Bool = False](accel: MutPointer[UInt8, MutAnyOrigin], d: DispSurface, org: Vec3f, dir: Vec3f, procedural: Bool,
                                       rm: Rmip, march: Float32) -> Hit:
     """Closest hit through Intel's ray queries: the hardware commits triangles; each sub-square it reports runs the
     subdivision loop, whose hit is committed (prim: the triangle, or the patch with its s, u and leaf size)."""
@@ -301,7 +302,9 @@ def _rq_trace[M: Int, R: Bool = False, PD: Bool = False](accel: MutPointer[UInt8
             var prim = Int(external_call["intel_get_hit_primitive_id", UInt32](q, UInt32(1)))
             comptime if R:   # RMIP: primitive prim is half prim & 1 of sub-square prim >> 1
                 var rr: Tuple[Bool, Float32, Float32, Float32, Int]
-                comptime if PD:   # projective displacement mapping on the same triangles, march = its step in texels
+                comptime if XU:   # Xu, Zhou and Budge 2026 on the same triangles
+                    rr = intersect_xu(d, rm, prim, org, dir, h.t, Int(march))
+                elif PD:   # projective displacement mapping on the same triangles, march = its step in texels
                     rr = intersect_pdm(d, rm, prim, org, dir, h.t, march)
                 else:
                     rr = intersect_rmip(d, rm, prim, org, dir, h.t, march)
@@ -338,7 +341,7 @@ def _rq_trace[M: Int, R: Bool = False, PD: Bool = False](accel: MutPointer[UInt8
     return h
 
 
-def render_hw[M: Int, R: Bool = False, PD: Bool = False](accel: MutPointer[UInt8, MutAnyOrigin], d: DispSurface, tri_base: Pointer[Int32, MutUntrackedOrigin],
+def render_hw[M: Int, R: Bool = False, PD: Bool = False, XU: Bool = False](accel: MutPointer[UInt8, MutAnyOrigin], d: DispSurface, tri_base: Pointer[Int32, MutUntrackedOrigin],
               grid_n: Pointer[Int32, MutUntrackedOrigin], ext: Pointer[Float32, MutUntrackedOrigin], np: Int32, procedural: Int32,
               img: Pointer[Float32, MutUntrackedOrigin], steps: Pointer[Int32, MutUntrackedOrigin], cam: GCam, rm: Rmip, march: Float32):
     """render_gpu through the hardware: a hit triangle maps back to its patch and (s, t), shaded as ours."""
@@ -351,7 +354,7 @@ def render_hw[M: Int, R: Bool = False, PD: Bool = False](accel: MutPointer[UInt8
     var py = (Float32(1) - Float32(2) * (Float32(y) + Float32(0.5)) / Float32(H)) * cam.tan_h * Float32(H) / Float32(W)
     var dir = cam.fwd + cam.right * px + cam.up * py
     dir = dir * (Float32(1) / sqrt(dot(dir, dir)))
-    var hh = _rq_trace[M, R, PD](accel, d, cam.eye, dir, procedural != 0, rm, march)
+    var hh = _rq_trace[M, R, PD, XU](accel, d, cam.eye, dir, procedural != 0, rm, march)
     steps[unsafe_offset=y * W + x] = Int32(hh.steps)
     if cam.prof == 4:   # the hit patch and its (s, t) in 8 bits each instead of steps, -1 for none
         steps[unsafe_offset=y * W + x] = Int32(hh.prim * 65536 + Int(hh.s * Float32(255.99)) * 256 + Int(hh.u * Float32(255.99))) if hh.prim >= 0 else Int32(-1)
@@ -394,8 +397,9 @@ def _hw_render(ctx: DeviceContext, mut bufs: List[DeviceBuffer[DType.uint8]], d:
     var size = Int64(0); var bounds = unsafe_alloc[Float32](6)
     var rtas: Pointer[UInt8, MutUntrackedOrigin]
     var use_pdm = procedural and getenv("PDM") == "1"
-    var use_rmip = procedural and (getenv("RMIP") == "1" or use_pdm)
-    var march = Float32(atof(getenv("PDM_STEP", "0.5"))) if use_pdm else Float32(atof(getenv("RMIP_MARCH", "8")))
+    var use_xu = procedural and getenv("XU") == "1"
+    var use_rmip = procedural and (getenv("RMIP") == "1" or use_pdm or use_xu)
+    var march = Float32(atof(getenv("PDM_STEP", "0.5"))) if use_pdm else (Float32(atof(getenv("XU_STAT", "0"))) if use_xu else Float32(atof(getenv("RMIP_MARCH", "8"))))
     var nfa = 0
     for p in range(np):
         nfa = max(nfa, Int(d.face[unsafe_offset=p]) + 1)
@@ -429,7 +433,8 @@ def _hw_render(ctx: DeviceContext, mut bufs: List[DeviceBuffer[DType.uint8]], d:
                 for g in range(2):
                     var p0 = intersect_pdm(d, rm_h, 2 * k + g, gc.eye, dir, Float32(1e30), Float32(0.25))
                     var r0 = intersect_rmip(d, rm_h, 2 * k + g, gc.eye, dir, Float32(1e30), Float32(8))
-                    print("  sub-square", k, "half", g, "| pdm", p0[0], p0[1], p0[4], "| rmip", r0[0], r0[1], r0[4])
+                    var x0 = intersect_xu(d, rm_h, 2 * k + g, gc.eye, dir, Float32(1e30))
+                    print("  sub-square", k, "half", g, "| pdm", p0[0], p0[1], p0[4], "| rmip", r0[0], r0[1], r0[4], "| xu", x0[0], x0[1], x0[4])
         raise Error("pixel trace done")
     var t0 = perf_counter_ns(); var t1 = t0; var in_bytes = 0; var nprim = 0
     if not procedural:
@@ -511,7 +516,9 @@ def _hw_render(ctx: DeviceContext, mut bufs: List[DeviceBuffer[DType.uint8]], d:
         var best = 1 << 62
         for _ in range(4):
             var ta = perf_counter_ns()
-            if use_pdm:
+            if use_xu:
+                ctx.enqueue_function[render_hw[5, True, False, True]](acc_d, dd, tb_d, gn_d, ext_d, Int32(np), pr, img_d, st_d, g, rm_d, march, grid_dim=ceildiv(W * hgt, 64), block_dim=64)
+            elif use_pdm:
                 ctx.enqueue_function[render_hw[5, True, True]](acc_d, dd, tb_d, gn_d, ext_d, Int32(np), pr, img_d, st_d, g, rm_d, march, grid_dim=ceildiv(W * hgt, 64), block_dim=64)
             elif use_rmip:
                 ctx.enqueue_function[render_hw[5, True]](acc_d, dd, tb_d, gn_d, ext_d, Int32(np), pr, img_d, st_d, g, rm_d, march, grid_dim=ceildiv(W * hgt, 64), block_dim=64)
