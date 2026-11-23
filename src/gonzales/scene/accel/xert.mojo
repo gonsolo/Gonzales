@@ -14,6 +14,10 @@ from gonzales.scene.shapes.primitives import PrimId, PrimKind, TriangleMesh, is_
 from gonzales.scene.shapes.displacement import displaced_hit
 from gonzales.scene.shapes.patches import intersect_patch
 from gonzales.scene.shapes.displaced_patches import intersect_displaced, prim_patch, sub_square
+from gonzales.scene.shapes.march import intersect_march
+from std.sys import get_defined_int
+
+comptime _SD_MARCH = get_defined_int["GZ_SD_MARCH", 0]() != 0   # -D GZ_SD_MARCH=1: sub-squares marched, not walked
 
 # Hardware ray tracing on Intel Xe2 (src/xert): the driver builds the acceleration structures, kernels trace them with
 # IGC's ray-query built-ins (opencl-c-intel.h, cl_intel_rt_production), linked by name from IGC's built-in library.
@@ -226,7 +230,12 @@ def xert_trace(accel: MutPointer[UInt8, MutAnyOrigin], ray: XeRayDesc, cv: XePro
                     var sub = cv.meshes[unsafe_offset=Int(cv.subdiv[unsafe_offset=rec + 1])].subdiv[unsafe_offset=0]
                     var t_lim = min(ray.tmax, external_call["intel_get_hit_distance", Float32](q, UInt32(0)))
                     var dl = sqrt(dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2])
-                    var sh = intersect_displaced[5](sub.d, pid - Int(cv.subdiv[unsafe_offset=rec]), Vec3f(org[0], org[1], org[2]),
+                    var sh: Tuple[Bool, Float32, Float32, Float32, Int, Float32]
+                    comptime if _SD_MARCH:
+                        sh = intersect_march(sub.d, pid - Int(cv.subdiv[unsafe_offset=rec]), Vec3f(org[0], org[1], org[2]),
+                                             Vec3f(dir[0], dir[1], dir[2]) * (Float32(1) / dl), t_lim * dl)
+                    else:
+                        sh = intersect_displaced[5](sub.d, pid - Int(cv.subdiv[unsafe_offset=rec]), Vec3f(org[0], org[1], org[2]),
                                                     Vec3f(dir[0], dir[1], dir[2]) * (Float32(1) / dl), t_lim * dl,
                                                     (1 if (cv.subdiv[unsafe_offset=-1] & 4) != 0 else 0))
                     n_st += Int64(max(sh[4], 0)); n_rej += Int64(1 if sh[4] == 0 else 0); n_bad += Int64(1 if sh[4] < 0 else 0)
