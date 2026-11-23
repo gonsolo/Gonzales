@@ -2,6 +2,8 @@
 # nodes from src/oiio/disp.cc, sub-square levels per patch, the welded corner grid (displaced_patches.mojo).
 
 from std.ffi import external_call
+from std.os import getenv
+from std.time import perf_counter_ns
 from std.sys.info import size_of
 from max.gpu.host import DeviceBuffer, DeviceContext
 from gonzales.scene.accel.dev_buf import dev_buf
@@ -71,6 +73,11 @@ struct DispMesh(Copyable, Movable):
 
     def prims(self) -> Int:
         return Int(self.lv.prim[LEVELS])
+
+    def free(self):
+        self.patches.unsafe_free(); self.sq.unsafe_free(); self.face.unsafe_free(); self.hdr.unsafe_free(); self.pyr.unsafe_free()
+        self.chain_off.unsafe_free(); self.chain.unsafe_free(); self.fm.unsafe_free(); self.greg.unsafe_free(); self.corners.unsafe_free()
+        self.face_off.unsafe_free(); self.face_patch.unsafe_free(); self.lvp.unsafe_free()
 
 
 def empty_disp_mesh() -> DispMesh:
@@ -212,9 +219,10 @@ def _level_error_px(dt: DispSurface, p: Int, l: Int, o: DispOptions, qerr: Float
     return worst
 
 
-def load_disp_mesh(ptx: String, o: DispOptions, corners: Int = 0) raises -> DispMesh:
+def load_disp_mesh(ptx: String, o: DispOptions, corners: Int = 0, cache: Int = 0) raises -> DispMesh:
     """The displaced mesh of `ptx` for options `o`; corners (an address, 0: the Ptex's own cage): the mesh's positions, 12
     floats a Ptex face in its (u, v) corner order, for a pose of the cage (src/oiio/disp.cc disp_open)."""
+    var tm = List[Int](); tm.append(Int(perf_counter_ns()))   # DISP_TIMES=1: the phases in ms
     var c = _cstr(ptx)
     var counts = unsafe_alloc[Int64](4)
     var view = unsafe_alloc[Float32](10)
@@ -222,7 +230,8 @@ def load_disp_mesh(ptx: String, o: DispOptions, corners: Int = 0) raises -> Disp
     view[unsafe_offset=3] = o.pixel; view[unsafe_offset=4] = o.lod if o.pixel > Float32(0) else Float32(0)
     view[unsafe_offset=5] = o.fwd.x; view[unsafe_offset=6] = o.fwd.y; view[unsafe_offset=7] = o.fwd.z
     view[unsafe_offset=8] = o.cos_cone; view[unsafe_offset=9] = o.far
-    var hd = external_call["disp_open", Int](c, Int32(2), counts, view, corners)
+    var hd = external_call["disp_cache_view", Int](cache, counts, view) if cache != 0 else external_call["disp_open", Int](c, Int32(2), counts, view, corners)
+    tm.append(Int(perf_counter_ns()))
     c.unsafe_free(); view.unsafe_free()
     if hd == 0:
         raise Error("cannot read " + ptx)
@@ -247,7 +256,9 @@ def load_disp_mesh(ptx: String, o: DispOptions, corners: Int = 0) raises -> Disp
     cpf.unsafe_free()
     var dt = DispSurface(patches, sq, face, hdr, pyr, o.hscale, o.eye, o.pixel, chain_off, chain, fm, greg,
                          Pointer[Levels, MutUntrackedOrigin].unsafe_dangling(), Int32(5), Pointer[Float32, MutUntrackedOrigin].unsafe_dangling())
+    tm.append(Int(perf_counter_ns()))
     var plev = disp_levels(np, patches, sq, face, hdr, fdrop, o, dt)
+    tm.append(Int(perf_counter_ns()))
     fdrop.unsafe_free()
     # Patches sorted by level: a primitive's patch follows from its index (prim_patch).
     var p2 = unsafe_alloc[BezierPatch](np); var sq2 = unsafe_alloc[Float32](3 * np); var face2 = unsafe_alloc[Int32](np)
@@ -286,6 +297,7 @@ def load_disp_mesh(ptx: String, o: DispOptions, corners: Int = 0) raises -> Disp
     var m = DispMesh(np, nf, npyr, nchain, ncg, texels, p2, sq2, face2, hdr, pyr, chain_off, chain, fm2, greg2, cg, foff, fpat, lv, lvp,
                      Vec3f(cbox[unsafe_offset=0], cbox[unsafe_offset=1], cbox[unsafe_offset=2]), Vec3f(cbox[unsafe_offset=3], cbox[unsafe_offset=4], cbox[unsafe_offset=5]))
     cbox.unsafe_free()
+    tm.append(Int(perf_counter_ns()))
     var d = m.surface(Float32(0), Vec3f(0, 0, 0), Float32(0), Int32(5))
     var plo = List[Vec3f](capacity=np); var pext = Float32(0)
     for p in range(np):
@@ -295,6 +307,11 @@ def load_disp_mesh(ptx: String, o: DispOptions, corners: Int = 0) raises -> Disp
     def fill(p: Int) {imm}:
         corner_grid(d, p, plo[p], cst, cg.unsafe_offset(corner_off(lv, p)))
     parallelize(fill, np)
+    tm.append(Int(perf_counter_ns()))
     if o.weld:
         weld_corner_grid(np, lv, cg)
+    tm.append(Int(perf_counter_ns()))
+    if getenv("DISP_TIMES") == "1":
+        print("load_disp_mesh ms: open", Float64(tm[1] - tm[0]) * 1e-6, "take", Float64(tm[2] - tm[1]) * 1e-6, "levels", Float64(tm[3] - tm[2]) * 1e-6,
+              "sort", Float64(tm[4] - tm[3]) * 1e-6, "corners", Float64(tm[5] - tm[4]) * 1e-6, "weld", Float64(tm[6] - tm[5]) * 1e-6)
     return m^
