@@ -406,27 +406,31 @@ def _hw_render(ctx: DeviceContext, mut bufs: List[DeviceBuffer[DType.uint8]], d:
         var rb = rmip_build(d, nfa); rm_h = rb[0]; rm_bytes = rb[1]
         var nent = (rm_bytes - 8 * nfa) // 2
         rm_d = Rmip(_up(ctx, bufs, rm_h.off, 2 * nfa), _up(ctx, bufs, rm_h.mm, 2 * nent))
-        var ppix = getenv("PIX_TRACE")
-        if ppix.byte_length() > 0:   # one pixel on the CPU: PDM and RMIP on every sub-square box the ray enters
-            var parts = ppix.split(",")
-            var X = Float32(atof(parts[0])); var Y = Float32(atof(parts[1])); var Wf = Float32(gc.w); var Hf = Float32(gc.h)
-            var dir = gc.fwd + gc.right * ((Float32(2) * (X + Float32(0.5)) / Wf - Float32(1)) * gc.tan_h) + gc.up * (
-                (Float32(1) - Float32(2) * (Y + Float32(0.5)) / Hf) * gc.tan_h * Hf / Wf)
-            dir = dir * (Float32(1) / sqrt(dot(dir, dir)))
-            var inv = Vec3f(Float32(1) / dir.x, Float32(1) / dir.y, Float32(1) / dir.z)
-            for k in range(prim_total(d)):
-                var b = sub_box(d, k); var lo = b[0] - gc.eye; var hi = b[1] - gc.eye
-                var ax = lo.x * inv.x; var bx = hi.x * inv.x; var ay = lo.y * inv.y; var by = hi.y * inv.y; var az = lo.z * inv.z; var bz = hi.z * inv.z
-                if min(min(max(ax, bx), max(ay, by)), max(az, bz)) < max(max(max(min(ax, bx), min(ay, by)), min(az, bz)), Float32(0)):
-                    continue
+        print(name + ": RMIP", rm_bytes // 1024, "KiB for", nfa, "faces, built in", (perf_counter_ns() - tr) // 1000000, "ms, marching below", march, "texels")
+    var ppix = getenv("PIX_TRACE")
+    if ppix.byte_length() > 0:   # one pixel on the CPU: walk, march (and PDM, RMIP) on every sub-square box the ray enters
+        var parts = ppix.split(",")
+        var X = Float32(atof(parts[0])); var Y = Float32(atof(parts[1])); var Wf = Float32(gc.w); var Hf = Float32(gc.h)
+        var dir = gc.fwd + gc.right * ((Float32(2) * (X + Float32(0.5)) / Wf - Float32(1)) * gc.tan_h) + gc.up * (
+            (Float32(1) - Float32(2) * (Y + Float32(0.5)) / Hf) * gc.tan_h * Hf / Wf)
+        dir = dir * (Float32(1) / sqrt(dot(dir, dir)))
+        var inv = Vec3f(Float32(1) / dir.x, Float32(1) / dir.y, Float32(1) / dir.z)
+        for k in range(prim_total(d)):
+            var b = sub_box(d, k); var lo = b[0] - gc.eye; var hi = b[1] - gc.eye
+            var ax = lo.x * inv.x; var bx = hi.x * inv.x; var ay = lo.y * inv.y; var by = hi.y * inv.y; var az = lo.z * inv.z; var bz = hi.z * inv.z
+            if min(min(max(ax, bx), max(ay, by)), max(az, bz)) < max(max(max(min(ax, bx), min(ay, by)), min(az, bz)), Float32(0)):
+                continue
+            var w0 = intersect_displaced[5](d, k, gc.eye, dir, Float32(1e30), 1)
+            var m0 = intersect_march(d, k, gc.eye, dir, Float32(1e30))
+            if getenv("PIX_K").byte_length() > 0 and atol(getenv("PIX_K")) == k:
+                _ = intersect_march[True](d, k, gc.eye, dir, Float32(1e30))
+            print("  sub-square", k, "| walk", w0[0], w0[1], w0[2], w0[3], w0[4], "| march", m0[0], m0[1], m0[2], m0[3], m0[4])
+            if use_rmip:
                 for g in range(2):
-                    if getenv("PIX_K").byte_length() > 0 and atol(getenv("PIX_K")) == k:
-                        print("  trace", k, g); _ = intersect_pdm[True](d, rm_h, 2 * k + g, gc.eye, dir, Float32(1e30), Float32(0.25))
                     var p0 = intersect_pdm(d, rm_h, 2 * k + g, gc.eye, dir, Float32(1e30), Float32(0.25))
                     var r0 = intersect_rmip(d, rm_h, 2 * k + g, gc.eye, dir, Float32(1e30), Float32(8))
                     print("  sub-square", k, "half", g, "| pdm", p0[0], p0[1], p0[4], "| rmip", r0[0], r0[1], r0[4])
-            raise Error("pixel trace done")
-        print(name + ": RMIP", rm_bytes // 1024, "KiB for", nfa, "faces, built in", (perf_counter_ns() - tr) // 1000000, "ms, marching below", march, "texels")
+        raise Error("pixel trace done")
     var t0 = perf_counter_ns(); var t1 = t0; var in_bytes = 0; var nprim = 0
     if not procedural:
         var nt = 0; var nv = 0

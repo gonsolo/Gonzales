@@ -122,7 +122,7 @@ def _span(c: Tuple[Vec3f, Vec3f, Float32, Float32, Float32], n: Vec3f, dir: Vec3
     return SIMD[DType.float32, 2](t0, t1)
 
 
-def intersect_march(d: DispSurface, prim: Int, org: Vec3f, dir: Vec3f, t_max: Float32) -> Tuple[Bool, Float32, Float32, Float32, Int, Float32]:
+def intersect_march[DBG: Bool = False](d: DispSurface, prim: Int, org: Vec3f, dir: Vec3f, t_max: Float32) -> Tuple[Bool, Float32, Float32, Float32, Int, Float32]:
     """The nearest hit of sub-square prim, marching its leaf-sized cells along the ray's projection: (hit, t, s, t, steps,
     the cell's size)."""
     var pk = prim_patch(d, prim); var pi = pk[0]; var sq = sub_square(pk[2], pk[1])
@@ -138,9 +138,10 @@ def intersect_march(d: DispSurface, prim: Int, org: Vec3f, dir: Vec3f, t_max: Fl
         return (False, t_max, Float32(0), Float32(0), 0, S)
     # Leaf-sized cells: the footprint at the sub-square's nearest point, no finer than a texel.
     var lo0 = Vec3f(fr.px.reduce_min(), fr.py.reduce_min(), fr.pz.reduce_min()); var hi0 = Vec3f(fr.px.reduce_max(), fr.py.reduce_max(), fr.pz.reduce_max())
-    var ls = _leaf_size(lo0, hi0, d.cam - org, d.pixel)
+    var ext = max(max(hi0.x - lo0.x, hi0.y - lo0.y), hi0.z - lo0.z)   # the base's extent, as the walk's leaf test
+    var fp = _leaf_size(c[0], c[1], d.cam - org, d.pixel)[1]   # the footprint at the displaced box, as the walk's
     var nc = 1
-    while Float32(2 * nc) <= texels and ls[0] / Float32(nc) > ls[1]:
+    while texels / Float32(nc) > Float32(1) and ext / Float32(nc) > fp:   # as the walk: down to a texel or the footprint
         nc *= 2
     var nf = Float32(nc); var i = 0; var j = 0; var i1 = 0; var j1 = 0; var side = -1   # side: the start cell's entry edge, -1 inside
     if nc > 1:   # one cell needs no projection
@@ -161,11 +162,15 @@ def intersect_march(d: DispSurface, prim: Int, org: Vec3f, dir: Vec3f, t_max: Fl
         j = min(max(Int(floor(min(max(a0b0[1], Float32(0)), Float32(1)) * nf)), 0), nc - 1)
         i1 = min(max(Int(floor(min(max(a1b1[0], Float32(0)), Float32(1)) * nf)), 0), nc - 1)
         j1 = min(max(Int(floor(min(max(a1b1[1], Float32(0)), Float32(1)) * nf)), 0), nc - 1)
+    comptime if DBG:
+        print("    march: span", sp[0], sp[1], "cells", nc, "start", i, j, "side", side, "end", i1, j1)
     var cw = S / nf; var steps = 0
     # Trace the projection: leave each cell through an edge psi changes sign along, not the one it came in by.
     for _ in range(4 * nc):
         steps += 1
         var lh = _bl_leaf(d, pi, f, fr, sq[0], sq[1], inv_s, (sq[0] + Float32(i) * cw, sq[1] + Float32(j) * cw, cw, cw), dir, t_max)
+        comptime if DBG:
+            print("      cell", i, j, "hit", lh[0], lh[1])
         if lh[0]:   # in ray order: the first hit is the nearest
             return (True, lh[1], lh[2], lh[3], steps, cw)
         if i == i1 and j == j1:
