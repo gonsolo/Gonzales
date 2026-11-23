@@ -1,7 +1,7 @@
 // The march on NVIDIA's RT cores through OptiX: the prototype's surface dump as custom primitives, rendered from its
 // camera; hits written for the prototype's shading (HITS=file).
 //
-//   optix_disp surface.dump optix_disp.optixir hits.bin
+//   optix_disp surface.dump optix_disp.optixir hits.bin [k]   (k: k x k rays a pixel, timing only; no hits written)
 #include "disp_load.h"
 #include "optix_disp_params.h"
 #include <cuda.h>
@@ -153,7 +153,8 @@ int main(int argc, char **argv) {
         sbt.missRecordBase = sbt_mem + sizeof(Record<int>), sbt.missRecordStrideInBytes = sizeof(Record<int>), sbt.missRecordCount = 1;
         sbt.hitgroupRecordBase = sbt_mem + 2 * sizeof(Record<int>), sbt.hitgroupRecordStrideInBytes = sizeof(Record<int>), sbt.hitgroupRecordCount = 1;
 
-        int W = dm.cam.w, H = dm.cam.h;
+        int spp = argc > 4 ? std::max(1, std::atoi(argv[4])) : 1;
+        int W = dm.cam.w * spp, H = dm.cam.h * spp;
         OdParams p = {};
         p.handle = gas;
         p.s = s;
@@ -180,7 +181,8 @@ int main(int argc, char **argv) {
         double tot = 0;
         for (size_t k = 0; k < hh.size(); ++k)
                 nh += hh[k].patch >= 0, tot += st[k];
-        write_hits(argv[3], hh);
+        if (spp == 1)
+                write_hits(argv[3], hh);
         std::printf("optix march (%s): %d x %d, %d sub-squares, GAS %zu KiB (build %.1f ms), surface %zu MiB, render %.3f ms, %.1f Mrays/s, "
                     "%ld hits, steps/ray %.2f\n",
                     name, W, H, dm.nprim, compact / 1024, build_ms, dm.bytes.size() >> 20, best, double(W) * H / (best * 1e3), nh, tot / (double(W) * H));

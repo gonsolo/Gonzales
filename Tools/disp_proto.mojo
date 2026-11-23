@@ -359,7 +359,9 @@ def render_hw[M: Int, R: Bool = False, PD: Bool = False, XU: Bool = False](accel
     if cam.prof == 4:   # the hit patch and its (s, t) in 8 bits each instead of steps, -1 for none
         steps[unsafe_offset=y * W + x] = Int32(hh.prim * 65536 + Int(hh.s * Float32(255.99)) * 256 + Int(hh.u * Float32(255.99))) if hh.prim >= 0 else Int32(-1)
     var shade = Float32(0)
-    if hh.prim >= 0:
+    if hh.prim >= 0 and (cam.prof & 1) != 0:   # PROF=1: the trace alone
+        shade = Float32(1)
+    elif hh.prim >= 0:
         var p = hh.prim; var s = hh.s; var t = hh.u; var size = hh.size
         if procedural == 0:
             var lo = 0; var hi = Int(np)
