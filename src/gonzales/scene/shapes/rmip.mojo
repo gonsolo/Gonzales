@@ -348,11 +348,23 @@ def _march(d: DispSurface, t: _Tri, f: Int, k: SIMD[DType.float32, 8], dir: Vec3
     return res
 
 
-def intersect_rmip(d: DispSurface, r: Rmip, id: Int, org: Vec3f, dir: Vec3f, t_max: Float32, march: Float32) -> Tuple[Bool, Float32, Float32, Float32, Int]:
-    """Algorithm 1 of the paper for triangle id: (hit, t, s, t in the patch, steps). march: the rectangle size in texels
-    below which the traversal marches texels."""
+@fieldwise_init
+struct _Span(TrivialRegisterPassable):
+    """Triangle id anchored on the ray just short of its prism (t + tp on the ray from org), its face, padded height range,
+    the remaining t_max and the interval from the first to the last prism crossing (nt crossings, 0: missed)."""
+    var t: _Tri
+    var f: Int
+    var h0: Float32
+    var h1: Float32
+    var tp: Float32
+    var t_lim: Float32
+    var lo: Float32
+    var hi: Float32
+    var nt: Int
+
+
+def _prism_span(d: DispSurface, r: Rmip, id: Int, org: Vec3f, dir: Vec3f, t_max: Float32) -> _Span:
     var tf = _tri(d, id, org); var t = tf[0]; var f = tf[1]
-    var steps = 0
     var hr = _prism_range(d, r, t, f)
     # Work from a point on the ray just short of the prism: small coordinates keep float32 precise far from the camera.
     var rad = Float32(2) * (sqrt(dot(t.Pa, t.Pa)) + sqrt(dot(t.Pb, t.Pb))) + Float32(2) * max(abs(hr[0]), abs(hr[1])) * (
@@ -383,8 +395,6 @@ def intersect_rmip(d: DispSurface, r: Rmip, id: Int, org: Vec3f, dir: Vec3f, t_m
             lo = min(lo, e1[g]); hi = max(hi, e1[g]); nt += 1
         if e2[g] > Float32(0):
             lo = min(lo, e2[g]); hi = max(hi, e2[g]); nt += 1
-    if nt == 0:
-        return (False, t_max, Float32(0), Float32(0), 1)
     if nt % 2 == 1:   # a crossing lost on an edge, or the origin inside: the prism's box instead
         var plo = Vec3f(min(min(min(a0.x, a1.x), min(a2.x, b0.x)), min(b1.x, b2.x)), min(min(min(a0.y, a1.y), min(a2.y, b0.y)), min(b1.y, b2.y)),
                         min(min(min(a0.z, a1.z), min(a2.z, b0.z)), min(b1.z, b2.z)))
@@ -392,6 +402,17 @@ def intersect_rmip(d: DispSurface, r: Rmip, id: Int, org: Vec3f, dir: Vec3f, t_m
                         max(max(max(a0.z, a1.z), max(a2.z, b0.z)), max(b1.z, b2.z)))
         var bt = _box_t(plo, phi, Vec3f(Float32(1) / dir.x, Float32(1) / dir.y, Float32(1) / dir.z))
         lo = max(bt[0], Float32(0)); hi = bt[1]
+    return _Span(t, f, hr[0], hr[1], tp, t_lim, lo, hi, nt)
+
+
+def intersect_rmip(d: DispSurface, r: Rmip, id: Int, org: Vec3f, dir: Vec3f, t_max: Float32, march: Float32) -> Tuple[Bool, Float32, Float32, Float32, Int]:
+    """Algorithm 1 of the paper for triangle id: (hit, t, s, t in the patch, steps). march: the rectangle size in texels
+    below which the traversal marches texels."""
+    var sp_ = _prism_span(d, r, id, org, dir, t_max)
+    var t = sp_.t; var f = sp_.f; var tp = sp_.tp; var t_lim = sp_.t_lim; var lo = sp_.lo; var hi = sp_.hi
+    var steps = 0
+    if sp_.nt == 0:
+        return (False, t_max, Float32(0), Float32(0), 1)
     var cd = cross(t.Nc, dir); var ca = cross(t.Na, dir); var cb = cross(t.Nb, dir)
     var k = SIMD[DType.float32, 8](dot(t.A, cd), dot(t.A, ca) + dot(t.Pa, cd), dot(t.A, cb) + dot(t.Pb, cd),
                                    dot(t.Pa, ca), dot(t.Pa, cb) + dot(t.Pb, ca), dot(t.Pb, cb), 0, 0)
