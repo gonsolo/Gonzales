@@ -153,7 +153,8 @@ def scene_cache_variant() -> Int:
         var h = 0
         for c in (sd + "@" + env_str["GONZALES_SUBDIV_LOD"]() + "@" + env_str["GONZALES_SUBDIV_PPS"]() + "@" +
                   env_str["GONZALES_SUBDIV_MINPX"]() + "@" + env_str["GONZALES_SUBDIV_SCALE"]() +
-                  ("@" + env_str["GONZALES_SUBDIV_EXACT_PX"]() if env_str["GONZALES_SUBDIV_EXACT_PX"]() != "" else "")).as_bytes():
+                  ("@" + env_str["GONZALES_SUBDIV_EXACT_PX"]() if env_str["GONZALES_SUBDIV_EXACT_PX"]() != "" else "") +
+                  ("@t" + env_str["GONZALES_SUBDIV_TPS"]() if env_str["GONZALES_SUBDIV_TPS"]() != "" else "")).as_bytes():
             h = (h * 31 + Int(c)) & 0xFFFFFFF
         v = v * 1000003 + h + 1
     return v + 2 * prune

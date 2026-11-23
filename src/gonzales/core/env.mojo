@@ -58,6 +58,7 @@ comptime ENV_SWITCHES: List[EnvSwitch] = [
     EnvSwitch("GONZALES_SUBDIV_MINPX", "pixels of relief below which a mesh keeps its bump map (default 1)"),
     EnvSwitch("GONZALES_SUBDIV_SCALE", "displaced surfaces' heights times this, for pictures (default 1)"),
     EnvSwitch("GONZALES_SUBDIV_PPS", "pixels a displaced surface's sub-square spans at least (default 0.5)"),
+    EnvSwitch("GONZALES_SUBDIV_TPS", "finest texels a displaced surface's sub-square spans at most (default 5)"),
     EnvSwitch("GONZALES_SUBDIV_FLATSTAT", "set: count the sub-squares whose height range is under 1/8 to 1 pixel"),
     EnvSwitch("GONZALES_SUBDIV_TRI_PX", "Intel Xe2: sub-squares whose relief spans fewer pixels become two hardware triangles (default 0: none)"),
     EnvSwitch("GONZALES_SUBDIV_EXACT_PX", "patches refine until their bilinear base is provably within this many pixels of the limit surface (default 0: off)"),
