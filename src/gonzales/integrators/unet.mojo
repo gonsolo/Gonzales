@@ -294,4 +294,4 @@ def unet_denoise(
 
 @always_inline
 def _p(b: DeviceBuffer[DType.float32]) -> Pointer[Float32, MutUntrackedOrigin]:
-    return b.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
+    return b.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
