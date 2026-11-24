@@ -16,7 +16,7 @@ from std.math import ceildiv
 from gonzales.core.geometry import Vec3f, cross, dot
 from gonzales.scene.shapes.patches import BezierPatch
 from gonzales.scene.shapes.displaced_patches import sub_base_error, sub_square, patch_eval_at, height_range, _len
-from gonzales.scene.shapes.displaced_patches import DispSurface, Levels, make_levels, prim_patch, prim_total, corner_off, patch_level, LEVELS, patch_box, sub_box, patch_at, intersect_displaced, displaced_normal, displaced_point, displaced_point_n, chain_color, _bl_frame, _bl_point, corner_grid, corner_words, corner_step, weld_corner_grid, face_height
+from gonzales.scene.shapes.displaced_patches import DispSurface, Levels, make_levels, prim_patch, prim_total, corner_off, patch_level, LEVELS, patch_box, sub_box, sub_box_bound, patch_at, intersect_displaced, displaced_normal, displaced_point, displaced_point_n, chain_color, _bl_frame, _bl_point, corner_grid, corner_words, corner_step, weld_corner_grid, face_height
 from gonzales.scene.shapes.disp_build import DispOptions, DispMesh, load_disp_mesh, disp_bounds, _cstr, upload_surface
 from gonzales.scene.shapes.rmip import Rmip, rmip_build, rmip_prism_box, intersect_rmip
 from gonzales.scene.shapes.pdm import intersect_pdm
@@ -871,13 +871,13 @@ def demo_gpu[M: Int, HWT: Bool](d: DispSurface, nodes: Pointer[BNode, MutUntrack
     accum[unsafe_offset=3 * i] = a.x; accum[unsafe_offset=3 * i + 1] = a.y; accum[unsafe_offset=3 * i + 2] = a.z
 
 
-def _proc_rtas(ctx: DeviceContext, d: DispSurface, np: Int) raises -> DeviceBuffer[DType.uint8]:
+def _proc_rtas(ctx: DeviceContext, d: DispSurface, np: Int, dh: DispSurface, pad: Float32 = -1, dil: Float32 = 1, pad_in: Float32 = 1) raises -> DeviceBuffer[DType.uint8]:
     """Our sub-squares' boxes as procedural primitives in an Intel RTAS, on the device."""
     var npr = prim_total(d)
     var pb = unsafe_alloc[Float32](6 * npr)
     def boxes(c: Int) {imm}:
         for k in range(c * 4096, min(npr, c * 4096 + 4096)):
-            var b = sub_box(d, k); var o = 6 * k
+            var b = sub_box_bound(d, dh, k, pad, dil, pad_in) if pad >= Float32(0) else sub_box(d, k); var o = 6 * k
             pb[unsafe_offset=o] = b[0].x; pb[unsafe_offset=o + 1] = b[0].y; pb[unsafe_offset=o + 2] = b[0].z
             pb[unsafe_offset=o + 3] = b[1].x; pb[unsafe_offset=o + 4] = b[1].y; pb[unsafe_offset=o + 5] = b[1].z
     parallelize(boxes, (npr + 4095) // 4096)
@@ -958,7 +958,7 @@ def run_demo(patches: Pointer[BezierPatch, MutUntrackedOrigin], sq: Pointer[Floa
     var use_hw = getenv("HW") != "0" and xert_alignment() != 0   # the top level in Intel's RTAS (HW=0: our BVH)
     var accel_buf = ctx.enqueue_create_buffer[DType.uint8](64)
     if use_hw:
-        accel_buf = _proc_rtas(ctx, host_d, np)
+        accel_buf = _proc_rtas(ctx, host_d, np, host_d)
     else:
         _demo_bvh(host_d, np, nodes, order)
     var nb_cap = max(len(nodes), 1) * size_of[BNode]() * 2   # room for a deeper tree
@@ -1007,6 +1007,8 @@ def run_demo(patches: Pointer[BezierPatch, MutUntrackedOrigin], sq: Pointer[Floa
     var host = List[Float32](length=3 * W * H, fill=Float32(0))
     # STREAM=k: every k moving frames the view's surface from a cache of what any view reads (FLY=f: the orbit closes in to f).
     var stream = Int(_env_f("STREAM", Float32(0))); var fly = _env_f("FLY", Float32(1))
+    var pad = _env_f("BOUND_PAD", Float32(-1)); var dil = _env_f("BOUND_DIL", Float32(1)); var pad_in = _env_f("BOUND_PAD_IN", Float32(1))   # >= 0: sub_box_bound
+    var full = dm.copy(); var dfull = dm.surface(Float32(1), Vec3f(0, 0, 0), Float32(0), _leaf_mode())
     var cache = 0; var cur = dm.copy(); var own_cur = False; var since = stream
     var sb_n = 0; var sb_view = Float64(0); var sb_up = Float64(0); var sb_bvh = Float64(0); var sb_max = Float64(0); var sb_res = 0
     if stream > 0:
@@ -1016,6 +1018,11 @@ def run_demo(patches: Pointer[BezierPatch, MutUntrackedOrigin], sq: Pointer[Floa
         pc.unsafe_free()
         if cache == 0:
             raise Error("cannot cache " + ptx)
+        if pad >= Float32(0):   # full-resolution heights for sub_box_bound
+            var of = o
+            of.lod = Float32(0)
+            full = load_disp_mesh(ptx, of, 0, cache)
+            dfull = full.surface(Float32(1), Vec3f(0, 0, 0), Float32(0), _leaf_mode())
         print("stream cache:", Int(external_call["disp_cache_bytes", Int64](cache)) >> 20, "MiB,", Float64(perf_counter_ns() - tc) * 1e-9, "s")
     var cur_w = W; var cur_h = H
     while True:
@@ -1068,7 +1075,7 @@ def run_demo(patches: Pointer[BezierPatch, MutUntrackedOrigin], sq: Pointer[Floa
             ctx.synchronize()
             var t2s = perf_counter_ns()
             var nh = nm.surface(exag / Float32(255), Vec3f(0, 0, 0), Float32(0), _leaf_mode())
-            accel_buf = _proc_rtas(ctx, nh, nm.np)
+            accel_buf = _proc_rtas(ctx, nh, nm.np, dfull if getenv("BOUND_FULL") != "0" else nh, pad, dil, pad_in)
             var t3s = perf_counter_ns()
             dsurf = ns; host_d = nh; sbufs = nb^
             if own_cur:
@@ -1083,7 +1090,7 @@ def run_demo(patches: Pointer[BezierPatch, MutUntrackedOrigin], sq: Pointer[Floa
         if rebuild:
             host_d = cur.surface(exag / Float32(255), Vec3f(0, 0, 0), Float32(0), _leaf_mode())
             if use_hw:
-                accel_buf = _proc_rtas(ctx, host_d, cur.np)
+                accel_buf = _proc_rtas(ctx, host_d, cur.np, host_d)
             else:
                 _demo_bvh(host_d, np, nodes, order)
                 _demo_upload(ctx, nb_buf, or_buf, nb_stage, nb_cap, nodes, order)   # nodes and the patch order they index
