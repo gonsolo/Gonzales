@@ -422,6 +422,14 @@ long long disp_cache_bytes(void *h) {
 
 void disp_cache_close(void *h) { delete static_cast<DispCache *>(h); }
 
+// Per face its four neighbours (-1: none), from the Ptex adjacency.
+void disp_cache_adj(void *h, int *adj) {
+        auto *C = static_cast<DispCache *>(h);
+        for (int f = 0; f < C->tex->numFaces(); ++f)
+                for (int e = 0; e < 4; ++e)
+                        adj[4 * f + e] = C->tex->getFaceInfo(f).adjface(e);
+}
+
 // The Disp disp_open(ptx, isolation, counts, view, corners) returns, from its cache; free it with disp_take.
 void *disp_cache_view(void *h, long long *counts, const float *view) {
         auto *C = static_cast<DispCache *>(h);
