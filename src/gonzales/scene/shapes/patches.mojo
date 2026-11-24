@@ -1,12 +1,17 @@
 # Bicubic Bezier patches traced directly (Binder and Keller 2018): the parameter square is halved alternately in u and v,
 # both halves' boxes are tested and the nearer one is entered first. A pending bit per level replaces the stack;
-# backtracking crops the original patch to the sibling's square. Patches come from Catmull-Clark meshes (src/oiio/osd.cc).
+# backtracking crops the original patch to the sibling's square. A piece flat enough is hit as its two corner triangles.
+# Patches come from Catmull-Clark meshes (src/oiio/osd.cc).
 from std.bit import count_leading_zeros
 from std.math import max, min
-from gonzales.core.geometry import Vec3f, cross
+from gonzales.core.geometry import Vec3f, cross, dot
 
 comptime PATCH_MAX_DEPTH = 40           # 20 halvings a direction
-comptime PATCH_REL_EPS = Float32(1.0 / 4096.0)   # leaves: boxes this small against the patch's own box
+comptime PATCH_REL_EPS = Float32(1.0 / 1024.0)   # leaves: pieces this flat against the patch's own box
+comptime _U = SIMD[DType.float32, 16](0, 1.0 / 3.0, 2.0 / 3.0, 1, 0, 1.0 / 3.0, 2.0 / 3.0, 1, 0, 1.0 / 3.0, 2.0 / 3.0, 1,
+                                      0, 1.0 / 3.0, 2.0 / 3.0, 1)
+comptime _V = SIMD[DType.float32, 16](0, 0, 0, 0, 1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0, 2.0 / 3.0, 2.0 / 3.0, 2.0 / 3.0,
+                                      2.0 / 3.0, 1, 1, 1, 1)
 
 
 @fieldwise_init
@@ -102,6 +107,35 @@ def _box_hit(p: BezierPatch, inv: Vec3f, t_max: Float32) -> Tuple[Bool, Float32,
 
 
 @always_inline
+def _flat_axis(p: SIMD[DType.float32, 16]) -> Float32:
+    """How far the control points stray from the corners' bilinear patch, and that from its two triangles."""
+    var bil = (1 - _U) * (1 - _V) * p[0] + _U * (1 - _V) * p[3] + (1 - _U) * _V * p[12] + _U * _V * p[15]
+    return max(abs(p - bil).reduce_max(), abs(p[0] - p[3] - p[12] + p[15]) * Float32(0.25))
+
+
+@always_inline
+def _flatness(p: BezierPatch) -> Float32:
+    return max(max(_flat_axis(p.x), _flat_axis(p.y)), _flat_axis(p.z))
+
+
+@always_inline
+def _tri_hit(a: Vec3f, b: Vec3f, c: Vec3f, dir: Vec3f, slack: Float32) -> Tuple[Bool, Float32, Float32, Float32]:
+    """The ray from the origin against triangle abc, its edges widened by `slack`: (hit, t, b1, b2)."""
+    var e1 = b - a; var e2 = c - a
+    var pv = cross(dir, e2)
+    var det = dot(e1, pv)
+    if det == Float32(0):
+        return (False, Float32(0), Float32(0), Float32(0))
+    var inv = Float32(1) / det
+    var tv = Vec3f(0, 0, 0) - a
+    var b1 = dot(tv, pv) * inv
+    var qv = cross(tv, e1)
+    var b2 = dot(dir, qv) * inv
+    var t = dot(e2, qv) * inv
+    return (b1 >= -slack and b2 >= -slack and b1 + b2 <= Float32(1) + slack, t, b1, b2)
+
+
+@always_inline
 def _domain(path: UInt64, depth: Int) -> Tuple[Float32, Float32, Float32, Float32]:
     """The sub-square (u0, v0, du, dv) at `depth` along `path` (bit d: upper half at level d; even levels split u)."""
     var u0 = Float32(0); var v0 = Float32(0); var du = Float32(1); var dv = Float32(1)
@@ -117,7 +151,7 @@ def _domain(path: UInt64, depth: Int) -> Tuple[Float32, Float32, Float32, Float3
 
 
 def intersect_patch(org: Vec3f, dir: Vec3f, patch: BezierPatch, t_max: Float32) -> Tuple[Bool, Float32, Float32, Float32]:
-    """The nearest hit before t_max: (hit, t, u, v). t is a leaf box's entry, (u, v) its square's centre."""
+    """The nearest hit before t_max: (hit, t, u, v), on a flat piece's corner triangles."""
     var o = BezierPatch(patch.x - org.x, patch.y - org.y, patch.z - org.z)   # anchored at the ray origin
     var inv = Vec3f(Float32(1) / dir.x, Float32(1) / dir.y, Float32(1) / dir.z)
     var root = _box_hit(o, inv, t_max)
@@ -132,15 +166,24 @@ def intersect_patch(org: Vec3f, dir: Vec3f, patch: BezierPatch, t_max: Float32) 
         var descend = False
         var leaf = _box_hit(p, inv, best)
         if leaf[0]:
-            if depth >= PATCH_MAX_DEPTH or leaf[2] <= eps:
-                if leaf[1] < best and leaf[1] > Float32(0):   # a leaf around the origin is the surface the ray leaves
-                    best = leaf[1]; hit = True
+            if depth >= PATCH_MAX_DEPTH or _flatness(p) <= eps:
+                var c00 = Vec3f(p.x[0], p.y[0], p.z[0]); var c30 = Vec3f(p.x[3], p.y[3], p.z[3])
+                var c03 = Vec3f(p.x[12], p.y[12], p.z[12]); var c33 = Vec3f(p.x[15], p.y[15], p.z[15])
+                var slack = min(Float32(0.25), Float32(2) * eps / max(leaf[2], Float32(1e-30)))   # neighbours at other depths leave T-junction gaps
+                var ta = _tri_hit(c00, c30, c33, dir, slack); var tb = _tri_hit(c00, c33, c03, dir, slack)
+                var use_a = ta[0] and (not tb[0] or ta[1] < tb[1])
+                var th = ta if use_a else tb
+                if th[0] and th[1] < best and th[1] > Float32(2) * eps:   # a hit at the origin is the surface the ray leaves
+                    best = th[1]; hit = True
+                    var s = th[2] + th[3] if use_a else th[2]
+                    var t = th[3] if use_a else th[2] + th[3]
                     var d = _domain(path, depth)
-                    hu = d[0] + Float32(0.5) * d[2]; hv = d[1] + Float32(0.5) * d[3]
+                    hu = d[0] + min(max(s, Float32(0)), Float32(1)) * d[2]; hv = d[1] + min(max(t, Float32(0)), Float32(1)) * d[3]
             else:
                 var along_u = depth % 2 == 0
-                var lo = _half(p, along_u, False); var up = _half(p, along_u, True)
-                var h0 = _box_hit(lo, inv, best); var h1 = _box_hit(up, inv, best)
+                var h0 = _box_hit(_half(p, along_u, False), inv, best)   # one half live at a time: registers
+                var up = _half(p, along_u, True)
+                var h1 = _box_hit(up, inv, best)
                 if h0[0] or h1[0]:
                     var upper_first = h1[0] and (not h0[0] or h1[1] < h0[1])
                     if h0[0] and h1[0]:
@@ -149,7 +192,7 @@ def intersect_patch(org: Vec3f, dir: Vec3f, patch: BezierPatch, t_max: Float32) 
                         path |= UInt64(1) << UInt64(depth)
                         p = up
                     else:
-                        p = lo
+                        p = _half(p, along_u, False)
                     depth += 1
                     descend = True
         if descend:
