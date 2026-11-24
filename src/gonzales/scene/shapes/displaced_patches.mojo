@@ -434,6 +434,26 @@ def sub_box(d: DispSurface, prim: Int) -> Tuple[Vec3f, Vec3f]:
     return (b[0], b[1])
 
 
+def sub_box_bound(d: DispSurface, dh: DispSurface, prim: Int, pad: Float32, dil: Float32 = 1, pad_in: Float32 = 1) -> Tuple[Vec3f, Vec3f]:
+    """sub_box whose heights also hold at finer texel levels (dh: full resolution), for streaming."""
+    var pk = prim_patch(d, prim); var pi = pk[0]; var sq = sub_square(pk[2], pk[1]); var f = Int(d.face[unsafe_offset=pi])
+    var fr = _bl_frame(d, pi, pk[1], Vec3f(0, 0, 0))
+    var a = SIMD[DType.float32, 4](0, 1, 1, 0); var b = SIMD[DType.float32, 4](0, 0, 1, 1)
+    var x = _bilerp[4](fr.px, a, b); var y = _bilerp[4](fr.py, a, b); var z = _bilerp[4](fr.pz, a, b)
+    var lo = Vec3f(x.reduce_min(), y.reduce_min(), z.reduce_min()); var hi = Vec3f(x.reduce_max(), y.reduce_max(), z.reduce_max())
+    var nx = _bilerp[4](fr.nx, a, b); var ny = _bilerp[4](fr.ny, a, b); var nz = _bilerp[4](fr.nz, a, b)
+    var sz = d.sq[unsafe_offset=3 * pi + 2]; var u0 = d.sq[unsafe_offset=3 * pi] + sq[0] * sz; var v0 = d.sq[unsafe_offset=3 * pi + 1] + sq[1] * sz
+    var u1 = u0 + sq[2] * sz; var v1 = v0 + sq[2] * sz
+    var du = dil / Float32(1 << Int(d.hdr[unsafe_offset=3 * f + 1])); var dv = dil / Float32(1 << Int(d.hdr[unsafe_offset=3 * f + 2]))
+    var hr = height_range(d, f, u0, u1, v0, v1); var hf = height_range(dh, f, u0 - du, u1 + du, v0 - dv, v1 + dv)
+    var p = pad if u0 <= Float32(0) or v0 <= Float32(0) or u1 >= Float32(1) or v1 >= Float32(1) else pad_in
+    var h0 = (min(hr[0], hf[0]) - p) * d.scale; var h1 = (max(hr[1], hf[1]) + p) * d.scale
+    var ox = _imul(h0, h1, nx.reduce_min(), nx.reduce_max()); var oy = _imul(h0, h1, ny.reduce_min(), ny.reduce_max())
+    var oz = _imul(h0, h1, nz.reduce_min(), nz.reduce_max())
+    var e = Float32(1e-6) * (abs(x).reduce_max() + abs(y).reduce_max() + abs(z).reduce_max())
+    return (Vec3f(lo.x + ox[0] - e, lo.y + oy[0] - e, lo.z + oz[0] - e), Vec3f(hi.x + ox[1] + e, hi.y + oy[1] + e, hi.z + oz[1] + e))
+
+
 def _comb_norm(cl: BezierPatch, ch: BezierPatch, w: SIMD[DType.float32, 16]) -> Float32:
     """The largest norm of sum w_k b_k over the interval net [cl, ch]."""
     var ax = w * cl.x; var bx = w * ch.x; var ay = w * cl.y; var by = w * ch.y; var az = w * cl.z; var bz = w * ch.z
