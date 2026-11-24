@@ -5,7 +5,7 @@ from std.os.path import exists
 from std.time import perf_counter_ns
 from max.gpu.host import DeviceContext
 from gonzales.core.env import env_str
-from gonzales.gpu.unet import UNetWeights, unet_denoise
+from gonzales.integrators.unet import UNetWeights, unet_denoise
 
 
 def denoiser_weights() -> String:

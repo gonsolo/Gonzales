@@ -5,7 +5,7 @@ from std.memory import bitcast
 from std.testing import assert_true, TestSuite
 from std.sys import has_accelerator
 from max.gpu.host import DeviceContext
-from gonzales.gpu.unet import UNetWeights, unet_denoise, autoexposure, pu_forward, pu_inverse
+from gonzales.integrators.unet import UNetWeights, unet_denoise, autoexposure, pu_forward, pu_inverse
 
 comptime C = 8
 comptime W = 40
