@@ -915,6 +915,64 @@ def _demo_upload(ctx: DeviceContext, nb_buf: DeviceBuffer[DType.uint8], or_buf: 
     ctx.synchronize()
 
 
+def _patch_levels(m: DispMesh) -> Dict[Int, Int]:
+    """Sub-square level per patch, keyed by its face and corner in the face (stable across builds)."""
+    var r = Dict[Int, Int]()
+    for p in range(m.np):
+        var l = 0
+        for k in range(1, LEVELS):
+            if Int(m.lv.patch[k]) <= p:
+                l = k
+        r[Int(m.face[unsafe_offset=p]) * 1048576 + Int(m.sq[unsafe_offset=3 * p] * 1024) * 1024 + Int(m.sq[unsafe_offset=3 * p + 1] * 1024)] = l
+    return r^
+
+
+def _dirty(old: Dict[Int, Int], new: Dict[Int, Int], faces_per: Int) raises -> Tuple[Int, Int, Int, Float64]:
+    """Patches whose level changed, clusters (faces_per Ptex faces each) holding them of all, and their share of sub-squares."""
+    var changed = 0; var dirty = Dict[Int, Bool](); var all_c = Dict[Int, Bool]()
+    for e in new.items():
+        all_c[e.key // 1048576 // faces_per] = True
+        if e.key not in old or old[e.key] != e.value:
+            changed += 1; dirty[e.key // 1048576 // faces_per] = True
+    var dp = 0; var tp = 0
+    for e in new.items():
+        var n = 1 << (2 * e.value); tp += n
+        if (e.key // 1048576 // faces_per) in dirty:
+            dp += n
+    return (changed, len(dirty), len(all_c), Float64(dp) / Float64(max(tp, 1)))
+
+
+def _dirty_faces(old: DispMesh, new: DispMesh, pl0: Dict[Int, Int], pl1: Dict[Int, Int], adj: Pointer[Int32, MutUntrackedOrigin],
+                 faces_per: Int) raises -> Tuple[Int, Int, Float64]:
+    """Like _dirty, also counting texel-level changes and the faces' neighbours."""
+    var nf = new.nf
+    var hit = List[Bool](length=nf, fill=False)
+    var n_drop = 0
+    for f in range(nf):
+        if old.hdr[unsafe_offset=3 * f + 1] != new.hdr[unsafe_offset=3 * f + 1] or old.hdr[unsafe_offset=3 * f + 2] != new.hdr[unsafe_offset=3 * f + 2]:
+            hit[f] = True; n_drop += 1
+    for e in pl1.items():
+        if e.key not in pl0 or pl0[e.key] != e.value:
+            hit[e.key // 1048576] = True
+    var ring = hit.copy()
+    for f in range(nf):
+        if hit[f]:
+            for k in range(4):
+                var g = Int(adj[unsafe_offset=4 * f + k])
+                if g >= 0:
+                    ring[g] = True
+    var dirty = Dict[Int, Bool]()
+    for f in range(nf):
+        if ring[f]:
+            dirty[f // faces_per] = True
+    var dp = 0; var tp = 0
+    for e in pl1.items():
+        var n = 1 << (2 * e.value); tp += n
+        if (e.key // 1048576 // faces_per) in dirty:
+            dp += n
+    return (n_drop, len(dirty), Float64(dp) / Float64(max(tp, 1)))
+
+
 def run_demo(patches: Pointer[BezierPatch, MutUntrackedOrigin], sq: Pointer[Float32, MutUntrackedOrigin], face: Pointer[Int32, MutUntrackedOrigin],
              hdr: Pointer[Int32, MutUntrackedOrigin], pyr: Pointer[UInt8, MutUntrackedOrigin], npyr: Int, chain_off: Pointer[Int32, MutUntrackedOrigin],
              chain: Pointer[UInt8, MutUntrackedOrigin], nchain: Int, fm: Pointer[Float32, MutUntrackedOrigin], greg: Pointer[UInt8, MutUntrackedOrigin],
@@ -1007,6 +1065,7 @@ def run_demo(patches: Pointer[BezierPatch, MutUntrackedOrigin], sq: Pointer[Floa
     var host = List[Float32](length=3 * W * H, fill=Float32(0))
     # STREAM=k: every k moving frames the view's surface from a cache of what any view reads (FLY=f: the orbit closes in to f).
     var stream = Int(_env_f("STREAM", Float32(0))); var fly = _env_f("FLY", Float32(1))
+    var adj = unsafe_alloc[Int32](4 * max(nf, 1))
     var pad = _env_f("BOUND_PAD", Float32(-1)); var dil = _env_f("BOUND_DIL", Float32(1)); var pad_in = _env_f("BOUND_PAD_IN", Float32(1))   # >= 0: sub_box_bound
     var full = dm.copy(); var dfull = dm.surface(Float32(1), Vec3f(0, 0, 0), Float32(0), _leaf_mode())
     var cache = 0; var cur = dm.copy(); var own_cur = False; var since = stream
@@ -1018,6 +1077,7 @@ def run_demo(patches: Pointer[BezierPatch, MutUntrackedOrigin], sq: Pointer[Floa
         pc.unsafe_free()
         if cache == 0:
             raise Error("cannot cache " + ptx)
+        external_call["disp_cache_adj", NoneType](cache, adj)
         if pad >= Float32(0):   # full-resolution heights for sub_box_bound
             var of = o
             of.lod = Float32(0)
@@ -1078,6 +1138,13 @@ def run_demo(patches: Pointer[BezierPatch, MutUntrackedOrigin], sq: Pointer[Floa
             accel_buf = _proc_rtas(ctx, nh, nm.np, dfull if getenv("BOUND_FULL") != "0" else nh, pad, dil, pad_in)
             var t3s = perf_counter_ns()
             dsurf = ns; host_d = nh; sbufs = nb^
+            if getenv("STREAM_DIRTY"):
+                var pl0 = _patch_levels(cur); var pl1 = _patch_levels(nm)
+                for fpc in [46, 12, 3, 1]:
+                    var dl = _dirty(pl0, pl1, fpc)
+                    print("stream dirty", it, fpc, ":", dl[0], "patches changed level;", dl[1], "of", dl[2], "clusters,", dl[3] * 100, "% of the sub-squares")
+                    var df = _dirty_faces(cur, nm, pl0, pl1, adj, fpc)
+                    print("stream dirty+ring", it, fpc, ":", df[0], "faces changed texel level;", df[1], "clusters,", df[2] * 100, "% of the sub-squares")
             if own_cur:
                 cur.free()
             cur = nm^; own_cur = True; since = 0
