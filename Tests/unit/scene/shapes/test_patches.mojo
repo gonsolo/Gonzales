@@ -75,5 +75,15 @@ def test_patches_from_outside() raises:
         assert_true(radius > Float32(0.835) and radius < Float32(0.870), String("hit at radius ") + String(radius))
 
 
+def test_patches_from_far() raises:
+    var patches = _cube_patches(2)
+    for k in range(200):   # float spacing at 3e5 is coarser than the patches' flatness: the descent must still end
+        var d = _dir(k, 200)
+        var r = _nearest(patches, d * Float32(3e5), -d)
+        assert_true(r[0] >= 0, "a ray at the cube from far missed it")
+        var radius = Float32(3e5) - r[1]
+        assert_true(radius > Float32(0.78) and radius < Float32(0.93), String("hit at radius ") + String(radius))
+
+
 def main() raises:
     TestSuite.discover_tests[__functions_in_module()]().run()

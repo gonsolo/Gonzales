@@ -8,6 +8,7 @@ from gonzales.core.geometry import Vec3f, cross, dot
 
 comptime PATCH_MAX_DEPTH = 40           # 20 halvings a direction
 comptime PATCH_REL_EPS = Float32(1.0 / 1024.0)   # leaves: pieces this flat against the patch's own box
+comptime _ULPS = Float32(1.0 / 2097152.0)   # 4 float ulps, relative
 comptime _U = SIMD[DType.float32, 16](0, 1.0 / 3.0, 2.0 / 3.0, 1, 0, 1.0 / 3.0, 2.0 / 3.0, 1, 0, 1.0 / 3.0, 2.0 / 3.0, 1,
                                       0, 1.0 / 3.0, 2.0 / 3.0, 1)
 comptime _V = SIMD[DType.float32, 16](0, 0, 0, 0, 1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0, 2.0 / 3.0, 2.0 / 3.0, 2.0 / 3.0,
@@ -91,12 +92,18 @@ def _half(p: BezierPatch, along_u: Bool, upper: Bool) -> BezierPatch:
 
 
 @always_inline
+def _mag(p: BezierPatch) -> Float32:
+    return max(max(abs(p.x).reduce_max(), abs(p.y).reduce_max()), abs(p.z).reduce_max())
+
+
+@always_inline
 def _box_hit(p: BezierPatch, inv: Vec3f, t_max: Float32) -> Tuple[Bool, Float32, Float32]:
     """The ray (from the origin: patches are anchored at it) against the patch's control-point box: (hit, entry, size)."""
     var lo = Vec3f(p.x.reduce_min(), p.y.reduce_min(), p.z.reduce_min())
     var hi = Vec3f(p.x.reduce_max(), p.y.reduce_max(), p.z.reduce_max())
     var size = max(max(hi.x - lo.x, hi.y - lo.y), hi.z - lo.z)
-    var pad = size * Float32(1e-5) + Float32(1e-7)    # rounding in the crops must not open cracks (Binder and Keller 3.4)
+    var mag = max(max(max(abs(lo.x), abs(hi.x)), max(abs(lo.y), abs(hi.y))), max(abs(lo.z), abs(hi.z)))
+    var pad = size * Float32(1e-5) + mag * _ULPS + Float32(1e-7)    # rounding must not open cracks (Binder and Keller 3.4)
     lo = lo - Vec3f(pad, pad, pad); hi = hi + Vec3f(pad, pad, pad)
     var ax = lo.x * inv.x; var bx = hi.x * inv.x
     var ay = lo.y * inv.y; var by = hi.y * inv.y
@@ -152,13 +159,17 @@ def _domain(path: UInt64, depth: Int) -> Tuple[Float32, Float32, Float32, Float3
 
 def intersect_patch(org: Vec3f, dir: Vec3f, patch: BezierPatch, t_max: Float32) -> Tuple[Bool, Float32, Float32, Float32]:
     """The nearest hit before t_max: (hit, t, u, v), on a flat piece's corner triangles."""
-    var o = BezierPatch(patch.x - org.x, patch.y - org.y, patch.z - org.z)   # anchored at the ray origin
     var inv = Vec3f(Float32(1) / dir.x, Float32(1) / dir.y, Float32(1) / dir.z)
-    var root = _box_hit(o, inv, t_max)
+    var far = BezierPatch(patch.x - org.x, patch.y - org.y, patch.z - org.z)
+    var root = _box_hit(far, inv, t_max)
     if not root[0]:
         return (False, t_max, Float32(0), Float32(0))
-    var eps = root[2] * PATCH_REL_EPS
-    var best = t_max; var hit = False; var hu = Float32(0); var hv = Float32(0)
+    # Anchored just before the box: from a far origin, rounding is coarser than flatness and the descent never ends.
+    var t0 = max(root[1] - root[2] - _mag(far) * Float32(8) * _ULPS, Float32(0))
+    var o0 = org + dir * t0
+    var o = BezierPatch(patch.x - o0.x, patch.y - o0.y, patch.z - o0.z)
+    var eps = max(root[2] * PATCH_REL_EPS, _mag(o) * Float32(8) * _ULPS)
+    var best = t_max - t0; var hit = False; var hu = Float32(0); var hv = Float32(0)
     var p = o
     var depth = 0
     var path = UInt64(0); var pend = UInt64(0)
@@ -173,7 +184,7 @@ def intersect_patch(org: Vec3f, dir: Vec3f, patch: BezierPatch, t_max: Float32) 
                 var ta = _tri_hit(c00, c30, c33, dir, slack); var tb = _tri_hit(c00, c33, c03, dir, slack)
                 var use_a = ta[0] and (not tb[0] or ta[1] < tb[1])
                 var th = ta if use_a else tb
-                if th[0] and th[1] < best and th[1] > Float32(2) * eps:   # a hit at the origin is the surface the ray leaves
+                if th[0] and th[1] < best and th[1] + t0 > Float32(2) * eps:   # a hit at the origin is the surface the ray leaves
                     best = th[1]; hit = True
                     var s = th[2] + th[3] if use_a else th[2]
                     var t = th[3] if use_a else th[2] + th[3]
@@ -205,7 +216,7 @@ def intersect_patch(org: Vec3f, dir: Vec3f, patch: BezierPatch, t_max: Float32) 
         depth = level + 1
         var d = _domain(path, depth)
         p = _crop(o, d[0], d[0] + d[2], d[1], d[1] + d[3])
-    return (hit, best, hu, hv)
+    return (hit, best + t0 if hit else t_max, hu, hv)
 
 
 def patch_bounds(p: BezierPatch) -> Tuple[Vec3f, Vec3f]:
