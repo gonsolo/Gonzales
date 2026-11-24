@@ -25,6 +25,8 @@ comptime ENV_SWITCHES: List[EnvSwitch] = [
     # Features
     EnvSwitch("GONZALES_FILM_EXR", "set: the film is written as .exr whatever extension the scene names (HDR training data)"),
     EnvSwitch("GONZALES_NO_DENOISE", "set: --interactive-frames output is not denoised"),
+    EnvSwitch("GONZALES_DENOISER", "unet (default): our U-Net on the GPU; oidn: the same weights in the OIDN library; atrous"),
+    EnvSwitch("GONZALES_DENOISER_WEIGHTS", "file: the U-Net's weights (default <GONZALES_DATA_DIR>/denoiser.tza)"),
     EnvSwitch("GONZALES_NO_MNEE", "set: the GPU path tracer runs no MNEE through smooth glass"),
     EnvSwitch("GONZALES_LIGHT_TREE", "0: lights picked by power, not by the light tree (comparisons)"),
     EnvSwitch("GONZALES_VCM_NO_EXIT", "set: VCM without exit merging (the original VCM's strategies on skin)"),

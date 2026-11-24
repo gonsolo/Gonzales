@@ -21,6 +21,7 @@ from gonzales.scene.description.pbrt_parser import ParsedScene_Mojo
 from gonzales.integrators.postprocess import denoise, write_image_cropwindow
 from gonzales.integrators.film import apply_film_sensor
 from gonzales.core.geometry import RGB, _is_real_ptr
+from gonzales.integrators.denoiser import learned_denoise
 
 
 def _cstr(s: String) -> Pointer[UInt8, MutUntrackedOrigin]:
@@ -91,6 +92,8 @@ def write_render_outputs[Ob: Origin[mut=True], On: Origin[mut=True], Oa: Origin[
     var fw = psc[unsafe_offset=0].film_w
     var fh = psc[unsafe_offset=0].film_h
     var film = psc[unsafe_offset=0].film_filename
+    if denoised:
+        _ = learned_denoise(image, noisy, albedo, normals, Int(fw), Int(fh))
     var cx0 = psc[unsafe_offset=0].crop_x0; var cy0 = psc[unsafe_offset=0].crop_y0
     var cx1 = psc[unsafe_offset=0].crop_x1; var cy1 = psc[unsafe_offset=0].crop_y1
     var x0 = Int(ceil(cx0 * Float32(fw))); var y0 = Int(ceil(cy0 * Float32(fh)))

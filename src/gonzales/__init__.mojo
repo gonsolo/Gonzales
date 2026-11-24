@@ -202,7 +202,7 @@ def main() raises:
     while i < len(args):
         var arg = String(args[i])
         if arg == "--help" or arg == "-h":
-            print("Usage: gonzales [--interactive] [--gpu] [--fullscreen] [--no-denoise] [--verbose] [--spp N] [--seed N] [--resolution WxH] [--width W] [--height H] [--pixel X Y] [--vulkan-rt] [--checkpoint FILE] [--checkpoint-every MIN] [--resume FILE] [--stop-after N] [--list-env] scene.pbrt")
+            print("Usage: gonzales [--interactive] [--gpu] [--fullscreen] [--no-denoise] [--denoiser unet|oidn|atrous] [--verbose] [--spp N] [--seed N] [--resolution WxH] [--width W] [--height H] [--pixel X Y] [--vulkan-rt] [--checkpoint FILE] [--checkpoint-every MIN] [--resume FILE] [--stop-after N] [--list-env] scene.pbrt")
             return
         elif arg == "--list-env":
             env_list()
@@ -213,6 +213,9 @@ def main() raises:
             use_gpu = True
         elif arg == "--no-denoise":
             no_denoise = True
+        elif arg == "--denoiser" and i + 1 < len(args):
+            i += 1
+            _ = setenv("GONZALES_DENOISER", String(args[i]))
         elif arg == "--fullscreen":
             fullscreen = True
             interactive = True
@@ -361,7 +364,7 @@ def main() raises:
         i += 1
 
     if scene_path.byte_length() == 0:
-        print("Usage: gonzales [--interactive] [--gpu] [--fullscreen] [--no-denoise] [--verbose] [--spp N] [--seed N] [--resolution WxH] [--width W] [--height H] scene.pbrt")
+        print("Usage: gonzales [--interactive] [--gpu] [--fullscreen] [--no-denoise] [--denoiser unet|oidn|atrous] [--verbose] [--spp N] [--seed N] [--resolution WxH] [--width W] [--height H] scene.pbrt")
         return
 
     var usd = scene_path.endswith(".usd") or scene_path.endswith(".usda") or scene_path.endswith(".usdc") or scene_path.endswith(".usdz")
